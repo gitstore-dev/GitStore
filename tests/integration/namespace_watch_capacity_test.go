@@ -645,7 +645,7 @@ func dialCapacitySubscription(apiURL, token, subscriptionID, query string, varia
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		wsURL := strings.Replace(apiURL, "http", "ws", 1) + "/graphql"
+		wsURL := strings.Replace(apiURL, "http", "ws", 1) + "/admin/graphql"
 		dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, Subprotocols: []string{"graphql-transport-ws"}}
 		conn, response, err := dialer.Dial(wsURL, http.Header{"Authorization": []string{"Bearer " + token}})
 		if err != nil {
@@ -1268,7 +1268,7 @@ func capacityCreateRetryable(err error) bool {
 	if !errors.As(err, &graphqlErr) {
 		return false
 	}
-	return strings.Contains(graphqlErr.raw, `"code":"NAMESPACE_CONFLICT"`) ||
+	return strings.Contains(graphqlErr.raw, `"code":"CONFLICT"`) ||
 		strings.Contains(graphqlErr.raw, `"reason":"RESOURCE_VERSION_CONFLICT"`) ||
 		(strings.Contains(graphqlErr.raw, "Cannot achieve consistency level") &&
 			strings.Contains(graphqlErr.raw, "potentially executed: false"))
@@ -1326,7 +1326,7 @@ func createCapacityNamespaceContext(ctx context.Context, client *http.Client, ap
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/graphql", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/admin/graphql", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -1381,7 +1381,7 @@ func updateCapacityNamespaceContext(ctx context.Context, client *http.Client, ap
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/graphql", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/admin/graphql", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -1437,7 +1437,7 @@ func capacityNamespaceExistsContext(ctx context.Context, client *http.Client, ap
 	if err != nil {
 		return false
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/graphql", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL+"/admin/graphql", bytes.NewReader(body))
 	if err != nil {
 		return false
 	}
@@ -1473,7 +1473,7 @@ func TestCapacityReplayCreateRetriesOnlyConflicts(t *testing.T) {
 			}
 			primaryCalls.Add(1)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"errors":[{"message":"superseded","extensions":{"code":"NAMESPACE_CONFLICT","reason":"RESOURCE_VERSION_CONFLICT"}}]}`)
+			_, _ = io.WriteString(w, `{"errors":[{"message":"superseded","extensions":{"code":"CONFLICT","diagnostics":[{"reason":"SUPERSEDED","message":"superseded","level":"FAILURE"}]}}]}`)
 		}))
 		defer primary.Close()
 		peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1507,7 +1507,7 @@ func TestCapacityReplayCreateRetriesOnlyConflicts(t *testing.T) {
 				return
 			}
 			primaryMutations.Add(1)
-			_, _ = io.WriteString(w, `{"errors":[{"message":"superseded","extensions":{"code":"NAMESPACE_CONFLICT","reason":"RESOURCE_VERSION_CONFLICT"}}]}`)
+			_, _ = io.WriteString(w, `{"errors":[{"message":"superseded","extensions":{"code":"CONFLICT","diagnostics":[{"reason":"SUPERSEDED","message":"superseded","level":"FAILURE"}]}}]}`)
 		}))
 		defer primary.Close()
 		peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1576,7 +1576,7 @@ func TestCapacityReplayCreateRetriesOnlyConflicts(t *testing.T) {
 		peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			peerCalls.Add(1)
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"errors":[{"message":"already exists","extensions":{"code":"NAMESPACE_POLICY_REJECTED","reason":"NAMESPACE_ALREADY_EXISTS"}}]}`)
+			_, _ = io.WriteString(w, `{"errors":[{"message":"already exists","extensions":{"code":"ALREADY_EXISTS","diagnostics":[{"reason":"NAMESPACE_ALREADY_EXISTS","message":"already exists","level":"FAILURE"}]}}]}`)
 		}))
 		defer peer.Close()
 
@@ -1767,7 +1767,7 @@ func mergeCapacityBaselineSamples(
 ) map[string]capacityProcessMetrics {
 	for label, sample := range latest {
 		previous, ok := retained[label]
-		if !ok || !previous.available || !sameCapacityProcess(previous, sample) {
+		if !ok || !previous.available || !sample.available || !sameCapacityProcess(previous, sample) {
 			previous.available = false
 			retained[label] = previous
 			continue
@@ -1786,7 +1786,7 @@ func mergeCapacityMemorySamples(
 ) map[string]capacityProcessMetrics {
 	for label, sample := range latest {
 		previous, ok := retained[label]
-		if !ok || !previous.available || !sameCapacityProcess(previous, sample) {
+		if !ok || !previous.available || !sample.available || !sameCapacityProcess(previous, sample) {
 			previous.available = false
 			retained[label] = previous
 			continue
@@ -1800,6 +1800,9 @@ func mergeCapacityMemorySamples(
 }
 
 func sameCapacityProcess(left, right capacityProcessMetrics) bool {
+	if left.instanceID != "" || right.instanceID != "" {
+		return left.instanceID != "" && left.instanceID == right.instanceID
+	}
 	// process_start_time_seconds is derived from host boot time and process
 	// start ticks. Docker Desktop's virtualized procfs has shown multi-second
 	// collector offsets for an unchanged container even though repeated samples
@@ -1862,6 +1865,47 @@ func TestSameCapacityProcessAllowsFractionalCollectorJitter(t *testing.T) {
 	require.True(t, sameCapacityProcess(left, capacityProcessMetrics{processStart: 100.25}))
 	require.True(t, sameCapacityProcess(left, capacityProcessMetrics{processStart: 104}))
 	require.False(t, sameCapacityProcess(left, capacityProcessMetrics{processStart: 106}))
+}
+
+func TestCapacityMetricMergesUseProcessIdentity(t *testing.T) {
+	for name, merge := range map[string]func(map[string]capacityProcessMetrics, map[string]capacityProcessMetrics) map[string]capacityProcessMetrics{
+		"baseline":  mergeCapacityBaselineSamples,
+		"post-load": mergeCapacityMemorySamples,
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, tc := range []struct {
+				name      string
+				identity  string
+				start     float64
+				available bool
+				wantValid bool
+			}{
+				{"same process with collector offset", "original", 110, true, true},
+				{"replacement with same start sample", "replacement", 100, true, false},
+				{"missing identity", "", 100, true, false},
+				{"unavailable sample", "original", 100, false, false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					retained := map[string]capacityProcessMetrics{
+						"api_a": {available: true, instanceID: "original", processStart: 100, cpu: 10, resident: 120, gomaxprocs: 2},
+					}
+					latest := map[string]capacityProcessMetrics{
+						"api_a": {available: tc.available, instanceID: tc.identity, processStart: tc.start, cpu: 12, resident: 100, gomaxprocs: 2},
+					}
+					got := merge(retained, latest)["api_a"]
+					require.Equal(t, tc.wantValid, got.available)
+					if tc.wantValid {
+						require.Equal(t, float64(100), got.resident)
+						if name == "baseline" {
+							require.Equal(t, float64(12), got.cpu)
+						} else {
+							require.Equal(t, float64(10), got.cpu)
+						}
+					}
+				})
+			}
+		})
+	}
 }
 
 func fetchCapacityMetrics(client *http.Client, endpoint string) (capacityProcessMetrics, error) {

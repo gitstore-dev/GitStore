@@ -1,0 +1,69 @@
+{
+  "description": "Admission rejection text parity between the API mutation path and the Git push path. Each case lists the ValidationError entries returned by catalog validation and the exact rejection text both paths must produce.",
+  "cases": [
+    {
+      "name": "empty_path",
+      "manifestPath": "",
+      "errors": [
+        {
+          "filePath": "",
+          "field": "",
+          "constraint": "",
+          "message": "validation service unavailable"
+        }
+      ],
+      "expected": "validation service unavailable"
+    },
+    {
+      "name": "single_error",
+      "manifestPath": "categories/laptops.md",
+      "errors": [
+        {
+          "filePath": "categories/laptops.md",
+          "field": "spec.title",
+          "constraint": "required",
+          "message": "validate: spec.title is required"
+        }
+      ],
+      "expected": "categories/laptops.md: validate: spec.title is required"
+    },
+    {
+      "name": "multi_error",
+      "manifestPath": "categories/laptops.md",
+      "errors": [
+        {
+          "filePath": "categories/laptops.md",
+          "field": "spec.title",
+          "constraint": "required",
+          "message": "validate: spec.title is required"
+        },
+        {
+          "filePath": "categories/laptops.md",
+          "field": "spec.parentRef.name",
+          "constraint": "self-parent",
+          "message": "validate: spec.parentRef.name must not reference the category itself"
+        }
+      ],
+      "expected": "categories/laptops.md: validate: spec.title is required; categories/laptops.md: validate: spec.parentRef.name must not reference the category itself"
+    },
+    {
+      "name": "mixed_paths",
+      "manifestPath": "categories/tv.md",
+      "errors": [
+        {
+          "filePath": "",
+          "field": "",
+          "constraint": "",
+          "message": "repository not found"
+        },
+        {
+          "filePath": "categories/tv.md",
+          "field": "spec.media",
+          "constraint": "required",
+          "message": "validate: spec.media[0].fileRef.name is required"
+        }
+      ],
+      "expected": "repository not found; categories/tv.md: validate: spec.media[0].fileRef.name is required"
+    }
+  ]
+}

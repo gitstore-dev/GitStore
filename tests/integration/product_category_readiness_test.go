@@ -130,7 +130,7 @@ func queryCategoryID(t *testing.T, namespace, name string) (string, bool) {
 		}
 	`, map[string]any{"namespace": namespace, "name": name})
 	if len(resp.Errors) > 0 {
-		if isNotFoundGraphQLError(resp.Errors) {
+		if categoryQueryNotFound(resp) {
 			return "", false
 		}
 		t.Fatalf("graphql errors querying category %q id: %s", name, resp.Errors)
@@ -170,7 +170,7 @@ func deleteCategoryByID(t *testing.T, id string) {
 	t.Helper()
 	resp := gqlQuery(t, `
 		mutation($id: ID!) {
-			deleteCategory(input: {id: $id}) { deletedCategoryId }
+			deleteCategory(input: {id: $id}) { outcome }
 		}
 	`, map[string]any{"id": id})
 	if len(resp.Errors) > 0 {

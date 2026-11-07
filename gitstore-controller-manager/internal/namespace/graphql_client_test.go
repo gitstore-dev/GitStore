@@ -103,29 +103,103 @@ func TestGraphQLRepositoryClientReportsRepositoryAbsence(t *testing.T) {
 	}
 }
 
+// TestGraphQLDeletionClientCompletesDeletion covers the success path against
+// CompleteNamespaceDeletionPayload's actual shape ({ id: ID }, since 84b7bb4
+// / #394 removed the payload's conflict field) rather than a payload-level
+// conflict that no longer exists.
 func TestGraphQLDeletionClientCompletesDeletion(t *testing.T) {
+	var gotInput map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Variables map[string]any `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		gotInput, _ = request.Variables["input"].(map[string]any)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"completeNamespaceDeletion":{"id":"namespace-1","conflict":null}}}`))
+		_, _ = w.Write([]byte(`{"data":{"completeNamespaceDeletion":{"id":"namespace-1"}}}`))
 	}))
 	defer srv.Close()
 
 	client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
-	if err := client.CompleteDeletion(context.Background(), "acme", "9"); err != nil {
+	if err := client.CompleteDeletion(context.Background(), "acme", "9", "namespace-1"); err != nil {
 		t.Fatalf("CompleteDeletion failed: %v", err)
+	}
+	if gotInput["name"] != "acme" || gotInput["resourceVersion"] != "9" || gotInput["id"] != "namespace-1" {
+		t.Fatalf("input = %#v, want name/resourceVersion/id", gotInput)
+	}
+	if _, exists := gotInput["uid"]; exists {
+		t.Fatal("completion must not send the removed uid input field")
 	}
 }
 
-func TestGraphQLDeletionClientReturnsConflict(t *testing.T) {
+func TestGraphQLDeletionClientAcceptsAlreadyAbsent(t *testing.T) {
+	for _, payload := range []string{`{}`, `{"id":null}`} {
+		t.Run(payload, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{"completeNamespaceDeletion":` + payload + `}}`))
+			}))
+			defer srv.Close()
+			client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
+			for range 2 {
+				if err := client.CompleteDeletion(context.Background(), "acme", "9", "namespace-1"); err != nil {
+					t.Fatalf("already-absent completion retry failed: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestGraphQLDeletionClientReturnsConflictOnLegacyCode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"completeNamespaceDeletion":{"id":null,"conflict":{"currentResourceVersion":"10"}}}}`))
+		_, _ = w.Write([]byte(`{"errors":[{"message":"resource version conflict","extensions":{"code":"RESOURCE_VERSION_CONFLICT","resourceVersion":"10"}}]}`))
 	}))
 	defer srv.Close()
 
 	client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
-	err := client.CompleteDeletion(context.Background(), "acme", "9")
+	err := client.CompleteDeletion(context.Background(), "acme", "9", "namespace-1")
 	if !errors.Is(err, types.ErrConflict) {
 		t.Fatalf("CompleteDeletion error = %v, want conflict", err)
+	}
+}
+
+// TestGraphQLDeletionClientReturnsConflictOnForwardCompatibleCode covers the
+// kind-neutral CONFLICT extension code an upcoming change folds
+// RESOURCE_VERSION_CONFLICT into.
+func TestGraphQLDeletionClientReturnsConflictOnForwardCompatibleCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"errors":[{"message":"conflict","extensions":{"code":"CONFLICT","resourceVersion":"10"}}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
+	err := client.CompleteDeletion(context.Background(), "acme", "9", "namespace-1")
+	if !errors.Is(err, types.ErrConflict) {
+		t.Fatalf("CompleteDeletion error = %v, want conflict", err)
+	}
+}
+
+// TestGraphQLDeletionClientPropagatesOtherErrors covers a GraphQL error with
+// neither conflict extension code: it must be returned, but never mapped to
+// types.ErrConflict.
+func TestGraphQLDeletionClientPropagatesOtherErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"errors":[{"message":"namespace not found","extensions":{"code":"NOT_FOUND"}}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewGraphQLDeletionClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
+	err := client.CompleteDeletion(context.Background(), "acme", "9", "namespace-1")
+	if err == nil {
+		t.Fatal("CompleteDeletion succeeded, want error")
+	}
+	if errors.Is(err, types.ErrConflict) {
+		t.Fatalf("CompleteDeletion error = %v, want non-conflict error", err)
 	}
 }

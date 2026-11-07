@@ -49,6 +49,7 @@ func TestParse_ValidProduct_OptionalFieldsOmitted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: minimal-product
 spec:
   title: Minimal Product
@@ -70,6 +71,7 @@ func TestParse_Product_MissingTitle_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: minimal-product
 spec: {}
 ---
@@ -85,6 +87,7 @@ func TestParse_ValidProduct_LabelsAndAnnotations(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: labelled-product
   labels:
     env: production
@@ -217,6 +220,7 @@ func TestParse_LegacyFrontmatterRejected(t *testing.T) {
 	doc := `---
 kind: Product
 metadata:
+  namespace: gitstore
   name: old-product
 ---
 body
@@ -231,6 +235,7 @@ func TestParse_StatusKeyRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec: {}
 status:
@@ -248,6 +253,7 @@ func TestParse_WrongApiVersionRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec: {}
 ---
@@ -263,6 +269,7 @@ func TestParse_SpecAbsentRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 ---
 body
@@ -277,6 +284,7 @@ func TestParse_EmptyNameRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: ""
 spec: {}
 ---
@@ -294,6 +302,7 @@ func TestParse_ReadOnlyMetadataUIDRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
   uid: some-uuid
 spec: {}
@@ -312,6 +321,7 @@ func TestParse_OptionMissingNameRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   options:
@@ -329,6 +339,7 @@ func TestParse_DuplicateOptionNamesRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   options:
@@ -348,6 +359,7 @@ func TestParse_ReadOnlyMetadataOwnerReferencesRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
   ownerReferences: []
 spec: {}
@@ -371,7 +383,7 @@ func TestParse_ReadOnlyMetadataAllFieldsRejected(t *testing.T) {
 	}
 	for _, tc := range readOnlyFields {
 		t.Run(tc.field, func(t *testing.T) {
-			doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\n" +
+			doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  namespace: gitstore\n  name: my-product\n" +
 				tc.yaml + "\nspec: {}\n---\nbody\n"
 			_, _, err := parseProduct(strings.NewReader(doc))
 			require.Error(t, err)
@@ -384,7 +396,7 @@ func TestParse_ReadOnlyMetadataAllFieldsRejected(t *testing.T) {
 
 func TestParse_LabelKeyTooLongRejected(t *testing.T) {
 	longKey := strings.Repeat("a", 64) // exceeds 63-char segment limit
-	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\n  labels:\n    " +
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  namespace: gitstore\n  name: my-product\n  labels:\n    " +
 		longKey + ": value\nspec: {}\n---\nbody\n"
 	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
@@ -394,7 +406,7 @@ func TestParse_LabelKeyTooLongRejected(t *testing.T) {
 func TestParse_LabelKeyPrefixTooLongRejected(t *testing.T) {
 	longPrefix := strings.Repeat("a", 254) // exceeds 253-char prefix limit
 	key := longPrefix + "/name"
-	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\n  labels:\n    \"" +
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  namespace: gitstore\n  name: my-product\n  labels:\n    \"" +
 		key + "\": value\nspec: {}\n---\nbody\n"
 	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
@@ -403,7 +415,7 @@ func TestParse_LabelKeyPrefixTooLongRejected(t *testing.T) {
 
 func TestParse_LabelValueTooLongRejected(t *testing.T) {
 	longVal := strings.Repeat("v", 64) // exceeds 63-char value limit
-	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\n  labels:\n    env: " +
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  namespace: gitstore\n  name: my-product\n  labels:\n    env: " +
 		longVal + "\nspec: {}\n---\nbody\n"
 	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
@@ -417,6 +429,7 @@ func TestParse_MultipleViolationsReportedTogether(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
   labels:
     env: ` + longVal + `
@@ -445,7 +458,7 @@ func TestParse_NoFrontmatterSkipped(t *testing.T) {
 
 func TestParse_SpecTitle_TooLong_Rejected(t *testing.T) {
 	longTitle := strings.Repeat("x", 201) // 201 chars — exceeds max=200
-	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\nspec:\n  title: \"" +
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  namespace: gitstore\n  name: my-product\nspec:\n  title: \"" +
 		longTitle + "\"\n---\nbody\n"
 	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
@@ -454,7 +467,7 @@ func TestParse_SpecTitle_TooLong_Rejected(t *testing.T) {
 
 func TestParse_SpecTitle_MaxLength_Accepted(t *testing.T) {
 	exactTitle := strings.Repeat("x", 200) // 200 chars — at limit, must pass
-	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\nspec:\n  title: \"" +
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  namespace: gitstore\n  name: my-product\nspec:\n  title: \"" +
 		exactTitle + "\"\n---\nbody\n"
 	res, _, err := parseProduct(strings.NewReader(doc))
 	require.NoError(t, err)
@@ -466,6 +479,7 @@ func TestParse_SpecMedia_EmptyFileRefName_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   media:
@@ -487,6 +501,7 @@ func TestParse_SpecMedia_EmptyFileRefKind_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   media:
@@ -508,6 +523,7 @@ func TestParse_SpecMedia_ValidFileRef_Accepted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   title: My Product
@@ -529,7 +545,7 @@ body
 
 func TestParse_SpecTitle_TooLong_FieldNamedInError(t *testing.T) {
 	longTitle := strings.Repeat("x", 201)
-	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\nspec:\n  title: \"" +
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  namespace: gitstore\n  name: my-product\nspec:\n  title: \"" +
 		longTitle + "\"\n---\nbody\n"
 	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
@@ -543,6 +559,7 @@ func TestParse_SpecMedia_MissingFileRefName_IndexedError(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   media:
@@ -563,6 +580,7 @@ func TestParse_CategoryRef_MissingName_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   categoryRef:
@@ -581,6 +599,7 @@ func TestParse_OptionsEmptyList_Accepted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   title: My Product
@@ -599,6 +618,7 @@ func TestParse_OptionsAbsent_Accepted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   title: My Product
@@ -616,6 +636,7 @@ func TestParse_MediaOptionalTrue_NoFileRefName_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   media:
@@ -638,6 +659,7 @@ func TestParse_StatusEmptyMap_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec: {}
 status: {}
@@ -656,6 +678,7 @@ func TestParse_MultipleReadOnlyFields_AllNamed(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
   uid: some-uuid
   resourceVersion: "1"
@@ -679,6 +702,7 @@ func TestParse_MultipleReadOnlyFieldsReportedTogether(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
   uid: some-uuid
   resourceVersion: "1"
@@ -700,6 +724,7 @@ func TestParse_SpecMedia_FieldPathInError(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   media:
@@ -722,6 +747,7 @@ func TestParseResource_CategoryTaxonomy_ValidAllFields(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -743,6 +769,7 @@ func TestParseResource_CategoryTaxonomy_MissingTitle(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec: {}
 ---
@@ -812,6 +839,7 @@ func TestParseResource_CategoryTaxonomy_SelfReference(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -830,6 +858,7 @@ func TestParseResource_Product_Regression(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   title: My Product
@@ -852,6 +881,7 @@ func TestParseResource_CategoryTaxonomy_ValidMedia_Accepted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -874,6 +904,7 @@ func TestParseResource_CategoryTaxonomy_MediaMissingFileRefName_Rejected(t *test
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -894,6 +925,7 @@ func TestParseResource_CategoryTaxonomy_MediaMissingFileRefKind_Rejected(t *test
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -916,6 +948,7 @@ func TestParseResource_CategoryTaxonomy_OptionalMediaMissingFile_Accepted(t *tes
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -940,6 +973,7 @@ func TestParseResource_Product_SingleCategoryRef_Accepted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   title: My Product
@@ -961,6 +995,7 @@ func TestParseResource_Product_NoCategoryRef_Accepted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   title: My Product
@@ -979,6 +1014,7 @@ func TestParseResource_Product_CategoryRefArray_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   categoryRef:
@@ -996,6 +1032,7 @@ func TestParseResource_Product_CategoryRefPresentButEmptyName_Rejected(t *testin
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   categoryRef:

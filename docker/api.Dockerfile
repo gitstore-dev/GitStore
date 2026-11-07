@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # Multi-stage build for GraphQL API (Go)
-FROM golang:1.26.1-alpine3.23 AS builder
+FROM golang:1.27.2-alpine3.23 AS builder
 
 RUN apk add --no-cache git
 
@@ -11,6 +11,8 @@ ENV GOWORK=off
 # Copy go modules manifests
 COPY gitstore-api/go.mod gitstore-api/go.sum ./
 COPY shared/secretmaterial/go.mod /build/shared/secretmaterial/go.mod
+COPY shared/observability/go.mod /build/shared/observability/go.mod
+COPY shared/scylla-cdc-go/go.mod /build/shared/scylla-cdc-go/go.mod
 
 # Download dependencies
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -19,6 +21,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Copy source code
 COPY gitstore-api/ ./
 COPY shared/secretmaterial/ /build/shared/secretmaterial/
+COPY shared/observability/ /build/shared/observability/
+COPY shared/scylla-cdc-go/ /build/shared/scylla-cdc-go/
 COPY shared/schemas /build/shared/schemas
 
 # Build application
@@ -46,6 +50,7 @@ COPY --from=builder /build/shared/schemas /app/schemas
 
 # Expose ports
 EXPOSE 4000
+EXPOSE 4001
 EXPOSE 9000
 EXPOSE 6000
 

@@ -7,14 +7,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/resolver"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/stretchr/testify/require"
 	"github.com/vektah/gqlparser/v2/gqlerror"
@@ -113,7 +114,7 @@ func TestWatchFiles_DeliversTypedPayloadAndFiltersNamespace(t *testing.T) {
 	file := &datastore.File{
 		UID: "00000000-0000-0000-0000-000000000061", Namespace: "acme", Name: "hero",
 		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", ResourceVersion: "7",
-		Spec: json.RawMessage(`{"ContentType":"image/jpeg","Source":{"Type":"s3","URI":"s3://bucket/hero"}}`),
+		Spec: json.RawMessage(`{"ContentType":"image/jpeg","Provider":"s3","Source":{"URI":"s3://bucket/hero"}}`),
 		Body: "alt text",
 	}
 	payload, err := json.Marshal(file)
@@ -192,7 +193,7 @@ func TestWatchCategories_DeliversEventsInOrder(t *testing.T) {
 	category := watchCategoryFixture("c1000000-0000-0000-0000-000000000001", "acme", "electronics", nil)
 	require.NoError(t, store.CreateCategoryTaxonomy(ctx, category))
 	category.ResourceVersion = "2"
-	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category))
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category, "1"))
 	require.NoError(t, store.DeleteCategoryTaxonomy(ctx, category.UID))
 
 	e1 := mustReceiveCategoryEvent(t, events)
@@ -222,7 +223,7 @@ func TestWatchCategories_ResumeFromValidCursor(t *testing.T) {
 	require.NoError(t, store.CreateCategoryTaxonomy(ctx, category))
 	added := mustReceiveCategoryEvent(t, first)
 	category.ResourceVersion = "2"
-	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category))
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, category, "1"))
 
 	rv := added.ResourceVersion
 	events, err := r.Subscription().WatchCategories(ctx, nil, nil, &rv)
@@ -312,7 +313,7 @@ func TestWatchResources_FileProjectsObject(t *testing.T) {
 	file := &datastore.File{
 		UID: "00000000-0000-0000-0000-000000000062", Namespace: "acme", Name: "hero",
 		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", ResourceVersion: "8",
-		Spec: json.RawMessage(`{"ContentType":"image/png","Source":{"Type":"git","URI":"blob://hero"}}`),
+		Spec: json.RawMessage(`{"ContentType":"image/png","Provider":"git","Source":{"URI":"blob://hero"}}`),
 	}
 	payload, err := json.Marshal(file)
 	require.NoError(t, err)
@@ -371,7 +372,7 @@ func TestWatchCategories_LabelSelectorFiltersEvents(t *testing.T) {
 
 	matching.Labels = map[string]string{"tier": "standard"}
 	matching.ResourceVersion = "2"
-	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, matching))
+	require.NoError(t, store.UpdateCategoryTaxonomy(ctx, matching, "1"))
 	exit := mustReceiveCategoryEvent(t, events)
 	require.Equal(t, model.WatchEventTypeDeleted, exit.Type)
 	require.Equal(t, "premium-cat", exit.Name)
@@ -410,7 +411,7 @@ func TestUpdateCategoryStatus_PartialMergeAppliesOnlySuppliedFields(t *testing.T
 }
 
 // T026: updateCategoryStatus with a stale resourceVersion returns a
-// RESOURCE_VERSION_CONFLICT GraphQL error, leaving status unchanged.
+// CONFLICT GraphQL error, leaving status unchanged.
 func TestUpdateCategoryStatus_StaleResourceVersionReturnsGraphQLError(t *testing.T) {
 	r, store := newWatchTestResolver(t)
 	ctx := context.Background()
@@ -429,8 +430,8 @@ func TestUpdateCategoryStatus_StaleResourceVersionReturnsGraphQLError(t *testing
 	})
 	var gqlErr *gqlerror.Error
 	require.True(t, errors.As(err, &gqlErr))
-	require.Equal(t, "RESOURCE_VERSION_CONFLICT", gqlErr.Extensions["code"])
-	require.Equal(t, "1", gqlErr.Extensions["resourceVersion"])
+	require.Equal(t, "CONFLICT", gqlErr.Extensions["code"])
+	require.Contains(t, fmt.Sprint(gqlErr.Extensions["diagnostics"]), "current resourceVersion is "+"1")
 }
 
 // T027: updateCategoryStatus targeting a deleted/nonexistent resource

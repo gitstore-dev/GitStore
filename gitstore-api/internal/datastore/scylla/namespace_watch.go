@@ -15,6 +15,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gocql/gocql"
 	"github.com/scylladb/gocqlx/v3"
+	"go.uber.org/zap"
 )
 
 const (
@@ -73,7 +74,7 @@ func (s *scyllaDatastore) ensureNamespaceWatchClock(ctx context.Context) (namesp
 	_, err = s.session.Query(
 		"INSERT INTO resource_watch_clock (journal,stream_id,epoch,high_water,oldest,bucket_size,update_timestamp,bookmark_timestamp,cdc_progress_timestamp,lease_holder,fencing_token,lease_expiration_timestamp) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) IF NOT EXISTS",
 		nil,
-	).WithContext(ctx).Bind(namespaceWatchJournalName, namespaceWatchClockStream, epoch, int64(0), int64(0), s.namespaceWatchBucketSize, time.Now().UTC(), zeroExpiry, zeroExpiry, "", int64(0), zeroExpiry).ExecCASRelease()
+	).WithContext(ctx).Bind(namespaceWatchJournalName, namespaceWatchClockStream, epoch, int64(0), int64(0), s.namespaceWatchBucketSize.Load(), time.Now().UTC(), zeroExpiry, zeroExpiry, "", int64(0), zeroExpiry).ExecCASRelease()
 	if err != nil {
 		return namespaceWatchClockRow{}, fmt.Errorf("scylla: initialize Namespace watch clock: %w", err)
 	}
@@ -99,12 +100,12 @@ func (s *scyllaDatastore) ensureNamespaceWatchBucketSize(ctx context.Context, ro
 		applied, err := s.session.Query(
 			"UPDATE resource_watch_clock SET bucket_size=? WHERE journal=? IF bucket_size=null",
 			nil,
-		).WithContext(ctx).Bind(s.namespaceWatchBucketSize, namespaceWatchJournalName).ExecCASRelease()
+		).WithContext(ctx).Bind(s.namespaceWatchBucketSize.Load(), namespaceWatchJournalName).ExecCASRelease()
 		if err != nil {
 			return fmt.Errorf("scylla: initialize Namespace watch bucket size: %w", err)
 		}
 		if applied {
-			row.BucketSize = s.namespaceWatchBucketSize
+			row.BucketSize = s.namespaceWatchBucketSize.Load()
 		} else if err := s.session.Query(
 			"SELECT bucket_size FROM resource_watch_clock WHERE journal=? LIMIT 1",
 			nil,
@@ -112,8 +113,14 @@ func (s *scyllaDatastore) ensureNamespaceWatchBucketSize(ctx context.Context, ro
 			return fmt.Errorf("scylla: reread Namespace watch bucket size: %w", err)
 		}
 	}
-	if row.BucketSize != s.namespaceWatchBucketSize {
-		return fmt.Errorf("scylla: Namespace watch bucket size is %d, configured %d", row.BucketSize, s.namespaceWatchBucketSize)
+	if row.BucketSize < 1 || row.BucketSize > int64(watchjournal.DefaultBucketSize) {
+		return fmt.Errorf("scylla: Namespace watch bucket size %d is outside 1..%d", row.BucketSize, watchjournal.DefaultBucketSize)
+	}
+	// The persisted size wins: journals initialized while the size was
+	// configurable keep their partition layout.
+	if previous := s.namespaceWatchBucketSize.Swap(row.BucketSize); previous != row.BucketSize {
+		s.log.Warn("Adopting persisted watch journal bucket size",
+			zap.Int64("persisted", row.BucketSize), zap.Int64("default", previous))
 	}
 	return nil
 }
@@ -188,7 +195,7 @@ func (s *scyllaDatastore) namespaceWatchRetainedOldest(ctx context.Context, cloc
 	if start < 1 {
 		start = 1
 	}
-	bucketSize := s.namespaceWatchBucketSize
+	bucketSize := s.namespaceWatchBucketSize.Load()
 	if bucketSize <= 0 {
 		bucketSize = int64(watchjournal.DefaultBucketSize)
 	}
@@ -247,7 +254,7 @@ func (s *scyllaDatastore) Append(ctx context.Context, lease datastore.NamespaceW
 		candidate.Epoch = clock.Epoch.String()
 		candidate.Sequence = uint64(next)
 		candidate.FencingToken = lease.FencingToken
-		bucket := namespaceWatchBucket(candidate.Sequence, s.namespaceWatchBucketSize)
+		bucket := namespaceWatchBucket(candidate.Sequence, s.namespaceWatchBucketSize.Load())
 		inserted, insertErr := s.session.Query(
 			"INSERT INTO resource_watch_events (epoch,bucket,sequence,event_type,kind,namespace,name,payload,labels,previous_labels,deduplication_key,fencing_token,event_timestamp) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) IF NOT EXISTS USING TTL ?",
 			nil,
@@ -327,8 +334,8 @@ func (s *scyllaDatastore) AppendBatch(ctx context.Context, lease datastore.Names
 			return nil, datastore.ErrStaleWatchLease
 		}
 		first := clock.HighWater + 1
-		bucket := namespaceWatchBucket(uint64(first), s.namespaceWatchBucketSize)
-		count := namespaceWatchBatchCount(events, first, s.namespaceWatchBucketSize)
+		bucket := namespaceWatchBucket(uint64(first), s.namespaceWatchBucketSize.Load())
+		count := namespaceWatchBatchCount(events, first, s.namespaceWatchBucketSize.Load())
 		chunk := events[:count]
 		batch, candidates, ttlSeconds := s.namespaceWatchEventBatch(clock, lease, bucket, chunk, ttl)
 		batch.Batch = batch.Batch.WithContext(ctx)
@@ -427,7 +434,7 @@ func (s *scyllaDatastore) resolveNamespaceWatchPublishedRange(
 			return state, err
 		},
 		func(resolveCtx context.Context, candidate datastore.NamespaceWatchEvent) (datastore.NamespaceWatchEvent, error) {
-			bucket := namespaceWatchBucket(candidate.Sequence, s.namespaceWatchBucketSize)
+			bucket := namespaceWatchBucket(candidate.Sequence, s.namespaceWatchBucketSize.Load())
 			return s.namespaceWatchEvent(resolveCtx, clock.Epoch, bucket, int64(candidate.Sequence))
 		},
 	)
@@ -567,7 +574,7 @@ func (s *scyllaDatastore) ReadAfter(ctx context.Context, cursor datastore.Namesp
 	}
 	out := make([]datastore.NamespaceWatchEvent, 0, limit)
 	for start <= bounds.HighWater && len(out) < limit {
-		bucketSize := s.namespaceWatchBucketSize
+		bucketSize := s.namespaceWatchBucketSize.Load()
 		if bucketSize <= 0 {
 			bucketSize = int64(watchjournal.DefaultBucketSize)
 		}

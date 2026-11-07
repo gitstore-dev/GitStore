@@ -15,6 +15,25 @@ import (
 
 const fullImageCDC = "cdc = {'enabled': 'true', 'preimage': 'full', 'postimage': 'true', 'ttl': '1209600'}"
 
+func TestServiceAccountFreshSchemaIsClusterScoped(t *testing.T) {
+	const file = "009_service_account.cql"
+	name := strings.Join(strings.Fields(createStatement(t, file, "service_accounts_by_cluster_name")), " ")
+	assert.Contains(t, name, "primary key ((name))")
+	assert.Contains(t, name, "enrollment_complete boolean")
+	uid := strings.Join(strings.Fields(createStatement(t, file, "service_accounts_by_cluster_uid")), " ")
+	assert.Contains(t, uid, "primary key ((uid))")
+	assert.Contains(t, uid, "name text")
+	bucket := strings.Join(strings.Fields(createStatement(t, file, "service_accounts_by_cluster_bucket")), " ")
+	assert.Contains(t, bucket, "primary key ((bucket), creation_timestamp, uid)")
+	assert.Contains(t, bucket, "name text")
+	raw, err := migrations.Files.ReadFile(file)
+	require.NoError(t, err)
+	for _, legacy := range []string{"namespace", "service_accounts_by_name", "service_accounts_by_uid", "service_accounts_by_bucket"} {
+		assert.NotContains(t, string(raw), legacy)
+	}
+	assert.Contains(t, string(raw), "service_account_assertion_replays")
+}
+
 // createStatement returns the CREATE TABLE statement for table, up to its
 // terminating semicolon.
 func createStatement(t *testing.T, file, table string) string {
@@ -34,7 +53,7 @@ func TestWatchedKindsEnableAuthoritativeFullImageCDC(t *testing.T) {
 		{"002_namespace.cql", "namespaces_by_uid"},
 		{"003_repository.cql", "repositories_by_uid"},
 		{"004_category_taxonomy.cql", "category_taxonomies_by_namespace"},
-		{"005_product.cql", "products_by_namespace"},
+		{"005_product.cql", "products_by_key"},
 		{"008_file.cql", "files_by_namespace"},
 	} {
 		assert.Containsf(t, createStatement(t, tc.file, tc.table), fullImageCDC, "%s CDC", tc.table)
@@ -50,7 +69,30 @@ func TestOnlyWatchedAuthoritativeTablesEnableCDC(t *testing.T) {
 		require.NoError(t, err)
 		count += strings.Count(strings.ToLower(string(raw)), "cdc = {")
 	}
-	assert.Equal(t, 5, count, "every CDC-enabled table must be a registered watch source")
+	assert.Equal(t, 5, count, "only the five current watch sources enable CDC")
+}
+
+func TestProductPartitionsSeparateEnvelopesNamesAndListings(t *testing.T) {
+	const file = "005_product.cql"
+	authority := strings.Join(strings.Fields(createStatement(t, file, "products_by_key")), " ")
+	assert.Contains(t, authority, "primary key ((namespace, creation_timestamp, uid))")
+	name := strings.Join(strings.Fields(createStatement(t, file, "products_by_identity")), " ")
+	assert.Contains(t, name, "primary key ((namespace, name))")
+	listing := strings.Join(strings.Fields(createStatement(t, file, "products_by_namespace_shard")), " ")
+	assert.Contains(t, listing, "primary key ((namespace, shard), creation_timestamp, uid)")
+	assert.Contains(t, listing, "shard tinyint")
+	assert.NotContains(t, listing, "status")
+	assert.NotContains(t, listing, "spec")
+	assert.NotContains(t, listing, "cdc")
+}
+
+func TestNamespaceCatalogFenceIsNotAWatchedResource(t *testing.T) {
+	statement := strings.Join(strings.Fields(createStatement(t, "002_namespace.cql", "namespace_catalog_fences_by_uid")), " ")
+	assert.Contains(t, statement, "uid uuid primary key")
+	assert.Contains(t, statement, "epoch bigint")
+	assert.Contains(t, statement, "pending bigint")
+	assert.NotContains(t, statement, "cdc")
+	assert.NotContains(t, statement, "default_time_to_live")
 }
 
 func TestResourceWatchJournalIsSharedAcrossKinds(t *testing.T) {
@@ -109,4 +151,14 @@ func TestMigrationStatementsSurviveGocqlxSplitting(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestCategoryAncestorIndexIsKeyedByNamespaceAndAncestor(t *testing.T) {
+	stmt := strings.Join(strings.Fields(createStatement(t, "010_category_ancestor_index.cql", "category_ancestor_index")), " ")
+	assert.Contains(t, stmt, "primary key ((namespace, ancestor), depth, descendant)")
+	assert.Contains(t, stmt, "clustering order by (depth asc, descendant asc)")
+	for _, column := range []string{"depth tinyint", "descendant_uid uuid", "resource_version text"} {
+		assert.Contains(t, stmt, column)
+	}
+	assert.NotContains(t, stmt, "cdc", "the ancestor index is a derived projection, not a watch source")
 }

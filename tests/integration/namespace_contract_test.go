@@ -29,7 +29,6 @@ var namespaceContractServer struct {
 	refs   int
 	apiURL string
 	cmd    *exec.Cmd
-	logs   bytes.Buffer
 }
 
 type namespaceContractHarness struct {
@@ -112,10 +111,9 @@ func acquireNamespaceContractAPI(t *testing.T) string {
 	defer namespaceContractServer.mu.Unlock()
 
 	if namespaceContractServer.cmd == nil {
-		apiURL, cmd, logs := startNamespaceContractAPIServer(t)
+		apiURL, cmd, _ := startNamespaceContractAPIServer(t)
 		namespaceContractServer.apiURL = apiURL
 		namespaceContractServer.cmd = cmd
-		namespaceContractServer.logs = *logs
 	}
 	namespaceContractServer.refs++
 	t.Cleanup(func() {
@@ -142,7 +140,6 @@ func releaseNamespaceContractAPI(t *testing.T) {
 
 	namespaceContractServer.apiURL = ""
 	namespaceContractServer.cmd = nil
-	namespaceContractServer.logs.Reset()
 }
 
 func startNamespaceContractAPIServer(t *testing.T) (string, *exec.Cmd, *bytes.Buffer) {
@@ -169,6 +166,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -187,18 +186,27 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type mockGitWriter struct {
 	mu sync.Mutex
+	seq int
+	heads map[string]string
+	trees map[string]map[string][]byte
 }
 
-type namespaceOwnerAuthZ struct{}
+// namespaceOwnerAuthZ mirrors namespace-scoped authorization: a non-admin
+// subject may act on categories only in a namespace it owns.
+type namespaceOwnerAuthZ struct {
+	store datastore.Datastore
+}
 
 func (*namespaceOwnerAuthZ) Name() string { return "namespace-owner-test" }
 
-func (*namespaceOwnerAuthZ) Authorize(
-	_ context.Context,
+func (n *namespaceOwnerAuthZ) Authorize(
+	ctx context.Context,
 	principal *authpkg.Principal,
 	_ string,
 	resource authpkg.ResourceContext,
@@ -206,46 +214,80 @@ func (*namespaceOwnerAuthZ) Authorize(
 	if principal.Subject == "admin" {
 		return authpkg.Allow("namespace-owner-test", "administrator"), nil
 	}
+	if namespace, _ := resource.Attrs["namespace"].(string); resource.Kind == "categoryTaxonomy" && namespace != "" {
+		if ns, err := n.store.GetNamespaceByName(ctx, namespace); err == nil && ns.EffectiveOwnerSub() != "" && ns.EffectiveOwnerSub() != principal.Subject {
+			return authpkg.Deny("namespace-owner-test", "namespace belongs to another user"), nil
+		}
+	}
 	if resource.OwnerSub != "" && resource.OwnerSub != principal.Subject {
 		return authpkg.Deny("namespace-owner-test", "resource belongs to another user"), nil
 	}
 	return authpkg.Allow("namespace-owner-test", "owner or unowned resource"), nil
 }
 
-func (m *mockGitWriter) CommitFile(_ context.Context, _ gitclient.CommitFileParams) (string, error) {
-	return "deadbeef", nil
+func (m *mockGitWriter) CommitFile(ctx context.Context, p gitclient.CommitFileParams) (string, error) {
+	return m.CommitFileForRepo(ctx, "", p)
 }
 
-func (m *mockGitWriter) CommitFileForRepo(_ context.Context, _ string, _ gitclient.CommitFileParams) (string, error) {
-	return "deadbeef", nil
+func (m *mockGitWriter) write(repo, path string, content []byte) string {
+	if m.heads == nil { m.heads = map[string]string{}; m.trees = map[string]map[string][]byte{} }
+	tree := map[string][]byte{}
+	for path, content := range m.trees[m.heads[repo]] { tree[path] = content }
+	if content == nil { delete(tree, path) } else { tree[path] = append([]byte(nil), content...) }
+	m.seq++
+	commit := fmt.Sprintf("%040x", m.seq)
+	m.trees[commit], m.heads[repo] = tree, commit
+	return commit
 }
 
-func (m *mockGitWriter) DeleteFileForRepo(_ context.Context, _ string, _ gitclient.DeleteFileParams) (string, error) {
-	return "cafe1234", nil
+func (m *mockGitWriter) CommitFileForRepo(_ context.Context, repo string, p gitclient.CommitFileParams) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.write(repo, p.Path, p.Content), nil
 }
 
-func (m *mockGitWriter) ResolveRefForRepo(_ context.Context, _ string, _ string) (string, error) {
-	return "deadbeef", nil
+func (m *mockGitWriter) DeleteFileForRepo(_ context.Context, repo string, p gitclient.DeleteFileParams) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p.ExpectedCommitSHA != "" && p.ExpectedCommitSHA != m.heads[repo] { return "", status.Error(codes.Aborted, "revision changed") }
+	return m.write(repo, p.Path, nil), nil
 }
 
-func (m *mockGitWriter) ReadFileForRepo(_ context.Context, _ string, _ string, _ string) ([]byte, error) {
-	return nil, nil
+func (m *mockGitWriter) ResolveRefForRepo(_ context.Context, repo string, _ string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.heads[repo], nil
 }
 
-func (m *mockGitWriter) ListFiles(_ context.Context, _ string, _ string, _ string) ([]string, error) {
-	return nil, nil
+func (m *mockGitWriter) ReadFileForRepo(_ context.Context, repo, path, ref string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if strings.HasPrefix(ref, "refs/") || ref == "HEAD" { ref = m.heads[repo] }
+	content, ok := m.trees[ref][path]
+	if !ok { return nil, status.Error(codes.NotFound, "file not found") }
+	return append([]byte(nil), content...), nil
 }
 
-func (m *mockGitWriter) ReadFile(_ context.Context, _ string, _ string, _ string) ([]byte, error) {
-	return nil, nil
+func (m *mockGitWriter) ListFiles(_ context.Context, repo, prefix, ref string) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if strings.HasPrefix(ref, "refs/") || ref == "HEAD" { ref = m.heads[repo] }
+	var paths []string
+	for path := range m.trees[ref] { if strings.HasPrefix(path, prefix) { paths = append(paths, path) } }
+	sort.Strings(paths)
+	return paths, nil
 }
 
-func (m *mockGitWriter) ResolveRef(_ context.Context, _ string, _ string) (string, error) {
-	return "deadbeef", nil
+func (m *mockGitWriter) ReadFile(ctx context.Context, repo, path, ref string) ([]byte, error) {
+	return m.ReadFileForRepo(ctx, repo, path, ref)
 }
 
-func (m *mockGitWriter) DeleteFile(_ context.Context, _ gitclient.DeleteFileParams) (string, error) {
-	return "cafe1234", nil
+func (m *mockGitWriter) ResolveRef(ctx context.Context, repo, ref string) (string, error) {
+	return m.ResolveRefForRepo(ctx, repo, ref)
+}
+
+func (m *mockGitWriter) DeleteFile(ctx context.Context, p gitclient.DeleteFileParams) (string, error) {
+	return m.DeleteFileForRepo(ctx, "", p)
 }
 
 func (m *mockGitWriter) CreateTag(_ context.Context, _ gitclient.CreateTagParams) (string, error) {
@@ -287,7 +329,7 @@ func main() {
 		JWT: config.JWTConfig{
 			Secret:   "namespace-contract-secret",
 			Issuer:   "gitstore",
-			Duration: "2h",
+			TTL:    2 * time.Hour,
 		},
 		ServiceAccount: config.ServiceAccountConfig{
 			Audience:   "gitstore-api",
@@ -315,7 +357,7 @@ func main() {
 	defer accessTokenProvider.Shutdown()
 	registry := authpkg.NewProviderRegistry(
 		authpkg.NewChainedAuthN(staticUsers, assertionProvider, accessTokenProvider, anonymous.New()),
-		&namespaceOwnerAuthZ{},
+		&namespaceOwnerAuthZ{store: store},
 		nil,
 	)
 	ids := apiruntime.NewSequenceIDGenerator()
@@ -356,6 +398,7 @@ func main() {
 	}
 	gitWriter := &mockGitWriter{}
 	committedAdmitter, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
+		Registry:    registry,
 		Store:       store,
 		GitReader:   gitWriter,
 		Logger:      zap.NewNop(),
@@ -465,7 +508,7 @@ func main() {
 
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(apiURL + "/playground")
+		resp, err := http.Get(apiURL + "/admin/playground")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -550,7 +593,7 @@ func gqlQueryWithURL(t *testing.T, apiURL, token, query string, vars map[string]
 		t.Fatalf("marshal gql request: %v", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, apiURL+"/graphql", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, apiURL+"/admin/graphql", bytes.NewReader(body))
 	if err != nil {
 		t.Fatalf("build graphql request: %v", err)
 	}
@@ -569,6 +612,7 @@ func gqlQueryWithURL(t *testing.T, apiURL, token, query string, vars map[string]
 	if err := json.NewDecoder(resp.Body).Decode(&gqlResp); err != nil {
 		t.Fatalf("decode gql response: %v", err)
 	}
+	gqlResp.Status = resp.StatusCode
 	return gqlResp
 }
 
@@ -672,9 +716,8 @@ func assertNamespaceContractShape(t *testing.T, got *namespaceContractNamespace,
 	if got.Status.ObservedGeneration != 1 {
 		t.Fatalf("status.observedGeneration = %d, want %d", got.Status.ObservedGeneration, 1)
 	}
-	if got.Status.LastAppliedRevision == nil || *got.Status.LastAppliedRevision != "main@sha1:deadbeef" {
-		t.Fatalf("status.lastAppliedRevision = %v, want %q", got.Status.LastAppliedRevision, "main@sha1:deadbeef")
-	}
+	require.NotNil(t, got.Status.LastAppliedRevision)
+	require.Regexp(t, `^main@sha1:[0-9a-f]{40}$`, *got.Status.LastAppliedRevision)
 	if len(got.Status.Conditions) != 1 ||
 		got.Status.Conditions[0].Type != "AdmissionAccepted" ||
 		got.Status.Conditions[0].Status != "TRUE" {
@@ -684,13 +727,6 @@ func assertNamespaceContractShape(t *testing.T, got *namespaceContractNamespace,
 
 func (h *namespaceContractHarness) cleanupNamespace(identifier string) {
 	h.t.Helper()
-
-	repoID, ok := h.lookupRepositoryID(identifier, namespaceContractSystemRepository)
-	if ok {
-		if errors := h.deleteRepositoryAndComplete(repoID); len(errors) > 0 {
-			h.t.Logf("cleanup deleteRepository(%s/%s) errors: %s", identifier, namespaceContractSystemRepository, namespaceContractErrors(errors))
-		}
-	}
 
 	namespaceID, ok := h.lookupNamespaceID(identifier)
 	if !ok {
@@ -748,15 +784,15 @@ func (h *namespaceContractHarness) lookupRepositoryID(namespace, name string) (s
 	return data.Repository.ID, true
 }
 
-func (h *namespaceContractHarness) requireDeleteSystemRepository(namespace string) {
+func (h *namespaceContractHarness) requireSystemDeletionRejected(namespace string) {
 	h.t.Helper()
 	repoID, ok := h.lookupRepositoryID(namespace, namespaceContractSystemRepository)
 	if !ok {
 		h.t.Fatalf("system repository %q not found in namespace %q", namespaceContractSystemRepository, namespace)
 	}
 
-	if errors := h.deleteRepositoryAndComplete(repoID); len(errors) > 0 {
-		h.t.Fatalf("graphql errors deleting system repository %s/%s: %s", namespace, namespaceContractSystemRepository, namespaceContractErrors(errors))
+	if errors := h.deleteRepositoryAndComplete(repoID); len(errors) == 0 {
+		h.t.Fatal("direct system repository deletion unexpectedly succeeded")
 	}
 }
 
@@ -810,17 +846,19 @@ func (h *namespaceContractHarness) deleteRepositoryAndComplete(repoID string) []
 		return []json.RawMessage{json.RawMessage(fmt.Sprintf(`{"message":%q}`, err.Error()))}
 	}
 	resp = h.gql(`
-		mutation($namespace: String!, $name: String!, $resourceVersion: String!) {
+		mutation($namespace: String!, $name: String!, $resourceVersion: String!, $uid: ID!) {
 			completeRepositoryDeletion(input: {
 				namespace: $namespace
 				name: $name
 				resourceVersion: $resourceVersion
+				id: $uid
 			}) { id }
 		}
 	`, map[string]any{
 		"namespace":       current.Repository.Metadata.Namespace,
 		"name":            current.Repository.Metadata.Name,
 		"resourceVersion": current.Repository.Metadata.ResourceVersion,
+		"uid":             repoID,
 	})
 	return resp.Errors
 }
@@ -841,7 +879,7 @@ func (h *namespaceContractHarness) createNamespace(identifier, title string) {
 		"apiVersion": "gitstore.dev/v1beta1",
 		"kind":       "Namespace",
 		"metadata":   map[string]any{"name": identifier},
-		"spec":       map[string]any{"title": title, "tier": "USER"},
+		"spec":       map[string]any{"title": title, "tier": "ORGANIZATION"},
 	}})
 	if len(resp.Errors) > 0 {
 		h.t.Fatalf("graphql errors creating namespace %q: %s", identifier, namespaceContractErrors(resp.Errors))
@@ -883,7 +921,7 @@ func TestNamespaceContract_QueryNamespaceProjectsDeclarativeFields(t *testing.T)
 	title := namespaceContractStringPtr("Namespace Contract Query")
 	h.createNamespace(identifier, *title)
 
-	resp := h.gqlAnonymous(`
+	resp := h.gql(`
 		query($identifier: String!) {
 			namespace(by: {name: $identifier}) {
 				id
@@ -931,7 +969,7 @@ func TestNamespaceContract_QueryNamespaceProjectsDeclarativeFields(t *testing.T)
 	if err := json.Unmarshal(resp.Data, &data); err != nil {
 		t.Fatalf("unmarshal namespace response: %v", err)
 	}
-	assertNamespaceContractShape(t, data.Namespace, identifier, title, "USER")
+	assertNamespaceContractShape(t, data.Namespace, identifier, title, "ORGANIZATION")
 }
 
 func TestNamespaceContract_NamespacesConnectionProjectsDeclarativeFields(t *testing.T) {
@@ -1009,7 +1047,7 @@ func TestNamespaceContract_NamespacesConnectionProjectsDeclarativeFields(t *test
 
 	for _, edge := range data.Namespaces.Edges {
 		if edge.Node != nil && edge.Node.Metadata != nil && edge.Node.Metadata.Name == identifier {
-			assertNamespaceContractShape(t, edge.Node, identifier, title, "USER")
+			assertNamespaceContractShape(t, edge.Node, identifier, title, "ORGANIZATION")
 			return
 		}
 	}
@@ -1070,7 +1108,7 @@ func TestNamespaceContract_DirectAndConnectionEnvelopeBodyParity(t *testing.T) {
 		body
 	}`
 
-	directResponse := h.gqlAnonymous(
+	directResponse := h.gql(
 		`query($identifier: String!) {
 			namespace(by: {name: $identifier}) `+selection+`
 		}`,
@@ -1092,7 +1130,7 @@ func TestNamespaceContract_DirectAndConnectionEnvelopeBodyParity(t *testing.T) {
 		t.Fatal("direct namespace metadata is nil")
 	}
 
-	connectionResponse := h.gqlAnonymous(
+	connectionResponse := h.gql(
 		`query {
 			namespaces(first: 100) {
 				edges {
@@ -1202,7 +1240,7 @@ func TestNamespaceContract_CreateNamespaceReturnsAdditiveContract(t *testing.T) 
 		"apiVersion": "gitstore.dev/v1beta1",
 		"kind":       "Namespace",
 		"metadata":   map[string]any{"name": identifier},
-		"spec":       map[string]any{"title": title, "tier": "USER"},
+		"spec":       map[string]any{"title": title, "tier": "ORGANIZATION"},
 	}})
 	if len(resp.Errors) > 0 {
 		t.Fatalf("graphql errors creating namespace additive contract: %s", namespaceContractErrors(resp.Errors))
@@ -1220,10 +1258,10 @@ func TestNamespaceContract_CreateNamespaceReturnsAdditiveContract(t *testing.T) 
 		t.Fatal("createNamespace payload is nil")
 	}
 	created = true
-	assertNamespaceContractShape(t, data.CreateNamespace.Namespace, identifier, namespaceContractStringPtr(title), "USER")
+	assertNamespaceContractShape(t, data.CreateNamespace.Namespace, identifier, namespaceContractStringPtr(title), "ORGANIZATION")
 }
 
-func TestNamespaceContract_DeleteNamespaceBehaviorUnchanged(t *testing.T) {
+func TestNamespaceContract_DeleteNamespaceFinalizesEmptySystemRepository(t *testing.T) {
 	h := newNamespaceContractHarness(t)
 	identifier := uniqueName("namespace-contract-delete")
 	displayName := fmt.Sprintf("Delete %s", identifier)
@@ -1236,11 +1274,11 @@ func TestNamespaceContract_DeleteNamespaceBehaviorUnchanged(t *testing.T) {
 
 	h.createNamespace(identifier, displayName)
 	created = true
-	h.requireDeleteSystemRepository(identifier)
+	h.requireSystemDeletionRejected(identifier)
 
 	namespaceID, ok := h.lookupNamespaceID(identifier)
 	require.True(t, ok)
-	resp := h.gql(`mutation($id: ID!) { deleteNamespace(input: {id: $id}) { namespace { id } outcome } }`, map[string]any{"id": namespaceID})
+	resp := h.gql(`mutation($id: ID!) { deleteNamespace(input: {id: $id}) { namespace { id metadata { resourceVersion } } outcome } }`, map[string]any{"id": namespaceID})
 	if len(resp.Errors) > 0 {
 		t.Fatalf("graphql errors deleting namespace: %s", namespaceContractErrors(resp.Errors))
 	}
@@ -1248,7 +1286,10 @@ func TestNamespaceContract_DeleteNamespaceBehaviorUnchanged(t *testing.T) {
 	var data struct {
 		DeleteNamespace *struct {
 			Namespace *struct {
-				ID string `json:"id"`
+				ID       string `json:"id"`
+				Metadata struct {
+					ResourceVersion string `json:"resourceVersion"`
+				} `json:"metadata"`
 			} `json:"namespace"`
 		} `json:"deleteNamespace"`
 	}
@@ -1261,5 +1302,12 @@ func TestNamespaceContract_DeleteNamespaceBehaviorUnchanged(t *testing.T) {
 	if data.DeleteNamespace.Namespace == nil || data.DeleteNamespace.Namespace.ID != namespaceID {
 		t.Fatalf("namespace ID = %+v, want %q", data.DeleteNamespace.Namespace, namespaceID)
 	}
+	resp = h.gql(`mutation($name: String!, $uid: ID!, $rv: String!) { completeNamespaceDeletion(input: {name: $name, id: $uid, resourceVersion: $rv}) { id } }`,
+		map[string]any{"name": identifier, "uid": namespaceID, "rv": data.DeleteNamespace.Namespace.Metadata.ResourceVersion})
+	require.Empty(t, resp.Errors)
+	_, exists := h.lookupNamespaceID(identifier)
+	require.False(t, exists)
+	_, exists = h.lookupRepositoryID(identifier, namespaceContractSystemRepository)
+	require.False(t, exists)
 	created = false
 }

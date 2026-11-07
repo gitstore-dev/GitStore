@@ -36,24 +36,10 @@ answered anyway:
 The authoritative current rows are replaced every time the admitted branch advances, so a flag on
 those rows can't hold a revision-, target- and time-specific answer.
 
-Other platforms separate these concerns in the following ways:
-
-- **commercetools** keeps a `staged` projection ("the draft data") and a `current` projection
-  ("the live version of the product data visible to customers"). Publishing copies `staged` to
-  `current`. Unpublishing "only sets the `published` flag to `false` … it does not alter the data
-  stored in the `current` or `staged` representations"
-  ([Product Projections](https://docs.commercetools.com/api/projects/productProjections)).
-- **Shopify** publishes a resource "to one or more publications" (sales channels), and "only
-  online store channels support scheduled publishing"
-  ([publishablePublish](https://shopify.dev/docs/api/admin-graphql/latest/mutations/publishablePublish)).
-- **Sanity Content Releases** "organize and schedule updates across multiple documents". A release
-  can also unpublish a live document, and publishing can be undone by "reverting the release"
-  ([Content Releases](https://www.sanity.io/docs/content-releases)).
-
-GitStore adopts the channel-scoped model (Shopify), the release as a unit of change across
-documents (Sanity), and an immutable live projection that stays separate from drafts
-(commercetools). Two properties are specific to GitStore: the unit of release is an immutable Git
-revision, and every write stays reviewable in Git.
+GitStore separates mutable private desired state from immutable, target-scoped
+public snapshots. A release groups changes across documents at one admitted Git
+revision. Publication controls where and when that snapshot is visible, and
+authored desired-state changes remain reviewable in Git.
 
 ## Decision
 
@@ -105,6 +91,10 @@ spec:
     - name: winter-coat
     variantRefs:
     - name: winter-coat-blue-m
+    resourceRefs:
+    - apiVersion: storefront.acme.example/v1alpha1
+      kind: PricingTable
+      name: winter-comparison
 ```
 
 - **Pinning.** At admission the API resolves `sourceRef` once, checks that the commit has an
@@ -135,6 +125,62 @@ spec:
 - **Status.** Conditions `SourcePinned`, `GatesSatisfied`, `SnapshotReady`, `TagObserved`,
   `TargetTrusted` and `Ready`. The status also records the snapshot digest, admission receipt ID,
   observed tag object ID and selected identities.
+
+### 2a. Custom resource selection and public projection
+
+`selection.resourceRefs` extends selection to explicitly named custom resources.
+Each reference includes `apiVersion`, `kind` and `name`; namespace and repository
+come from the release. Cross-namespace selection is rejected. Resolve references
+against the admitted pinned source tree, never current mutable rows. Reject
+duplicate identities across selection forms, unsupported versions, missing
+resources, and kinds without `spec.capabilities.catalog.releaseEligible: true`.
+
+The definition and namespace binding must be active under
+[ADR 0016](0016-custom-resource-definitions.md). `adminVisible` alone is not
+eligibility. Selecting a private-only configuration resource fails public
+preparation unless the kind defines the required reviewed projection. A package's
+requested catalog capability cannot override these checks.
+
+Snapshot preparation records source GVK, UID, generation, authored blob identity,
+pinned definition/schema/conversion digests, public serializer version, dependency
+closure and gate/evidence digests. `SchemaFields` uses an explicit allowlist and
+rejects credential references, internal status and private dependencies in public
+output. Body content follows ADR 0013; derived fields must be reproducible from
+the pinned material. Defaults and conversions are pinned; a later definition
+upgrade cannot reinterpret an existing public snapshot.
+
+Required dependencies must be resolvable and ready for the pinned revision.
+References to public resources are included in the bounded closure; runtime
+provider credentials are private dependencies, never serialized into it. Cycles,
+missing serializers, unsupported schema versions and excessive closure size
+fail preparation with typed diagnostics. Numeric size limits require benchmarked
+implementation defaults. The release author and preparation executor each need
+the relevant source-read and release authority through the configured provider.
+
+Required gates are revalidated at the release transition's commit boundary;
+conditions are cached observations, not authorization/evidence authority. Record
+the policy/issuer revisions used for approvals and attestations. Revocation
+before commitment prevents the transition. Later evidence revocation invokes
+the configured suppression/review policy rather than rewriting historical
+snapshots. An App disable/uninstall must not erase a required gate to authorize
+a release that would otherwise be denied.
+
+Derived releases may use `exclude.resourceRefs` with the same explicit identity
+shape; exclusion cannot leave a required public dependency dangling. Reject
+the derived release unless it also removes dependent selected resources.
+Snapshot readers retain the pinned serializers while snapshots remain referenced
+by publications or commerce records. App removal is not permission to purge them.
+
+Search and recommendation indexes are external serving projections of these
+snapshots. Partition them by namespace, target and snapshot digest. Changes to
+the active publication trigger index reconciliation without synthetic custom
+configuration writes. A backend result is only a candidate: the API checks
+membership, current suppression and request eligibility before returning it.
+Apply the same boundary to snippets, facets, counts and caches; filtering hits
+alone cannot hide private aggregate information. If the backend cannot supply
+safe aggregates, omit them or fail with a defined unavailable outcome. Never
+fall back to mutable administrative rows while an index is rebuilding. The
+complete lifecycle is in [ADR 0019 §7](0019-app-installation-and-platform-capabilities.md#7-use-case-search-and-recommendation).
 
 ### 3. Prepare early, verify the tag at activation
 
@@ -352,7 +398,7 @@ whenever the admitted branch advances (see Context).
 Rejected. It creates two admission sources, and merge order would decide visibility. Tags pin an
 exact revision without competing with the admission branch.
 
-### Unpublish by flipping a flag while keeping the live projection (commercetools model)
+### Unpublish solely by flipping a mutable visibility flag
 
 Rejected as the only mechanism. It fits one mutable live projection per product, but GitStore
 serves immutable per-target snapshots. A per-identity flag over a snapshot is exactly what

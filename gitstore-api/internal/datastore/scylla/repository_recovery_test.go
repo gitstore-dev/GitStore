@@ -16,6 +16,60 @@ import (
 
 const sagaTestRepositoryID = "11111111-1111-1111-1111-111111111111"
 
+// InjectRepositoryCompletionFailureForTest exposes the existing injector to
+// external-package Scylla integration tests without a production API.
+func InjectRepositoryCompletionFailureForTest(store datastore.Datastore, step string, after bool) func() {
+	s := store.(*scyllaDatastore)
+	previous := s.mutations.injector
+	injector := newTestFailureInjector()
+	point := failureBefore
+	if after {
+		point = failureAfter
+	}
+	injector.fail(step, point)
+	s.mutations.injector = injector
+	return func() { s.mutations.injector = previous }
+}
+
+func TestInfrastructureCompletionRetainsRowAcrossCleanupFailure(t *testing.T) {
+	rowExists, visible, cleaned := true, true, false
+	transient := errors.New("transient mapping cleanup failure")
+	attempts := 0
+	complete := func() error {
+		return runInfrastructureDeletionCompletion(func() error {
+			require.True(t, rowExists, "intent/finalizer must remain during cleanup")
+			visible = false
+			attempts++
+			if attempts == 1 {
+				return transient
+			}
+			cleaned = true
+			return nil
+		}, func() error {
+			require.True(t, cleaned, "no authoritative deletion before successful cleanup")
+			rowExists = false
+			return nil
+		}, func() error {
+			visible = true
+			return nil
+		})
+	}
+	require.ErrorIs(t, complete(), transient)
+	require.True(t, rowExists)
+	require.True(t, visible)
+	require.NoError(t, complete())
+	require.False(t, rowExists)
+}
+
+func TestInfrastructureCompletionConflictRestoresVisibility(t *testing.T) {
+	restored := false
+	err := runInfrastructureDeletionCompletion(func() error { return nil },
+		func() error { return datastore.ErrConflict },
+		func() error { restored = true; return nil })
+	require.ErrorIs(t, err, datastore.ErrConflict)
+	require.True(t, restored)
+}
+
 func TestNamespaceRepositoryReservationRetainsFenceAfterRepairRequiredOperation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	operationErr := datastore.NewRepairRequiredError(

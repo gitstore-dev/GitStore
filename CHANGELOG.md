@@ -1,5 +1,123 @@
 # Changelog
 
+## [0.1.0-alpha.9](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.8...v0.1.0-alpha.9) (2026-11-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** replace /graphql and api.port with /admin/graphql on api.admin_port and /storefront/graphql on api.storefront_port; upgrade API clients and routing together.
+* **scylla:** partition Products and isolate namespace catalog fences ([#527](https://github.com/gitstore-dev/GitStore/issues/527))
+* **api:** File reads now use file(by: FileBy!); the flat namespace/name query arguments are removed.
+
+### Features
+
+* **api:** split Admin and Storefront GraphQL endpoints ([#531](https://github.com/gitstore-dev/GitStore/issues/531)) ([be97e94](https://github.com/gitstore-dev/GitStore/commit/be97e94223b8151b158c043260ced4fca75eea4f))
+* **api:** unify resource metadata with scope-aware namespace validation ([#521](https://github.com/gitstore-dev/GitStore/issues/521)) ([4751d4e](https://github.com/gitstore-dev/GitStore/commit/4751d4e842851aac0b05aa6fdb68b594207dcae3))
+* **auth:** bound authorization decision diagnostics ([#536](https://github.com/gitstore-dev/GitStore/issues/536)) ([21984ed](https://github.com/gitstore-dev/GitStore/commit/21984ed9d011a4839c1aaa8fc5e9ce6c65bf0e63))
+* **auth:** expose bounded registry reload diagnostics ([#537](https://github.com/gitstore-dev/GitStore/issues/537)) ([824bb96](https://github.com/gitstore-dev/GitStore/commit/824bb96b9321ae04caba464863f7fe1b5d27ecec))
+* **controller:** record consumed resource snapshots ([#533](https://github.com/gitstore-dev/GitStore/issues/533)) ([52498f3](https://github.com/gitstore-dev/GitStore/commit/52498f33cbd2687f6b8226bc5139c1152fa0b19e))
+
+
+### Bug Fixes
+
+* **api:** align File lookups with resource selectors ([#523](https://github.com/gitstore-dev/GitStore/issues/523)) ([50f2da6](https://github.com/gitstore-dev/GitStore/commit/50f2da6c3f1f1702d9baa543be7c8d6c91b0d1ca))
+* **controller:** bind repository storage verification to UID ([#530](https://github.com/gitstore-dev/GitStore/issues/530)) ([3f08b65](https://github.com/gitstore-dev/GitStore/commit/3f08b656cf414d592a1be29e47cc829b286b3655))
+* **controller:** preserve authored catalog revisions ([#534](https://github.com/gitstore-dev/GitStore/issues/534)) ([7e934fd](https://github.com/gitstore-dev/GitStore/commit/7e934fd882d8b420692eb79664f650d0e6de907d))
+* **controller:** preserve category work across status conflicts ([#529](https://github.com/gitstore-dev/GitStore/issues/529)) ([4648798](https://github.com/gitstore-dev/GitStore/commit/4648798eea4a4cfca21e8db7fbc9a903deef627a))
+* **scylla:** partition Products and isolate namespace catalog fences ([#527](https://github.com/gitstore-dev/GitStore/issues/527)) ([e84c66c](https://github.com/gitstore-dev/GitStore/commit/e84c66cb697cd63c554f5750d54ce0befa13205f))
+
+
+### Documentation
+
+* clarify resource storage groups and operational guidance ([#528](https://github.com/gitstore-dev/GitStore/issues/528)) ([b7645d9](https://github.com/gitstore-dev/GitStore/commit/b7645d99d1c31c7821b36f5bcd0689ad17a8a374))
+
+## [0.1.0-alpha.8](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.7...v0.1.0-alpha.8) (2026-11-03)
+
+
+### ⚠ BREAKING CHANGES
+
+* **file:** select storage with spec.provider ([#515](https://github.com/gitstore-dev/GitStore/issues/515))
+* **api:** Missing typed and Node resources return null with NOT_FOUND diagnostics instead of silent absence. Invalid batch IDs return indexed BAD_USER_INPUT errors while retaining other authorized results.
+
+### Features
+
+* **infra:** add DigitalOcean infrastructure provisioning ([#514](https://github.com/gitstore-dev/GitStore/issues/514)) ([5be0f8b](https://github.com/gitstore-dev/GitStore/commit/5be0f8bb4e930ac07ef0b4d40b44edb638bef1d2))
+* **observability:** extract private bounded Go profiling ([#513](https://github.com/gitstore-dev/GitStore/issues/513)) ([d5da686](https://github.com/gitstore-dev/GitStore/commit/d5da6860a4141d94598b6f98db58438e212e429a))
+* **observability:** route core signals through the collector ([#511](https://github.com/gitstore-dev/GitStore/issues/511)) ([5369cca](https://github.com/gitstore-dev/GitStore/commit/5369ccaab8fd0c126392fb730e5bad02614d26db))
+
+
+### Bug Fixes
+
+* **api:** unify GraphQL resource lookup error envelopes ([#510](https://github.com/gitstore-dev/GitStore/issues/510)) ([85f5994](https://github.com/gitstore-dev/GitStore/commit/85f599405aa1a5bae736716d132fc6ca1a788d49))
+* **makefile:** separate controller signing generation and enrollment ([#517](https://github.com/gitstore-dev/GitStore/issues/517)) ([07ec053](https://github.com/gitstore-dev/GitStore/commit/07ec0530c9d260694c222506bf3be26c5ef45bc7))
+
+
+### Documentation
+
+* **architecture:** define app capabilities and installation contracts ([#507](https://github.com/gitstore-dev/GitStore/issues/507)) ([8ee50fd](https://github.com/gitstore-dev/GitStore/commit/8ee50fdf7b2efbe6001862fee1c2bafd44d0e5f9))
+* **auth:** align workload assertions with reference OIDC and UserDir ([#508](https://github.com/gitstore-dev/GitStore/issues/508)) ([99a9d3a](https://github.com/gitstore-dev/GitStore/commit/99a9d3a32eb1f590e1d24ac68a3d3e59df93b6b5))
+* **authorization:** explain local RBAC policies and examples ([#518](https://github.com/gitstore-dev/GitStore/issues/518)) ([dafde0a](https://github.com/gitstore-dev/GitStore/commit/dafde0a16182aa94671b7a3237973f5206410c16))
+* restore GitStore branding assets and README banner ([#520](https://github.com/gitstore-dev/GitStore/issues/520)) ([242a769](https://github.com/gitstore-dev/GitStore/commit/242a76955799b97ecbb096b86f114deb7e91ece5))
+* scope contributor instructions and general guardrails ([#519](https://github.com/gitstore-dev/GitStore/issues/519)) ([5ee783d](https://github.com/gitstore-dev/GitStore/commit/5ee783d539b82065286cbc448b6ededb9fc3e595))
+
+
+### Code Refactoring
+
+* **file:** select storage with spec.provider ([#515](https://github.com/gitstore-dev/GitStore/issues/515)) ([0065b76](https://github.com/gitstore-dev/GitStore/commit/0065b76c9d49fcfb0f66ac90b022558cf1164496))
+
+## [0.1.0-alpha.7](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.6...v0.1.0-alpha.7) (2026-10-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** adopt canonical authorization and cluster identities ([#453](https://github.com/gitstore-dev/GitStore/issues/453))
+
+### Features
+
+* **auth:** adopt canonical authorization and cluster identities ([#453](https://github.com/gitstore-dev/GitStore/issues/453)) ([4c16dbc](https://github.com/gitstore-dev/GitStore/commit/4c16dbc53feff278605ca3f3eadf4578a966bd46))
+* **auth:** authorize every complete*Deletion mutation as &lt;kind&gt;.purge ([#478](https://github.com/gitstore-dev/GitStore/issues/478)) ([aa839a6](https://github.com/gitstore-dev/GitStore/commit/aa839a6463297b1c33531aef47bfca81861679cf))
+* **category:** scope products to resolved subtree ([#480](https://github.com/gitstore-dev/GitStore/issues/480)) ([41e68ff](https://github.com/gitstore-dev/GitStore/commit/41e68ff39c4791f6750d358531e4e57ea45144b7))
+
+
+### Bug Fixes
+
+* **api:** align namespace and repository generation semantics ([#483](https://github.com/gitstore-dev/GitStore/issues/483)) ([9eb0f6b](https://github.com/gitstore-dev/GitStore/commit/9eb0f6b4aa21fb55e397ada65f461ea88d45b2e7))
+* **lifecycle:** align namespace and repository Git-backed deletion ([#485](https://github.com/gitstore-dev/GitStore/issues/485)) ([91ffa11](https://github.com/gitstore-dev/GitStore/commit/91ffa11eadf35d0448af286f4f5034aede820ef2))
+* preserve CDC ordering and concurrent Product updates ([#486](https://github.com/gitstore-dev/GitStore/issues/486)) ([b11da97](https://github.com/gitstore-dev/GitStore/commit/b11da979e1556ef066ae683992675eaa03aaf16d))
+
+## [0.1.0-alpha.6](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.5...v0.1.0-alpha.6) (2026-10-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** Category.path/depth and DeleteCategoryPayload.deletedCategoryId/ orphanedProductIds are removed; Namespace mutation errors use the shared envelope codes; RESOURCE_VERSION_CONFLICT is folded into CONFLICT; category reads and mutations require the categoryTaxonomy.* actions. Roll out the API before the controllers.
+* **config:** every renamed/removed config key and environment variable listed in docs/configuration.md's "Upgrading configuration" section now fails startup instead of silently falling back to a default. Operators must update config.toml and GITSTORE_* environment variables (including .env files, which this change does not touch) before upgrading. Highlights: auth.* -> api.auth.* (gitstore-api); auth.jwt.duration -> api.auth.jwt.ttl; auth.grpc.hmac_secret / GITSTORE_AUTH__GRPC__HMAC_SECRET -> grpc_auth.hmac_secret / GITSTORE_GRPC_AUTH__HMAC_SECRET (shared); datastore.* -> api.datastore.*; watch.namespace.* -> api.watch.journal.* (readers_enabled/materializer_enabled/cdc_retention_seconds/bucket_size removed); git.grpc.uri -> api.git_service.uri; grpc.port -> git_service. grpc_port; git.data_dir -> git_service.data_dir; git.repo.max_file_size / max_pack_size_bytes removed in favor of shared push_limits.max_file_size / max_pack_size (IEC size strings); hooks.git_receive_pack.* removed (always on); schema_validation.* / admission_control.* folded into git_service.validation.timeout / git_service.admission.branch_pattern; catalog_service.uri -> git_service.catalog.uri (now dns:///host:port); api.rate_limit_per_second/burst -> api.rate_limit.per_second/burst; controller.api_client.requests_per_second/burst -> controller.api_client.rate_limit.per_second/burst.
+* **api:** the config.go `features.namespace_repository_fence` key and the GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE environment variable are no longer recognised; config.Load() now fails startup with a clear error if either is present, instead of silently ignoring them. The NAMESPACE_REPOSITORY_FENCE_DISABLED GraphQL error code is removed, along with NamespaceRepositoryFenceMode/NamespaceRepositoryFenceEnabled() and the empty Features/FeatureConfig struct.
+
+### Features
+
+* **api:** Git-backed category mutations, subtree filter and shared mutation error envelope ([#383](https://github.com/gitstore-dev/GitStore/issues/383)) ([d5f4d2a](https://github.com/gitstore-dev/GitStore/commit/d5f4d2aa4dccb42f4c9a4ffc4fd07cf024c033bd))
+
+
+### Bug Fixes
+
+* **api:** align namespace completion and delete input shapes with other kinds ([#461](https://github.com/gitstore-dev/GitStore/issues/461)) ([df6d841](https://github.com/gitstore-dev/GitStore/commit/df6d8416136b3e891fef94461decba0a860257f6))
+* **api:** align Product Git mutations with admission ([#475](https://github.com/gitstore-dev/GitStore/issues/475)) ([b004f34](https://github.com/gitstore-dev/GitStore/commit/b004f34625178c2e450b53a86f086eecea43fa32))
+* **api:** make namespace repository fence always on and remove TransferRepository ([#457](https://github.com/gitstore-dev/GitStore/issues/457)) ([b01979a](https://github.com/gitstore-dev/GitStore/commit/b01979ac605ccbd51288b1e89012094c4a852bcf))
+* **api:** repair admission after API commits ([#473](https://github.com/gitstore-dev/GitStore/issues/473)) ([7cbb06a](https://github.com/gitstore-dev/GitStore/commit/7cbb06a1503c0584e2d7d224d62434301345a4ec))
+* **controller:** complete namespace deletion with the current payload shape ([#456](https://github.com/gitstore-dev/GitStore/issues/456)) ([9bd7b87](https://github.com/gitstore-dev/GitStore/commit/9bd7b877a11d7a79377760534be4858d37837809))
+* **scylla:** correct projection kind attribution ([#474](https://github.com/gitstore-dev/GitStore/issues/474)) ([04b523d](https://github.com/gitstore-dev/GitStore/commit/04b523deb3048959232fe4fc8b4655425e1ea82b))
+
+
+### Documentation
+
+* **adr:** define ADR status lifecycle and mark implemented decisions accepted ([#460](https://github.com/gitstore-dev/GitStore/issues/460)) ([4012a14](https://github.com/gitstore-dev/GitStore/commit/4012a14889edd5b1ad09338577197e81077b51fb))
+
+
+### Code Refactoring
+
+* **config:** group configuration by service and normalize durations, sizes and names ([#458](https://github.com/gitstore-dev/GitStore/issues/458)) ([ee19e7d](https://github.com/gitstore-dev/GitStore/commit/ee19e7d111b2b6dbde7c8e8ee8fd32b35603c6fc))
+
 ## [0.1.0-alpha.5](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.4...v0.1.0-alpha.5) (2026-10-05)
 
 

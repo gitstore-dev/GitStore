@@ -5,6 +5,8 @@ services:
       context: .
       dockerfile: docker/git-service.Dockerfile
     container_name: gitstore-git-service
+    environment:
+      - GITSTORE_OBSERVABILITY__OTLP__URI
     ports:
       - "${GITSTORE_HOST_GIT_GRPC_PORT:-50051}:50051"  # gRPC
     volumes:
@@ -18,8 +20,11 @@ services:
       context: .
       dockerfile: docker/api.Dockerfile
     container_name: gitstore-api
+    environment:
+      - GITSTORE_OBSERVABILITY__OTLP__URI
     ports:
-      - "${GITSTORE_HOST_API_PORT:-4000}:4000"  # GraphQL API
+      - "${GITSTORE_HOST_API_PORT:-4000}:4000"  # Admin GraphQL API
+      - "${GITSTORE_HOST_STOREFRONT_PORT:-4100}:4001"  # Storefront GraphQL API
       - "${GITSTORE_HOST_GIT_HTTP_PORT:-9000}:9000"  # Git smart HTTP
       - "${GITSTORE_HOST_CATALOG_GRPC_PORT:-6000}:6000"  # CatalogService gRPC
     depends_on:
@@ -40,6 +45,8 @@ services:
       context: .
       dockerfile: docker/controller-manager.Dockerfile
     container_name: gitstore-controller-manager
+    environment:
+      - GITSTORE_OBSERVABILITY__OTLP__URI
     ports:
       - "${GITSTORE_HOST_CONTROLLER_PORT:-5001}:5001"
     depends_on:
@@ -54,7 +61,76 @@ services:
       retries: 10
       start_period: 2s
 
+  otel-collector:
+    profiles: [observability]
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    command: ["--config=/etc/otelcol/config.yml"]
+    ports:
+      - "127.0.0.1:${OTLP_PORT:-4318}:4318"
+      - "127.0.0.1:${OTEL_HEALTH_PORT:-13133}:13133"
+    volumes:
+      - ./config/observability/otel-collector.yml:/etc/otelcol/config.yml:ro
+    depends_on: [tempo, loki]
+    mem_limit: 192m
+    cpus: "0.5"
+    networks: [gitstore-network]
+    logging: &bounded-logging
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:v3.5.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=24h
+      - --storage.tsdb.retention.size=256MB
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./config/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - observability-prometheus:/prometheus
+    depends_on: [otel-collector]
+    mem_limit: 256m
+    cpus: "0.5"
+    networks: [gitstore-network]
+    logging: *bounded-logging
+
+  tempo:
+    profiles: [observability]
+    image: grafana/tempo:2.10.8
+    command: ["-config.file=/etc/tempo/config.yml"]
+    environment:
+      GOMEMLIMIT: 256MiB
+    ports:
+      - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
+    volumes:
+      - ./config/observability/tempo.yml:/etc/tempo/config.yml:ro
+      - observability-tempo:/var/tempo
+    mem_limit: 384m
+    cpus: "0.5"
+    networks: [gitstore-network]
+    logging: *bounded-logging
+
+  loki:
+    profiles: [observability]
+    image: grafana/loki:3.7.8
+    command: ["-config.file=/etc/loki/config.yml"]
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+    volumes:
+      - ./config/observability/loki.yml:/etc/loki/config.yml:ro
+      - observability-loki:/loki
+    mem_limit: 384m
+    cpus: "0.5"
+    networks: [gitstore-network]
+    logging: *bounded-logging
+
 volumes:
+  observability-prometheus:
+  observability-tempo:
+  observability-loki:
   git-repo-data-root:
     driver: local
   api-serviceaccount-issuer-key:

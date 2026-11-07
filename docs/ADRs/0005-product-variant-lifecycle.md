@@ -1,6 +1,6 @@
 # ADR 0005: ProductVariant Lifecycle
 
-**Status**: Proposed
+**Status**: Accepted (2026-06-26)
 
 **Date**: 2026-06-26
 

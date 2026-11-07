@@ -30,7 +30,7 @@ delete/create operation rather than an in-place update. Product,
 CategoryTaxonomy, and Collection have no additional immutable authored fields;
 Repository rename is intentionally supported by its API contract.
 
-The validation call is **blocking** and has a configurable timeout (`GITSTORE_SCHEMA_VALIDATION__TIMEOUT_SECS`, default 10 seconds). If the validation service is unreachable or times out, the push is **rejected** (fail-closed).
+The validation call is **blocking** and has a configurable timeout (`git_service.validation.timeout`, env `GITSTORE_GIT_SERVICE__VALIDATION__TIMEOUT`, default `10s`). If the validation service is unreachable or times out, the push is **rejected** (fail-closed).
 
 All blobs are validated in a single RPC call. If any blob has violations, the push is rejected and all field-level errors are returned to the author via `git push` stderr output. No fail-fast — all blobs are checked before returning.
 
@@ -86,11 +86,11 @@ Duplicate SKU conflicts for `ProductVariant` are not inserted after detection. T
 
 ### Branch filtering
 
-Only pushes to refs matching `GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN` (default: `refs/heads/main`) trigger catalog storage. Pushes to feature branches pass validation but are not stored.
+Only pushes to refs matching `git_service.admission.branch_pattern` (env `GITSTORE_GIT_SERVICE__ADMISSION__BRANCH_PATTERN`, default: `^refs/heads/main$`) trigger catalog storage. Pushes to feature branches pass validation but are not stored.
 
 ### Branch deletion
 
-When a branch matching `GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN` is deleted via `git push origin --delete <branch>`, the git service forwards the deletion as an `AdmitResources` call with `new_commit_sha` set to the zero OID (`0000000000000000000000000000000000000000`). The API interprets this as a branch-delete and removes all catalog resources that were admitted on the deleted ref.
+When a branch matching `git_service.admission.branch_pattern` is deleted via `git push origin --delete <branch>`, the git service forwards the deletion as an `AdmitResources` call with `new_commit_sha` set to the zero OID (`0000000000000000000000000000000000000000`). The API interprets this as a branch-delete and removes all catalog resources that were admitted on the deleted ref.
 
 Branch-delete admission uses the same pattern filter as push admission — deleting a branch that does not match the pattern produces no admission activity. The call is fire-and-forget (non-blocking), consistent with all other post-receive admission calls.
 
@@ -106,63 +106,50 @@ main@sha1:a1b2c3d4e5f6...
 
 This provides a human-readable audit trail: branch name + commit SHA without requiring an extra lookup.
 
+## Push size limits
+
+Every push is bounded by a shared platform ceiling, configured as
+`push_limits.max_pack_size` (default `512MiB`) and `push_limits.max_file_size`
+(default `100MiB`) on both `gitstore-api` and `gitstore-git-service`. This
+ceiling is enforced at two points:
+
+1. **Namespace admission (`gitstore-api`)**: a Namespace's
+   `spec.pushPolicyDefaults.maxPackSizeBytes`/`maxFileSizeBytes` is rejected at
+   create/update time if it exceeds the configured ceiling. A Repository
+   created under that namespace inherits the namespace's defaults, or the
+   ceiling itself when the namespace sets no default.
+2. **Receive-pack clamp (`gitstore-git-service`)**: for every push, the git
+   service resolves the effective limit as
+   `effective = min(repository policy, ceiling)`, treating a `0`/absent
+   repository policy as the ceiling itself. There is no "0 = unlimited"
+   sentinel — every repository always has a positive, enforceable limit. A
+   pack or blob that exceeds the effective limit is rejected with
+   `RESOURCE_EXHAUSTED` before the push is accepted.
+
+Because namespace defaults are already validated against the ceiling at
+admission time, the git-service clamp is a defense-in-depth bound: it only
+takes effect if the ceiling itself is lowered after a repository's policy was
+set, or for repositories created before the ceiling existed.
+
+See [`push_limits`](../configuration.md#shared-push-size-ceiling) in the
+configuration reference for the full key/env-var table.
+
 ## Configuration reference
 
-| Environment variable                         | Default                 | Description                                               |
-|----------------------------------------------|-------------------------|-----------------------------------------------------------|
-| `GITSTORE_SCHEMA_VALIDATION__PHASE`          | `pre-receive`           | Hook phase for validation callout                         |
-| `GITSTORE_SCHEMA_VALIDATION__TIMEOUT_SECS`   | `10`                    | Validation gRPC timeout in seconds                        |
-| `GITSTORE_ADMISSION_CONTROL__PHASE`          | `post-receive`          | Hook phase for admission callout                          |
-| `GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN` | `refs/heads/main`       | Refs that trigger catalog storage (regex)                 |
-| `GITSTORE_CATALOG_SERVICE__URI`              | `http://localhost:6000` | gitstore-api gRPC endpoint                                |
-| `GITSTORE_API__GRPC_PORT`                    | `6000`                  | Port where gitstore-api listens for gRPC (CatalogService) |
+| Key                                     | Env Var                                           | Default                 | Description                                               |
+|--------------------------------------------|------------------------------------------------------|--------------------------|-------------------------------------------------------------|
+| `git_service.validation.timeout`        | `GITSTORE_GIT_SERVICE__VALIDATION__TIMEOUT`       | `10s`                    | Validation gRPC timeout (duration string, `ms\|s\|m\|h`)   |
+| `git_service.admission.branch_pattern`  | `GITSTORE_GIT_SERVICE__ADMISSION__BRANCH_PATTERN` | `^refs/heads/main$`      | Refs that trigger catalog storage (regex)                 |
+| `git_service.catalog.uri`               | `GITSTORE_GIT_SERVICE__CATALOG__URI`              | `dns:///localhost:6000`  | gitstore-api gRPC endpoint                                |
+| `push_limits.max_pack_size`              | `GITSTORE_PUSH_LIMITS__MAX_PACK_SIZE`             | `512MiB`                 | Platform ceiling for a push's total pack size (IEC size string) |
+| `push_limits.max_file_size`              | `GITSTORE_PUSH_LIMITS__MAX_FILE_SIZE`             | `100MiB`                 | Platform ceiling for a single file/blob in a push (IEC size string) |
+| `api.grpc_port`                         | `GITSTORE_API__GRPC_PORT`                         | `6000`                   | Port where gitstore-api listens for gRPC (CatalogService) |
 
-### Hook phase toggles
-
-Each `git-receive-pack` hook phase can be independently enabled or disabled. The env-var naming
-convention uses **double underscores** (`__`) as the level separator:
-
-| Environment variable                                               | Default | Description                          |
-|--------------------------------------------------------------------|---------|--------------------------------------|
-| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PRE_RECEIVE__ENABLED`           | `true`  | Enable pre-receive schema validation |
-| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__UPDATE__ENABLED`                | `false` | Enable update hook                   |
-| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_RECEIVE__ENABLED`          | `true`  | Enable post-receive admission        |
-| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__PROC_RECEIVE__ENABLED`          | `false` | Enable proc-receive hook             |
-| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__POST_UPDATE__ENABLED`           | `false` | Enable post-update hook              |
-| `GITSTORE_HOOKS__GIT_RECEIVE_PACK__REFERENCE_TRANSACTION__ENABLED` | `false` | Enable reference-transaction hook    |
-
-> **Separator note**: The field name `pre_receive` contains a single underscore. The env-var uses a
-> double underscore only between config-key levels, not within field names. So the correct var is
-> `...__PRE_RECEIVE__ENABLED`, not `...__PRE__RECEIVE__ENABLED`.
-
-### Startup observability
-
-At startup the git service emits a structured `info` log line (`"hook phases"`) that lists the
-enabled/disabled state of every `git_receive_pack` hook phase and the configured
-`admission_phase`. This is the canonical way to confirm that an environment variable override took
-effect without making a push.
-
-Example JSON log (default configuration):
-
-```json
-{
-  "timestamp": "2026-01-01T00:00:00Z",
-  "level": "INFO",
-  "fields": {
-    "pre_receive": true,
-    "update": false,
-    "post_receive": true,
-    "proc_receive": false,
-    "post_update": false,
-    "reference_transaction": false,
-    "schema_validation_phase": "pre-receive",
-    "admission_phase": "post-receive",
-    "message": "hook phases"
-  }
-}
-```
-
-> **Phase conflict**: `GITSTORE_SCHEMA_VALIDATION__PHASE` and `GITSTORE_ADMISSION_CONTROL__PHASE` must not be equal. The service refuses to start if they are the same.
+Pre-receive schema validation and post-receive admission control run
+unconditionally on every push — both phases are always on, with no toggle and
+no way to reorder or disable them. See the full
+[gitstore-git-service configuration reference](../configuration.md#gitstore-git-service)
+for every key above plus the shared `grpc_auth` and `log` settings.
 
 ## Metrics
 

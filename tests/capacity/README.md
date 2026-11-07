@@ -1,5 +1,98 @@
 # GitStore capacity profiles
 
+`api/endpoint-split` measures Admin and the unavailable Storefront boundary:
+
+```sh
+CAPACITY_ADMIN_URLS=http://localhost:4000/admin/graphql \
+CAPACITY_STOREFRONT_URLS=http://localhost:4100/storefront/graphql \
+make capacity TARGET=api PROFILE=endpoint-split MODE=diagnostic
+```
+
+URLs are complete and may be comma-separated for two replicas. Diagnostics
+default to ten seconds at 100 public requests/s and ten Admin probes/s;
+`CAPACITY_DURATION` changes diagnostic duration only. Acceptance uses 30 minutes
+at baseline, five minutes at twice the public rate, then 30 seconds of recovery.
+Use the existing private `CAPACITY_TOKEN_FILE` mechanism for credentials.
+The probe is `__typename`; authoring/status/push/watch correctness needs the
+connected drivers as well. Never target an operator deployment implicitly.
+
+Acceptance requires existing API readiness manifests/process verification,
+`CAPACITY_OWNED_PROJECT`, two `CAPACITY_CONTROLLER_CONTAINERS`, one
+`CAPACITY_GIT_SERVICE_CONTAINER`, and `CAPACITY_DATASET_RECEIPT`. The verified
+retained dataset receipt contains `verified=true`, `products>=5000000`,
+`categories>=10000`, two distinct `targets` and a SHA-256 `digest`. Inspect actual
+processes and verify the dataset independently; a manifest alone is insufficient.
+
+Use a fresh test-owned native-push repository for a repeatable timed workload;
+retain the datastore baseline and all earlier repository histories. Record the
+repository identity and initial commit count with the configuration. Clones retain
+full history; do not use shallow clones or extend command deadlines to hide setup
+failures from an accumulated fixture.
+
+The default `make test` and `make pr-ready` suites include local endpoint receipt,
+bounded push scheduling and controller counter-reset regressions. Controller
+progress compares one scrape's process identity and success counter: an unchanged
+process must advance, while a replacement must record successful work. Restarting
+without successful work does not pass. Live workloads remain explicit opt-ins.
+
+Acceptance automatically runs the existing repository workload/oracle with its
+own endpoint profile: twenty durable observers and two authoring operations/s,
+plus eight k6 Admin probes/s. It preserves the larger `repository/lifecycle`
+acceptance gates. The public load remains 100 requests/s, then 200/s for overload.
+Native pushes run separately at one/s with one worker by default and three
+pending offers per worker. Full pending budgets and missed producer deadlines
+count as dropped. Receipts identify `bounded-pending/v1`, the pending capacity
+and dispatch-delay distribution; push latency includes waiting from the original
+scheduled offer through acknowledgement. Pending work drains within the recorded
+completion window. A sustained rate above service capacity still exhausts the
+budget and fails the zero-drop gate. The acknowledgement verification queue is
+also finite. Every acknowledged commit must appear with the same UID,
+revision and Ready state on both Admin APIs within sixty seconds; those oracle
+reads are measurement overhead in addition to the offered workload.
+Two additional measurement streams require the same UID/commit through the
+durable journal on both APIs and resume from their last cursor after disconnect.
+The Git fixtures use normal clones and `fetch.negotiationAlgorithm=noop`;
+the native service currently returns invalid responses to shallow and incremental
+have/ACK negotiation. This standard client setting fetches without have negotiation
+and can increase transferred pack data. These runs do not certify those unsupported
+negotiation paths. Existing command deadlines and output bounds still apply.
+Prepare an empty owned workload namespace separately from the preserved catalog
+baseline, and a separate native-push repository inside that namespace. This keeps
+baseline Git trees out of authoring measurements and avoids competing clients on
+one branch. Setup never clones the retained catalog repository. The HTTP runners
+preallocate their declared maximum pools (100 public and 20 Admin clients) before
+measurement; client allocation is not part of the offered workload.
+
+Supply the usual `REPOSITORY_API_A/B`, `REPOSITORY_CONTROLLER_A/B`, private
+`CAPACITY_TOKEN_FILE`, and an owned API-B replacement watcher with a fresh
+`REPOSITORY_REPLACEMENT_TRIGGER_FILE`. Provide `REPOSITORY_CAPACITY_NAMESPACE`
+and `CAPACITY_PUSH_NAMESPACE` as the same explicit `endpoint-split-*` namespace,
+plus its prepared `CAPACITY_PUSH_REMOTE` and `CAPACITY_PUSH_REPOSITORY`.
+Set `GIT_URL` explicitly for the connected Git deletion/push parity checks. Keep
+the retained baseline outside these writable fixtures. The namespace/repository
+must be provisioned through normal bootstrap before the test; the runner does
+not infer or mutate an existing catalog repository.
+
+`CAPACITY_PROMETHEUS_URL` is required for acceptance, with shared OTLP/SDK
+telemetry enabled on both APIs. Samples include effective runtime ceilings,
+HTTP/WebSocket in-flight work, limiter cardinality, connection counts and process
+CPU/RSS/GC. Construction/cleanup tests cover the same limits without relying on
+query timings. Connected artifacts remain under the run's `connected/` directory;
+background children own finite deadlines/process groups and are stopped on exit.
+Drivers finish setup behind a shared, run-specific barrier before offered load
+starts. Both driver receipts must cover the entire k6 window; late scheduled
+pushes are counted as drops rather than disappearing through timer coalescing.
+Receipts must match source/config/environment identity and the full load window.
+Missing receipts, failed/dropped work or a measured ceiling breach fail acceptance.
+Error rates are enforced separately per endpoint. Any public data or malformed
+unavailable response fails outright. The final ten seconds of the recovery
+allowance must restore Admin latency/success and unthrottled unavailable responses.
+
+Boundary, publication-fixture and published-catalog outcomes are separate.
+HTTP 503 throughput never counts as successful catalog reads. Publication/target
+support and adversarial WebSocket pre-decode allocation bounds remain open.
+A diagnostic pass is not production certification.
+
 Capacity scenarios use k6 or focused Go harnesses for reproducible offered
 load and threshold decisions. Run them only through the root Makefile:
 
@@ -8,7 +101,7 @@ make capacity TARGET=api PROFILE=readiness MODE=diagnostic \
   CAPACITY_BASE_URL=http://localhost:4000
 ```
 
-Valid target/profile pairs are `api/readiness`, `namespace/admission`,
+Valid target/profile pairs are `api/readiness`, `api/endpoint-split`, `namespace/admission`,
 `namespace/validation`, `namespace/watch`, `namespace/recovery`,
 `repository/lifecycle`, and `scylla/soak`. Admission is deployed k6 load; validation is the in-process
 two-replica soak. `CAPACITY_PROFILE` is now only an internal k6 dispatch detail.
@@ -40,7 +133,7 @@ on the one Git service to avoid client-side non-fast-forward contention, and
 offers real pushes through a queue capped at 256. Missed schedules and drops are
 counted rather than hidden by ticker coalescing or retries. Every acknowledged
 batch is checked through both APIs' existing `nodes` query. Initial IDs come
-from persisted `file(namespace:, name:)` lookups of the 100 known fixture names
+from persisted `file(by: {namespacePath: {namespace:, name:}})` lookups of the 100 known fixture names
 on each API: ten aliases per request, a five-second request timeout, and a
 30-second bootstrap deadline. This is not an inventory scan or a subscription
 snapshot; subscribing after seed pushes cannot discover already-existing Files.
@@ -279,6 +372,12 @@ replacement with cursor-resumed recovery. Configure it with the
 `REPOSITORY_API_*`, `REPOSITORY_CONTROLLER_*`, `REPOSITORY_TOKEN[_FILE]`, and
 `REPOSITORY_CAPACITY_*` variables shown by `make help`. Diagnostic mode permits
 smaller experiments but never produces passing gate evidence.
+Sustained and burst arrivals follow absolute schedule times across the full
+offered window. Late arrivals are counted as missed schedules rather than
+replayed as catch-up work; missed schedules or an incomplete window fail the
+workload and are recorded separately from queue drops. Each mutation is sent
+once, so retries cannot disguise failed offered work; response capture is
+bounded and failure evidence omits response bodies.
 
 The managed alpha topology contains two APIs, one singleton Git service, two
 active-active controllers, and three Scylla nodes. The shared Git volume is not
@@ -303,17 +402,59 @@ replacement, evidence capture, and cleanup. Production mode does not create a
 local stack; point it at an externally managed topology with the documented
 `REPOSITORY_*` and `CAPACITY_*` variables. The managed alpha topology is
 defined in the shared `compose.capacity.yml` capacity overlay.
+Both controllers must report boolean readiness, credential readiness and
+registration of the exercised kind before load and after it. Startup polls
+within `REPOSITORY_CAPACITY_WAIT_SECONDS` (default 300 seconds). Failed post-run
+readiness or process-identity validation fails the command and marks existing
+`metadata.json` as failed, even when the load phase passed.
 
 When a load balancer or local container runtime buffers WebSocket traffic,
 point `REPOSITORY_OVERFLOW_API` at a reader-only API replica on the same
 datastore and journal. Configure only that chaos endpoint with
-`watch.namespace.subscriber_buffer=1` and
-`watch.namespace.subscriber_backpressure_millis=1`; the two measured API
+`api.watch.journal.subscriber.buffer=1` and
+`api.watch.journal.subscriber.backpressure=1ms`; the two measured API
 replicas must retain their production settings.
 
 The checked-in three-node profile defaults `SCYLLA_CLUSTER_MEMORY_LIMIT` to
 `3g` per node. Override it explicitly when testing another resource tier and
 set `CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE` to the corresponding byte value.
+
+## Historical controller observations (2026-10-05)
+
+These observations are relocated from the controller diagnostics runbook.
+They are **not production acceptance or the later six-hour laptop baseline**.
+The original summary did not record host sizing or the total Docker memory
+envelope, so use the complete original evidence before comparing hardware
+tiers or treating these numbers as a repeatable benchmark.
+
+The retained five-million-Product dataset was copied to a fresh baseline
+keyspace with authoritative-row and projection verification; the original
+keyspace was unchanged. Both APIs matched the acknowledged manifest through
+20,000 pages of 250 rows.
+
+| Observation | Result |
+| --- | --- |
+| Cold recovery, both controllers | 515.8 seconds; below the unchanged 600-second guard |
+| Persisted restart | 1.9-3.1 seconds; no Product relist |
+| Final hour-long load, controller cgroup peaks | About 352 / 464 MiB, including filesystem cache |
+| OOMs / automatic restarts in the final attempt | None |
+| Final File gate | Failed: 28,185 dropped offers, 548 failed completions, 636 projection failures |
+| Offered-to-push latency, including queue waiting | p95 about 160 seconds; p99 about 230 seconds |
+
+The recorded attempt was `441-overnight-production-20261005-1d3635f-retry`.
+Key overlap/retirement and scheduled controller replacement did not complete.
+A separate credential-outage check recovered controllers in about 24.6 / 20.9
+seconds. Cold recovery cgroup peaks were about 982 / 983 MiB; Docker allocation
+was not increased and integrated controllers had no individual memory cap.
+
+A separate 512-MiB-capped probe used 10,000 already-converged Products, made
+zero status writes, and used about 22 MiB of Go heap. It measured about
+2 million/s for memory lookup/reconciliation, 45,000/s for warm disk
+lookup/reconciliation, and 3,000/s for disk reconciliation with durable
+acknowledgement. These are small warm-working-set diagnostics, not
+five-million-row throughput extrapolations. The live dataset required initial
+status writes and drained at roughly 26-40/s, so that drain is not a pure
+cache benchmark either.
 
 ## Adding a profile
 
@@ -425,6 +566,44 @@ a default.
   requires nonzero admissions, zero failed checks, and cross-replica visibility
   at p95 <= 1 second and p99 <= 3 seconds. The Go watch verifier remains
   authoritative for replay, duplicates, cursor recovery, and replacement.
+
+- `category-hierarchy` (`make capacity TARGET=category PROFILE=hierarchy
+  MODE=<mode>`, spec 057) seeds a deterministic fan-out subtree of
+  `CAPACITY_CATEGORY_SUBTREE_SIZE` (default and alpha/production minimum 10,000)
+  descendants under one root, then sustains `createCategory`/`updateCategory`
+  at `CAPACITY_RATE` (default and minimum 20/s, one namespace,
+  `CAPACITY_CATEGORY_NAMESPACE`) alternating across both APIs, while paging
+  `categories(filter:{descendantOf,...}, first:100)`. Midway
+  (`CAPACITY_CATEGORY_REPARENT_AFTER_SECONDS`) the subtree root is re-parented
+  and cascade convergence is recorded as `category_cascade_convergence_ms`
+  (reported, not gated). Thresholds for alpha and production alike: mutation
+  p95 <= 750ms / p99 <= 2s; filtered page p95 <= 150ms / p99 <= 500ms, including
+  during the cascade. Other knobs: `CAPACITY_CATEGORY_FANOUT`,
+  `CAPACITY_CATEGORY_DURATION_SECONDS` (min 300 for gates),
+  `CAPACITY_CATEGORY_READ_RATE`, `CAPACITY_CATEGORY_CONVERGENCE_TIMEOUT_SECONDS`.
+  - **SC-009**: teardown waits for the cascade, walks every category's
+    `status.resolved.path`, and compares the walk with seven filtered result
+    sets (including `maxDepth`, `includeSelf` and an unknown root) fully paged
+    on each API replica; any missing or extra name fails.
+  - **SC-007**: each pool record (a created category or a seed updated once) is
+    touched by exactly one mutation. Each acknowledged payload must carry its own
+    name and title and a `metadata.revision` of the form `<branch>@sha1:<commit>` (40-64 hex commit); at teardown
+    the commits extracted from the stored revisions of all pool records must be pairwise distinct. This
+    needs `ObjectMeta.revision` populated on `Category`.
+  - **Concurrent pushes**: k6 cannot push, so the companion push driver
+    (`TestCapacityGitPushDriver` in `tests/integration/capacity_push_driver_test.go`,
+    enabled with `CAPACITY_PUSH_DRIVER=1`; see the file header for its
+    `CAPACITY_PUSH_*` settings) pushes commits to the same `gitstore-system`
+    repository for the duration of the load and writes `{"repository":"gitstore-system","pushes":N,"failures":0,
+    "firstPushMs":<epoch ms>,"lastPushMs":<epoch ms>}`. Pass its path as
+    `CAPACITY_CATEGORY_PUSH_EVIDENCE`; alpha/production require it and the
+    verifier requires the push window to cover at least half of the load window.
+  - **Faults**: reuse `tests/chaos/profiles/controller-restart.json` and
+    `api-restart.json` via `CAPACITY_CHAOS_PROFILE` (one per run) with
+    `CAPACITY_CHAOS_DELAY` set inside the load window (for example, the delay
+    that lands in the cascade). After recovery run `gitctl scylla-projection-audit`
+    and pass the output as `CAPACITY_CATEGORY_AUDIT_FILE`; alpha/production
+    require zero `findings`.
 
 Alpha and production modes refuse to run unless evidence
 declares at least two API replicas, three Scylla nodes with at least two shards

@@ -10,13 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
-	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // TestIntegration_Reconcile_SucceedsOnFirstAttempt covers FR-001: a resource
@@ -45,7 +45,7 @@ func TestIntegration_Reconcile_SucceedsOnFirstAttempt(t *testing.T) {
 		t.Fatalf("Register failed: %v", err)
 	}
 
-	before := testutil.ToFloat64(health.ReconcileTotal.WithLabelValues(kind, "success"))
+	before := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_reconcile_total", map[string]string{"kind": kind, "result": "success"})
 
 	go func() { _ = mgr.Start(ctx) }()
 
@@ -65,7 +65,7 @@ func TestIntegration_Reconcile_SucceedsOnFirstAttempt(t *testing.T) {
 	if got := r.callCount(); got != 1 {
 		t.Fatalf("reconciler call count = %d, want 1", got)
 	}
-	after := testutil.ToFloat64(health.ReconcileTotal.WithLabelValues(kind, "success"))
+	after := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_reconcile_total", map[string]string{"kind": kind, "result": "success"})
 	if after-before != 1 {
 		t.Errorf("ReconcileTotal{success} delta = %v, want 1", after-before)
 	}
@@ -105,7 +105,7 @@ func TestIntegration_Reconcile_TransientFailureThenSucceeds(t *testing.T) {
 		t.Fatalf("Register failed: %v", err)
 	}
 
-	beforeSuccess := testutil.ToFloat64(health.ReconcileTotal.WithLabelValues(kind, "success"))
+	beforeSuccess := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_reconcile_total", map[string]string{"kind": kind, "result": "success"})
 
 	go func() { _ = mgr.Start(ctx) }()
 
@@ -125,7 +125,7 @@ func TestIntegration_Reconcile_TransientFailureThenSucceeds(t *testing.T) {
 	if got := r.callCount(); got != int64(len(script)) {
 		t.Fatalf("reconciler call count = %d, want %d", got, len(script))
 	}
-	afterSuccess := testutil.ToFloat64(health.ReconcileTotal.WithLabelValues(kind, "success"))
+	afterSuccess := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_reconcile_total", map[string]string{"kind": kind, "result": "success"})
 	if afterSuccess-beforeSuccess != 1 {
 		t.Errorf("ReconcileTotal{success} delta = %v, want 1", afterSuccess-beforeSuccess)
 	}

@@ -3,9 +3,44 @@
 
 package memdb
 
-import "maps"
+import (
+	"encoding/binary"
+	"fmt"
+	"maps"
 
-import "github.com/hashicorp/go-memdb"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/hashicorp/go-memdb"
+)
+
+// repositoryNamespaceOrderIndex supports bounded first-page lifecycle probes
+// without materializing and sorting all repositories in the namespace.
+type repositoryNamespaceOrderIndex struct{}
+
+func (repositoryNamespaceOrderIndex) FromObject(raw interface{}) (bool, []byte, error) {
+	repository := raw.(*datastore.Repository)
+	key := append([]byte(repository.Namespace), 0)
+	key = binary.BigEndian.AppendUint64(key, ^(uint64(repository.CreationTimestamp.Unix()) ^ (1 << 63)))
+	key = binary.BigEndian.AppendUint32(key, ^uint32(repository.CreationTimestamp.Nanosecond()))
+	for _, value := range []byte(repository.UID) {
+		key = append(key, ^value)
+	}
+	return true, key, nil
+}
+
+func (repositoryNamespaceOrderIndex) FromArgs(args ...interface{}) ([]byte, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("repository namespace index requires one namespace")
+	}
+	namespace, ok := args[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("repository namespace index requires a string")
+	}
+	return append([]byte(namespace), 0), nil
+}
+
+func (index repositoryNamespaceOrderIndex) PrefixFromArgs(args ...interface{}) ([]byte, error) {
+	return index.FromArgs(args...)
+}
 
 var schema = &memdb.DBSchema{
 	Tables: map[string]*memdb.TableSchema{
@@ -20,7 +55,39 @@ var schema = &memdb.DBSchema{
 			"ancestor_path": optionalStringIndex("ancestor_path", "AncestorPath"),
 			"repository_id": optionalStringIndex("repository_id", "RepositoryID"),
 		}),
-		"service_account": resourceTableSchema("service_account", map[string]*memdb.IndexSchema{}),
+		"category_ancestor_index": {
+			Name: "category_ancestor_index",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {
+					Name:    "id",
+					Unique:  true,
+					Indexer: &memdb.StringFieldIndex{Field: "ID"},
+				},
+				"ancestor": {
+					Name:   "ancestor",
+					Unique: false,
+					Indexer: &memdb.CompoundIndex{Indexes: []memdb.Indexer{
+						&memdb.StringFieldIndex{Field: "Namespace"},
+						&memdb.StringFieldIndex{Field: "Ancestor"},
+					}},
+				},
+				"descendant": {
+					Name:   "descendant",
+					Unique: false,
+					Indexer: &memdb.CompoundIndex{Indexes: []memdb.Indexer{
+						&memdb.StringFieldIndex{Field: "Namespace"},
+						&memdb.StringFieldIndex{Field: "Descendant"},
+					}},
+				},
+			},
+		},
+		"service_account": {
+			Name: "service_account",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id":   {Name: "id", Unique: true, Indexer: &memdb.UUIDFieldIndex{Field: "UID"}},
+				"name": {Name: "name", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "Name"}},
+			},
+		},
 		"service_account_assertion_replay": {
 			Name: "service_account_assertion_replay",
 			Indexes: map[string]*memdb.IndexSchema{
@@ -113,9 +180,18 @@ var schema = &memdb.DBSchema{
 				"tier": optionalStringIndex("tier", "Tier"),
 			},
 		},
+		"deleted_repository": {
+			Name: "deleted_repository",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {Name: "id", Unique: true, Indexer: &memdb.UUIDFieldIndex{Field: "UID"}},
+			},
+		},
 		"repository": {
 			Name: "repository",
 			Indexes: map[string]*memdb.IndexSchema{
+				"namespace_created": {
+					Name: "namespace_created", Unique: true, Indexer: repositoryNamespaceOrderIndex{},
+				},
 				"id": {
 					Name:    "id",
 					Unique:  true,

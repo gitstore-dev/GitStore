@@ -23,6 +23,14 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+func TestGRPCMissingAuthorizerRejected(t *testing.T) {
+	client, err := gitclient.NewClientWithAddr(sharedGRPCAddr, testHmacSecret)
+	require.NoError(t, err)
+	defer client.Close()
+	_, err = client.CreateRepository(t.Context(), uuid.NewString(), "default")
+	require.ErrorIs(t, err, gitclient.ErrAuthorizationDenied)
+}
+
 // TestGRPCReadFileNotFound asserts GetFile returns an error when the path does not exist.
 func TestGRPCReadFileNotFound(t *testing.T) {
 	client, cleanup := startMutationContainer(t)
@@ -106,8 +114,8 @@ func TestGRPCGetLatestTagEmptyRepo(t *testing.T) {
 		Image:        "gitstore-git-service:latest",
 		ExposedPorts: []string{"50051/tcp"},
 		Env: map[string]string{
-			"GITSTORE_GRPC__PORT":              "50051",
-			"GITSTORE_AUTH__GRPC__HMAC_SECRET": testHmacSecret,
+			"GITSTORE_GIT_SERVICE__GRPC_PORT": "50051",
+			"GITSTORE_GRPC_AUTH__HMAC_SECRET": testHmacSecret,
 		},
 		WaitingFor: wait.ForListeningPort("50051/tcp").
 			WithStartupTimeout(60 * time.Second),
@@ -123,7 +131,7 @@ func TestGRPCGetLatestTagEmptyRepo(t *testing.T) {
 	grpcPort, err := container.MappedPort(ctx, "50051")
 	require.NoError(t, err)
 
-	c, err := gitclient.NewClientWithAddr(fmt.Sprintf("localhost:%s", grpcPort.Port()), testHmacSecret)
+	c, err := newContractClient(fmt.Sprintf("localhost:%s", grpcPort.Port()))
 	require.NoError(t, err)
 	defer c.Close()
 

@@ -12,13 +12,13 @@ import (
 
 type waitingSigner struct{}
 
-func (waitingSigner) SignAssertion(ctx context.Context, _, _ string, _ time.Duration, _ string) (string, error) {
+func (waitingSigner) SignAssertion(ctx context.Context, _ string, _ time.Duration, _ string) (string, error) {
 	<-ctx.Done()
 	return "", ctx.Err()
 }
 
 func TestExchangeBudgetIncludesSigning(t *testing.T) {
-	source := NewServiceAccountSource("http://unused.invalid", "controllers", "manager", waitingSigner{}, "assertion", "api", time.Minute, time.Hour)
+	source := NewServiceAccountSource("http://unused.invalid", "manager", waitingSigner{}, "assertion", "api", time.Minute, time.Hour)
 	source.exchangeTimeout = 20 * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -43,7 +43,7 @@ func TestBackoffClampsAfterJitter(t *testing.T) {
 }
 
 func TestCallerCancellationDoesNotBackoffOtherCallers(t *testing.T) {
-	source := NewServiceAccountSource("http://unused.invalid", "controllers", "manager", waitingSigner{}, "assertion", "api", time.Minute, time.Hour)
+	source := NewServiceAccountSource("http://unused.invalid", "manager", waitingSigner{}, "assertion", "api", time.Minute, time.Hour)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	_, err := source.Current(ctx)

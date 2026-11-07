@@ -1,11 +1,36 @@
 # GitStore Developer Guide
 
+Admin uses `/admin/graphql` on port 4000 and Storefront uses
+`/storefront/graphql` on port 4001. Configure `api.admin_port` and
+`api.storefront_port`; generic `api.port` is rejected. Health/readiness stay at
+the Admin root. The old `/graphql` and `/playground` paths are removed.
+`make generate TARGET=all` generates both explicit gqlgen configurations;
+aggregate checks verify deterministic output for both schemas.
+
+Playgrounds live at `/admin/playground` and `/storefront/playground`. Switching
+requires an explicit peer URL, closes subscriptions and clears headers; editor
+sessions are separate. Configure endpoint CORS for cross-origin use. Storefront
+currently returns a fixed unavailable response until publication/target support
+exists. See [configuration](configuration.md) for policies and resource bounds.
+
 **Date**: 2026-06-17
 
 **Audience**: Contributors, operators, and integration engineers
-**Prerequisites**: Docker, Git, Go, Rust, Make, curl, jq
+**Prerequisites**: Docker, Git, Go 1.27.2, Rust 1.99.1, Make, curl, jq
+
+Use Go 1.27.2 for the workspace and standalone modules. Rustup selects
+Rust 1.99.1 from the root `rust-toolchain.toml`, using the minimal profile
+with Clippy and rustfmt. The Cargo manifest declares the same minimum Rust
+version. CI and container builders use these compiler versions; when updating
+them, keep the workspace, module manifests, Rust toolchain file, Dockerfiles
+and CI setup steps aligned.
 
 This guide keeps implementation detail out of the user guide. It covers service topology, local development, datastore backends, hook/admission flow, controller-manager runtime, generated schema/proto workflow, and module responsibilities.
+
+Contributor procedures: [Make command reference](development/make-reference.md),
+[production-readiness testing](development/production-readiness-testing.md)
+and [release process](development/release-process.md). Deployment procedures and
+exceptional recovery are indexed separately in [Operations and Recovery](runbooks/README.md).
 
 ## Current Topology
 
@@ -15,7 +40,7 @@ graph TD
     GraphQLClient["GraphQL clients\nstorefront / admin / scripts"]
     Controller["gitstore-controller-manager\nport 5001"]
 
-    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 9000 (host)\nCatalogService gRPC: 6000"]
+    API["gitstore-api\nAdmin GraphQL: 4000\nStorefront GraphQL: 4001\nGit Smart HTTP: 9000 (host)\nCatalogService gRPC: 6000"]
     GitService["gitstore-git-service\nGitService gRPC: 50051"]
     Datastore["Datastore\nmemdb or ScyllaDB"]
     Repos["Bare repositories\nlocal filesystem"]
@@ -70,7 +95,7 @@ Makefile. Use `make capacity TARGET=<target> PROFILE=<scenario>
 MODE=<diagnostic|alpha|production>` for offered-load and threshold
 evidence, and `make chaos CHAOS_PROFILE=<profile>
 CHAOS_TARGET=<gitstore-container> CHAOS_CONFIRM=1` for bounded container fault
-injection. See [Production readiness testing](runbooks/production-readiness-testing.md)
+injection. See [Production readiness testing](development/production-readiness-testing.md)
 for profile authoring, correctness-verifier, evidence, and safety requirements.
 
 ## Local Development
@@ -89,15 +114,17 @@ Choose an alternate shared file with
 `make compose CONFIG_FILE=./config/config.stage.toml`; the selected host path
 is mounted at the same container path for every service.
 
-Run native services:
+Run native Git and API services in separate terminals (with their required
+environment configuration):
 
 ```bash
 make git
 make api
-make controller
 ```
 
-Run the Git service and API together in the foreground:
+Once the API is listening, follow the controller setup below. Alternatively,
+`make dev` generates/enrolls local credentials and runs all three core services
+together in the foreground with shutdown trapping:
 
 ```bash
 make dev
@@ -113,7 +140,8 @@ Useful variables:
 
 | Variable          | Default                         | Purpose                                     |
 |-------------------|---------------------------------|---------------------------------------------|
-| `API_URL`         | `http://localhost:4000/graphql` | Bootstrap GraphQL endpoint                  |
+| `API_URL`         | `http://localhost:4000/admin/graphql` | Bootstrap GraphQL endpoint                  |
+| `API_HEALTH_URL`  | Admin-root `/health` derived from `API_URL` | Native startup health probe; override for separate operational routing |
 | `ADMIN_USERNAME`  | `admin`                         | Login username                              |
 | `ADMIN_PASSWORD`  | unset                           | Login password for bootstrap token creation |
 | `BOOTSTRAP_TOKEN` | unset                           | Reuse an existing bearer token              |
@@ -121,6 +149,65 @@ Useful variables:
 | `REPOSITORY`      | `catalog`                       | Repository to create                        |
 | `DEFAULT_BRANCH`  | `main`                          | Repository default branch                   |
 | `CONFIG_FILE`     | `./config/config.toml`          | Shared local Compose configuration          |
+
+### Native controller credentials: generate → enroll → run
+
+With a running local API and the shipped development identity/policy fixtures:
+
+```bash
+make secret TARGET=signing-key
+make enroll-controller-serviceaccount
+make controller
+```
+
+Each command has a separate responsibility:
+
+| Command | Result with native defaults |
+|---------|-----------------------------|
+| `make secret TARGET=signing-key` | Creates `.gitstore/secrets/controller-manager/privateKey` and `.gitstore/secrets/controller-manager.json`, containing the matching private key and `controller-key` ID. No API connection is needed. |
+| `make enroll-controller-serviceaccount` | Registers the public key with the API and saves its assigned UID to `.gitstore/secrets/controller-manager/serviceaccount.env`. Does not write the JSON record or generate private material. |
+| `make controller` | Uses that JSON record and UID to run the controller. Missing material is an error; startup does not generate it. |
+
+The PEM and JSON record are private files (mode `0600`); never commit them or
+mount the controller record into the API/Git service. Re-running generation
+preserves an existing key and identical record. A different record/key ID is
+rejected, not overwritten; follow the
+[rotation runbook](runbooks/secret-material-rotation.md) for rotation.
+
+Enrollment uses `API_URL` (default `http://localhost:4000/admin/graphql`) and
+`DEV_ADMIN_USERNAME` / `DEV_ADMIN_PASSWORD` (local fixtures: `admin` / `admin123`).
+Use these fixture credentials only with local development APIs, never deployed
+environments. Enrollment re-enrolls the selected key ID with
+`--replace-existing-key`; it does not grant RBAC permissions. The shipped policy
+already binds the cluster-scoped `gitstore-controller-manager` account. No
+ServiceAccount namespace is accepted.
+
+Use the same `CONTROLLER_SECRET_DIR` (absolute path), `CONTROLLER_SECRET_NAME`,
+`CONTROLLER_SECRET_KEY`, and `CONTROLLER_SERVICEACCOUNT_KEY_ID` overrides across
+all three commands. For example, export them before running the sequence.
+`CONTROLLER_SERVICEACCOUNT_NAME` selects the account, while
+`CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE` can override the UID file destination.
+Changing the account name also requires matching policy bindings.
+
+For a custom signing-key destination, Make writes `<DESTINATION_PATH>.json` by
+default. Override `RECORD_OUTPUT_PATH` explicitly when the record must match a
+configured `key_ref.name`; relative paths resolve from the repository root:
+
+```bash
+make secret TARGET=signing-key \
+  DESTINATION_PATH=/run/controller-secrets/gitstore-controller-manager-signing-key \
+  RECORD_OUTPUT_PATH=/run/controller-secrets/gitstore-controller-manager-signing-key.json \
+  CONTROLLER_SERVICEACCOUNT_KEY_ID=controller-key
+```
+
+These output-path overrides apply to generation only; they do not reconfigure
+enrollment or controller startup. For a separate API issuer PEM without a
+controller record, use `RECORD_OUTPUT_PATH=` explicitly. Never reuse the
+controller private key as the API issuer key.
+
+`make compose` and `make dev` already automate their own generation and
+enrollment; the manual sequence above is for separately started native services.
+Compose keeps its credentials in dedicated volumes, separate from native files.
 
 ## Datastore Backends
 
@@ -198,11 +285,11 @@ projections:
 
 ```bash
 cd gitstore-api
-GITSTORE_DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
+GITSTORE_API__DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
   go run ./cmd/gitctl scylla-projection-audit
-GITSTORE_DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
+GITSTORE_API__DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
   go run ./cmd/gitctl scylla-projection-repair --dry-run
-GITSTORE_DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
+GITSTORE_API__DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
   go run ./cmd/gitctl scylla-projection-repair --confirm
 ```
 
@@ -238,12 +325,22 @@ The API is the Git Smart HTTP front door. The Rust Git service is gRPC-only stor
 5. In the blocking pre-receive phase, `gitstore-git-service` sends frontmatter resource blobs to `gitstore-api` via `CatalogService.ValidateResources`; when a resource is removed, it additionally sends the old and proposed trees to `CatalogService.ValidateResourceDeletions`.
 6. If validation passes, refs are updated and the push succeeds.
 7. In the post-receive phase, `gitstore-git-service` calls `CatalogService.AdmitResources` with repository ID, ref name, old commit SHA, and new commit SHA. New callers populate `new_commit_sha`; the deprecated `commit_sha` tag remains reserved for mixed-version decoding only.
-8. `gitstore-api` verifies that the ref still points at the admitted new commit, skips stale admissions if a newer push already won, compares old/new resource identities, applies admission checks, and creates, updates, or deletes hydrated records in the datastore.
+8. `gitstore-api` compares old/new resource identities, applies admission checks, and creates, updates, or deletes hydrated records in the datastore. Signed changed-path callbacks read the affected blobs directly instead of enumerating the whole repository. If a newer push has advanced the ref, a delayed callback can still project an unchanged manifest that remains at the current tip; changed or removed manifests and stale deletions are skipped. Delayed creates remain create-only through the atomic datastore write: an identity materialized by another replica is preserved, including its content and provenance, and create conflicts are skipped. Current create replays that converge an existing identity require UPDATE authorization as well as CREATE authorization. Authorization is checked again; independent Product and Category upserts verify their complete manifest at the live tip so unrelated pushes do not require a globally idle branch, and non-Namespace resources retain their original accepted source revision. Git read failures fail admission rather than implying a deleted manifest. Product and Category denial-status retries require the original source commit to remain the tip so an older denial cannot replace a newer accepted status.
 9. `gitstore-controller-manager` reconciles controller-owned status and operational follow-up through the API.
+
+The native Git service retains at most 64 reusable gix repository handles, with object-index slots sized by gix for each repository to avoid repeatedly discovering pack indexes for short operations. Ref advertisements read HEAD as a reference without loading its object. Post-receive index discovery and tree reads use the blocking pool so RPC streams can continue. Ref reads remain disk-backed; authorization and repository locks still apply on every request. Configuration changes and repository deletion invalidate cached handles. Small quarantine packs use a request-local gix object-memory view, capped at 64 objects, 2 MiB of pack data and 8 MiB of decoded object content, with an 8 MiB decoder allocation bound. Accepted small packs are published as loose objects within the same bounds, avoiding a new pack index for each incremental push. Larger packs use separate disk-backed object stores and remain packed on acceptance. Neither path retains rejected objects in live cached mappings. Unchanged resource blobs do not trigger deletion preflight when a push adds another file. Nonrecursive listings read only the requested level, so resolving a ref does not traverse descendant trees.
 
 The pre-receive phase is intentionally stateless and blocking. Admission can use datastore state and is allowed to complete asynchronously relative to the Git client acknowledgement.
 
 Admission identity is `apiVersion`, `kind`, resolved namespace, and `metadata.name`; the Git file path is stored as provenance only. A path move with the same identity preserves `metadata.uid` and only increments `resourceVersion`. Spec/body edits increment both `generation` and `resourceVersion`. Deleting a resource file removes the stored identity; adding the same identity again later allocates a new UID.
+
+Synchronous `updateRepository` authoring uses the same complete-manifest fence
+when another path advances the namespace system branch. Its status-conflict
+retries recheck authorization and the current manifest, retain the accepted
+source revision, and reject changed, removed or unreadable content. Updating
+one Repository therefore does not require other Repository authors to leave
+the shared branch idle. Creates and deletions retain their existing stricter
+revision checks.
 
 Post-receive admission cannot reject an already accepted Git push. DB-backed conflicts such as duplicate `ProductVariant.spec.sku` leave the existing resource unchanged, skip the conflicting incoming resource, and emit structured API logs with the operation, namespace, name, SKU, and conflicting identity.
 
@@ -259,7 +356,11 @@ Runtime pieces:
 - Quarantine for poison items after repeated failures.
 - Panic capture with stack traces.
 - Per-kind health statistics.
-- Prometheus metrics.
+- Collector-routed OTLP metrics, operational logs and traces when enabled.
+  See [telemetry configuration](configuration.md#collector-routed-telemetry).
+  Metrics originate from SDK instruments, including runtime and gRPC sources;
+  compatibility scrapes use SDK collection. See the contributor
+  [metrics inventory](implementation/041-sdk-native-metrics.md) for signal contracts.
 - List-then-watch bootstrap and `resourceVersion` checkpointing per registered kind (`internal/checkpoint`, `internal/listwatch`) — populates the informer cache on first start, resumes a watch stream from a persisted checkpoint after a restart, and recovers from a compacted watch cursor by re-listing (the `Runner[T]`/`ListWatcher[T]` wiring pattern); no concrete transport ships yet.
 
 HTTP surface on port `5001`:
@@ -267,7 +368,7 @@ HTTP surface on port `5001`:
 | Route                                                          | Purpose                                                              |
 |----------------------------------------------------------------|----------------------------------------------------------------------|
 | `GET /health`                                                  | Returns `ok` or `degraded` based on stalled workers and poison items |
-| `GET /metrics`                                                 | Prometheus metrics                                                   |
+| `GET /metrics`                                                 | Compatibility diagnostics; the collector topology does not scrape this route |
 | `GET /controller/v1/poison/{kind}`                             | List quarantined items for one kind                                  |
 | `GET /controller/v1/poison/_all`                               | List all quarantined items                                           |
 | `POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue` | Requeue one poison item                                              |
@@ -291,7 +392,7 @@ Important directories:
 |------------------------|-------------------------------------|
 | `cmd/server`           | API entrypoint                      |
 | `internal/app`         | Runtime composition                 |
-| `internal/graph`       | gqlgen resolvers and generated code |
+| `internal/admin/graph`       | gqlgen resolvers and generated code |
 | `internal/githttp`     | Smart HTTP front door               |
 | `internal/gitclient`   | GitService gRPC client              |
 | `internal/cataloggrpc` | CatalogService gRPC implementation  |
@@ -314,6 +415,12 @@ Purpose:
 - Own bare repository storage.
 - Serve GitService gRPC operations for repository lifecycle, ref advertisement, receive-pack, upload-pack, file reads, commits, deletes, and tags.
 - Run receive hook phases and call the API CatalogService.
+
+Fetch negotiation acknowledges only offered commit objects present in the
+repository, using the client's single-ACK, `multi_ack`, or
+`multi_ack_detailed` mode. Unknown objects and non-commit objects are not
+common commits. Negotiation responses end at their ACK/NAK packet; a completed
+negotiation sends a final ACK before the pack when a common commit is known.
 
 Important directories:
 
@@ -365,20 +472,19 @@ cd gitstore-controller-manager
 go test ./...
 ```
 
-Operations runbooks:
+Conditional recovery procedures are listed in the [operations index](runbooks/README.md):
 
-| Runbook                                                                              | Symptom                                                          |
-|--------------------------------------------------------------------------------------|------------------------------------------------------------------|
-| [`controller-lag`](runbooks/controller-lag.md)                                       | Queue depth growing, reconciles falling behind                   |
-| [`controller-replay-window-exceeded`](runbooks/controller-replay-window-exceeded.md) | Watch cursor expired / relist triggered                          |
-| [`controller-poisoned-item`](runbooks/controller-poisoned-item.md)                   | A resource repeatedly fails reconciliation                       |
-| [`controller-auth`](runbooks/controller-auth.md)                                     | Controller credential enrollment, renewal, or revocation failure |
+| Guide | Symptom |
+| --- | --- |
+| [Controller recovery](runbooks/controller-recovery.md) | Growing backlog, expired cursor, or quarantined work |
+| [Watch and status diagnostics](runbooks/controller-watch-status.md) | Watch disconnects, journal readiness, or sustained status conflicts |
+| [Controller authentication](runbooks/controller-auth.md) | Credential enrollment, renewal, or revocation failure |
 
 ## Generated Schema And Proto Workflow
 
 ### GraphQL
 
-Schema files live in [shared/schemas](../shared/schemas/). gqlgen configuration lives in [gitstore-api/gqlgen.yml](../gitstore-api/gqlgen.yml).
+Schema files live in [shared/schemas](../shared/schemas/). gqlgen configuration lives in [gitstore-api/gqlgen.admin.yml](../gitstore-api/gqlgen.admin.yml).
 
 When schema changes:
 
@@ -388,7 +494,7 @@ go generate ./...
 go test ./...
 ```
 
-Generated files are under `gitstore-api/internal/graph/generated` and `gitstore-api/internal/graph/model`.
+Generated files are under `gitstore-api/internal/admin/graph/generated` and `gitstore-api/internal/admin/graph/model`.
 
 ### Protobuf
 
@@ -446,23 +552,22 @@ Use Conventional Commits.
 
 | Env var                               | Default                  | Purpose                  |
 |---------------------------------------|--------------------------|--------------------------|
-| `GITSTORE_API__PORT`                  | `4000`                   | GraphQL HTTP port        |
+| `GITSTORE_API__ADMIN_PORT`                  | `4000`                   | GraphQL HTTP port        |
 | `GITSTORE_API__GIT_PORT`              | `9000`                   | Git Smart HTTP port      |
 | `GITSTORE_API__GRPC_PORT`             | `6000`                   | CatalogService gRPC port |
-| `GITSTORE_GIT__GRPC__URI`             | `dns:///localhost:50051` | GitService gRPC target   |
-| `GITSTORE_DATASTORE__BACKEND`         | `memdb`                  | `memdb` or `scylla`      |
-| `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE` | `auto` | `auto`, `disabled`, or `enabled`; see the Namespace admission runbook |
-| `GITSTORE_AUTH__JWT__SECRET`          | unset                    | JWT signing secret       |
-| `GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY` | unset | API-only service-account access-token signing key; required when service-account providers are enabled |
+| `GITSTORE_API__GIT_SERVICE__URI`      | `dns:///localhost:50051` | GitService gRPC target   |
+| `GITSTORE_API__DATASTORE__BACKEND`    | `memdb`                  | `memdb` or `scylla`      |
+| `GITSTORE_API__AUTH__JWT__SECRET`     | unset                    | JWT signing secret       |
+| `GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY` | unset | API-only service-account access-token signing key; required when service-account providers are enabled |
 
 ### Git Service
 
-| Env var                             | Default                 | Purpose                   |
-|-------------------------------------|-------------------------|---------------------------|
-| `GITSTORE_GRPC__PORT`               | `50051`                 | GitService gRPC port      |
-| `GITSTORE_GIT__DATA_DIR`            | `/var/lib/gitstore/repos` | Bare repository root    |
-| `GITSTORE_GIT__REPO__MAX_FILE_SIZE` | `52428800`              | Per-file limit            |
-| `GITSTORE_CATALOG_SERVICE__URI`     | `http://localhost:6000` | API CatalogService target |
+| Env var                                     | Default                   | Purpose                     |
+|-----------------------------------------------|------------------------------|--------------------------------|
+| `GITSTORE_GIT_SERVICE__GRPC_PORT`           | `50051`                   | GitService gRPC port        |
+| `GITSTORE_GIT_SERVICE__DATA_DIR`            | `/var/lib/gitstore/repos` | Bare repository root        |
+| `GITSTORE_PUSH_LIMITS__MAX_FILE_SIZE`       | `100MiB`                  | Shared platform file-size ceiling (IEC size string) |
+| `GITSTORE_GIT_SERVICE__CATALOG__URI`        | `dns:///localhost:6000`   | API CatalogService target (`dns:///host:port`) |
 
 ### Controller Manager
 
@@ -479,5 +584,5 @@ environment variables, defaults, and bootstrap requirements.
 - [CategoryTaxonomy Spec](categories/category-taxonomy-spec.md)
 - [Collection Spec](collections/collection-spec.md)
 - [ProductVariant Spec](products/product-variant-spec.md)
-- [Release Process](runbooks/release-process.md)
-- [Production Readiness Testing](runbooks/production-readiness-testing.md)
+- [Release Process](development/release-process.md)
+- [Production Readiness Testing](development/production-readiness-testing.md)

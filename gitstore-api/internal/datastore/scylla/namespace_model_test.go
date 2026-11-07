@@ -126,7 +126,7 @@ func TestServiceAccountListingUsesBoundedCursorQuery(t *testing.T) {
 		nil,
 	)
 
-	assert.Contains(t, query.Stmt, "FROM service_accounts_by_bucket")
+	assert.Contains(t, query.Stmt, "FROM service_accounts_by_cluster_bucket")
 	assert.Contains(t, query.Stmt, "bucket = ?")
 	assert.Contains(t, query.Stmt, "(creation_timestamp, uid) < (?, ?)")
 	assert.Contains(t, query.Stmt, "ORDER BY creation_timestamp DESC, uid DESC LIMIT 3")
@@ -159,8 +159,7 @@ func TestNamespaceMigrationUsesQueryFirstNamespaceTables(t *testing.T) {
 	assert.NotContains(t, schema, "TimeWindowCompactionStrategy")
 }
 
-// The schema is a single per-resource baseline; later changes are appended
-// as incremental migrations rather than edited into these files.
+// The schema retains its per-resource baseline and existing incremental files.
 func TestScyllaSchemaIsPerResourceBaseline(t *testing.T) {
 	entries, err := migrations.Files.ReadDir(".")
 	require.NoError(t, err)
@@ -182,7 +181,22 @@ func TestScyllaSchemaIsPerResourceBaseline(t *testing.T) {
 		"007_collection.cql",
 		"008_file.cql",
 		"009_service_account.cql",
+		"010_category_ancestor_index.cql",
+		"011_category_product_index.cql",
+		"012_repository_resource_membership.cql",
 	}, names)
+}
+
+func TestRepositoryMembershipMigrationDefinesOnlySharedTables(t *testing.T) {
+	content, err := migrations.Files.ReadFile("012_repository_resource_membership.cql")
+	require.NoError(t, err)
+	schema := string(content)
+	assert.Equal(t, 2, strings.Count(schema, "CREATE TABLE"))
+	assert.Contains(t, schema, "CREATE TABLE IF NOT EXISTS resources_by_repository (")
+	assert.Contains(t, schema, "PRIMARY KEY ((repository_id, shard), kind, uid)")
+	assert.Contains(t, schema, "CREATE TABLE IF NOT EXISTS repository_catalog_projection_state (")
+	assert.Contains(t, schema, "membership_ready boolean")
+	assert.NotContains(t, schema, "ALTER TABLE")
 }
 
 func TestInfraMigrationDefinesSharedTables(t *testing.T) {

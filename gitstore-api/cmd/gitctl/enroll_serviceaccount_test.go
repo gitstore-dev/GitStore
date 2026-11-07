@@ -30,6 +30,14 @@ func TestServiceAccountIdentityPublicationIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestEnrollServiceAccountRejectsRemovedNamespaceFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runEnrollServiceAccount([]string{"--namespace", "legacy"}, &stdout, &stderr)
+	if code != 2 || !strings.Contains(stderr.String(), "cluster-scoped") {
+		t.Fatalf("expected removed namespace diagnostic, code=%d stderr=%s", code, stderr.String())
+	}
+}
+
 func TestGenerateSigningRecordPreservesExistingKey(t *testing.T) {
 	root := t.TempDir()
 	keyPath, recordPath := filepath.Join(root, "private.pem"), filepath.Join(root, "controller.json")
@@ -100,7 +108,7 @@ func TestEnrollServiceAccountIsIdempotentAndDoesNotWriteCredentials(t *testing.T
 			_, _ = w.Write([]byte(`{"data":{"createServiceAccount":{"serviceAccount":{"metadata":{"uid":"uid-1"}}}}}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"errors":[{"message":"service account controllers:manager already exists"}]}`))
+		_, _ = w.Write([]byte(`{"errors":[{"message":"service account manager already exists"}]}`))
 	}))
 	defer server.Close()
 
@@ -109,7 +117,6 @@ func TestEnrollServiceAccountIsIdempotentAndDoesNotWriteCredentials(t *testing.T
 		"enroll-serviceaccount",
 		"--api-url", server.URL,
 		"--admin-token", adminToken,
-		"--namespace", "controllers",
 		"--name", "manager",
 		"--key-id", "key-1",
 		"--private-key-path", keyPath,

@@ -11,7 +11,9 @@ import (
 	"testing"
 
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -46,6 +48,29 @@ func (s *writeStub) CreateTag(_ context.Context, req *gitv1.CreateTagRequest) (*
 		return s.createTagFunc(req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not set up")
+}
+
+func TestBackingWriteUsesLiveInternalPolicy(t *testing.T) {
+	called := false
+	c := startBufconn(t, &writeStub{commitFileFunc: func(req *gitv1.CommitFileRequest) (*gitv1.CommitFileResponse, error) {
+		called = true
+		require.Equal(t, "system:api", req.Authorization.Actor.Subject)
+		require.Equal(t, "repository.contents.write", req.Authorization.Action)
+		return &gitv1.CommitFileResponse{CommitSha: "commit"}, nil
+	}})
+	allow := testutil.NewAllowAllAuthZ()
+	registry := auth.NewProviderRegistry(nil, allow, nil)
+	c.Registry = registry
+	ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "alice", AuthMethod: "static-users"})
+	_, err := c.CommitFile(ctx, gitclient.CommitFileParams{Path: "products/p.md"})
+	require.NoError(t, err)
+	require.True(t, called)
+	require.Equal(t, "alice", auth.PrincipalFromContext(ctx).Subject, "backing writer must not replace domain actor")
+	called = false
+	registry.Swap(nil, testutil.NewDenyAllAuthZ(t), nil)
+	_, err = c.CommitFile(ctx, gitclient.CommitFileParams{Path: "products/p.md"})
+	require.ErrorIs(t, err, gitclient.ErrAuthorizationDenied)
+	require.False(t, called, "live reload denial must prevent the Git RPC")
 }
 
 func TestCommitFile_OK(t *testing.T) {
@@ -116,6 +141,32 @@ func TestDeleteFile_NotFound(t *testing.T) {
 	_, err := c.DeleteFile(context.Background(), gitclient.DeleteFileParams{Path: "missing.md"})
 	require.Error(t, err)
 	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+func TestDeleteFile_Preconditions(t *testing.T) {
+	for _, guarded := range []bool{false, true} {
+		t.Run(map[bool]string{false: "legacy", true: "guarded"}[guarded], func(t *testing.T) {
+			p := gitclient.DeleteFileParams{Path: "products/p1.md"}
+			if guarded {
+				p.RefName = "refs/heads/catalog"
+				p.ExpectedCommitSHA = "0123456789012345678901234567890123456789"
+			}
+			c := startBufconn(t, &writeStub{
+				deleteFileFunc: func(req *gitv1.DeleteFileRequest) (*gitv1.DeleteFileResponse, error) {
+					assert.Equal(t, "selected-repository", req.RepositoryId)
+					assert.Equal(t, p.RefName, req.GetRefName())
+					assert.Equal(t, p.ExpectedCommitSHA, req.GetExpectedCommitSha())
+					if !guarded {
+						assert.Nil(t, req.RefName)
+						assert.Nil(t, req.ExpectedCommitSha)
+					}
+					return nil, status.Error(codes.Aborted, "ref changed")
+				},
+			})
+			_, err := c.DeleteFileForRepo(context.Background(), "selected-repository", p)
+			assert.Equal(t, codes.Aborted, status.Code(err))
+		})
+	}
 }
 
 func TestCreateTag_OK(t *testing.T) {

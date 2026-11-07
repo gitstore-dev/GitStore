@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -21,7 +23,7 @@ import (
 // terminal reason, never a Product identity, namespace, or durable cursor.
 func TestProductObservabilityContract_BoundedJournalAndAlertSignals(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	metrics, err := watchjournal.NewMetrics(registry)
+	metrics, err := watchjournal.NewMetrics(observabilitytest.Meter(t, registry, "gitstore/watchjournal"))
 	require.NoError(t, err)
 	metrics.SetLeader(true)
 	metrics.SetSubscribers("typed", 2)

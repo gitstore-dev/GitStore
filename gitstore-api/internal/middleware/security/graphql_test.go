@@ -7,14 +7,20 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,8 +28,6 @@ import (
 	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
-
-func ptr(s string) *string { return &s }
 
 func TestGraphQLAuthenticatorValidBearerInjectsPrincipal(t *testing.T) {
 	registry, staticAdmin := newTestRegistry(t)
@@ -54,6 +58,134 @@ func TestGraphQLAuthenticatorValidBearerInjectsPrincipal(t *testing.T) {
 	assert.Equal(t, "static-users", principal.AuthMethod)
 }
 
+func TestRepositoryNodeAbsenceDoesNotReachResolverOrHideOtherFailures(t *testing.T) {
+	const uid = "01960000-0000-7000-8000-000000000140"
+	id := base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Repository/" + uid))
+	for _, mode := range []string{"missing", "storage", "parent", "denied", "existing", "typed", "typed-storage", "typed-parent", "typed-denied", "typed-existing"} {
+		t.Run(mode, func(t *testing.T) {
+			outcome := strings.TrimPrefix(mode, "typed-")
+			reads := 0
+			store := &testutil.StubStore{
+				GetRepositoryFunc: func(context.Context, string) (*datastore.Repository, error) {
+					reads++
+					switch outcome {
+					case "missing", "typed":
+						return nil, datastore.ErrNotFound
+					case "storage":
+						return nil, errors.New("storage unavailable")
+					}
+					return &datastore.Repository{UID: uid, Name: "catalog", Namespace: "acme"}, nil
+				},
+				GetNamespaceByNameFunc: func(context.Context, string) (*datastore.Namespace, error) {
+					if outcome == "parent" {
+						return nil, datastore.ErrNotFound
+					}
+					return &datastore.Namespace{Name: "acme"}, nil
+				},
+			}
+			var provider auth.AuthZProvider = testutil.NewAllowAllAuthZ()
+			if outcome == "denied" {
+				provider = testutil.NewDenyAllAuthZ(t)
+			}
+			middleware := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, provider, nil), store, zap.NewNop())
+			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "reader", AuthMethod: "bearer"})
+			field := "node"
+			args := map[string]any{"id": id}
+			if mode == "typed" || strings.HasPrefix(mode, "typed-") {
+				field, args = "repository", map[string]any{"by": model.RepositoryBy{ID: &id}}
+			}
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+				Object: "Query", Field: graphql.CollectedField{Field: &ast.Field{Name: field}}, Args: args,
+			})
+			called := false
+			value, err := middleware.GraphQLFieldAuthorizer(ctx, func(next context.Context) (any, error) {
+				called = true
+				_, _, reused := AuthorizedRepositoryRead(next, model.RepositoryBy{ID: &id})
+				require.Equal(t, field == "repository", reused)
+				return "resolved", nil
+			})
+			require.Equal(t, 1, reads)
+			if mode == "missing" {
+				var notFound *gqlerror.Error
+				require.ErrorAs(t, err, &notFound)
+				require.Equal(t, "NOT_FOUND", notFound.Extensions["code"])
+				require.Nil(t, value)
+				require.False(t, called, "an absent UID must not be reread without authorization")
+			} else if outcome == "existing" {
+				require.NoError(t, err)
+				require.True(t, called)
+				require.Equal(t, "resolved", value)
+			} else {
+				require.Error(t, err)
+				require.False(t, called)
+				if mode == "typed" || outcome == "parent" {
+					var notFound *gqlerror.Error
+					require.ErrorAs(t, err, &notFound)
+					require.Equal(t, "NOT_FOUND", notFound.Extensions["code"])
+				}
+			}
+		})
+	}
+}
+
+func TestCatalogBoundariesUseStoredOwnersAndNamespaceOwnerForCreate(t *testing.T) {
+	store := &testutil.StubStore{
+		GetNamespaceByNameFunc: func(context.Context, string) (*datastore.Namespace, error) {
+			return &datastore.Namespace{Name: "acme", CreationActor: "namespace-owner"}, nil
+		},
+		GetCategoryTaxonomyByNameFunc: func(context.Context, string, string) (*datastore.CategoryTaxonomy, error) {
+			return &datastore.CategoryTaxonomy{Namespace: "acme", Name: "category", CreationActor: "category-owner"}, nil
+		},
+		GetFileByNameFunc: func(context.Context, string, string) (*datastore.File, error) {
+			return &datastore.File{Namespace: "acme", Name: "file", CreationActor: "file-owner"}, nil
+		},
+	}
+	for _, tc := range []struct {
+		object, field, owner string
+		args                 map[string]any
+	}{
+		{"Mutation", "createProduct", "namespace-owner", map[string]any{"input": model.CreateProductInput{Metadata: &model.ObjectMetaInput{Name: "widget", Namespace: new("acme")}}}},
+		{"Mutation", "createCategory", "namespace-owner", map[string]any{"input": model.CreateCategoryInput{Metadata: &model.ObjectMetaInput{Name: "category", Namespace: new("acme")}}}},
+		{"Query", "category", "category-owner", map[string]any{"by": struct {
+			NamespacePath *struct{ Namespace, Name string }
+		}{&struct{ Namespace, Name string }{"acme", "category"}}}},
+		{"Query", "file", "file-owner", map[string]any{"by": model.FileBy{NamespacePath: &model.FileNamespacePath{Namespace: "acme", Name: "file"}}}},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			recorder := testutil.NewAllowAllAuthZ()
+			middleware := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, recorder, nil), store, zap.NewNop())
+			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "alice", AuthMethod: "static-users"})
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: tc.object, Field: graphql.CollectedField{Field: &ast.Field{Name: tc.field}}, Args: tc.args})
+			_, err := middleware.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { return nil, nil })
+			require.NoError(t, err)
+			require.Equal(t, tc.owner, recorder.Resource.OwnerSub)
+		})
+	}
+}
+
+// assertAuthorizationCalls checks invocation count as well as exact canonical
+// action, kind and facts; a later successful call must not hide a missing or
+// incorrect earlier decision on aliased/nested/node fields.
+func assertAuthorizationCalls(t *testing.T, recorder *testutil.RecordingAuthZ, expected ...testutil.AuthorizationCall) {
+	t.Helper()
+	require.Equal(t, expected, recorder.Calls)
+}
+
+func TestAuthorizationRecorderRetainsAllBoundaryCalls(t *testing.T) {
+	recorder := testutil.NewAllowAllAuthZ()
+	principal := &auth.Principal{Subject: "alice", AuthMethod: "static-users"}
+	first := auth.ResourceContext{Kind: "repository", Name: "catalog", OwnerSub: "alice", Attrs: map[string]any{"namespace": "acme"}}
+	_, err := recorder.Authorize(t.Context(), principal, "repository.read", first)
+	require.NoError(t, err)
+	second := auth.ResourceContext{Kind: "product", Attrs: map[string]any{"namespace": "acme"}}
+	_, err = recorder.Authorize(t.Context(), principal, "product.list", second)
+	require.NoError(t, err)
+	assertAuthorizationCalls(t, recorder,
+		testutil.AuthorizationCall{Subject: "alice", Action: "repository.read", Resource: first},
+		testutil.AuthorizationCall{Subject: "alice", Action: "product.list", Resource: second},
+	)
+}
+
 func TestGraphQLAuthenticatorInvalidBearerReturnsGraphQLError(t *testing.T) {
 	registry, _ := newTestRegistry(t)
 	opCtx := &graphql.OperationContext{
@@ -76,6 +208,8 @@ func TestGraphQLAuthenticatorInvalidBearerReturnsGraphQLError(t *testing.T) {
 	require.NotEmpty(t, resp.Errors)
 	assert.False(t, called)
 	assert.Contains(t, resp.Errors[0].Message, "invalid or expired credentials")
+	assert.Equal(t, "UNAUTHENTICATED", resp.Errors[0].Extensions["code"])
+	assert.Empty(t, resp.Errors[0].Path, "credential rejection must precede field execution")
 }
 
 func TestGraphQLAuthorizerRequiresAuthForNonLoginMutation(t *testing.T) {
@@ -406,12 +540,253 @@ func assertAnonymousOperationRejected(t *testing.T, opCtx *graphql.OperationCont
 	assert.Contains(t, resp.Errors[0].Message, "authentication required")
 }
 
+func TestGraphQLAdditionalCatalogReadBoundaries(t *testing.T) {
+	store := &testutil.StubStore{
+		GetCollectionFunc: func(context.Context, string) (*datastore.Collection, error) {
+			return &datastore.Collection{Name: "summer", Namespace: "acme", CreationActor: "alice"}, nil
+		},
+		GetCollectionByNameFunc: func(context.Context, string, string) (*datastore.Collection, error) {
+			return &datastore.Collection{Name: "summer", Namespace: "acme", CreationActor: "alice"}, nil
+		},
+		GetProductVariantFunc: func(context.Context, string) (*datastore.ProductVariant, error) {
+			return &datastore.ProductVariant{Name: "blue", Namespace: "acme", CreationActor: "alice"}, nil
+		},
+		GetProductVariantByNameFunc: func(context.Context, string, string) (*datastore.ProductVariant, error) {
+			return &datastore.ProductVariant{Name: "blue", Namespace: "acme", CreationActor: "alice"}, nil
+		},
+		GetNamespaceByNameFunc: func(context.Context, string) (*datastore.Namespace, error) {
+			return &datastore.Namespace{Name: "acme", CreationActor: "alice"}, nil
+		},
+	}
+	for _, tc := range []struct {
+		object, field, action, name string
+		args                        map[string]any
+		parent                      any
+	}{
+		{"Query", "collection", "collection.read", "summer", map[string]any{"by": model.CollectionBy{NamespacePath: &model.CollectionNamespacePath{Namespace: "acme", Name: "summer"}}}, nil},
+		{"Query", "collections", "collection.list", "", map[string]any{"namespace": "acme"}, nil},
+		{"Query", "productVariant", "productVariant.read", "blue", map[string]any{"by": model.ProductVariantBy{NamespacePath: &model.ProductVariantNamespacePath{Namespace: "acme", Name: "blue"}}}, nil},
+		{"Query", "productVariants", "productVariant.list", "", map[string]any{"namespace": "acme"}, nil},
+		{"Query", "node", "collection.read", "summer", map[string]any{"id": base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Collection/id"))}, nil},
+		{"Query", "nodes", "productVariant.read", "blue", map[string]any{"ids": []string{base64.StdEncoding.EncodeToString([]byte("gid://GitStore/ProductVariant/id"))}}, nil},
+		{"Collection", "products", "product.list", "", nil, &model.Collection{Metadata: &model.ObjectMeta{Namespace: new("acme"), Name: "summer"}}},
+		{"Product", "productVariants", "productVariant.list", "", nil, &model.Product{Metadata: &model.ObjectMeta{Namespace: new("acme"), Name: "widget"}}},
+	} {
+		t.Run(tc.object+"."+tc.field, func(t *testing.T) {
+			recorder := testutil.NewAllowAllAuthZ()
+			mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, recorder, nil), store, zap.NewNop())
+			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "alice", AuthMethod: "static-users"})
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Result: tc.parent})
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: tc.object, Field: graphql.CollectedField{Field: &ast.Field{Name: tc.field}}, Args: tc.args})
+			_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { return nil, nil })
+			require.NoError(t, err)
+			require.Len(t, recorder.Calls, 1)
+			require.Equal(t, tc.action, recorder.Action)
+			require.Equal(t, tc.name, recorder.Resource.Name)
+			require.Equal(t, "acme", recorder.Resource.Attrs["namespace"])
+		})
+	}
+}
+
+func TestGraphQLCanonicalNamespaceBoundaries(t *testing.T) {
+	ns := &datastore.Namespace{UID: "ns-id", Name: "alice", CreationActor: "alice", Tier: datastore.NamespaceTierUser}
+	store := &testutil.StubStore{GetNamespaceFunc: func(context.Context, string) (*datastore.Namespace, error) { return ns, nil }, GetNamespaceByNameFunc: func(context.Context, string) (*datastore.Namespace, error) { return ns, nil }}
+	id := base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/ns-id"))
+	name := "alice"
+	for _, tc := range []struct {
+		object, field, action, name string
+		args                        map[string]any
+	}{
+		{"Query", "namespace", "namespace.read", "alice", map[string]any{"by": model.NamespaceBy{Name: &name}}},
+		{"Query", "namespaces", "namespace.list", "", nil},
+		{"Query", "node", "namespace.read", "alice", map[string]any{"id": id}},
+		{"Query", "nodes", "namespace.read", "alice", map[string]any{"ids": []string{id}}},
+		{"Mutation", "createNamespace", "namespace.create", "alice", map[string]any{"input": model.CreateNamespaceInput{Metadata: &model.ObjectMetaInput{Name: name}, Spec: &model.NamespaceSpecInput{Tier: model.NamespaceTierUser}}}},
+	} {
+		t.Run(tc.field, func(t *testing.T) {
+			recorder := testutil.NewAllowAllAuthZ()
+			mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, recorder, nil), store, zap.NewNop())
+			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "alice", AuthMethod: "static-users"})
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: tc.object, Field: graphql.CollectedField{Field: &ast.Field{Name: tc.field}}, Args: tc.args})
+			_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { return nil, nil })
+			require.NoError(t, err)
+			require.Len(t, recorder.Calls, 1)
+			require.Equal(t, tc.action, recorder.Action)
+			require.Equal(t, "namespace", recorder.Resource.Kind)
+			require.Equal(t, tc.name, recorder.Resource.Name)
+			if tc.field != "namespaces" {
+				require.Equal(t, "USER", recorder.Resource.Attrs["tier"])
+			}
+		})
+	}
+}
+
+func TestShippedPolicyGraphQLBoundaryBaseline(t *testing.T) {
+	provider, err := rbaclocal.New(config.RBACConfig{PolicyFile: "../../../../config/policy.yaml"}, zap.NewNop())
+	require.NoError(t, err)
+	principals := map[string]*auth.Principal{
+		"admin":      {Subject: "admin", AuthMethod: "static-users", Groups: []string{"system:authenticated"}},
+		"alice":      {Subject: "alice", AuthMethod: "static-users", Groups: []string{"system:authenticated"}},
+		"controller": {Subject: "system:serviceaccount:gitstore-controller-manager", AuthMethod: "serviceaccount-jwt", ServiceAccountUID: "enrolled-uid", Groups: []string{"system:authenticated", "system:serviceaccounts"}},
+		"internal":   {Subject: "system:api", AuthMethod: "internal", Groups: []string{"system:authenticated"}},
+		"anonymous":  auth.Anonymous(),
+	}
+	store := &testutil.StubStore{GetNamespaceByNameFunc: func(_ context.Context, name string) (*datastore.Namespace, error) {
+		return &datastore.Namespace{Name: name, CreationActor: name, Tier: datastore.NamespaceTierUser}, nil
+	}}
+	alice, bob := "alice", "bob"
+	for _, tc := range []struct {
+		field, object, action string
+		args                  map[string]any
+		allowed               map[string]bool
+	}{
+		{"namespace", "Query", "namespace.read", map[string]any{"by": model.NamespaceBy{Name: &alice}}, map[string]bool{"admin": true, "alice": true, "controller": true}},
+		{"namespace", "Query", "namespace.read", map[string]any{"by": model.NamespaceBy{Name: &bob}}, map[string]bool{"admin": true, "controller": true}},
+		{"namespaces", "Query", "namespace.list", nil, map[string]bool{"admin": true, "controller": true}},
+		{"watchProducts", "Subscription", "product.watch", map[string]any{"namespace": "acme"}, map[string]bool{"admin": true, "controller": true}},
+		{"updateProductStatus", "Mutation", "product.status.write", map[string]any{"input": model.UpdateProductStatusInput{Name: "widget", Namespace: "acme"}}, map[string]bool{"admin": true, "controller": true}},
+		{"completeNamespaceDeletion", "Mutation", "namespace.purge", map[string]any{"input": model.CompleteNamespaceDeletionInput{Name: "acme"}}, map[string]bool{"admin": true, "controller": true}},
+		{"createNamespace", "Mutation", "namespace.create", map[string]any{"input": model.CreateNamespaceInput{Metadata: &model.ObjectMetaInput{Name: "alice"}, Spec: &model.NamespaceSpecInput{Tier: model.NamespaceTierUser}}}, map[string]bool{"admin": true, "alice": true, "controller": true, "internal": true}},
+		{"createNamespace", "Mutation", "namespace.create", map[string]any{"input": model.CreateNamespaceInput{Metadata: &model.ObjectMetaInput{Name: "acme"}, Spec: &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization}}}, map[string]bool{"admin": true}},
+	} {
+		for name, principal := range principals {
+			t.Run(tc.field+"/"+tc.action+"/"+name+"/"+fmt.Sprint(tc.args), func(t *testing.T) {
+				recorder := testutil.NewRecordingAuthZ(provider)
+				mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, recorder, nil), store, zap.NewNop())
+				ctx := auth.ContextWithPrincipal(t.Context(), principal)
+				ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: tc.object, Field: graphql.CollectedField{Field: &ast.Field{Name: tc.field, Alias: "alias"}}, Args: tc.args})
+				called := false
+				_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
+				require.Equal(t, tc.allowed[name], called)
+				if called {
+					require.NoError(t, err)
+				} else {
+					require.Error(t, err)
+				}
+				require.Len(t, recorder.Calls, 1)
+				require.Equal(t, tc.action, recorder.Action)
+			})
+		}
+	}
+}
+
+func TestManagementOnlyPolicyAtProductAndVariantReadBoundaries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`apiVersion: rbac.authorization.gitstore.dev/v1beta1
+kind: RbacLocalConfiguration
+clusterRoles:
+  manager:
+    rules: [{resources: [product/management, productVariant/management], verbs: [read, list]}]
+roleBindings:
+  - namespace: acme
+    roleRef: {kind: ClusterRole, name: manager}
+    subjects: [{kind: User, name: alice}]
+`), 0600))
+	provider, err := rbaclocal.New(config.RBACConfig{PolicyFile: path}, zap.NewNop())
+	require.NoError(t, err)
+	store := &testutil.StubStore{
+		GetNamespaceByNameFunc: func(_ context.Context, name string) (*datastore.Namespace, error) {
+			return &datastore.Namespace{Name: name}, nil
+		},
+		GetProductByNameFunc: func(_ context.Context, ns, name string) (*datastore.Product, error) {
+			return &datastore.Product{Name: name, Namespace: ns}, nil
+		},
+		GetProductVariantByNameFunc: func(_ context.Context, ns, name string) (*datastore.ProductVariant, error) {
+			return &datastore.ProductVariant{Name: name, Namespace: ns}, nil
+		},
+	}
+	for _, ns := range []string{"acme", "other"} {
+		for _, tc := range []struct {
+			field, action string
+			args          map[string]any
+		}{
+			{"product", "product.read", map[string]any{"by": model.ProductBy{NamespacePath: &model.ProductNamespacePath{Namespace: ns, Name: "widget"}}}},
+			{"products", "product.list", map[string]any{"namespace": ns}},
+			{"productVariant", "productVariant.read", map[string]any{"by": model.ProductVariantBy{NamespacePath: &model.ProductVariantNamespacePath{Namespace: ns, Name: "blue"}}}},
+			{"productVariants", "productVariant.list", map[string]any{"namespace": ns}},
+		} {
+			t.Run(ns+"/"+tc.field, func(t *testing.T) {
+				recorder := testutil.NewRecordingAuthZ(provider)
+				mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, recorder, nil), store, zap.NewNop())
+				ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "alice", AuthMethod: "static-users"})
+				ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Query", Field: graphql.CollectedField{Field: &ast.Field{Name: tc.field}}, Args: tc.args})
+				called := false
+				_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
+				require.Equal(t, ns == "acme", called)
+				if called {
+					require.NoError(t, err)
+				} else {
+					require.Error(t, err)
+				}
+				require.Len(t, recorder.Calls, 2, "ordinary deny then independent management decision")
+				require.Equal(t, tc.action, recorder.Calls[0].Action)
+				require.Contains(t, recorder.Calls[1].Action, ".management.")
+				require.Equal(t, recorder.Calls[0].Resource, recorder.Calls[1].Resource)
+			})
+		}
+	}
+}
+
+func TestNamespaceTransferUsesNormalizedOwnerAndTierFacts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`apiVersion: rbac.authorization.gitstore.dev/v1beta1
+kind: RbacLocalConfiguration
+clusterRoles:
+  transfer:
+    rules:
+      - resources: [namespace]
+        verbs: [transfer]
+        when: [owner, targetOwnerMember, {attr: tier, op: eq, value: ORGANIZATION}]
+clusterRoleBindings:
+  - roleRef: {kind: ClusterRole, name: transfer}
+    subjects: [{kind: Group, name: 'system:authenticated'}]
+`), 0600))
+	provider, err := rbaclocal.New(config.RBACConfig{PolicyFile: path}, zap.NewNop())
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		kind          model.OwnerKind
+		name, encoded string
+		principal     *auth.Principal
+	}{
+		{model.OwnerKindUser, "alice", "alice", &auth.Principal{Subject: "alice", AuthMethod: "static-users", Groups: []string{"system:authenticated"}}},
+		{model.OwnerKindGroup, "team", "system:group:team", &auth.Principal{Subject: "alice", AuthMethod: "static-users", Groups: []string{"system:authenticated", "system:group:team"}}},
+		{model.OwnerKindServiceAccount, "ci", "system:serviceaccount:ci", &auth.Principal{Subject: "system:serviceaccount:ci", AuthMethod: "serviceaccount-jwt", ServiceAccountUID: "enrolled-uid", Groups: []string{"system:authenticated", "system:serviceaccounts"}}},
+	} {
+		for _, ownerPresent := range []bool{false, true} {
+			t.Run(string(tc.kind)+fmt.Sprint(ownerPresent), func(t *testing.T) {
+				ns := &datastore.Namespace{UID: "ns-id", Name: "acme", Tier: datastore.NamespaceTierOrganization}
+				if ownerPresent {
+					ns.Annotations = map[string]string{datastore.OwnerAnnotationKey: tc.encoded}
+				}
+				store := &testutil.StubStore{GetNamespaceFunc: func(context.Context, string) (*datastore.Namespace, error) { return ns, nil }}
+				recorder := testutil.NewRecordingAuthZ(provider)
+				mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, recorder, nil), store, zap.NewNop())
+				ctx := auth.ContextWithPrincipal(t.Context(), tc.principal)
+				ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Mutation", Field: graphql.CollectedField{Field: &ast.Field{Name: "transferNamespaceOwner"}}, Args: map[string]any{"input": model.TransferNamespaceOwnerInput{NamespaceID: base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/ns-id")), TargetOwnerRef: &model.ResourceOwnerInput{Kind: tc.kind, Name: tc.name}}}})
+				called := false
+				_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
+				require.Equal(t, ownerPresent, called)
+				if called {
+					require.NoError(t, err)
+				} else {
+					require.Error(t, err)
+				}
+				require.Len(t, recorder.Calls, 1)
+				require.Equal(t, "namespace.transfer", recorder.Action)
+				require.Equal(t, "ORGANIZATION", recorder.Resource.Attrs["tier"])
+				kind, name := datastore.DecodeOwnerSubject(tc.encoded)
+				require.Equal(t, map[string]any{"kind": string(kind), "name": name}, recorder.Resource.Attrs["targetOwnerRef"])
+			})
+		}
+	}
+}
+
 func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationUsesPolicy(t *testing.T) {
 	authz := testutil.NewAllowAllAuthZ()
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "bob", AuthMethod: "static-users", Roles: []string{"developer"}})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "bob", AuthMethod: "static-users"})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "createNamespace"}},
@@ -419,7 +794,7 @@ func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationUsesPolicy(t *testing.
 			"input": model.CreateNamespaceInput{
 				APIVersion: "gitstore.dev/v1beta1",
 				Kind:       "Namespace",
-				Metadata:   &model.NamespaceMetadataInput{Name: "acme"},
+				Metadata:   &model.ObjectMetaInput{Name: "acme"},
 				Spec:       &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization},
 			},
 		},
@@ -432,7 +807,8 @@ func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationUsesPolicy(t *testing.
 	})
 	require.NoError(t, err)
 	assert.True(t, called)
-	assert.Equal(t, "namespace.create.organization", authz.Action)
+	assert.Equal(t, "namespace.create", authz.Action)
+	assert.Equal(t, "acme", authz.Resource.Name)
 }
 
 func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationFailsWithoutAuthZ(t *testing.T) {
@@ -446,7 +822,7 @@ func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationFailsWithoutAuthZ(t *t
 			"input": model.CreateNamespaceInput{
 				APIVersion: "gitstore.dev/v1beta1",
 				Kind:       "Namespace",
-				Metadata:   &model.NamespaceMetadataInput{Name: "acme"},
+				Metadata:   &model.ObjectMetaInput{Name: "acme"},
 				Spec:       &model.NamespaceSpecInput{Tier: model.NamespaceTierOrganization},
 			},
 		},
@@ -476,7 +852,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenyFromPolicy(t *testing.T) {
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
 		Args: map[string]any{
-			"input": model.DeleteNamespaceInput{ID: ptr(base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/acme")))},
+			"input": model.DeleteNamespaceInput{ID: base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/acme"))},
 		},
 	})
 
@@ -488,7 +864,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenyFromPolicy(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, called)
 	assert.Contains(t, err.Error(), "permission denied")
-	assert.Equal(t, "namespace.delete.any", authz.Action)
+	assert.Equal(t, "namespace.delete", authz.Action)
 }
 
 func TestGraphQLFieldAuthorizerDeleteNamespaceDenialHidesDeletionDetails(t *testing.T) {
@@ -529,7 +905,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespaceDenialHidesDeletionDetails(t *test
 				Object: "Mutation",
 				Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
 				Args: map[string]any{
-					"input": model.DeleteNamespaceInput{ID: ptr(base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/" + tc.namespace.UID)))},
+					"input": model.DeleteNamespaceInput{ID: base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/" + tc.namespace.UID))},
 				},
 			})
 
@@ -564,7 +940,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespacePassesAuthorizedRecord(t *testing.
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "deleteNamespace"}},
 		Args: map[string]any{
-			"input": model.DeleteNamespaceInput{ID: ptr(base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/acme")))},
+			"input": model.DeleteNamespaceInput{ID: base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/acme"))},
 		},
 	})
 
@@ -575,7 +951,7 @@ func TestGraphQLFieldAuthorizerDeleteNamespacePassesAuthorizedRecord(t *testing.
 		return "ok", nil
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "namespace.delete.own", authz.Action)
+	assert.Equal(t, "namespace.delete", authz.Action)
 }
 
 func TestGraphQLFieldAuthorizerUpdateCategoryStatusUsesPolicy(t *testing.T) {
@@ -583,7 +959,7 @@ func TestGraphQLFieldAuthorizerUpdateCategoryStatusUsesPolicy(t *testing.T) {
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-users", Roles: []string{"controller"}})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-users"})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "updateCategoryStatus"}},
@@ -603,7 +979,81 @@ func TestGraphQLFieldAuthorizerUpdateCategoryStatusUsesPolicy(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, called)
-	assert.Equal(t, "category.status.write", authz.Action)
+	assert.Equal(t, "categoryTaxonomy.status.write", authz.Action)
+}
+
+func TestGraphQLFieldAuthorizerCompleteNamespaceDeletionUsesControllerPolicy(t *testing.T) {
+	authz := testutil.NewDenyAllAuthZ(t)
+	registry := auth.NewProviderRegistry(nil, authz, nil)
+	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "untrusted", AuthMethod: "static-users"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Mutation",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "completeNamespaceDeletion"}},
+		Args:   map[string]any{"input": model.CompleteNamespaceDeletionInput{ID: "Z2lkOi8vR2l0U3RvcmUvTmFtZXNwYWNlL25hbWVzcGFjZS0x", Name: "obsolete", ResourceVersion: "7"}},
+	})
+
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+		called = true
+		return "ok", nil
+	})
+	require.Error(t, err)
+	assert.False(t, called)
+	assert.Equal(t, "namespace.purge", authz.Action)
+	var graphErr *gqlerror.Error
+	require.ErrorAs(t, err, &graphErr)
+	assert.Equal(t, "FORBIDDEN", graphErr.Extensions["code"])
+}
+
+func TestCompletionMutationsRequireIndependentPurgeGrant(t *testing.T) {
+	for _, tc := range []struct {
+		field, kind string
+		input       any
+	}{
+		{"completeNamespaceDeletion", "namespace", model.CompleteNamespaceDeletionInput{Name: "obsolete", ResourceVersion: "7"}},
+		{"completeRepositoryDeletion", "repository", model.CompleteRepositoryDeletionInput{Namespace: "acme", Name: "obsolete", ResourceVersion: "7"}},
+		{"completeCategoryDeletion", "categoryTaxonomy", model.CompleteCategoryDeletionInput{Namespace: "acme", Name: "obsolete", ResourceVersion: "7"}},
+		{"completeProductDeletion", "product", model.CompleteProductDeletionInput{Namespace: "acme", Name: "obsolete", ResourceVersion: "7"}},
+	} {
+		for _, grant := range []string{"delete", "status.write", "purge"} {
+			t.Run(tc.field+"/"+grant, func(t *testing.T) {
+				resource, verb := tc.kind, grant
+				if grant == "status.write" {
+					resource, verb = tc.kind+"/status", "write"
+				}
+				path := filepath.Join(t.TempDir(), "policy.yaml")
+				policy := fmt.Sprintf("apiVersion: rbac.authorization.gitstore.dev/v1beta1\nkind: RbacLocalConfiguration\nclusterRoles:\n  finalizer:\n    rules: [{resources: [%s], verbs: [%s]}]\nclusterRoleBindings:\n  - roleRef: {kind: ClusterRole, name: finalizer}\n    subjects: [{kind: User, name: alice}]\n", resource, verb)
+				require.NoError(t, os.WriteFile(path, []byte(policy), 0600))
+				provider, err := rbaclocal.New(config.RBACConfig{PolicyFile: path}, zap.NewNop())
+				require.NoError(t, err)
+				recorder := testutil.NewRecordingAuthZ(provider)
+				store := &testutil.StubStore{GetProductByNameFunc: func(context.Context, string, string) (*datastore.Product, error) {
+					return &datastore.Product{Namespace: "acme", Name: "obsolete", CreationActor: "alice"}, nil
+				}}
+				mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, recorder, nil), store, zap.NewNop())
+				ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "alice", AuthMethod: "static-users"})
+				ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Mutation", Field: graphql.CollectedField{Field: &ast.Field{Name: tc.field, Alias: "finish"}}, Args: map[string]any{"input": tc.input}})
+				called := false
+				_, err = mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
+				if grant == "purge" {
+					require.NoError(t, err)
+				} else {
+					var graphErr *gqlerror.Error
+					require.ErrorAs(t, err, &graphErr)
+					require.Equal(t, "FORBIDDEN", graphErr.Extensions["code"])
+				}
+				require.Equal(t, grant == "purge", called)
+				require.Len(t, recorder.Calls, 1)
+				require.Equal(t, tc.kind+".purge", recorder.Action)
+				require.Equal(t, tc.kind, recorder.Resource.Kind)
+				require.Equal(t, "obsolete", recorder.Resource.Name)
+				if tc.kind != "namespace" {
+					require.Equal(t, "acme", recorder.Resource.Attrs["namespace"])
+				}
+			})
+		}
+	}
 }
 
 func TestGraphQLFieldAuthorizerCompleteRepositoryDeletionUsesControllerPolicy(t *testing.T) {
@@ -614,7 +1064,7 @@ func TestGraphQLFieldAuthorizerCompleteRepositoryDeletionUsesControllerPolicy(t 
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "completeRepositoryDeletion"}},
-		Args:   map[string]any{"input": model.CompleteRepositoryDeletionInput{Namespace: "acme", Name: "catalog", ResourceVersion: "9"}},
+		Args:   map[string]any{"input": model.CompleteRepositoryDeletionInput{ID: "Z2lkOi8vR2l0U3RvcmUvUmVwb3NpdG9yeS9yZXBvLTE=", Namespace: "acme", Name: "catalog", ResourceVersion: "9"}},
 	})
 
 	called := false
@@ -624,7 +1074,7 @@ func TestGraphQLFieldAuthorizerCompleteRepositoryDeletionUsesControllerPolicy(t 
 	})
 	require.Error(t, err)
 	assert.False(t, called)
-	assert.Equal(t, "repository.status.write", authz.Action)
+	assert.Equal(t, "repository.purge", authz.Action)
 	var graphErr *gqlerror.Error
 	require.ErrorAs(t, err, &graphErr)
 	assert.Equal(t, "FORBIDDEN", graphErr.Extensions["code"])
@@ -714,7 +1164,7 @@ func TestGraphQLFieldAuthorizerDeleteCategoryUsesPersistedScope(t *testing.T) {
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return "ok", nil })
 	require.NoError(t, err)
 	assert.True(t, called)
-	assert.Equal(t, "category.delete", authz.Action)
+	assert.Equal(t, "categoryTaxonomy.delete", authz.Action)
 	assert.Equal(t, "phones", authz.Resource.Name)
 	assert.Equal(t, "alice", authz.Resource.OwnerSub)
 	assert.Equal(t, "shop", authz.Resource.Attrs["namespace"])
@@ -726,7 +1176,7 @@ func TestGraphQLFieldAuthorizerUpdateResourceStatusUsesLowerCamelKindAction(t *t
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-users", Roles: []string{"controller"}})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-users"})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "updateResourceStatus"}},
@@ -743,8 +1193,8 @@ func TestGraphQLFieldAuthorizerUpdateResourceStatusUsesLowerCamelKindAction(t *t
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
 		return "ok", nil
 	})
-	require.NoError(t, err)
-	assert.Equal(t, "backfillJob.status.write", authz.Action)
+	require.Error(t, err)
+	assert.Empty(t, authz.Calls, "unknown kinds must not be guessed into actions")
 }
 
 func TestGraphQLFieldAuthorizerConfinesAssertionPrincipalToTokenIssuance(t *testing.T) {
@@ -752,7 +1202,7 @@ func TestGraphQLFieldAuthorizerConfinesAssertionPrincipalToTokenIssuance(t *test
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
 	principal := &auth.Principal{
-		Subject:    datastore.ServiceAccountSubject("controllers", "manager"),
+		Subject:    datastore.ServiceAccountSubject("manager"),
 		AuthMethod: "serviceaccount-assertion",
 	}
 
@@ -794,8 +1244,8 @@ func TestGraphQLFieldAuthorizerRequiresAssertionForTokenIssuance(t *testing.T) {
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "issueServiceAccountToken"}},
 		Args: map[string]any{"input": map[string]any{"metadata": map[string]any{
-			"namespace": "controllers",
-			"name":      "manager",
+
+			"name": "manager",
 		}}},
 	})
 	called := false
@@ -813,9 +1263,9 @@ func TestGraphQLFieldAuthorizerUsesPolicyForServiceAccountMutations(t *testing.T
 		field  string
 		action string
 	}{
-		{field: "createServiceAccount", action: "serviceaccount.create"},
-		{field: "rotateServiceAccountKey", action: "serviceaccount.key.rotate"},
-		{field: "deleteServiceAccount", action: "serviceaccount.delete"},
+		{field: "createServiceAccount", action: "serviceAccount.create"},
+		{field: "rotateServiceAccountKey", action: "serviceAccount.key.rotate"},
+		{field: "deleteServiceAccount", action: "serviceAccount.delete"},
 	} {
 		t.Run(test.field, func(t *testing.T) {
 			authz := testutil.NewDenyAllAuthZ(t)

@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,15 +45,34 @@ func TestProductWatchAuthorizationRunsBeforeCursorHandling(t *testing.T) {
 			require.Error(t, err)
 			assert.False(t, called)
 			assert.Equal(t, "product.watch", authz.Action)
-			assert.Equal(t, "Product", authz.Resource.Kind)
+			assert.Equal(t, "product", authz.Resource.Kind)
 			assert.Equal(t, "acme", authz.Resource.Attrs["namespace"])
 		})
 	}
 }
 
+func TestCategoryProductsRequiresProductListBeforeResolver(t *testing.T) {
+	authz := testutil.NewDenyAllAuthZ(t)
+	mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), &testutil.StubStore{GetNamespaceByNameFunc: func(context.Context, string) (*datastore.Namespace, error) {
+		return &datastore.Namespace{Name: "private", CreationActor: "owner"}, nil
+	}}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "denied", AuthMethod: "bearer"})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Category", Result: &model.Category{Metadata: &model.ObjectMeta{Namespace: new("private")}}})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Category", Field: graphql.CollectedField{Field: &ast.Field{Name: "products"}}})
+	called := false
+	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
+	require.Error(t, err)
+	assert.False(t, called)
+	require.Len(t, authz.Calls, 2)
+	assert.Equal(t, "product.list", authz.Calls[0].Action)
+	assert.Equal(t, "product.management.list", authz.Calls[1].Action)
+	assert.Equal(t, "private", authz.Resource.Attrs["namespace"])
+	assert.Equal(t, "owner", authz.Resource.OwnerSub)
+}
+
 func TestProductMutationAuthorizationMatrix(t *testing.T) {
 	productID := "Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC9wcm9kLXVpZA=="
-	metadata := &model.ObjectMetaInput{Namespace: "acme", Name: "widget"}
+	metadata := &model.ObjectMetaInput{Namespace: new("acme"), Name: "widget"}
 	store := &testutil.StubStore{
 		GetProductFunc: func(context.Context, string) (*datastore.Product, error) {
 			return &datastore.Product{UID: "prod-uid", Name: "widget", Namespace: "acme", CreationActor: "author"}, nil
@@ -69,7 +88,7 @@ func TestProductMutationAuthorizationMatrix(t *testing.T) {
 	}{
 		{"createProduct", map[string]any{"input": model.CreateProductInput{Metadata: metadata}}, "product.create"},
 		{"updateProduct", map[string]any{"input": model.UpdateProductInput{Metadata: metadata}}, "product.update"},
-		{"deleteProduct", map[string]any{"input": model.DeleteProductInput{ID: &productID}}, "product.delete"},
+		{"deleteProduct", map[string]any{"input": model.DeleteProductInput{ID: productID}}, "product.delete"},
 	} {
 		t.Run(tc.field, func(t *testing.T) {
 			authz := testutil.NewDenyAllAuthZ(t)
@@ -81,7 +100,7 @@ func TestProductMutationAuthorizationMatrix(t *testing.T) {
 			require.Error(t, err)
 			assert.False(t, called)
 			assert.Equal(t, tc.action, authz.Action)
-			assert.Equal(t, "Product", authz.Resource.Kind)
+			assert.Equal(t, "product", authz.Resource.Kind)
 			assert.Equal(t, "acme", authz.Resource.Attrs["namespace"])
 		})
 	}
@@ -102,7 +121,9 @@ func TestProductReadAuthorizationRunsBeforeResolver(t *testing.T) {
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
 	require.Error(t, err)
 	assert.False(t, called)
-	assert.Equal(t, "product.read", authz.Action)
+	require.Len(t, authz.Calls, 2)
+	assert.Equal(t, "product.read", authz.Calls[0].Action)
+	assert.Equal(t, "product.management.read", authz.Calls[1].Action)
 	assert.Equal(t, "acme", authz.Resource.Attrs["namespace"])
 }
 
@@ -117,7 +138,9 @@ func TestProductListAuthorizationDoesNotDiscloseCrossNamespaceExistence(t *testi
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
 	require.Error(t, err)
 	assert.False(t, called, "the list resolver must not reveal whether private Products exist")
-	assert.Equal(t, "product.read", authz.Action)
+	require.Len(t, authz.Calls, 2)
+	assert.Equal(t, "product.list", authz.Calls[0].Action)
+	assert.Equal(t, "product.management.list", authz.Calls[1].Action)
 	assert.Equal(t, "private", authz.Resource.Attrs["namespace"])
 	assert.Equal(t, "namespace-owner", authz.Resource.OwnerSub)
 }
@@ -135,7 +158,9 @@ func TestProductNodeAuthorizationRunsBeforeResolver(t *testing.T) {
 	_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
 	require.Error(t, err)
 	assert.False(t, called)
-	assert.Equal(t, "product.read", authz.Action)
+	require.Len(t, authz.Calls, 2)
+	assert.Equal(t, "product.read", authz.Calls[0].Action)
+	assert.Equal(t, "product.management.read", authz.Calls[1].Action)
 }
 
 // TestProductAuthorizationCapabilitiesAreAttributedAcrossPrincipalProviders
@@ -181,7 +206,12 @@ func TestProductAuthorizationCapabilitiesAreAttributedAcrossPrincipalProviders(t
 		{
 			name:      "human deletes product",
 			principal: &auth.Principal{Subject: "alice", AuthMethod: "static-users"},
-			field:     "deleteProduct", args: map[string]any{"input": model.DeleteProductInput{ID: &productID}}, action: "product.delete",
+			field:     "deleteProduct", args: map[string]any{"input": model.DeleteProductInput{ID: productID}}, action: "product.delete",
+		},
+		{
+			name:      "controller completes product deletion",
+			principal: &auth.Principal{Subject: "serviceaccount:controllers:gitstore-controller-manager", AuthMethod: "grpc-forwarded"},
+			field:     "completeProductDeletion", args: map[string]any{"input": model.CompleteProductDeletionInput{ID: "Z2lkOi8vR2l0U3RvcmUvUHJvZHVjdC9wcm9kdWN0LTE=", Namespace: "acme", Name: "widget", ResourceVersion: "3"}}, action: "product.purge",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

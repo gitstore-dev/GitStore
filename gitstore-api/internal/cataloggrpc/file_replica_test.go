@@ -5,6 +5,7 @@ package cataloggrpc_test
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"strings"
 	"sync"
@@ -12,7 +13,7 @@ import (
 	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
-	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +23,7 @@ import (
 // body, used to prove which commit's content ultimately won an admission
 // race or handoff.
 func makeFileWithBody(name, body string) []byte {
-	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: " + name + "\nspec:\n  contentType: image/jpeg\n  source:\n    type: s3\n    uri: s3://bucket/" + name + "\n---\n" + body)
+	return []byte("---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  namespace: gitstore\n  name: " + name + "\nspec:\n  contentType: image/jpeg\n  provider: s3\n  source:\n    uri: s3://bucket/" + name + "\n---\n" + body)
 }
 
 // TestAdmitResources_FileConcurrentDuplicateAdmissionIsIdempotent models two
@@ -48,7 +49,7 @@ func TestAdmitResources_FileConcurrentDuplicateAdmissionIsIdempotent(t *testing.
 
 	// Two independent Server instances sharing one datastore == two replicas
 	// handling the same webhook delivery.
-	replicas := []*cataloggrpc.Server{
+	replicas := []*catalogTestServer{
 		newCatalogServer(t, store, git),
 		newCatalogServer(t, store, git),
 	}
@@ -57,11 +58,11 @@ func TestAdmitResources_FileConcurrentDuplicateAdmissionIsIdempotent(t *testing.
 	errs := make(chan error, len(replicas))
 	for _, replica := range replicas {
 		wg.Add(1)
-		go func(srv *cataloggrpc.Server) {
+		go func(srv *catalogTestServer) {
 			defer wg.Done()
 			_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-				ActorSubject: "test-admission-actor",
-				RepositoryId: testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
+				Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+				RepositoryId:  testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
 			})
 			errs <- err
 		}(replica)
@@ -75,6 +76,10 @@ func TestAdmitResources_FileConcurrentDuplicateAdmissionIsIdempotent(t *testing.
 	file, err := store.GetFileByName(context.Background(), "gitstore", "hero")
 	require.NoError(t, err)
 	assert.Equal(t, "Alt text", file.Body)
+	var spec catalog.FileSpec
+	require.NoError(t, json.Unmarshal(file.Spec, &spec))
+	assert.Equal(t, "s3", spec.Provider)
+	assert.Equal(t, "s3://bucket/hero.jpg", spec.Source.URI)
 	assert.Equal(t, "1", file.ResourceVersion, "an identical create collision must not manufacture an update")
 
 	controllerRevision := "controller-resolved"
@@ -89,8 +94,8 @@ func TestAdmitResources_FileConcurrentDuplicateAdmissionIsIdempotent(t *testing.
 	// even though the stored representation normalizes omitted metadata maps
 	// to empty maps. In particular it must not erase controller-owned status.
 	_, err = replicas[0].AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	file, err = store.GetFileByName(context.Background(), "gitstore", "hero")
@@ -127,8 +132,8 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 	seedCurrent := a
 	seedServer := newCatalogServer(t, store, newTreeGitReader(&seedCurrent, files))
 	_, err := seedServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID, NewCommitSha: a, RefName: "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID, NewCommitSha: a, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	seeded, err := store.GetFileByName(context.Background(), "gitstore", "hero")
@@ -137,22 +142,14 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 
 	var mu sync.Mutex
 	current := b
-	blockFirstBListing := true
-	olderListingStarted := make(chan struct{})
+	blockFirstBRead := true
+	olderReadStarted := make(chan struct{})
 	releaseOlder := make(chan struct{})
 	git := &mockGitReader{
 		listFilesFunc: func(_ context.Context, _, _, ref string) ([]string, error) {
 			mu.Lock()
-			block := ref == b && blockFirstBListing
-			if block {
-				blockFirstBListing = false
-			}
 			tree := files[ref]
 			mu.Unlock()
-			if block {
-				close(olderListingStarted)
-				<-releaseOlder
-			}
 			paths := make([]string, 0, len(tree))
 			for filePath := range tree {
 				paths = append(paths, filePath)
@@ -162,8 +159,16 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 		},
 		readFileFunc: func(_ context.Context, _, path, ref string) ([]byte, error) {
 			mu.Lock()
+			block := ref == b && blockFirstBRead
+			if block {
+				blockFirstBRead = false
+			}
 			content := files[ref][path]
 			mu.Unlock()
+			if block {
+				close(olderReadStarted)
+				<-releaseOlder
+			}
 			return content, nil
 		},
 		resolveRefFunc: func(_ context.Context, _, _ string) (string, error) {
@@ -179,25 +184,25 @@ func TestAdmitResources_FileOlderCommitCannotOverwriteNewerAdmission(t *testing.
 	olderDone := make(chan error, 1)
 	go func() {
 		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			ActorSubject: "test-admission-actor",
-			RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b,
+			Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+			RepositoryId:  testRepoID, OldCommitSha: a, NewCommitSha: b,
 			RefName: "refs/heads/main", ChangedPaths: []string{path},
 		})
 		olderDone <- err
 	}()
 
 	select {
-	case <-olderListingStarted:
+	case <-olderReadStarted:
 	case <-time.After(time.Second):
-		t.Fatal("older admission did not verify and begin loading its commit")
+		t.Fatal("older admission did not verify and begin reading its commit")
 	}
 
 	mu.Lock()
 	current = c
 	mu.Unlock()
 	_, err = newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID, OldCommitSha: b, NewCommitSha: c,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID, OldCommitSha: b, NewCommitSha: c,
 		RefName: "refs/heads/main", ChangedPaths: []string{path},
 	})
 	require.NoError(t, err)
@@ -284,8 +289,8 @@ func TestAdmitResources_FileCurrentCreateRetriesAfterConcurrentCollision(t *test
 	olderDone := make(chan error, 1)
 	go func() {
 		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			ActorSubject: "test-admission-actor",
-			RepositoryId: testRepoID, NewCommitSha: b, RefName: "refs/heads/main",
+			Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+			RepositoryId:  testRepoID, NewCommitSha: b, RefName: "refs/heads/main",
 		})
 		olderDone <- err
 	}()
@@ -301,8 +306,8 @@ func TestAdmitResources_FileCurrentCreateRetriesAfterConcurrentCollision(t *test
 	newerDone := make(chan error, 1)
 	go func() {
 		_, err := newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			ActorSubject: "test-admission-actor",
-			RepositoryId: testRepoID, NewCommitSha: c, RefName: "refs/heads/main",
+			Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+			RepositoryId:  testRepoID, NewCommitSha: c, RefName: "refs/heads/main",
 		})
 		newerDone <- err
 	}()
@@ -366,8 +371,8 @@ func TestAdmitResources_FileCurrentCommitRetriesAfterConcurrentConflict(t *testi
 	current := a
 	seed := newCatalogServer(t, base, newTreeGitReader(&current, files))
 	_, err := seed.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID, NewCommitSha: a, RefName: "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID, NewCommitSha: a, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 
@@ -390,8 +395,8 @@ func TestAdmitResources_FileCurrentCommitRetriesAfterConcurrentConflict(t *testi
 	olderDone := make(chan error, 1)
 	go func() {
 		_, err := olderServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			ActorSubject: "test-admission-actor",
-			RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b,
+			Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+			RepositoryId:  testRepoID, OldCommitSha: a, NewCommitSha: b,
 			RefName: "refs/heads/main", ChangedPaths: []string{path},
 		})
 		olderDone <- err
@@ -408,8 +413,8 @@ func TestAdmitResources_FileCurrentCommitRetriesAfterConcurrentConflict(t *testi
 	newerDone := make(chan error, 1)
 	go func() {
 		_, err := newerServer.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			ActorSubject: "test-admission-actor",
-			RepositoryId: testRepoID, OldCommitSha: b, NewCommitSha: c,
+			Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+			RepositoryId:  testRepoID, OldCommitSha: b, NewCommitSha: c,
 			RefName: "refs/heads/main", ChangedPaths: []string{path},
 		})
 		newerDone <- err
@@ -462,8 +467,8 @@ func TestAdmitResources_FileUpdateSurvivesReplicaProcessReplacement(t *testing.T
 	}
 	process1 := newCatalogServer(t, store, gitA)
 	_, err := process1.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID, NewCommitSha: a, RefName: "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID, NewCommitSha: a, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err)
 	// process1 is deliberately never referenced again below — it represents
@@ -488,8 +493,8 @@ func TestAdmitResources_FileUpdateSurvivesReplicaProcessReplacement(t *testing.T
 	current = b
 	process2 := newCatalogServer(t, store, gitB)
 	_, err = process2.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID, OldCommitSha: a, NewCommitSha: b,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID, OldCommitSha: a, NewCommitSha: b,
 		RefName: "refs/heads/main", ChangedPaths: []string{"files/hero.md"},
 	})
 	require.NoError(t, err)

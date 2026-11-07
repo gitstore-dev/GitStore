@@ -13,10 +13,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -53,8 +56,8 @@ const (
 )
 
 // Repository is the cache entity populated by RepositoryListWatcher.
-// UID is retained for cache identity and diagnostics; the controller invokes
-// storage provisioning by stable namespace/name through the API.
+// UID binds completion to an incarnation; storage provisioning uses
+// namespace/name through the API.
 type Repository struct {
 	UID             string
 	Namespace       string
@@ -62,6 +65,7 @@ type Repository struct {
 	StorageClass    string
 	Generation      int64
 	ResourceVersion string
+	Revision        string
 	Finalizers      []string
 	Status          status.ResourceStatus
 }
@@ -86,7 +90,7 @@ type StorageClient interface {
 // the catalog-resource drain condition, clears the finalizer, and only then
 // permits hard deletion. The controller never cascades catalog resources.
 type CompletionClient interface {
-	CompleteDeletion(ctx context.Context, namespace, name, resourceVersion string) error
+	CompleteDeletion(ctx context.Context, namespace, name, resourceVersion, uid string) error
 }
 
 // Reconciler implements types.Reconciler for Repository resources.
@@ -96,7 +100,7 @@ type Reconciler struct {
 	storageClient    StorageClient
 	completionClient CompletionClient
 
-	// lastStorageVerification records, per key, the last time this process
+	// lastStorageVerification records, per key and UID, the last time this process
 	// actually confirmed storage with EnsureStorage (as opposed to trusting
 	// the cached StorageProvisioned condition). It is in-memory only and
 	// empty after every restart — deliberately: a restart is the cheapest
@@ -105,25 +109,30 @@ type Reconciler struct {
 	lastStorageVerification storageVerificationCache
 }
 
-// Eviction only causes an earlier storage recheck; it never trusts an
+// Verification is UID-bound. Eviction only causes an earlier recheck; it never trusts an
 // unverified repository or persists a verification across process replacement.
 type storageVerificationCache struct {
 	mu      sync.Mutex
-	entries map[types.WorkItemKey]time.Time
+	entries map[types.WorkItemKey]storageVerification
 }
 
-func (c *storageVerificationCache) Load(key types.WorkItemKey) (time.Time, bool) {
+type storageVerification struct {
+	uid string
+	at  time.Time
+}
+
+func (c *storageVerificationCache) Load(key types.WorkItemKey, uid string) (time.Time, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	value, exists := c.entries[key]
-	return value, exists
+	return value.at, exists && value.uid == uid
 }
 
-func (c *storageVerificationCache) Store(key types.WorkItemKey, value time.Time) {
+func (c *storageVerificationCache) Store(key types.WorkItemKey, uid string, value time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.entries == nil {
-		c.entries = make(map[types.WorkItemKey]time.Time)
+		c.entries = make(map[types.WorkItemKey]storageVerification)
 	}
 	if _, exists := c.entries[key]; !exists && len(c.entries) >= 4096 {
 		for evicted := range c.entries {
@@ -131,7 +140,7 @@ func (c *storageVerificationCache) Store(key types.WorkItemKey, value time.Time)
 			break
 		}
 	}
-	c.entries[key] = value
+	c.entries[key] = storageVerification{uid: uid, at: value}
 }
 
 // NewReconciler returns a Repository reconciler.
@@ -159,10 +168,27 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		// checkpointed controller restart. Absence is the reconciled state.
 		return types.ResultOK()
 	}
+	if span := trace.SpanFromContext(ctx); span.IsRecording() {
+		uid, rv, revision := current.UID, current.ResourceVersion, current.Revision
+		exact := uid != "" && rv != "" && revision != "" && current.Generation > 0
+		// Stay within the telemetry SDK's 256-character cap; never truncate evidence.
+		if len(uid) > 64 || len(rv) > 128 || len(revision) > 256 ||
+			!utf8.ValidString(uid) || !utf8.ValidString(rv) || !utf8.ValidString(revision) {
+			uid, rv, revision = "[invalid]", "[invalid]", "[invalid]"
+			exact = false
+		}
+		span.AddEvent("controller.reconcile.snapshot", trace.WithAttributes(
+			attribute.String("resource.uid", uid),
+			attribute.String("resource.resource_version", rv),
+			attribute.Int64("resource.generation", current.Generation),
+			attribute.String("resource.revision", revision),
+			attribute.Bool("resource.snapshot.exact", exact),
+		))
+	}
 	if current.Name == SystemRepositoryName {
 		return types.ResultOK()
 	}
-	if slices.Contains(current.Finalizers, ForegroundDeletionFinalizer) {
+	if slices.Contains(current.Finalizers, ForegroundDeletionFinalizer) || conditionTrue(current.Status.Conditions, "DeletionPending") {
 		return r.reconcileDeletion(ctx, current)
 	}
 	return r.reconcileActive(ctx, key, current)
@@ -174,7 +200,7 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 	var resolvedJSON json.RawMessage
 	var provisionErr error
 	switch {
-	case admitted && storageProvisionedCurrent(current) && !r.storageVerificationDue(key):
+	case admitted && storageProvisionedCurrent(current) && !r.storageVerificationDue(key, current.UID):
 		// Storage was already provisioned for this generation and verified
 		// recently: re-invoking EnsureStorage on every reconcile (including
 		// the one triggered by this reconciler's own prior status write)
@@ -187,7 +213,7 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 		resolved, err := r.storageClient.EnsureStorage(ctx, current.Namespace, current.Name)
 		provisionErr = err
 		if err == nil {
-			r.lastStorageVerification.Store(key, time.Now())
+			r.lastStorageVerification.Store(key, current.UID, time.Now())
 			resolvedJSON, err = json.Marshal(resolved)
 			if err != nil {
 				return types.ResultTransient(fmt.Errorf("repository: marshal resolved status: %w", err))
@@ -233,7 +259,7 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 }
 
 func (r *Reconciler) reconcileDeletion(ctx context.Context, current Repository) types.ReconcileResult {
-	if err := r.completionClient.CompleteDeletion(ctx, current.Namespace, current.Name, current.ResourceVersion); err != nil {
+	if err := r.completionClient.CompleteDeletion(ctx, current.Namespace, current.Name, current.ResourceVersion, current.UID); err != nil {
 		if errors.Is(err, types.ErrConflict) {
 			return types.ResultAfter(conflictRequeueDelay)
 		}
@@ -267,8 +293,8 @@ func storageProvisionedCurrent(current Repository) bool {
 // storageVerificationDue reports whether it has been long enough since this
 // process last actually called EnsureStorage for key that the cached
 // StorageProvisioned condition should no longer be trusted on its own.
-func (r *Reconciler) storageVerificationDue(key types.WorkItemKey) bool {
-	last, ok := r.lastStorageVerification.Load(key)
+func (r *Reconciler) storageVerificationDue(key types.WorkItemKey, uid string) bool {
+	last, ok := r.lastStorageVerification.Load(key, uid)
 	if !ok {
 		return true
 	}

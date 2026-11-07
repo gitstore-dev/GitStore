@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/google/uuid"
 	"github.com/testcontainers/testcontainers-go"
@@ -25,13 +28,27 @@ var (
 	sharedRepoID   string
 )
 
+// Exercise the shipped internal-API grant and signed RPC path, not an auth bypass.
+func newContractClient(addr string) (*gitclient.Client, error) {
+	provider, err := rbaclocal.New(config.RBACConfig{PolicyFile: "../../../../config/policy.yaml"}, nil)
+	if err != nil {
+		return nil, err
+	}
+	client, err := gitclient.NewClientWithAddr(addr, testHmacSecret)
+	if err != nil {
+		return nil, err
+	}
+	client.Registry = auth.NewProviderRegistry(nil, provider, nil)
+	return client, nil
+}
+
 // startSharedClient returns a client targeting the shared repository provisioned in TestMain.
 func startSharedClient(t *testing.T) (*gitclient.Client, error) {
 	t.Helper()
 	if sharedGRPCAddr == "" {
 		return nil, fmt.Errorf("shared gRPC test container is not initialized")
 	}
-	c, err := gitclient.NewClientWithAddr(sharedGRPCAddr, testHmacSecret)
+	c, err := newContractClient(sharedGRPCAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -46,9 +63,9 @@ func TestMain(m *testing.M) {
 		Image:        "gitstore-git-service:latest",
 		ExposedPorts: []string{"50051/tcp"},
 		Env: map[string]string{
-			"GITSTORE_GIT__DATA_DIR":           "/data/repos",
-			"GITSTORE_GRPC__PORT":              "50051",
-			"GITSTORE_AUTH__GRPC__HMAC_SECRET": testHmacSecret,
+			"GITSTORE_GIT_SERVICE__DATA_DIR":  "/data/repos",
+			"GITSTORE_GIT_SERVICE__GRPC_PORT": "50051",
+			"GITSTORE_GRPC_AUTH__HMAC_SECRET": testHmacSecret,
 		},
 		WaitingFor: wait.ForListeningPort("50051/tcp").
 			WithStartupTimeout(60 * time.Second),
@@ -74,10 +91,15 @@ func TestMain(m *testing.M) {
 	sharedRepoID = uuid.New().String()
 
 	// Provision the shared repository used by catalogue load and reload tests.
-	setupClient, err := gitclient.NewClientWithAddr(sharedGRPCAddr, testHmacSecret)
+	setupClient, err := newContractClient(sharedGRPCAddr)
 	if err == nil {
-		_, _ = setupClient.CreateRepository(ctx, sharedRepoID, "default")
+		_, err = setupClient.CreateRepository(ctx, sharedRepoID, "default")
 		_ = setupClient.Close()
+	}
+	if err != nil {
+		_ = container.Terminate(ctx)
+		fmt.Fprintf(os.Stderr, "failed to provision shared repository: %v\n", err)
+		os.Exit(1)
 	}
 
 	code := m.Run()

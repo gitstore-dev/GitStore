@@ -6,6 +6,8 @@ package cataloggrpc_test
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -13,11 +15,16 @@ import (
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 )
@@ -37,14 +44,72 @@ spec:
 
 type repositoryConflictOnceStore struct {
 	datastore.Datastore
-	remaining atomic.Int32
+	remaining     atomic.Int32
+	newOwner      string
+	afterConflict func()
 }
 
 func (s *repositoryConflictOnceStore) UpdateRepository(ctx context.Context, repository *datastore.Repository, expectedResourceVersion string) error {
 	if s.remaining.CompareAndSwap(1, 0) {
+		if s.newOwner != "" {
+			current, err := s.Datastore.GetRepository(ctx, repository.UID)
+			if err != nil {
+				return err
+			}
+			expected := current.ResourceVersion
+			current.Annotations = map[string]string{datastore.OwnerAnnotationKey: s.newOwner}
+			datastore.AdvanceRepositorySystemVersion(current)
+			if err := s.Datastore.UpdateRepository(ctx, current, expected); err != nil {
+				return err
+			}
+		}
+		if s.afterConflict != nil {
+			s.afterConflict()
+		}
 		return datastore.ErrConflict
 	}
 	return s.Datastore.UpdateRepository(ctx, repository, expectedResourceVersion)
+}
+
+func TestRepositoryCASRetryReauthorizesChangedOwner(t *testing.T) {
+	ctx := context.Background()
+	base, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = base.Close() })
+	require.NoError(t, base.CreateNamespace(ctx, &datastore.Namespace{UID: "00000000-0000-0000-0000-000000000171", Name: "acme", Tier: datastore.NamespaceTierOrganization}))
+	require.NoError(t, base.CreateRepository(ctx, &datastore.Repository{UID: testRepoID, ID: testRepoID, RepositoryID: testRepoID, Namespace: "acme", Name: "gitstore-system"}))
+	uid := "00000000-0000-0000-0000-000000000172"
+	require.NoError(t, base.CreateRepository(ctx, &datastore.Repository{UID: uid, ID: uid, RepositoryID: uid, Namespace: "acme", Name: "catalog", APIVersion: "gitstore.dev/v1beta1", Kind: "Repository", DefaultBranch: "main", StorageClass: "standard", Generation: 1, ResourceVersion: "1", CreationActor: "alice"}))
+	require.NoError(t, base.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "acme", Name: "catalog", RepositoryID: uid}))
+	policyPath := filepath.Join(t.TempDir(), "policy.yaml")
+	require.NoError(t, os.WriteFile(policyPath, []byte(`apiVersion: rbac.authorization.gitstore.dev/v1beta1
+kind: RbacLocalConfiguration
+defaultDeny: true
+clusterRoles:
+  owner:
+    rules:
+      - resources: [repository]
+        verbs: [update, transfer]
+        when: [owner]
+clusterRoleBindings:
+  - roleRef: {kind: ClusterRole, name: owner}
+    subjects: [{kind: User, name: alice}]
+`), 0600))
+	provider, err := rbaclocal.New(config.RBACConfig{PolicyFile: policyPath}, zap.NewNop())
+	require.NoError(t, err)
+	store := &repositoryConflictOnceStore{Datastore: base, newOwner: "bob"}
+	store.remaining.Store(1)
+	path, commit := "repositories/catalog.md", strings.Repeat("d", 40)
+	content := repositoryManifestFor("catalog", "acme", "trunk", "premium")
+	current := commit
+	srv := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{commit: {path: content}}), func(deps *cataloggrpc.ServerDeps) { deps.Registry = auth.NewProviderRegistry(nil, provider, nil) })
+	_, err = srv.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{RepositoryID: testRepoID, Namespace: "acme", ActorSubject: "alice", CommitSHA: commit, RefName: "refs/heads/main", Path: path, Content: content, Operation: admission.OperationUpdate})
+	require.Error(t, err)
+	require.Zero(t, store.remaining.Load())
+	stored, err := base.GetRepository(ctx, uid)
+	require.NoError(t, err)
+	require.Equal(t, "bob", stored.EffectiveOwnerSub())
+	require.Equal(t, "main", stored.DefaultBranch)
 }
 
 func TestValidateResources_RepositoryAuthoringTarget(t *testing.T) {
@@ -120,7 +185,7 @@ func TestAdmitResources_RepositoryLifecycleWritesCanonicalNamespaceOwnerReferenc
 		second: {path: repositoryManifestFor("catalog", "acme", "trunk", "premium")},
 	}))
 
-	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{ActorSubject: "test-admission-actor", RepositoryId: testRepoID, OldCommitSha: zero, NewCommitSha: first, RefName: "refs/heads/main", ChangedPaths: []string{path}})
+	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}}, RepositoryId: testRepoID, OldCommitSha: zero, NewCommitSha: first, RefName: "refs/heads/main", ChangedPaths: []string{path}})
 	require.NoError(t, err)
 	createdMapping, err := store.LookupRepository(ctx, "acme", "catalog")
 	require.NoError(t, err)
@@ -135,7 +200,7 @@ func TestAdmitResources_RepositoryLifecycleWritesCanonicalNamespaceOwnerReferenc
 	require.Equal(t, []catalog.OwnerReference{{APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace", Name: "acme", UID: namespace.UID, BlockOwnerDeletion: true}}, refs)
 
 	current = second
-	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{ActorSubject: "test-admission-actor", RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: second, RefName: "refs/heads/main", ChangedPaths: []string{path}})
+	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}}, RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: second, RefName: "refs/heads/main", ChangedPaths: []string{path}})
 	require.NoError(t, err)
 	updated, err := store.GetRepository(ctx, created.UID)
 	require.NoError(t, err)
@@ -251,7 +316,7 @@ func TestAdmitResources_RepositoryRejectsDowngradeAndImmutableIdentity(t *testin
 	assert.Equal(t, "spec.storageClass", validation.Errors[0].Field)
 	assert.Equal(t, "immutable_downgrade", validation.Errors[0].Constraint)
 
-	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{ActorSubject: "test-admission-actor", RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: downgrade, RefName: "refs/heads/main", ChangedPaths: []string{path}})
+	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}}, RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: downgrade, RefName: "refs/heads/main", ChangedPaths: []string{path}})
 	require.NoError(t, err)
 	unchanged, err := store.GetRepository(ctx, uid)
 	require.NoError(t, err)
@@ -260,7 +325,7 @@ func TestAdmitResources_RepositoryRejectsDowngradeAndImmutableIdentity(t *testin
 	assert.Equal(t, int64(3), unchanged.Generation)
 
 	current = renamed
-	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{ActorSubject: "test-admission-actor", RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: renamed, RefName: "refs/heads/main", ChangedPaths: []string{path}})
+	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}}, RepositoryId: testRepoID, OldCommitSha: first, NewCommitSha: renamed, RefName: "refs/heads/main", ChangedPaths: []string{path}})
 	require.Error(t, err)
 	assert.Equal(t, codes.FailedPrecondition, grpcstatus.Code(err))
 	_, err = store.LookupRepository(ctx, "acme", "renamed")
@@ -290,7 +355,7 @@ func TestAdmitResources_RepositoryManifestRemovalStartsForegroundDeletion(t *tes
 	}))
 	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
 		RepositoryId: uid, OldCommitSha: oldCommit, NewCommitSha: newCommit,
-		RefName: "refs/heads/main", ActorSubject: "mallory", ChangedPaths: []string{path},
+		RefName: "refs/heads/main", Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "mallory", AuthMethod: "static-users"}}, ChangedPaths: []string{path},
 	})
 	require.NoError(t, err)
 	notTerminating, err := store.GetRepository(ctx, uid)
@@ -298,7 +363,7 @@ func TestAdmitResources_RepositoryManifestRemovalStartsForegroundDeletion(t *tes
 	assert.Nil(t, notTerminating.DeletionTimestamp, "a non-system authoring repository must not delete Repository metadata")
 	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID, OldCommitSha: oldCommit, NewCommitSha: newCommit,
-		RefName: "refs/heads/feature", ActorSubject: "mallory", ChangedPaths: []string{path},
+		RefName: "refs/heads/feature", Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "mallory", AuthMethod: "static-users"}}, ChangedPaths: []string{path},
 	})
 	require.NoError(t, err)
 	notTerminating, err = store.GetRepository(ctx, uid)
@@ -307,7 +372,7 @@ func TestAdmitResources_RepositoryManifestRemovalStartsForegroundDeletion(t *tes
 
 	_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
 		RepositoryId: testRepoID, OldCommitSha: oldCommit, NewCommitSha: newCommit,
-		RefName: "refs/heads/main", ActorSubject: "alice", ChangedPaths: []string{path},
+		RefName: "refs/heads/main", Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "alice", AuthMethod: "static-users"}}, ChangedPaths: []string{path},
 	})
 	require.NoError(t, err)
 	terminating, err := store.GetRepository(ctx, uid)
@@ -336,16 +401,229 @@ func TestAdmitResources_RepositoryRejectsBootstrapAndTerminatingNamespace(t *tes
 			if test.terminating {
 				namespace.DeletionTimestamp = &now
 			}
-			require.NoError(t, store.CreateNamespace(ctx, namespace))
 			require.NoError(t, store.CreateRepository(ctx, &datastore.Repository{UID: testRepoID, ID: testRepoID, RepositoryID: testRepoID, Namespace: "acme", Name: "gitstore-system"}))
+			require.NoError(t, store.CreateNamespace(ctx, namespace))
 			commit := strings.Repeat("a", 40)
 			path := "repositories/" + test.manifestName + ".md"
 			current := commit
 			srv := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{commit: {path: repositoryManifestFor(test.manifestName, "acme", "main", "standard")}}))
-			_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{ActorSubject: "test-admission-actor", RepositoryId: testRepoID, OldCommitSha: strings.Repeat("0", 40), NewCommitSha: commit, RefName: "refs/heads/main", ChangedPaths: []string{path}})
+			_, err = srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}}, RepositoryId: testRepoID, OldCommitSha: strings.Repeat("0", 40), NewCommitSha: commit, RefName: "refs/heads/main", ChangedPaths: []string{path}})
 			require.NoError(t, err)
 			_, err = store.LookupRepository(ctx, "acme", test.manifestName)
 			assert.ErrorIs(t, err, datastore.ErrNotFound)
 		})
+	}
+}
+
+// catalogOwnerRaceStore changes the owner after authorization and before the
+// authoritative write, as another API replica could do.
+type catalogOwnerRaceStore struct {
+	datastore.Datastore
+	injected atomic.Bool
+}
+
+func (s *catalogOwnerRaceStore) UpdateProduct(ctx context.Context, proposed *datastore.Product, expected string) error {
+	if s.injected.CompareAndSwap(false, true) {
+		current, err := s.Datastore.GetProduct(ctx, proposed.UID)
+		if err != nil {
+			return err
+		}
+		previous := current.ResourceVersion
+		current.ResourceVersion = "2"
+		current.Annotations = map[string]string{datastore.OwnerAnnotationKey: "bob"}
+		if err := s.Datastore.UpdateProduct(ctx, current, previous); err != nil {
+			return err
+		}
+	}
+	return s.Datastore.UpdateProduct(ctx, proposed, expected)
+}
+
+func (s *catalogOwnerRaceStore) UpdateCategoryTaxonomy(ctx context.Context, proposed *datastore.CategoryTaxonomy, expected string) error {
+	if s.injected.CompareAndSwap(false, true) {
+		current, err := s.Datastore.GetCategoryTaxonomy(ctx, proposed.UID)
+		if err != nil {
+			return err
+		}
+		previous := current.ResourceVersion
+		current.ResourceVersion = "2"
+		current.Annotations = map[string]string{datastore.OwnerAnnotationKey: "bob"}
+		if err := s.Datastore.UpdateCategoryTaxonomy(ctx, current, previous); err != nil {
+			return err
+		}
+	}
+	return s.Datastore.UpdateCategoryTaxonomy(ctx, proposed, expected)
+}
+
+func (s *catalogOwnerRaceStore) UpdateCollection(ctx context.Context, proposed *datastore.Collection, expected string) error {
+	if s.injected.CompareAndSwap(false, true) {
+		current, err := s.Datastore.GetCollection(ctx, proposed.UID)
+		if err != nil {
+			return err
+		}
+		previous := current.ResourceVersion
+		current.ResourceVersion = "2"
+		current.Annotations = map[string]string{datastore.OwnerAnnotationKey: "bob"}
+		if err := s.Datastore.UpdateCollection(ctx, current, previous); err != nil {
+			return err
+		}
+	}
+	return s.Datastore.UpdateCollection(ctx, proposed, expected)
+}
+
+func (s *catalogOwnerRaceStore) UpdateProductVariant(ctx context.Context, proposed *datastore.ProductVariant, expected string) error {
+	if s.injected.CompareAndSwap(false, true) {
+		current, err := s.Datastore.GetProductVariant(ctx, proposed.UID)
+		if err != nil {
+			return err
+		}
+		previous := current.ResourceVersion
+		current.ResourceVersion = "2"
+		current.Annotations = map[string]string{datastore.OwnerAnnotationKey: "bob"}
+		if err := s.Datastore.UpdateProductVariant(ctx, current, previous); err != nil {
+			return err
+		}
+	}
+	return s.Datastore.UpdateProductVariant(ctx, proposed, expected)
+}
+
+func TestCatalogCASRepairReauthorizesConcurrentOwner(t *testing.T) {
+	for _, tc := range []struct {
+		kind, path string
+		content    []byte
+	}{
+		{"Product", "products/widget.md", makeProduct("widget")},
+		{"CategoryTaxonomy", "categories/widget.md", makeCategoryTaxonomy("widget")},
+		{"Collection", "collections/widget.md", []byte(strings.Replace(string(makeProduct("widget")), "kind: Product", "kind: Collection", 1))},
+		{"ProductVariant", "variants/widget.md", makeProductVariant("widget", "race-sku")},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			ctx := context.Background()
+			base := newTestDatastore(t)
+			store := &catalogOwnerRaceStore{Datastore: base}
+			a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+			current := a
+			updated := append(append([]byte{}, tc.content...), []byte("\nChanged body\n")...)
+			git := newTreeGitReader(&current, map[string]map[string][]byte{a: {tc.path: tc.content}, b: {tc.path: updated}})
+			bootstrap := newCatalogServer(t, base, git)
+			_, err := bootstrap.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, OldCommitSha: strings.Repeat("0", 40), NewCommitSha: a, RefName: "refs/heads/main",
+				Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "alice", AuthMethod: "static-users"}},
+			})
+			require.NoError(t, err)
+			policyPath := filepath.Join(t.TempDir(), "policy.yaml")
+			require.NoError(t, os.WriteFile(policyPath, []byte(`apiVersion: rbac.authorization.gitstore.dev/v1beta1
+kind: RbacLocalConfiguration
+defaultDeny: true
+clusterRoles:
+  owner:
+    rules:
+      - resources: [product, categoryTaxonomy, collection, productVariant]
+        verbs: [update, transfer]
+        when: [owner]
+clusterRoleBindings:
+  - roleRef: {kind: ClusterRole, name: owner}
+    subjects: [{kind: User, name: alice}]
+`), 0600))
+			provider, err := rbaclocal.New(config.RBACConfig{PolicyFile: policyPath}, zap.NewNop())
+			require.NoError(t, err)
+			srv := newCatalogServer(t, store, git, func(deps *cataloggrpc.ServerDeps) { deps.Registry = auth.NewProviderRegistry(nil, provider, nil) })
+			current = b
+			_, err = srv.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{
+				RepositoryID: testRepoID, Namespace: "gitstore", ActorSubject: "alice", CommitSHA: b,
+				RefName: "refs/heads/main", Path: tc.path, Content: updated, Operation: admission.OperationUpdate,
+			})
+			require.Error(t, err)
+			require.True(t, store.injected.Load(), "test must reach the authorized write: %v", err)
+			var owner, version, body, commit string
+			switch tc.kind {
+			case "Product":
+				row, getErr := base.GetProductByName(ctx, "gitstore", "widget")
+				require.NoError(t, getErr)
+				owner, version, body, commit = row.EffectiveOwnerSub(), row.ResourceVersion, row.Body, row.GitCommitSHA
+			case "CategoryTaxonomy":
+				row, getErr := base.GetCategoryTaxonomyByName(ctx, "gitstore", "widget")
+				require.NoError(t, getErr)
+				owner, version, body, commit = row.EffectiveOwnerSub(), row.ResourceVersion, row.Body, row.GitCommitSHA
+			case "Collection":
+				row, getErr := base.GetCollectionByName(ctx, "gitstore", "widget")
+				require.NoError(t, getErr)
+				owner, version, body, commit = row.EffectiveOwnerSub(), row.ResourceVersion, row.Body, row.GitCommitSHA
+			case "ProductVariant":
+				row, getErr := base.GetProductVariantByName(ctx, "gitstore", "widget")
+				require.NoError(t, getErr)
+				owner, version, body, commit = row.EffectiveOwnerSub(), row.ResourceVersion, row.Body, row.GitCommitSHA
+			}
+			assert.Equal(t, "bob", owner)
+			assert.Equal(t, "2", version)
+			assert.NotContains(t, body, "Changed body")
+			assert.Equal(t, a, commit)
+		})
+	}
+}
+
+func TestRepositoryCommittedUpsertFencesItsManifestAcrossRefAdvance(t *testing.T) {
+	for _, stage := range []string{"before admission", "during CAS retry"} {
+		for _, change := range []string{"independent path", "changed content", "changed identity", "removed manifest", "unavailable manifest"} {
+			t.Run(stage+"/"+change, func(t *testing.T) {
+				ctx := context.Background()
+				base, err := memdb.New()
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = base.Close() })
+				require.NoError(t, base.CreateNamespace(ctx, &datastore.Namespace{UID: "00000000-0000-0000-0000-000000000171", Name: "acme", Tier: datastore.NamespaceTierUser}))
+				require.NoError(t, base.CreateRepository(ctx, &datastore.Repository{UID: testRepoID, ID: testRepoID, RepositoryID: testRepoID, Namespace: "acme", Name: "gitstore-system"}))
+				uid := "00000000-0000-0000-0000-000000000172"
+				require.NoError(t, base.CreateRepository(ctx, &datastore.Repository{UID: uid, ID: uid, RepositoryID: uid, Namespace: "acme", NamespaceID: "acme", Name: "catalog", APIVersion: "gitstore.dev/v1beta1", Kind: "Repository", DefaultBranch: "main", StorageClass: "standard", Generation: 1, ResourceVersion: "1"}))
+				require.NoError(t, base.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{Namespace: "acme", Name: "catalog", RepositoryID: uid}))
+				mine, theirs := strings.Repeat("c", 40), strings.Repeat("d", 40)
+				path := "repositories/catalog.md"
+				content := repositoryManifestFor("catalog", "acme", "trunk", "premium")
+				latest := append([]byte(nil), content...)
+				if change == "changed content" {
+					latest = repositoryManifestFor("catalog", "acme", "other", "premium")
+				}
+				if change == "changed identity" {
+					latest = repositoryManifestFor("other", "acme", "trunk", "premium")
+				}
+				trees := map[string]map[string][]byte{mine: {path: content}, theirs: {path: latest}}
+				if change == "removed manifest" {
+					delete(trees[theirs], path)
+				}
+				current := theirs
+				store := &repositoryConflictOnceStore{Datastore: base}
+				if stage == "during CAS retry" {
+					current = mine
+					store.remaining.Store(1)
+					store.afterConflict = func() { current = theirs }
+				}
+				reader := newTreeGitReader(&current, trees)
+				if change == "unavailable manifest" {
+					read := reader.readFileFunc
+					reader.readFileFunc = func(ctx context.Context, repositoryID, p, ref string) ([]byte, error) {
+						if ref == theirs {
+							return nil, grpcstatus.Error(codes.Unavailable, "read unavailable")
+						}
+						return read(ctx, repositoryID, p, ref)
+					}
+				}
+				srv := newCatalogServer(t, store, reader)
+				result, err := srv.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{RepositoryID: testRepoID, Namespace: "acme", ActorSubject: "alice", CommitSHA: mine, RefName: "refs/heads/main", Path: path, Content: content, Operation: admission.OperationUpdate})
+				stored, getErr := base.GetRepository(ctx, uid)
+				require.NoError(t, getErr)
+				if change == "independent path" {
+					require.NoError(t, err)
+					require.Equal(t, mine, result.CommitSHA)
+					require.Equal(t, "trunk", stored.DefaultBranch)
+					require.Equal(t, mine, stored.GitCommitSHA)
+					require.Equal(t, "main@sha1:"+mine, stored.Revision)
+				} else {
+					require.ErrorIs(t, err, admission.ErrCommittedManifestSuperseded)
+					require.Equal(t, "main", stored.DefaultBranch)
+					require.Empty(t, stored.GitCommitSHA)
+				}
+				if stage == "during CAS retry" {
+					require.Zero(t, store.remaining.Load(), "the race must reach the CAS conflict")
+				}
+			})
+		}
 	}
 }

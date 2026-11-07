@@ -9,14 +9,14 @@ CONTROLLER_MANAGER_DIR := $(ROOT)/gitstore-controller-manager
 GIT_SERVICE_DIR := $(ROOT)/gitstore-git-service
 OIDC_BRIDGE_DIR := $(ROOT)/gitstore-oidc-bridge
 SECRET_MATERIAL_DIR := $(ROOT)/shared/secretmaterial
-GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR) $(SECRET_MATERIAL_DIR)
+GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR) $(SECRET_MATERIAL_DIR) $(ROOT)/shared/observability $(ROOT)/shared/scylla-cdc-go
 
 API_ENV_FILE ?= $(API_DIR)/.env
 CONFIG_FILE ?= ./config/config.toml
 AUTH_CONFIG_DIR ?= $(ROOT)/config
 POLICY_FILE ?= $(AUTH_CONFIG_DIR)/policy.yaml
 USERS_FILE ?= $(AUTH_CONFIG_DIR)/users.yaml
-LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" docker compose --profile local -f compose.yml -f compose.local.yml
+LOCAL_COMPOSE = CONFIG_FILE="$(abspath $(CONFIG_FILE))" COMPOSE_BAKE="$(COMPOSE_BAKE)" $(OBSERVABILITY_ENV) docker compose --profile local $(OBSERVABILITY_PROFILE) -f compose.yml -f compose.local.yml
 LIFECYCLE_COMPOSE = $(LOCAL_COMPOSE) -f compose.scylla.yml -f compose.scylla.cluster.yml $(IDENTITY_COMPOSE_FILE)
 GIT_DATA_DIR ?= $(ROOT)/.gitstore/repos
 GIT_GRPC_PORT ?= 50051
@@ -29,18 +29,21 @@ CONTROLLER_SECRET_KEY ?= privateKey
 # key above). Required whenever auth.authn.chain includes
 # serviceaccount-jwt/serviceaccount-assertion (see gitstore-api's
 # validateServiceAccountSigningKeySource) — it must be supplied via the
-# GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY env var, never via config.toml.
+# GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY env var, never via config.toml.
 API_SERVICEACCOUNT_SIGNING_KEY_PATH ?= $(ROOT)/.gitstore/secrets/api-issuer/privateKey
-CONTROLLER_SERVICEACCOUNT_NAMESPACE ?= controllers
+ifneq ($(origin CONTROLLER_SERVICEACCOUNT_NAMESPACE),undefined)
+$(error CONTROLLER_SERVICEACCOUNT_NAMESPACE is removed; ServiceAccounts are cluster-scoped. Use CONTROLLER_SERVICEACCOUNT_NAME)
+endif
 CONTROLLER_SERVICEACCOUNT_NAME ?= gitstore-controller-manager
 CONTROLLER_SERVICEACCOUNT_KEY_ID ?= controller-key
+# Custom destinations get a sibling record; explicitly empty requests PEM only.
+RECORD_OUTPUT_PATH ?= $(if $(DESTINATION_PATH),$(DESTINATION_PATH).json,$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME).json)
 # CONTROLLER_SERVICEACCOUNT_UID is intentionally left unset by default: the
-# real UID is assigned by the API at enrollment time (see the `dev`/`controller`
-# targets' auto-enrollment step) and is not a value operators should hardcode.
+# real UID is assigned by the API at enrollment time (`make dev` automates
+# enrollment) and is not a value operators should hardcode.
 CONTROLLER_SERVICEACCOUNT_UID ?=
-# DEV_ADMIN_USERNAME/DEV_ADMIN_PASSWORD are used only to auto-enroll the
-# controller-manager's ServiceAccount against a locally running API in the
-# `dev`/`controller` targets. They default to the admin fixture already
+# DEV_ADMIN_USERNAME/DEV_ADMIN_PASSWORD are used by enrollment and `make dev`
+# against a locally running API. They default to the admin fixture already
 # checked into config/users.yaml for local development and must not be used
 # against any non-local environment (use ADMIN_USERNAME/ADMIN_PASSWORD with
 # the bootstrap-* targets for that).
@@ -57,6 +60,9 @@ SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS ?= 2048
 SCYLLA_COMPOSE_FILE = $(if $(filter cluster,$(PROFILE)),compose.scylla.cluster.yml,compose.scylla.yml)
 DATASTORE_COMPOSE_FILE = $(if $(filter scylla,$(DATASTORE)),-f $(SCYLLA_COMPOSE_FILE),)
 IDENTITY_COMPOSE_FILE = $(if $(filter oidc,$(IDENTITY)),-f compose.oidc.yml,)
+OBSERVABILITY ?= none
+OBSERVABILITY_PROFILE = $(if $(filter otel,$(OBSERVABILITY)),--profile observability,)
+OBSERVABILITY_ENV = $(if $(filter otel,$(OBSERVABILITY)),GITSTORE_OBSERVABILITY__OTLP__URI=http://otel-collector:4318,)
 SCYLLA_SERVICES = $(if $(filter cluster,$(PROFILE)),scylla-1 scylla-2 scylla-3 scylla-init,scylla scylla-init)
 SCYLLA_LIFECYCLE_SERVICES = scylla scylla-1 scylla-2 scylla-3 scylla-init
 OIDC_SERVICES = hydra-postgres hydra-migrate hydra hydra-client-setup kratos-postgres kratos-migrate kratos kratos-selfservice-ui mailslurper oidc-bridge
@@ -64,15 +70,18 @@ COMPOSE_SERVICE = $(if $(filter scylla,$(SERVICE)),$(SCYLLA_LIFECYCLE_SERVICES),
 DETACH_FLAG := $(if $(filter 1 true yes,$(DETACH)),-d,)
 SERVICE ?=
 
-API_URL ?= http://localhost:4000/graphql
-API_HEALTH_URL ?= $(patsubst %/graphql,%/health,$(API_URL))
+API_URL ?= http://localhost:4000/admin/graphql
+# Override when a reverse proxy routes operational endpoints separately.
+API_HEALTH_URL ?= $(patsubst %/admin/graphql,%/health,$(API_URL))
 ADMIN_USERNAME ?= admin
 ADMIN_PASSWORD ?=
 BOOTSTRAP_TOKEN ?=
 BOOTSTRAP_TOKEN_CACHE ?= $(ROOT)/.gitstore/bootstrap-token
+# Capture only an operator-supplied namespace before the bootstrap default.
+RBAC_EXPLICIT_NAMESPACE := $(if $(filter undefined default,$(origin NAMESPACE)),,$(NAMESPACE))
 NAMESPACE ?= gitstore-test
 NAMESPACE_DISPLAY_NAME ?= GitStore Test
-NAMESPACE_TIER ?= USER
+NAMESPACE_TIER ?= ORGANIZATION
 REPOSITORY ?= catalog
 DEFAULT_BRANCH ?= main
 SCYLLA_TEST_ADDR ?= 127.0.0.1:9042
@@ -174,11 +183,12 @@ export API_URL ADMIN_USERNAME ADMIN_PASSWORD BOOTSTRAP_TOKEN BOOTSTRAP_TOKEN_CAC
 export NAMESPACE NAMESPACE_DISPLAY_NAME NAMESPACE_TIER REPOSITORY DEFAULT_BRANCH
 
 .PHONY: help git api controller dev compose scylla ps logs stop down
-.PHONY: build test lint pr-ready check clean bootstrap secret capacity chaos
+.PHONY: build test lint pr-ready check clean bootstrap secret capacity chaos generate _generate-authz _generate-all _check-generated
 .PHONY: _capacity-k6 _capacity-scylla-soak _capacity-namespace-admission _capacity-namespace-watch _capacity-namespace-recovery _capacity-repository-lifecycle _capacity-repository-overflow _capacity-observability _capacity-observability-down
-.PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage
+.PHONY: _capacity-authorization
+.PHONY: _check-all _check-local-config _check-compose-config _check-licenses _check-credentials _check-credential-output _check-credential-leakage _check-infrastructure _bootstrap-infrastructure
 .PHONY: _clean-git-data _clean-controller-checkpoints _bootstrap-all _bootstrap-tools _bootstrap-token _bootstrap-namespace _bootstrap-repository _secret-jwt _secret-grpc-hmac _secret-signing-key
-.PHONY: add-user add-role assign-role hash-user-password enroll-controller-serviceaccount
+.PHONY: add-user add-role assign-role hash-user-password enroll-controller-serviceaccount _enroll-controller-serviceaccount
 .PHONY: oidc
 
 help: ## Show available targets and common variables.
@@ -187,6 +197,7 @@ help: ## Show available targets and common variables.
 	@printf "  DETACH=1                  Run compose start targets in the background\n"
 	@printf "  DATASTORE=%s              Compose datastore: memdb or scylla\n" "$(DATASTORE)"
 	@printf "  IDENTITY=%s               Compose identity stack: none or oidc (Hydra + Kratos reference provider)\n" "$(IDENTITY)"
+	@printf "  OBSERVABILITY=%s          Optional collector-routed metrics, logs and traces: none or otel\n" "$(OBSERVABILITY)"
 	@printf "  COMPOSE_BAKE=true         Compose build bake setting for Docker Compose\n"
 	@printf "  PROFILE=%s                Scylla profile: single or cluster\n" "$(PROFILE)"
 	@printf "  SERVICE=<name>            Limit logs/stop to one compose service; SERVICE=scylla includes all Scylla variants; SERVICE=oidc (with IDENTITY=oidc) covers the whole OIDC stack\n"
@@ -196,6 +207,7 @@ help: ## Show available targets and common variables.
 	@printf "  GIT_DATA_DIR=%s\n" "$(GIT_DATA_DIR)"
 	@printf "  CONTROLLER_CHECKPOINT_DIR=%s\n" "$(CONTROLLER_CHECKPOINT_DIR)"
 	@printf "  CONTROLLER_SECRET_DIR=%s\n" "$(CONTROLLER_SECRET_DIR)"
+	@printf "  secret TARGET=signing-key  Generate controller PEM + JSON; optional DESTINATION_PATH, RECORD_OUTPUT_PATH (empty for PEM only), CONTROLLER_SERVICEACCOUNT_KEY_ID\n"
 	@printf "  CONFIG_FILE=%s        Shared local-profile configuration\n" "$(CONFIG_FILE)"
 	@printf "  API_URL=%s\n" "$(API_URL)"
 	@printf "  ADMIN_USERNAME=%s\n" "$(ADMIN_USERNAME)"
@@ -237,7 +249,7 @@ help: ## Show available targets and common variables.
 
 git: ## Run gitstore-git-service locally in the foreground.
 	@mkdir -p "$(GIT_DATA_DIR)"
-	@cd "$(GIT_SERVICE_DIR)" && GITSTORE_GIT__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service
+	@cd "$(GIT_SERVICE_DIR)" && GITSTORE_GIT_SERVICE__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service
 
 # enroll-controller-serviceaccount registers the controller-manager's signing
 # key with a running API and resolves the real, API-assigned ServiceAccount
@@ -246,36 +258,19 @@ git: ## Run gitstore-git-service locally in the foreground.
 # idempotent. Requires the API to already be listening on API_URL's host:port.
 CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE ?= $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/serviceaccount.env
 
-enroll-controller-serviceaccount: ## Enroll controller-manager's signing key with the API.
-	@mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"
-	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
-		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
-		echo "Generate one with: make secret TARGET=signing-key DESTINATION_PATH=$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
-		exit 2; \
-	}
-	@cd "$(API_DIR)" && go run ./cmd/gitctl enroll-serviceaccount \
-		--api-url "$(API_URL)" \
-		--admin-username "$(DEV_ADMIN_USERNAME)" \
-		--admin-password "$(DEV_ADMIN_PASSWORD)" \
-		--namespace "$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
-		--name "$(CONTROLLER_SERVICEACCOUNT_NAME)" \
-		--key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
-		--replace-existing-key \
-		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
-		--identity-output-path "$(CONTROLLER_SERVICEACCOUNT_IDENTITY_FILE)"
+enroll-controller-serviceaccount: _enroll-controller-serviceaccount ## Enroll the existing controller public key and save its API-assigned UID.
 
 _enroll-controller-serviceaccount:
 	@mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"
 	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
 		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
-		echo "Generate one with: cd $(API_DIR) && go run ./cmd/gitctl generate-serviceaccount-key --private-key-path $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+		echo "Generate one with: make secret TARGET=signing-key (use the same CONTROLLER_* overrides)"; \
 		exit 2; \
 	}
 	@cd "$(API_DIR)" && go run ./cmd/gitctl enroll-serviceaccount \
 		--api-url "$(API_URL)" \
 		--admin-username "$(DEV_ADMIN_USERNAME)" \
 		--admin-password "$(DEV_ADMIN_PASSWORD)" \
-		--namespace "$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 		--name "$(CONTROLLER_SERVICEACCOUNT_NAME)" \
 		--key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
 		--replace-existing-key \
@@ -284,14 +279,10 @@ _enroll-controller-serviceaccount:
 
 controller: ## Run gitstore-controller-manager locally in the foreground.
 	@mkdir -p "$(CONTROLLER_CHECKPOINT_DIR)"
-	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" || { \
-		echo "Missing controller signing key at $(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
-		echo "Generate one with: make secret TARGET=signing-key DESTINATION_PATH=$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)"; \
+	@test -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME).json" || { \
+		echo "Missing controller signing record. Run: make secret TARGET=signing-key (use the same CONTROLLER_* overrides)"; \
 		exit 2; \
 	}
-	@cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key \
-		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
-		--record-output-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME).json" --key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)"
 	@set -u; \
 	resolved_uid="$(CONTROLLER_SERVICEACCOUNT_UID)"; \
 	if [ -z "$$resolved_uid" ]; then \
@@ -304,7 +295,6 @@ controller: ## Run gitstore-controller-manager locally in the foreground.
 	fi; \
 	cd "$(CONTROLLER_MANAGER_DIR)" && \
 		GITSTORE_CONTROLLER__CHECKPOINT__DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
-		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$resolved_uid" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
@@ -317,10 +307,10 @@ api: ## Run gitstore-api locally in the foreground.
 	@test -f "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" || \
 		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" )
 	@cd "$(API_DIR)" && \
-		GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
+		GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
 		go run ./cmd/server
 
-dev: ## Run local git service and API together in the foreground.
+dev: ## Generate/enroll local credentials and run all three core services in the foreground.
 	@set -u; \
 	mkdir -p "$(GIT_DATA_DIR)"; \
 	mkdir -p "$(CONTROLLER_CHECKPOINT_DIR)"; \
@@ -353,7 +343,7 @@ dev: ## Run local git service and API together in the foreground.
 	trap 'cleanup' EXIT; \
 	( set +e; \
 		cd "$(GIT_SERVICE_DIR)" || { printf 'git-service 1\n' > "$$fifo"; exit 0; }; \
-		GITSTORE_GIT__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service & child=$$!; \
+		GITSTORE_GIT_SERVICE__DATA_DIR="$(GIT_DATA_DIR)" cargo run --bin git-service & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
 		wait "$$child"; status=$$?; \
 		printf 'git-service %s\n' "$$status" > "$$fifo"; \
@@ -372,8 +362,8 @@ dev: ## Run local git service and API together in the foreground.
 		done; \
 		exec 3<&- 2>/dev/null || true; \
 		exec 3>&- 2>/dev/null || true; \
-		GITSTORE_AUTH__AUTHN__CHAIN="static-users,serviceaccount-assertion,serviceaccount-jwt,anonymous" \
-		GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
+		GITSTORE_API__AUTH__AUTHN__CHAIN="static-users,serviceaccount-assertion,serviceaccount-jwt,anonymous" \
+		GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
 		go run ./cmd/server & child=$$!; \
 		trap 'kill "$$child" 2>/dev/null; wait "$$child" 2>/dev/null; exit 143' INT TERM; \
 		wait "$$child"; status=$$?; \
@@ -396,7 +386,6 @@ dev: ## Run local git service and API together in the foreground.
 			--api-url "$(API_URL)" \
 			--admin-username "$(DEV_ADMIN_USERNAME)" \
 			--admin-password "$(DEV_ADMIN_PASSWORD)" \
-			--namespace "$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 			--name "$(CONTROLLER_SERVICEACCOUNT_NAME)" \
 			--key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" \
 			--replace-existing-key \
@@ -410,7 +399,6 @@ dev: ## Run local git service and API together in the foreground.
 	( set +e; \
 		cd "$(CONTROLLER_MANAGER_DIR)" || { printf 'controller 1\n' > "$$fifo"; exit 0; }; \
 		GITSTORE_CONTROLLER__CHECKPOINT__DIR="$(CONTROLLER_CHECKPOINT_DIR)" \
-		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE="$(CONTROLLER_SERVICEACCOUNT_NAMESPACE)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME="$(CONTROLLER_SERVICEACCOUNT_NAME)" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$resolved_uid" \
 		GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND="SecretRef" \
@@ -433,16 +421,17 @@ _check-local-config:
 	@test -f "$(POLICY_FILE)" || { echo "Local RBAC policy does not exist: $(POLICY_FILE)"; exit 2; }
 	@test -r "$(POLICY_FILE)" || { echo "Local RBAC policy is not readable: $(POLICY_FILE)"; exit 2; }
 	@cd "$(API_DIR)" && \
-		GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY="$${GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY:-config-validation-placeholder}" \
+		GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$${GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY:-config-validation-placeholder}" \
 		go run ./cmd/gitctl validate-local-config \
 			--config-file "$(abspath $(CONFIG_FILE))" --policy-file "$(abspath $(POLICY_FILE))"
 
 _check-compose-config: _check-local-config
-	@CONFIG_FILE="$(abspath $(CONFIG_FILE))" ./scripts/check-local-compose-config.sh
+	@CONFIG_FILE="$(abspath $(CONFIG_FILE))" OBSERVABILITY="$(OBSERVABILITY)" ./scripts/check-local-compose-config.sh
 
-compose: _check-local-config ## Run all core services; pass DATASTORE=scylla (optional PROFILE=cluster) and/or IDENTITY=oidc for optional stacks.
+compose: _check-local-config ## Run core services; optional DATASTORE=scylla, PROFILE=cluster, IDENTITY=oidc, OBSERVABILITY=otel.
 	@case "$(DATASTORE)" in memdb|scylla) ;; *) echo "DATASTORE must be 'memdb' or 'scylla'"; exit 2;; esac
 	@case "$(IDENTITY)" in none|oidc) ;; *) echo "IDENTITY must be 'none' or 'oidc'"; exit 2;; esac
+	@case "$(OBSERVABILITY)" in none|otel) ;; *) echo "OBSERVABILITY must be 'none' or 'otel'"; exit 2;; esac
 	@case "$(PROFILE)" in single|cluster) ;; *) echo "PROFILE must be 'single' or 'cluster'"; exit 2;; esac
 	@SCYLLA_CLUSTER_SMP="$(SCYLLA_CLUSTER_SMP)" SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS="$(SCYLLA_CLUSTER_MAX_NETWORKING_IO_CONTROL_BLOCKS)" $(LOCAL_COMPOSE) $(DATASTORE_COMPOSE_FILE) $(IDENTITY_COMPOSE_FILE) up --build $(DETACH_FLAG)
 
@@ -471,6 +460,19 @@ build: ## Build Rust/Go services and the shared secret-material module.
 		( cd "$$dir" && go build -v ./... ) || exit 1; \
 	done
 
+generate: ## Generate committed sources; TARGET=authz or all.
+	@./scripts/run-make-workflow.sh generate "$(TARGET)"
+
+_generate-authz:
+	@cd "$(API_DIR)" && go run ./cmd/gitctl generate authz --root "$(ROOT)"
+
+_generate-all:
+	@cd "$(API_DIR)" && go generate ./...
+
+_check-generated:
+	@cd "$(API_DIR)" && go run ./cmd/gitctl generate authz --root "$(ROOT)" --check
+	@bash ./scripts/check-graphql-generation.sh
+
 test: ## Run tests; TARGET=all (default), datastore, or secret-integration. Datastore tests use DATASTORE=memdb|scylla.
 ifeq ($(TEST_TARGET),secret-integration)
 	@test "$(SECRET_TEST_OWNED_DEPLOYMENT)" = "1" || { echo "SECRET_TEST_OWNED_DEPLOYMENT=1 is required"; exit 2; }
@@ -495,9 +497,10 @@ else
 	@echo "test TARGET=datastore requires DATASTORE=memdb or DATASTORE=scylla" >&2; exit 2
 endif
 else ifeq ($(TEST_TARGET),all)
+	@$(MAKE) --no-print-directory _check-generated
 	@bash ./scripts/test-secret-config.sh
 	@bash ./scripts/test-secret-capacity-evidence.sh
-	@cd "$(ROOT)/tests/integration" && GOWORK=off go test -count=1 -race -run '^TestSecretCapacity' .
+	@cd "$(ROOT)/tests/integration" && GOWORK=off go test -count=1 -race -run '^TestSecretCapacity|^Test(CapacityPush|EndpointSplit|EndpointLoad|RepositoryController)' .
 	@./scripts/test-make-workflow-dispatch.sh
 	@./scripts/test-capacity-dispatch.sh
 	@./scripts/test-capacity-prometheus-export.sh
@@ -583,6 +586,10 @@ chaos: ## Inject an opt-in container fault and retain structured evidence.
 		CHAOS_EVIDENCE_DIR="$(CHAOS_EVIDENCE_DIR)" \
 		PUMBA_IMAGE="$(PUMBA_IMAGE)" \
 		./scripts/run-chaos.sh "$(CHAOS_PROFILE)"
+
+_capacity-authorization:
+	@cd "$(API_DIR)" && AUTHZ_CAPACITY_RUN=1 MODE="$(MODE)" \
+		go test -count=1 -timeout 75m -v -run '^TestAuthorizationDecisionCapacity$$' ./internal/auth/provider/rbaclocal
 
 _capacity-scylla-soak:
 	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
@@ -704,8 +711,11 @@ lint: ## Run Rust and Go lint checks, including shared secret material.
 		( cd "$$dir" && "$$(go env GOPATH)"/bin/staticcheck ./... ) || exit 1; \
 	done
 
-check: ## Run validation checks; set TARGET=all, config, compose, licenses, or credentials.
+check: ## Run validation checks; TARGET=all, config, compose, licenses, credentials, or infrastructure.
 	@./scripts/run-make-workflow.sh check "$(TARGET)"
+
+_check-infrastructure:
+	@PROFILE="$(if $(filter single,$(PROFILE)),digitalocean,$(PROFILE))" ./scripts/run-infrastructure.sh check
 
 _check-licenses:
 	@./scripts/check-go-license-headers.sh --all
@@ -723,12 +733,15 @@ _check-credential-leakage:
 
 _check-credentials: _check-credential-output _check-credential-leakage
 
-_check-all: _check-compose-config _check-licenses _check-credentials
+_check-all: _check-compose-config _check-licenses _check-credentials _check-generated
 
 pr-ready: lint build test _check-licenses _check-credentials ## Run the full PR readiness workflow.
 
-bootstrap: ## Bootstrap local resources; set TARGET=all, token, namespace, or repository.
+bootstrap: ## Bootstrap resources; TARGET=all, token, namespace, repository, or infrastructure (ACTION selects operation).
 	@./scripts/run-make-workflow.sh bootstrap "$(TARGET)"
+
+_bootstrap-infrastructure:
+	@PROFILE="$(if $(filter single,$(PROFILE)),digitalocean,$(PROFILE))" ./scripts/run-infrastructure.sh "$(or $(ACTION),plan)"
 
 _bootstrap-all:
 	@$(MAKE) --no-print-directory _bootstrap-namespace
@@ -761,54 +774,43 @@ add-user: ## Add a local user to USERS_FILE; requires USERNAME and PASSWORD.
 		--display-name "$${DISPLAY_NAME:-}" \
 		--password-stdin)
 
-add-role: ## Add a role to POLICY_FILE; requires ROLE and ALLOW and/or DENY.
-	@if [ -z "$${ROLE:-}" ] || { [ -z "$${ALLOW:-}" ] && [ -z "$${DENY:-}" ]; }; then \
-		echo "Usage: make add-role ROLE=<role> [ALLOW='action,action'] [DENY='action,action'] [POLICY_FILE=<path>]"; \
-		exit 2; \
-	fi
-	@cd "$(API_DIR)" && go run ./cmd/gitctl rbac role add \
-		--file "$(abspath $(POLICY_FILE))" \
-		--name "$$ROLE" \
-		$${ALLOW:+--allow "$$ALLOW"} \
-		$${DENY:+--deny "$$DENY"}
+add-role: ## Add canonical ALLOW actions to a role; SCOPE=cluster or namespace. DENY is unsupported.
+	@POLICY_FILE="$(abspath $(POLICY_FILE))" RBAC_NAMESPACE="$(RBAC_EXPLICIT_NAMESPACE)" ./scripts/run-make-workflow.sh rbac role-add
 
-assign-role: ## Assign an existing role to a subject in POLICY_FILE.
-	@if [ -z "$${SUBJECT:-}" ] || [ -z "$${ROLE:-}" ]; then \
-		echo "Usage: make assign-role SUBJECT=<subject> ROLE=<role> [POLICY_FILE=<path>]"; \
-		exit 2; \
-	fi
-	@cd "$(API_DIR)" && go run ./cmd/gitctl rbac binding add \
-		--file "$(abspath $(POLICY_FILE))" \
-		--subject "$$SUBJECT" \
-		--role "$$ROLE"
+assign-role: ## Bind ROLE to SUBJECT; typed SUBJECT_KIND/ROLE_KIND and SCOPE selectors, explicit NAMESPACE for namespace bindings.
+	@POLICY_FILE="$(abspath $(POLICY_FILE))" RBAC_NAMESPACE="$(RBAC_EXPLICIT_NAMESPACE)" ./scripts/run-make-workflow.sh rbac binding-add
 
-secret: ## Generate local security material; set TARGET=jwt, grpc-hmac, or signing-key.
+secret: ## Generate local security material; TARGET=jwt, grpc-hmac, or signing-key (controller PEM + JSON).
 	@./scripts/run-make-workflow.sh secret "$(TARGET)"
 
 _secret-jwt:
-	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-jwt-secret | sed -n 's/^GITSTORE_AUTH__JWT__SECRET=//p') || { \
+	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-jwt-secret | sed -n 's/^GITSTORE_API__AUTH__JWT__SECRET=//p') || { \
 		echo "Failed to generate JWT secret. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
-	./scripts/update-env-secret.sh GITSTORE_AUTH__JWT__SECRET "$$secret" "$(API_DIR)/.env"
+	./scripts/update-env-secret.sh GITSTORE_API__AUTH__JWT__SECRET "$$secret" "$(API_DIR)/.env"
 
 _secret-grpc-hmac:
-	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-hmac-secret | sed -n 's/^GITSTORE_AUTH__GRPC__HMAC_SECRET=//p') || { \
+	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-hmac-secret | sed -n 's/^GITSTORE_GRPC_AUTH__HMAC_SECRET=//p') || { \
 		echo "Failed to generate HMAC secret. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
-	./scripts/update-env-secret.sh GITSTORE_AUTH__GRPC__HMAC_SECRET "$$secret" "$(API_DIR)/.env" "$(GIT_SERVICE_DIR)/.env"; \
+	./scripts/update-env-secret.sh GITSTORE_GRPC_AUTH__HMAC_SECRET "$$secret" "$(API_DIR)/.env" "$(GIT_SERVICE_DIR)/.env"; \
 	echo "HMAC secret updated in $(API_DIR)/.env and $(GIT_SERVICE_DIR)/.env"
 
 _secret-signing-key:
-	@if [ -z "$(DESTINATION_PATH)" ]; then \
-		echo "DESTINATION_PATH is required for make secret TARGET=signing-key"; \
-		exit 2; \
-	fi
-	@abs_path="$$(cd "$(ROOT)" && pwd)/$$(echo "$(DESTINATION_PATH)" | sed 's|^/||')"; \
-	if echo "$(DESTINATION_PATH)" | grep -q '^/'; then abs_path="$(DESTINATION_PATH)"; fi; \
-	mkdir -p "$$(dirname "$$abs_path")"; \
-	cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$$abs_path"
+	@set -eu; \
+	key_path="$(or $(DESTINATION_PATH),$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY))"; \
+	record_path="$(RECORD_OUTPUT_PATH)"; \
+	case "$$key_path" in /*) ;; *) key_path="$(ROOT)/$$key_path" ;; esac; \
+	mkdir -p "$$(dirname "$$key_path")"; \
+	set -- --private-key-path "$$key_path"; \
+	if [ -n "$$record_path" ]; then \
+		case "$$record_path" in /*) ;; *) record_path="$(ROOT)/$$record_path" ;; esac; \
+		mkdir -p "$$(dirname "$$record_path")"; \
+		set -- "$$@" --record-output-path "$$record_path" --key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)"; \
+	fi; \
+	cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key "$$@"
 
 _bootstrap-token: _bootstrap-tools
 	@if [ -z "$${ADMIN_PASSWORD:-}" ]; then \

@@ -9,6 +9,14 @@ served from the same durable, replica-safe watch journal, so one set of signals
 covers all of them. A cursor issued by one API replica can be resumed on any
 other replica.
 
+A successful Git push can precede catalog admission and controller status
+publication. Bounded category polling therefore permits only a null `category`
+with the matching `NOT_FOUND` / `CATEGORY_NOT_FOUND` failure diagnostic while
+waiting for admission. Namespace absence, authorization failures, malformed
+responses and operational errors are not convergence signals. Once admitted,
+resolved paths and filtered membership still converge asynchronously; endpoint
+readiness alone does not prove that a newly pushed hierarchy has reconciled.
+
 ## Diagnostic Steps: Watch Disconnects
 
 1. Check how many subscribers are connected and whether streams are being
@@ -19,15 +27,15 @@ other replica.
    sum by (reason) (rate(gitstore_resource_watch_expired_total[5m]))
    ```
 
-   A reconnect that resumes from its cursor without a matching
-   `expired_total` increment is a normal transient disconnect and needs no
-   operator action.
+   A reconnect that successfully resumes from its cursor while journal
+   readiness remains healthy, without a matching `expired_total` increment,
+   is a normal transient disconnect and needs no operator action.
 
 2. If streams are expiring, the `reason` label tells you why:
 
    - `RETENTION_EXPIRED` or `REPLAY_LIMIT`: the client was disconnected longer
-     than the retained journal window (`watch.namespace.journal_retention_seconds`)
-     or would need to replay more than `watch.namespace.max_replay_events`.
+     than the retained journal window (`api.watch.journal.retention`)
+     or would need to replay more than `api.watch.journal.read.max_replay_events`.
    - `INVALID_CURSOR`, `INCOMPATIBLE_CURSOR` or `EPOCH_MISMATCH`: the client presented a cursor the
      journal never issued, for example one checkpointed before an upgrade.
    - `SUBSCRIBER_OVERFLOW`: the client did not drain its stream fast enough.
@@ -41,12 +49,20 @@ other replica.
    ```
 
    A sustained non-zero rate means a subscriber's buffer
-   (`watch.namespace.subscriber_buffer`) filled up and its stream was ended with
+   (`api.watch.journal.subscriber.buffer`) filled up and its stream was ended with
    `WATCH_EXPIRED/SUBSCRIBER_OVERFLOW`. Overflow never drops events silently.
+
+4. If reconnects do not recover, check the API's `/ready` response and
+   materializer logs. `WATCH_UNAVAILABLE/MATERIALIZER_NOT_READY` can persist
+   without incrementing the expired-cursor counter. A CDC ordering
+   discontinuity stops the materializer deliberately; controller liveness
+   can remain healthy while reconciliation is stalled. Preserve the logged
+   stream and CDC positions and involve the datastore owner rather than
+   treating repeated reconnects as successful recovery.
 
 ## Recovery Actions: Watch Disconnects
 
-- **Transient reconnect (no `expired_total` increment)**: no action needed.
+- **Successful transient reconnect with healthy journal readiness**: no action needed.
 - **Expired cursor**: the controller's `listwatch.Runner` discards the cursor,
   re-lists from a fresh journal bookmark and resumes automatically. Repeated
   `RETENTION_EXPIRED`/`REPLAY_LIMIT` expiries for a controller mean it is
@@ -54,7 +70,23 @@ other replica.
   `journal_retention_seconds`/`max_replay_events` within their documented bounds.
 - **Overflow**: the affected controller is not draining its watch fast enough.
   Check its queue-depth/worker-saturation signals (see
-  [controller-lag.md](./controller-lag.md)) before reconnecting.
+  [controller-recovery.md](controller-recovery.md#lag-and-stalled-work)) before reconnecting.
+
+### CDC generation boundaries
+
+An empty query on a retiring CDC stream can finish beyond the next generation's
+start. Its query-end timestamp is evidence of that stream's read progress, not
+an event published by the next generation. Namespace, Repository, Product,
+CategoryTaxonomy and File sequencing therefore compares incoming changes with
+the last actually published change, not with empty-query timestamps. Per-stream
+read checkpoints still advance while idle and keep readiness fresh.
+
+Namespace recovery persists the published-change position separately from
+per-stream read progress before acknowledging those checkpoints, including
+when no event has yet been published. Recovery uses the same qualified source
+table identity as the CDC reader; older manifests' unqualified recovery keys
+are reconciled into that identity before resuming. A genuinely older change still fails closed;
+do not clear checkpoints or ignore a discontinuity to make readiness green.
 
 ## Diagnostic Steps: Status-Write Conflicts
 
@@ -73,6 +105,45 @@ other replica.
    ```
 
    If the same `namespace`/`name` pair appears repeatedly in a short window, two writers are racing on that specific resource. If many different resources of the same kind are conflicting, the reconciler for that kind may be operating on a stale cache snapshot (e.g. a watch resume gap — cross-reference with the watch-disconnect signals above).
+
+Product status writes and category-deletion owner cleanup use a status-only
+datastore compare-and-swap against the caller's resource version.
+Owner-reference changes, when supplied, participate in that same conditional
+write. A concurrent Git spec
+update must cause stale status work to conflict, never overwrite the new spec,
+body, Git revision or finalizers with a cached full-resource snapshot. On
+conflict, reconcile again from current state; category deletion retains the
+Product for its next bounded cleanup continuation.
+
+## Diagnosing the snapshot consumed by reconciliation
+
+For Namespace and Repository, sampled reconciliation-attempt spans include a
+`controller.reconcile.snapshot` event after a successful lookup. Match its
+`resource.uid`, `resource.resource_version`, `resource.generation` and
+`resource.revision` to the expected API postimage and controller instance.
+The revision is authored `metadata.revision`, not `status.lastAppliedRevision`.
+Missing resources and failed lookups emit no snapshot event.
+
+Category and Product controller projections also retain authored
+`metadata.revision` from list/watch responses, separately from
+`status.lastAppliedRevision`. When diagnosing a stale projection, compare the
+authored revision to the API postimage; a status revision can lag behind it.
+These two kinds do not emit the snapshot event described here.
+
+Use only events with `resource.snapshot.exact=true` for exact snapshot matching.
+Missing fields or nonpositive generation make it false. UID, resource version
+and revision are limited to 64, 128 and 256 UTF-8 bytes; an invalid or oversized
+string replaces all three strings with `[invalid]`, without changing the
+resource used for reconciliation. Old persisted projections without authored
+revision remain readable but produce non-exact events until refreshed.
+
+A matching event proves which snapshot was read, not successful reconciliation
+or delivery of every intermediate version: queued keys can observe a newer
+snapshot. Check the attempt outcome and resulting status separately. Compare
+UIDs across same-name recreation and controller instance identities across
+replacement. Missing sampled or exporter-dropped events do not prove that work
+was skipped. These identities are trace attributes, never metric labels.
+When tracing is disabled or an attempt is not recording, this event is absent.
 
 ## Controller API throttling and recovery
 
@@ -114,6 +185,12 @@ not that the pending reconciliation backlog is empty; also inspect queue depth
 and its drain rate. Load and final acceptance require readiness.
 No retry is counted as successful reconciliation.
 
+Managed alpha runs require boolean `ready:true`, `credentialReady:true` and
+registration of the exercised kind on both controllers before load and after
+it. Startup polls within the configured wait timeout; post-run checks also
+require distinct process identities. A failed post-run check makes the command
+fail and marks existing run metadata `passed:false`, even if load itself passed.
+
 Credential acquisition failures are shared dependency failures, not evidence
 that an individual resource is invalid. The HTTP/WebSocket client shares a
 cancellable cooldown before retrying acquisition, and the manager defers
@@ -147,7 +224,7 @@ replicas; do not use mixed-version results to claim bounded-memory recovery.
 
 The controller shares one outbound request budget across all reconciliation
 kinds, list/status requests and WebSocket upgrades. Defaults are
-`controller.api_client.requests_per_second = 40` and `burst = 10`, leaving
+`controller.api_client.rate_limit.per_second = 40` and `rate_limit.burst = 10`, leaving
 headroom under the API's unchanged 50 requests/second, burst-100 per-IP limit
 for token exchange. Budget waits happen after potentially slow credential
 renewal, preventing a burst when exchange waiters wake up. Cached service-account
@@ -250,7 +327,7 @@ previous depth/path. The Repository storage-verification cache is capped at
 Corruption, incompatible schemas and I/O failures return errors rather than an
 empty catalog. Watch persistence failures close recovery admission until
 durable progress resumes. Quarantine listing is paginated; see
-[controller-poisoned-item.md](./controller-poisoned-item.md).
+[controller-recovery.md](controller-recovery.md#quarantined-work).
 Decoded status normalizes an absent or JSON-null `resolved` payload to nil.
 Otherwise a disk round trip turns nil into non-nil `"null"` bytes, causing
 already-converged Products to rewrite status and repeatedly enqueue themselves.
@@ -281,45 +358,9 @@ These are storage and dispatch bounds, not production capacity acceptance; use
 `make capacity` against a real deployment for throughput and rolling-recovery
 evidence.
 
-### Overnight measurements (2026-10-05)
-
-The retained five-million-Product dataset was copied into a fresh baseline
-keyspace using task-local tooling, with full authoritative-row and projection
-verification. The original keyspace was not modified. Both APIs subsequently
-matched the acknowledged manifest through 20,000 pages of 250 rows each.
-
-| Observation | Result |
-| --- | --- |
-| Cold recovery, both controllers | 515.8 seconds; below the unchanged 600-second guard |
-| Persisted restart | 1.9-3.1 seconds; no Product relist |
-| Final hour-long load, controller cgroup peaks | About 352 / 464 MiB, including filesystem cache |
-| OOMs / automatic restarts in the final attempt | None |
-| Final File gate | Failed: 28,185 dropped offers, 548 failed completions, 636 projection failures |
-| Final offered-to-push latency | p95 about 160 seconds; p99 about 230 seconds |
-
-The final attempt is
-`441-overnight-production-20261005-1d3635f-retry`. These numbers **do not certify
-production capacity**. The push latency includes queue waiting. Key
-overlap/retirement and the scheduled controller replacement did not complete.
-The separate credential-outage fix did recover both controllers, in about
-24.6 / 20.9 seconds; both were healthy at the final capture.
-The cold run had higher cgroup peaks, about 982 / 983 MiB. Docker allocation
-was not increased; these integrated controllers had no individual container
-memory cap.
-
-A separate, 512-MiB-capped diagnostic used 10,000 already-converged Products:
-memory lookup/reconciliation measured about 2 million/s, warm disk
-lookup/reconciliation about 45,000/s, and disk reconciliation with durable
-acknowledgement about 3,000/s. It made zero status writes and used about 22 MiB
-of Go heap. This is a small warm-working-set probe, not a five-million-row
-throughput extrapolation. The live dataset still contains Products requiring
-their first status write, so its roughly 26-40/s net backlog drain is not a
-pure cache benchmark.
-
-Keep the bounded disk-backed implementation while investigating Git admission,
-projection visibility, request quotas and queueing under the combined load.
-The current evidence does not justify an io_uring implementation or a
-memory/disk switch as the remedy for the remaining gate failure.
+Historical measurements and their workload limitations are retained with the
+[capacity documentation](../../tests/capacity/README.md#historical-controller-observations-2026-10-05),
+not as controller maintenance steps or sustainable capacity limits.
 
 Typed and generic watches of every kind require the durable journal. Development
 and tests wire the memdb journal; a deployment without a configured journal
@@ -363,10 +404,12 @@ Roll out in this order:
 4. Run a cross-replica probe: commit a change through API A and resume a watch
    on API B from an earlier cursor.
 
-To take the journal out of service, deny watch ingress and disable
-`watch.namespace.readers_enabled` first, then disable the materializer once
-readers are drained. Do not drop CDC or journal tables while any issued cursor
-could still be presented.
+The durable watch journal reader and CDC materializer are always on — there is
+no config flag to disable them independently, and no watch mechanism besides
+the journal. To take the journal out of service, stop every API replica (and
+drain or redirect watch ingress at the load balancer first) rather than
+reaching for a config toggle. Do not drop CDC or journal tables while any
+issued cursor could still be presented.
 
 Journal signals have bounded labels only (`path` and `reason`; never a
 resource name, UID, cursor, holder ID, or replica ID):

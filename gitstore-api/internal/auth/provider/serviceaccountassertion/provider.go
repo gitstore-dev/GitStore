@@ -40,7 +40,6 @@ const assertionTyp = "gitstore-sa-assertion+jwt"
 
 const (
 	defaultAssertionAudience = "gitstore-api/serviceaccount-token"
-	defaultClockSkew         = 2 * time.Minute
 	// maxAssertionLifetime is the hard exp-iat<=60s bound from data-model.md
 	// §3 — assertions are single-use, proof-of-possession tokens, not
 	// general-purpose bearer tokens, so their validity window is
@@ -54,7 +53,7 @@ const (
 // provider package only depends on the one method it actually calls,
 // without coupling the two packages to each other.
 type ServiceAccountLookup interface {
-	GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*datastore.ServiceAccount, error)
+	GetServiceAccountBySubject(ctx context.Context, name string) (*datastore.ServiceAccount, error)
 }
 
 // ServiceAccountStore is the narrow datastore seam this provider needs. The
@@ -89,14 +88,10 @@ func New(cfg config.ServiceAccountConfig, store ServiceAccountStore, logger *zap
 	if audience == "" {
 		audience = defaultAssertionAudience
 	}
-	skew := defaultClockSkew
-	if raw := strings.TrimSpace(cfg.ClockSkew); raw != "" {
-		d, err := time.ParseDuration(raw)
-		if err != nil {
-			return nil, fmt.Errorf("serviceaccountassertion: invalid clock_skew %q: %w", raw, err)
-		}
-		skew = d
-	}
+	// config.Load defaults ClockSkew to 2m; a caller constructing
+	// ServiceAccountConfig directly (e.g. tests) that leaves it zero means
+	// zero tolerance, not "use the default" — the zero value is meaningful.
+	skew := cfg.ClockSkew
 
 	return &Provider{
 		assertionAudience: audience,
@@ -137,11 +132,11 @@ func (p *Provider) Authenticate(ctx context.Context, req auth.AuthRequest) (*aut
 	// key to verify the signature against — it is never treated as
 	// authorization on its own, and every field checked here is re-checked
 	// against the now-trusted claims after signature verification below.
-	namespace, name, ok := datastore.ParseServiceAccountSubject(peek.Subject)
+	name, ok := datastore.ParseServiceAccountSubject(peek.Subject)
 	if !ok {
 		return nil, auth.Deny(providerName, "subject is not a serviceaccount identifier"), nil
 	}
-	sa, err := p.store.GetServiceAccountBySubject(ctx, namespace, name)
+	sa, err := p.store.GetServiceAccountBySubject(ctx, name)
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
 			return nil, auth.Deny(providerName, "service account not found"), nil
@@ -174,7 +169,7 @@ func (p *Provider) Authenticate(ctx context.Context, req auth.AuthRequest) (*aut
 	// caller-supplied peek.Subject — so a token cannot smuggle a
 	// differently-formatted-but-equivalent subject string past the checks
 	// below.
-	expectedSubject := datastore.ServiceAccountSubject(namespace, name)
+	expectedSubject := datastore.ServiceAccountSubject(name)
 
 	// Step 4: verify the signature against the enrolled key, plus iss/sub
 	// exactly equal to the subject (data-model.md §3: "iss equal to the
@@ -224,9 +219,9 @@ func (p *Provider) Authenticate(ctx context.Context, req auth.AuthRequest) (*aut
 	}
 
 	principal := &auth.Principal{
-		Subject:           claims.Subject,
-		Issuer:            claims.Issuer,
-		Roles:             nil, // resolved exclusively by rbac-local — never embedded (FR-011)
+		Subject: claims.Subject,
+		Issuer:  claims.Issuer,
+
 		AuthMethod:        providerName,
 		TokenID:           claims.ID,
 		ExpiresAt:         claims.ExpiresAt.Time,

@@ -5,7 +5,6 @@ package factory
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -17,16 +16,18 @@ import (
 // NewDatastore constructs the active Datastore backend from cfg.
 // Returns an error immediately if the backend value is unrecognised or
 // if the backend cannot be initialised (e.g. ScyllaDB unreachable).
-func NewDatastore(cfg config.DatastoreConfig, log *zap.Logger, watchConfig ...config.NamespaceWatchConfig) (datastore.Datastore, error) {
-	var watch config.NamespaceWatchConfig
+// watchConfig optionally overrides the durable watch journal's retention;
+// the journal's bucket size is fixed at config.JournalBucketSize.
+func NewDatastore(cfg config.DatastoreConfig, log *zap.Logger, watchConfig ...config.WatchJournalConfig) (datastore.Datastore, error) {
+	var watch config.WatchJournalConfig
 	if len(watchConfig) > 0 {
 		watch = watchConfig[0]
 	}
 	switch cfg.Backend {
 	case "memdb":
-		return memdb.New(time.Duration(watch.JournalRetentionSeconds) * time.Second)
+		return memdb.New(watch.Retention)
 	case "scylla":
-		return scylla.New(cfg.Scylla, log, watch.BucketSize)
+		return scylla.New(cfg.Scylla, log, config.JournalBucketSize)
 	default:
 		return nil, fmt.Errorf("invalid datastore backend %q; valid values: memdb, scylla", cfg.Backend)
 	}

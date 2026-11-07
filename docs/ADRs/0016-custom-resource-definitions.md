@@ -13,30 +13,23 @@
 Some commerce resources, such as pricing tables, workflow definitions
 ([037](../implementation/037-custom-commerce-workflows.md)) and marketplace-specific
 configuration, matter to specific deployments but should not grow the core API
-([resource storage: Core vs Extension/CRD](../resource-storage/README.md#core-vs-extensioncrd)).
+([resource storage: Core vs Extension/CRD](../storage-groups/README.md#resource-catalogue-scope)).
 GitStore needs a way to define new kinds that:
 
 - are authored and reviewed like core resources;
 - participate in admission, lifecycle hooks, watches and GraphQL;
 - can't compromise the determinism of Git-backed admission.
 
-Kubernetes CRDs are the obvious model. They describe their schema with `openAPIV3Schema`, and
-since `apiextensions.k8s.io/v1` that schema must be **structural**
-([CRDs](https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/)).
-Kubernetes chose OpenAPI for historical and ecosystem reasons that don't apply to GitStore:
+GitStore's API is GraphQL and its authored files are YAML frontmatter. It needs
+offline, deterministic validation with a static field shape for typed policies,
+discovery and projections. JSON Schema 2020-12 supplies the schema dialect;
+GitStore's structural profile restricts it to predictable, bounded shapes.
 
-- The Kubernetes API was already published as OpenAPI (`/openapi/v2`, `/openapi/v3`), which
-  `kubectl explain`, client generation and server-side apply consume.
-- CRD v1 went GA in 2019. OpenAPI only aligned with JSON Schema 2020-12 in 3.1, released in 2021,
-  and the 3.0 dialect was already in use.
-- The structural restrictions exist so that pruning, defaulting and merge strategies are
-  well-defined. In effect they make the schema a type system rather than an arbitrary validator.
-
-GitStore's API is GraphQL, not OpenAPI. Its authored files are YAML frontmatter. It needs
-**offline, deterministic** validation in the admission path. JSON Schema 2020-12 is the current
-standard for that, has mature validators in Go and Rust, and is what #253 specifies
-(`spec.versions[].schema`). The lesson GitStore takes from Kubernetes is the **structural
-constraint**, not the dialect.
+A definition is not an installed application. An app may introduce several
+definitions, reuse existing kinds or have none. [ADR 0019](0019-app-installation-and-platform-capabilities.md)
+defines package composition, capability approval and installation. This ADR
+defines kind-level contracts. Both remain proposed; examples do not advertise
+implemented CRD APIs or runtime target support.
 
 ## Decision
 
@@ -49,16 +42,21 @@ A `CustomResourceDefinition` is a Git-backed Markdown document with YAML frontma
 apiVersion: apiextensions.gitstore.dev/v1alpha1
 kind: CustomResourceDefinition
 metadata:
-  name: pricingtables.storefront.gitstore.dev
+  name: pricingtables.storefront.acme.example
 spec:
-  group: storefront.gitstore.dev
+  group: storefront.acme.example
   scope: Namespaced
   storageGroup: GitBacked          # GitBacked | DatastoreOnly
   names:
     kind: PricingTable
     plural: pricingtables
-    singular: pricingtable
-    shortNames: [pt]
+    singular: pricingtable             # optional discovery alias
+    shortNames: [pt]                   # optional CLI aliases
+  capabilities:
+    catalog:
+      adminVisible: true
+      releaseEligible: true
+      publicProjection: SchemaFields
   versions:
   - name: v1alpha1
     served: true
@@ -66,17 +64,34 @@ spec:
     schema:
       $schema: https://schemas.gitstore.dev/crd/2020-12/structural   # GitStore profile (§2)
       type: object
+      required: [spec]
       properties:
-        spec: { ... }
+        spec:
+          type: object
+          required: [title]
+          properties:
+            title: {type: string, minLength: 1, maxLength: 200}
     subresources:
       status: {}
-    x-gitstore-graphql:
-      expose: true
+    publicProjection:
+      fields: [spec.title]
 ```
 
 Rules:
 
+- **Envelope.** The shared platform envelope validates `apiVersion`, `kind` and
+  metadata separately. The version schema describes the kind-specific payload;
+  the host composes it with reserved envelope fields before enforcing closed
+  objects. Definitions cannot redefine identity, revision or system status
+  authority. The small example above illustrates a minimal payload, not the
+  complete PricingTable presentation contract.
 - **Scope.** Only `Namespaced` is supported in v1alpha1. Cluster-scoped kinds remain core.
+- **Names.** `kind` is the canonical identity and `plural` is the stable discovery
+  collection name used in the definition name. `singular` and `shortNames` are
+  optional presentation/CLI aliases; they never define REST routes, GraphQL
+  fields or authorization actions. Aliases must be unambiguous in the visible
+  namespace; clients require an explicit kind selector on ambiguity and must
+  not guess by pluralization. Kind/collection identity is immutable after use.
 - **Group ownership.** Core groups (`*.gitstore.dev` groups owned by GitStore:
   `catalog`, `storage`, `admission`, `apiextensions`, …) are reserved. Installing a CRD in an
   unreserved group requires `customResourceDefinition.create`
@@ -86,8 +101,14 @@ Rules:
 - **Storage group.** `storageGroup` is immutable after creation. It selects the hook matrix row
   in [ADR 0015 §2](0015-resource-lifecycle-hooks.md#2-storage-group-matrix). A `GitBacked` kind
   therefore can't have mutating hooks, and its instances are Markdown documents like core
-  resources. `DatastoreOnly` kinds are written through GraphQL. LFS payloads are referenced via
-  `File`, never embedded, and transient kinds are not definable in v1alpha1.
+  resources. Resources can enter through Git or authorized GraphQL mutations.
+  GraphQL writes to `GitBacked` kinds route through the Git service and return
+  admission outcome/correlation; they never directly update hydrated spec rows.
+  Git admission has bounded pre-receive checks and asynchronous post-receive
+  admission; a ref move alone is not accepted read-model state. `DatastoreOnly`
+  kinds use the datastore write path and are rejected on Git ingress. LFS
+  payloads are referenced via `File`, never embedded, and transient kinds are
+  not definable in v1alpha1.
 
 ### 2. The GitStore structural profile
 
@@ -109,20 +130,20 @@ conform to the profile is rejected at CRD admission, with a path to the offendin
 Extension keywords, all prefixed `x-gitstore-`:
 
 - `x-gitstore-validations: [{rule, message, reason, fieldPath}]` holds CEL rules for cross-field
-  checks, in the same style as Kubernetes `x-kubernetes-validations`. Rules run in the API
+  checks. Rules run in the API
   admission `Chain` as validating policies.
 - `x-gitstore-list-type: atomic|set|map` and `x-gitstore-list-map-keys: [...]` define list
   identity for diffs, watches and annotations.
 - `x-gitstore-index: true` requests a datastore projection for list filtering. The number of
   indexes per kind is bounded.
-- `x-gitstore-graphql` controls field exposure and naming in the generated GraphQL schema.
+- `x-gitstore-graphql` may constrain field exposure in discovery. It does not
+  install remote resolvers or require a dynamically generated schema (§7).
 - `x-gitstore-reference: {kind, apiVersion}` marks a field as an object reference. The reference
   participates in ownerReferences and readiness, and must resolve to a core or CRD kind.
 
 ### 3. Versions and conversion
 
-- **Exactly one version has `storage: true`.** Any number may be `served`. This is the Kubernetes
-  rule ([versioning](https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definition-versioning/)).
+- **Exactly one version has `storage: true`.** Any number may be `served`.
 - For Git-backed kinds, the **authored `apiVersion` is what is stored in Git**, and GitStore never
   rewrites it. The hydrated read model is converted to the storage version. Reads of another
   served version convert on read.
@@ -141,11 +162,12 @@ Extension keywords, all prefixed `x-gitstore-`:
 - `subresources.status: {}` gives the kind a system-managed `status`, which authors must not set
   (the same rule as core resources). Status updates go through the controller status API and don't
   advance `generation`.
-- Status follows Kubernetes API conventions
-  ([api-conventions](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md)):
+- Status uses the shared resource condition convention:
   `conditions[]` with `type`, `status`, `reason`, `message`, `lastTransitionTime` and
   `observedGeneration`. `AdmissionAccepted` and `Ready` are always present. `Ready` is `True` only
-  when every declared reference is ready and every gate registered for `Ready` is satisfied.
+  when the responsible controller's own readiness facts, every declared
+  reference and every required `Ready` gate are satisfied for current material
+  inputs. Absence of gates does not make an unreconciled resource ready.
 - Finalizers work as in core resources: a deletion timestamp is set, finalizers are removed one by
   one, and the object is deleted when none remain. Extensions register finalizers through
   `LifecycleGate` (ADR 0015 §5). Deleting a CRD is blocked while instances exist
@@ -159,19 +181,51 @@ CRD instances automatically get:
 - a watch journal source, so they get `watchResources` and event subscriptions. Sources are
   registered in the shared catalog CDC source registry (kind → authoritative table → payload
   decoder) rather than per-kind runners; the generic CRD instance table is future schema work;
-- GraphQL list/get/watch types generated from the served versions;
+- generic GraphQL list/get/watch/status operations with explicit discovery
+  mappings; dynamically generated types or schema stitching are not prerequisites (§7);
 - authorization actions in the [ADR 0010](0010-authorization-model.md) grammar.
   - The `<kind>` slug is `names.kind` in lower camelCase (`PricingTable` → `pricingTable`).
-  - The verbs are `read`, `list` and `watch`, plus `create`/`update`/`delete` for datastore-only
-    kinds. For Git-backed kinds those writes happen only through push admission.
-  - A status subresource adds `<kind>.status.write` for its controller's service account.
+  - The verbs are `read`, `list`, `watch`, `create`, `update` and `delete` for
+    writable kinds. Git-backed writes use Git admission regardless of the
+    client ingress path; push permission does not replace per-kind authority.
+  - A status subresource makes `<kind>.status.write` available for an explicit
+    controller ServiceAccount grant; declaration grants no authority itself.
   - The slug must be unique across core kinds and installed CRDs. A CRD whose slug collides is
     rejected at admission.
 
-A CRD can opt into catalog release selection with `x-gitstore-releaseable: true`. Its instances
-can then appear in a `CatalogRelease` selection and in Storefront snapshots
-([ADR 0014](0014-catalog-release-and-publication.md)). Without the opt-in, instances are never
-public.
+Automatic action availability is contingent on the proposed bounded installed-kind
+catalog extension in [ADR 0010 §15](0010-authorization-model.md#15-proposed-app-and-custom-kind-catalog-extension).
+The implemented finite catalog does not accept arbitrary runtime action strings.
+
+`spec.capabilities.catalog` separates three decisions:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `adminVisible` | `false` | Eligible for schema-driven catalog administration; still requires read/list authority |
+| `releaseEligible` | `false` | Instances may be explicitly selected by `CatalogRelease.spec.selection.resourceRefs` |
+| `publicProjection` | `None` | `SchemaFields` permits a reviewed public projection of the selected served-version schema |
+
+`SchemaFields` requires `releaseEligible: true` and admission-time rejection of
+secret/provider credential fields in the public shape. Public serializers must
+use an explicit bounded allowlist; references to private resources, raw status,
+internal IDs and extension credentials are excluded. Publication is still an
+independent, authorized operation. A private configuration resource can drive a
+public search provider without exposing the configuration itself.
+
+Each served version declares `publicProjection.fields`: exact schema leaf
+paths selected for public serialization (array elements use `[]` in the path).
+No object-subtree or recursive wildcard selection is allowed; newly added
+fields are private until explicitly selected. Body projection is a separate
+`publicProjection.body: true` opt-in and uses the resolved public body IR.
+Unknown, sensitive or unbounded paths fail definition admission. Metadata is
+limited to the platform's reviewed public identity fields; status is never
+implicitly copied. Serializer and selected-path digests are pinned at release.
+
+This proposed structured contract replaces this ADR's earlier
+`x-gitstore-releaseable: true` shorthand. Because CRDs have not shipped, no
+dual spelling or compatibility parser is required. A runtime boolean never
+substitutes for public schema review or a publication. See
+[ADR 0014 §2a](0014-catalog-release-and-publication.md#2a-custom-resource-selection-and-public-projection).
 
 ### 6. Controllers for custom kinds
 
@@ -184,6 +238,73 @@ GitStore does not host arbitrary controllers. A CRD's behaviour comes from:
   through the status API using a service account
   ([021](../implementation/021-controller_service_account_auth.md)).
 
+Merchant or authorized automation writes desired state; watches and webhook
+delivery wake reconcilers. Secondary catalog/publication changes do not require
+synthetic CR updates. Request-time search and recommendation output belongs in
+runtime serving state, not authored CR instances. The three concrete capability
+examples are in [ADR 0019 §§7–9](0019-app-installation-and-platform-capabilities.md#7-use-case-search-and-recommendation).
+
+### 7. API exposure and discovery
+
+The first CRD API contract uses generic resource operations parameterized by
+`apiVersion`, `kind`, namespace and identity. Discovery must advertise exact
+callable GraphQL operation/argument mappings, schema digest/version, supported
+CRUD/watch/status/transition operations, authorization slug, storage group,
+scope, concurrency preconditions and optional aliases. Unsupported operations
+are omitted or explicitly unavailable, never inferred from schema existence.
+
+AuthZ filters discovery to visible definitions/bindings. A discovery result is
+not a permission grant; each invocation rechecks current identity and policy.
+Lists are paginated and watches resumable through the journal. Input validation,
+query complexity, field exposure, body/status bounds and namespace confinement
+apply to generic operations just as to typed core fields. Return a stable typed
+unsupported-kind/version/operation error rather than guessing a resolver.
+
+Generated typed fields can be a separately versioned convenience after a schema
+lifecycle contract is reviewed. App-owned remote schema stitching is not part
+of CRD registration. Function input selection can use the advertised generic
+mapping and host target schema; it does not depend on remote schema composition.
+
+### 8. Declared custom transitions
+
+Core transitions `Ready`, `Delete` and, for eligible kinds, `ReleaseEligible`
+have fixed platform semantics. A CRD can additionally declare named operations
+under `spec.lifecycle.transitions`. Names are stable, bounded identifiers,
+unique per kind; they cannot shadow core transitions. A declaration requires a
+host-supported executor contract and a cataloged action. It does not install
+code or turn a status field into an enforcing API.
+
+```yaml
+spec:
+  lifecycle:
+    transitions:
+    - name: Activate
+      action: searchIndex.activate
+      executor:
+        type: Workflow
+        definitionRef:
+          name: staged-index-activation
+        command: Activate
+```
+
+This is a fragment of a `SearchIndex` definition. The workflow definition must
+declare the subject and typed command under the proposed custom-resource scope
+in [037](../implementation/037-custom-commerce-workflows.md#custom-resource-transition-adapters).
+The executor is the API workflow command handler, not arbitrary external code.
+The definition and its schema/command version are pinned on each execution.
+Definition resolution is a prepared dependency; instances remain unavailable
+for transition dispatch until the adapter is active. Unknown executors fail
+closed. No CRD-defined transition is needed for normal reconciliation.
+
+The action must use the kind slug and a registered verb; additional segments
+require an explicit subresource contract. Execution goes through the bounded,
+authorized, idempotent command and evidence checks in
+[039 §11](../implementation/039-resource-lifecycle-hooks.md#11-transition-and-evidence-contracts).
+A LifecycleGate can constrain the operation only after this declaration is
+validated. A FunctionBinding or EventSubscription cannot declare an operation.
+Removing or changing a transition with live executions requires retirement and
+retention of the pinned definition; edits never reinterpret old executions.
+
 ## Consequences
 
 Positive:
@@ -195,10 +316,9 @@ Positive:
 
 Negative:
 
-- Authors coming from Kubernetes have to translate `openAPIV3Schema` to 2020-12, and learn a
-  profile that rejects some valid 2020-12 constructs.
-- Generated GraphQL types make schema evolution a public API concern. The breaking-change rule
-  (§3) is strict for that reason.
+- Authors must learn a structural profile that rejects some valid 2020-12 constructs.
+- Schema evolution affects generic clients, policies and projections even
+  without generated GraphQL fields. The breaking-change rule (§3) remains strict.
 - WASM conversion requires every multi-version CRD to ship and test a module.
 
 ## Cross-references
@@ -212,11 +332,11 @@ Negative:
 
 ## Alternatives considered
 
-### OpenAPI 3.0 `openAPIV3Schema` (Kubernetes-compatible)
+### OpenAPI 3.0 schema dialect
 
 Rejected. GitStore publishes no OpenAPI document. The 3.0 dialect diverges from JSON Schema, for
-example in `nullable` and in its limited `$ref` handling. Kubernetes compatibility would be
-superficial, because GitStore CRDs are Markdown documents with different storage semantics.
+example in `nullable` and in its limited `$ref` handling. GitStore CRDs use
+Markdown documents and require deterministic offline validation.
 
 ### Unrestricted JSON Schema 2020-12
 

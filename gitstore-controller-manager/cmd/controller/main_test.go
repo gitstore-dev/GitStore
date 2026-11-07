@@ -45,7 +45,7 @@ func TestProductionRegistrationUsesDiskForEveryKind(t *testing.T) {
 	cancel()
 	mgr := manager.New()
 	var runners sync.WaitGroup
-	client := graphqlclient.New("http://unused.invalid/graphql", graphqlclient.NewStaticToken("test"))
+	client := graphqlclient.New("http://unused.invalid/admin/graphql", graphqlclient.NewStaticToken("test"))
 	closeStores, err := registerDiskControllers(ctx, &runners, mgr, cfg, zap.NewNop(), client)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = closeStores() })
@@ -148,12 +148,11 @@ func TestBuildCredentialSourceUsesResolvedServiceAccountKey(t *testing.T) {
 
 	source, err := buildCredentialSource(context.Background(), &config.Config{
 		Controller: config.ControllerConfig{
-			ApiURI: "http://api.example.test/graphql",
+			ApiURI: "http://api.example.test/admin/graphql",
 			ServiceAccount: config.ServiceAccountConfig{
-				Namespace: "controllers",
-				Name:      "gitstore-controller-manager",
-				UID:       "sa-uid-1",
-				KeyRef:    ref,
+				Name:   "gitstore-controller-manager",
+				UID:    "sa-uid-1",
+				KeyRef: ref,
 			},
 			SecretProviders: config.SecretProvidersConfig{Bootstrap: provider},
 		},
@@ -209,7 +208,7 @@ func TestBuildCredentialSourceFailsClosedOnInvalidRecords(t *testing.T) {
 			cfg := &config.Config{Controller: config.ControllerConfig{
 				ApiURI: "http://must-not-call.invalid",
 				ServiceAccount: config.ServiceAccountConfig{
-					Namespace: "controllers", Name: "manager", UID: "uid",
+					Name: "manager", UID: "uid",
 					KeyRef: secret.Ref{Kind: "SecretRef", Name: "controller"},
 				},
 				SecretProviders: config.SecretProvidersConfig{Bootstrap: secret.BootstrapProviderConfig{

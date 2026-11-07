@@ -6,58 +6,85 @@ package namespace
 import (
 	"sort"
 	"strings"
-)
 
-type Phase string
-
-const (
-	PhaseStructural Phase = "STRUCTURAL"
-	PhasePolicy     Phase = "POLICY"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 )
 
 type Reason string
 
 const (
-	ReasonInvalidEnvelope         Reason = "INVALID_ENVELOPE"
-	ReasonInvalidIdentifier       Reason = "INVALID_IDENTIFIER"
-	ReasonReservedIdentifier      Reason = "RESERVED_IDENTIFIER"
-	ReasonInvalidTier             Reason = "INVALID_TIER"
-	ReasonInvalidAuthoringTarget  Reason = "INVALID_AUTHORING_TARGET"
-	ReasonDuplicateIdentity       Reason = "DUPLICATE_IDENTITY"
-	ReasonImmutableName           Reason = "IMMUTABLE_NAME"
-	ReasonBootstrapNamespace      Reason = "BOOTSTRAP_NAMESPACE"
-	ReasonTierDemotion            Reason = "TIER_DEMOTION"
-	ReasonNamespaceTerminating    Reason = "NAMESPACE_TERMINATING"
-	ReasonNamespaceAlreadyExists  Reason = "NAMESPACE_ALREADY_EXISTS"
-	ReasonNamespaceNotFound       Reason = "NAMESPACE_NOT_FOUND"
-	ReasonNamespaceNotEmpty       Reason = "NAMESPACE_NOT_EMPTY"
-	ReasonResourceVersionConflict Reason = "RESOURCE_VERSION_CONFLICT"
+	ReasonInvalidEnvelope          Reason = "INVALID_ENVELOPE"
+	ReasonInvalidIdentifier        Reason = "INVALID_IDENTIFIER"
+	ReasonReservedIdentifier       Reason = "RESERVED_IDENTIFIER"
+	ReasonInvalidTier              Reason = "INVALID_TIER"
+	ReasonInvalidAuthoringTarget   Reason = "INVALID_AUTHORING_TARGET"
+	ReasonDuplicateIdentity        Reason = "DUPLICATE_IDENTITY"
+	ReasonImmutableName            Reason = "IMMUTABLE_NAME"
+	ReasonBootstrapNamespace       Reason = "BOOTSTRAP_NAMESPACE"
+	ReasonPushPolicyExceedsCeiling Reason = "PUSH_POLICY_EXCEEDS_CEILING"
+	ReasonTierDemotion             Reason = "TIER_DEMOTION"
+	ReasonTierImmutable            Reason = "TIER_IMMUTABLE"
+	ReasonUserNamespaceIdentity    Reason = "USER_NAMESPACE_IDENTITY"
+	ReasonNamespaceTerminating     Reason = "NAMESPACE_TERMINATING"
+	ReasonNamespaceAlreadyExists   Reason = "NAMESPACE_ALREADY_EXISTS"
+	ReasonNamespaceNotFound        Reason = "NAMESPACE_NOT_FOUND"
+	ReasonNamespaceNotEmpty        Reason = "NAMESPACE_NOT_EMPTY"
+	ReasonResourceVersionConflict  Reason = "RESOURCE_VERSION_CONFLICT"
+	ReasonSuperseded               Reason = "SUPERSEDED"
 )
+
+// CodeForReason selects the shared mutation error code for a Namespace reason.
+func CodeForReason(reason Reason) admission.Code {
+	switch reason {
+	case ReasonBootstrapNamespace, ReasonNamespaceTerminating, ReasonNamespaceNotEmpty:
+		return admission.CodeFailedPrecondition
+	case ReasonNamespaceAlreadyExists:
+		return admission.CodeAlreadyExists
+	case ReasonNamespaceNotFound:
+		return admission.CodeNotFound
+	case ReasonResourceVersionConflict, ReasonSuperseded:
+		return admission.CodeConflict
+	default:
+		return admission.CodeAdmissionRejected
+	}
+}
+
+// ValidationStage labels Namespace validation latency.
+type ValidationStage string
 
 const (
-	CodeStructuralValidationFailed = "NAMESPACE_STRUCTURAL_VALIDATION_FAILED"
-	CodeImmutableField             = "NAMESPACE_IMMUTABLE_FIELD"
-	CodePolicyRejected             = "NAMESPACE_POLICY_REJECTED"
-	CodeDeletionBlocked            = "NAMESPACE_DELETION_BLOCKED"
-	CodeConflict                   = "NAMESPACE_CONFLICT"
+	StageStructural ValidationStage = "STRUCTURAL"
+	StagePolicy     ValidationStage = "POLICY"
 )
 
+// Decision is a Namespace policy rejection.
 type Decision struct {
-	Phase    Phase
 	Reason   Reason
 	Field    string
 	Message  string
 	FilePath string
 }
 
+func (d *Decision) Error() string { return d.Message }
+
+func (d *Decision) Unwrap() error {
+	switch d.Reason {
+	case ReasonTierDemotion:
+		return ErrTierDemotion
+	case ReasonTierImmutable:
+		return ErrTierImmutable
+	case ReasonUserNamespaceIdentity:
+		return ErrUserNamespaceIdentity
+	default:
+		return nil
+	}
+}
+
 func (d Decision) Constraint() string {
 	if d.Reason == ReasonImmutableName {
 		return "immutable"
 	}
-	if d.Phase == PhasePolicy {
-		return "policy/" + strings.ToLower(strings.ReplaceAll(string(d.Reason), "_", "-"))
-	}
-	return ""
+	return "policy/" + strings.ToLower(strings.ReplaceAll(string(d.Reason), "_", "-"))
 }
 
 type DeletionOutcome string

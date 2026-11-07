@@ -9,6 +9,7 @@ package gitclient_test
 import (
 	"bytes"
 	"context"
+	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"io"
 	"testing"
 
@@ -171,7 +172,7 @@ func TestUploadPackReadAllDrainsFinalChunkLargerThanReadBuffer(t *testing.T) {
 		},
 	})
 
-	reader, err := c.UploadPack(context.Background(), "repo-123", []byte("want abc123\n0000"))
+	reader, err := c.UploadPack(gitclient.ContextForBackingWork(context.Background()), "repo-123", []byte("want abc123\n0000"))
 	require.NoError(t, err)
 
 	got, err := io.ReadAll(reader)

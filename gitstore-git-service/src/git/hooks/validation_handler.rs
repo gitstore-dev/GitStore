@@ -27,6 +27,7 @@ use catalog_proto::{ResourceBlob as ProtoBlob, ResourceValidationTree, ValidateR
 /// On `accepted=false`: aggregates all `ValidationError.message` fields into rejection.
 /// On timeout or transport error: returns `Reject("validation service unavailable")`.
 pub struct SchemaValidationHandler {
+    service_token: String,
     client: CatalogServiceClient<tonic::transport::Channel>,
     timeout: Duration,
     repository_id: String,
@@ -39,10 +40,16 @@ impl SchemaValidationHandler {
         repository_id: String,
     ) -> Self {
         Self {
+            service_token: String::new(),
             client,
             timeout,
             repository_id,
         }
+    }
+
+    pub fn with_service_token(mut self, secret: &str) -> Self {
+        self.service_token = secret.to_string();
+        self
     }
 
     pub async fn connect(
@@ -75,7 +82,9 @@ impl ValidationHandler for SchemaValidationHandler {
             trees: vec![ResourceValidationTree {
                 old_blobs: vec![],
                 proposed_blobs: blobs.iter().cloned().map(to_proto_blob).collect(),
+                r#ref: None,
             }],
+            authorization: Some(hook_ctx.callback_authorization(vec![])),
         };
         self.call(req, file_count, start).await
     }
@@ -112,6 +121,7 @@ impl ValidationHandler for SchemaValidationHandler {
                     trees.push(ResourceValidationTree {
                         old_blobs: old_blobs.into_iter().map(to_proto_blob).collect(),
                         proposed_blobs: proposed_blobs.into_iter().map(to_proto_blob).collect(),
+                        r#ref: Some(update.into()),
                     });
                 }
             }
@@ -143,6 +153,9 @@ impl SchemaValidationHandler {
             } else {
                 hook_ctx.repository_id.clone()
             },
+            authorization: Some(hook_ctx.callback_authorization(
+                trees.iter().filter_map(|tree| tree.r#ref.clone()).collect(),
+            )),
             trees,
         };
         self.call(req, file_count, start).await
@@ -155,7 +168,12 @@ impl SchemaValidationHandler {
         start: std::time::Instant,
     ) -> anyhow::Result<AdmissionDecision> {
         let mut client = self.client.clone();
-        let result = tokio::time::timeout(self.timeout, client.validate_resources(req)).await;
+        let request = crate::auth::interceptor::callback_request(
+            req,
+            &self.service_token,
+            "/gitstore.catalog.v1.CatalogService/ValidateResources",
+        )?;
+        let result = tokio::time::timeout(self.timeout, client.validate_resources(request)).await;
         let duration_ms = start.elapsed().as_millis() as u64;
         match result {
             Err(_) => {
@@ -189,18 +207,7 @@ impl SchemaValidationHandler {
                     self.record_metric("accepted");
                     Ok(AdmissionDecision::Accept)
                 } else {
-                    let aggregated = resp
-                        .errors
-                        .iter()
-                        .map(|e| {
-                            if e.file_path.is_empty() {
-                                e.message.clone()
-                            } else {
-                                format!("{}: {}", e.file_path, e.message)
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("; ");
+                    let aggregated = format_rejection(&resp.errors);
                     error!(file_count, duration_ms, outcome = "rejected", error_summary = %aggregated, "validation_callout_complete");
                     self.record_metric("rejected");
                     Ok(AdmissionDecision::Reject(aggregated))
@@ -213,6 +220,22 @@ impl SchemaValidationHandler {
         use crate::git::metrics::increment_schema_validation_total;
         increment_schema_validation_total(result);
     }
+}
+
+/// Joins validation errors as `file: message; …` (`message` when there is no
+/// file). The API produces byte-identical text for mutation rejections.
+fn format_rejection(errors: &[catalog_proto::ValidationError]) -> String {
+    errors
+        .iter()
+        .map(|e| {
+            if e.file_path.is_empty() {
+                e.message.clone()
+            } else {
+                format!("{}: {}", e.file_path, e.message)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn to_proto_blob(blob: ResourceBlob) -> ProtoBlob {
@@ -321,7 +344,8 @@ mod tests {
         let handler =
             SchemaValidationHandler::connect(&addr, Duration::from_secs(5), "repo-1".into())
                 .await
-                .unwrap();
+                .unwrap()
+                .with_service_token("fixture-key");
 
         let blobs = vec![make_blob("products/p.md", b"---\nkind: Product\n---")];
         let hook_ctx = HookContext {
@@ -362,7 +386,8 @@ mod tests {
             "repository-default".into(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .with_service_token("fixture-key");
         let result = handler
             .validate(
                 &[make_blob(
@@ -421,7 +446,8 @@ mod tests {
                 "file-repository".into(),
             )
             .await
-            .unwrap();
+            .unwrap()
+            .with_service_token("fixture-key");
             let blobs = vec![make_blob("files/product-hero.md", content.as_bytes())];
             let decision = handler
                 .validate(&blobs, &HookContext::default())
@@ -468,7 +494,8 @@ mod tests {
         let handler =
             SchemaValidationHandler::connect(&addr, Duration::from_secs(5), "repo-1".into())
                 .await
-                .unwrap();
+                .unwrap()
+                .with_service_token("fixture-key");
 
         let blobs = vec![make_blob("products/p.md", b"---\nkind: Product\n---")];
         let result = handler
@@ -508,7 +535,8 @@ mod tests {
         let handler =
             SchemaValidationHandler::connect(&addr, Duration::from_millis(50), "repo-1".into())
                 .await
-                .unwrap();
+                .unwrap()
+                .with_service_token("fixture-key");
 
         let blobs = vec![make_blob("products/p.md", b"---\nkind: Product\n---")];
         let result = handler
@@ -544,7 +572,8 @@ mod tests {
         let handler =
             SchemaValidationHandler::connect(&format!("http://{addr}"), timeout, "repo-1".into())
                 .await
-                .unwrap();
+                .unwrap()
+                .with_service_token("fixture-key");
 
         let start = std::time::Instant::now();
         let blobs = vec![make_blob("products/p.md", b"---\nkind: Product\n---")];
@@ -588,7 +617,8 @@ mod tests {
             "repo-1".into(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .with_service_token("fixture-key");
 
         let blobs = vec![make_blob("products/p.md", b"---\nkind: Product\n---")];
         let result = handler
@@ -611,7 +641,8 @@ mod tests {
             "repo-1".into(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .with_service_token("fixture-key");
 
         let hook_ctx = HookContext {
             repository_id: "repo-1".to_string(),
@@ -620,6 +651,7 @@ mod tests {
             max_pack_size_bytes: 0,
             max_file_size_bytes: 0,
             config_resource_version: String::new(),
+            ..HookContext::default()
         };
         let blobs = vec![make_blob("products/p.md", b"---\nkind: Product\n---")];
         // Call with HookContext — must not panic. Server is down so we'll get a Reject.
@@ -628,5 +660,36 @@ mod tests {
             matches!(result, AdmissionDecision::Reject(_)),
             "expected Reject when server is unreachable"
         );
+    }
+
+    /// The push rejection text must stay byte-identical to the API's
+    /// mutation rejection text for the same validation errors.
+    #[test]
+    fn format_rejection_matches_golden_fixture() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/fixtures/admission-rejection-golden.json");
+        let raw = std::fs::read_to_string(&path).expect("read golden fixture");
+        let fixture: serde_json::Value = serde_json::from_str(&raw).expect("parse golden fixture");
+        let cases = fixture["cases"].as_array().expect("cases array");
+        assert!(!cases.is_empty());
+        for case in cases {
+            let errors: Vec<ValidationError> = case["errors"]
+                .as_array()
+                .expect("errors array")
+                .iter()
+                .map(|e| ValidationError {
+                    file_path: e["filePath"].as_str().unwrap_or_default().to_string(),
+                    field: e["field"].as_str().unwrap_or_default().to_string(),
+                    constraint: e["constraint"].as_str().unwrap_or_default().to_string(),
+                    message: e["message"].as_str().unwrap_or_default().to_string(),
+                })
+                .collect();
+            assert_eq!(
+                format_rejection(&errors),
+                case["expected"].as_str().expect("expected text"),
+                "case {}",
+                case["name"]
+            );
+        }
     }
 }

@@ -4,69 +4,40 @@
 package namespace
 
 import (
+	"context"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
+	"github.com/gitstore-dev/gitstore/observability"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
 type Metrics struct {
-	validationRejections *prometheus.CounterVec
-	deletionRejections   *prometheus.CounterVec
-	deletionOutcomes     *prometheus.CounterVec
-	validationDuration   *prometheus.HistogramVec
-	admissionDuration    *prometheus.HistogramVec
+	validationRejections metric.Float64Counter
+	deletionRejections   metric.Float64Counter
+	deletionOutcomes     metric.Float64Counter
+	validationDuration   metric.Float64Histogram
+	admissionDuration    metric.Float64Histogram
 }
 
 var capacityLatencyBuckets = []float64{.001, .005, .01, .025, .05, .1, .25, .5, .75, 1, 1.5, 2, 3, 5}
 
-var defaultMetrics = NewMetrics(prometheus.DefaultRegisterer)
+var defaultMetrics = NewMetrics(otel.Meter("gitstore/namespace"))
 
 func DefaultMetrics() *Metrics {
 	return defaultMetrics
 }
 
-func NewMetrics(reg prometheus.Registerer) *Metrics {
+func NewMetrics(meter metric.Meter) *Metrics {
 	metrics := &Metrics{
-		validationRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "gitstore",
-			Subsystem: "namespace",
-			Name:      "validation_rejections_total",
-			Help:      "Namespace validation rejections by bounded phase and reason.",
-		}, []string{"phase", "reason"}),
-		deletionRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "gitstore",
-			Subsystem: "namespace",
-			Name:      "deletion_rejections_total",
-			Help:      "Namespace deletion rejections by bounded reason.",
-		}, []string{"reason"}),
-		deletionOutcomes: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "gitstore",
-			Subsystem: "namespace",
-			Name:      "deletion_outcomes_total",
-			Help:      "Successful Namespace deletion requests by bounded outcome.",
-		}, []string{"outcome"}),
-		validationDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: "gitstore",
-			Subsystem: "namespace",
-			Name:      "validation_duration_seconds",
-			Help:      "Namespace validation latency by phase.",
-			Buckets:   capacityLatencyBuckets,
-		}, []string{"phase"}),
-		admissionDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: "gitstore",
-			Subsystem: "namespace",
-			Name:      "admission_stage_duration_seconds",
-			Help:      "Namespace GraphQL admission latency at bounded internal stages.",
-			Buckets:   capacityLatencyBuckets,
-		}, []string{"stage"}),
+		validationRejections: observability.MustInstrument(meter.Float64Counter("gitstore_namespace_validation_rejections_total", metric.WithDescription("Namespace validation rejections by bounded error code and reason."))),
+		deletionRejections:   observability.MustInstrument(meter.Float64Counter("gitstore_namespace_deletion_rejections_total", metric.WithDescription("Namespace deletion rejections by bounded reason."))),
+		deletionOutcomes:     observability.MustInstrument(meter.Float64Counter("gitstore_namespace_deletion_outcomes_total", metric.WithDescription("Successful Namespace deletion requests by bounded outcome."))),
+		validationDuration:   observability.MustInstrument(meter.Float64Histogram("gitstore_namespace_validation_duration_seconds", metric.WithDescription("Namespace validation latency by stage."), metric.WithUnit("s"), metric.WithExplicitBucketBoundaries(capacityLatencyBuckets...))),
+		admissionDuration:    observability.MustInstrument(meter.Float64Histogram("gitstore_namespace_admission_stage_duration_seconds", metric.WithDescription("Namespace GraphQL admission latency at bounded internal stages."), metric.WithUnit("s"), metric.WithExplicitBucketBoundaries(capacityLatencyBuckets...))),
 	}
-	reg.MustRegister(
-		metrics.validationRejections,
-		metrics.deletionRejections,
-		metrics.deletionOutcomes,
-		metrics.validationDuration,
-		metrics.admissionDuration,
-	)
+
 	return metrics
 }
 
@@ -74,33 +45,33 @@ func (m *Metrics) ObserveAdmissionStage(stage string, duration time.Duration) {
 	if m == nil {
 		return
 	}
-	m.admissionDuration.WithLabelValues(stage).Observe(duration.Seconds())
+	m.admissionDuration.Record(context.Background(), duration.Seconds(), metric.WithAttributes(attribute.String("stage", stage)))
 }
 
-func (m *Metrics) ObserveRejection(phase Phase, reason Reason) {
+func (m *Metrics) ObserveRejection(reason Reason) {
 	if m == nil {
 		return
 	}
-	m.validationRejections.WithLabelValues(string(phase), string(reason)).Inc()
+	m.validationRejections.Add(context.Background(), 1, metric.WithAttributes(attribute.String("code", string(CodeForReason(reason))), attribute.String("reason", string(reason))))
 }
 
 func (m *Metrics) ObserveDeletionBlocked(reason Reason) {
 	if m == nil {
 		return
 	}
-	m.deletionRejections.WithLabelValues(string(reason)).Inc()
+	m.deletionRejections.Add(context.Background(), 1, metric.WithAttributes(attribute.String("reason", string(reason))))
 }
 
 func (m *Metrics) ObserveDeletionOutcome(outcome DeletionOutcome) {
 	if m == nil {
 		return
 	}
-	m.deletionOutcomes.WithLabelValues(string(outcome)).Inc()
+	m.deletionOutcomes.Add(context.Background(), 1, metric.WithAttributes(attribute.String("outcome", string(outcome))))
 }
 
-func (m *Metrics) ObserveValidationDuration(phase Phase, duration time.Duration) {
+func (m *Metrics) ObserveValidationDuration(stage ValidationStage, duration time.Duration) {
 	if m == nil {
 		return
 	}
-	m.validationDuration.WithLabelValues(string(phase)).Observe(duration.Seconds())
+	m.validationDuration.Record(context.Background(), duration.Seconds(), metric.WithAttributes(attribute.String("stage", string(stage))))
 }

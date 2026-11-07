@@ -39,10 +39,16 @@ var (
 	// ordering can no longer be proven. Operator repair is required before a
 	// materializer may safely resume.
 	ErrNamespaceWatchDiscontinuity = errors.New("datastore: Namespace watch CDC ordering discontinuity")
+	// ErrProjectionNotReady prevents serving an incomplete rebuilt projection
+	// during a rolling deployment.
+	ErrProjectionNotReady = errors.New("datastore: projection not ready")
 )
 
 // DefaultPageSize is used when First/Last is zero.
 const DefaultPageSize = 100
+
+// MaxProductPageSize bounds Product connections before backend allocation.
+const MaxProductPageSize = 250
 
 // MaxOwnerDependentPageSize is the hard upper bound for reverse-owner pages.
 // It prevents a caller from turning a controller continuation into an
@@ -142,6 +148,16 @@ func (p PageParams) Limit() int {
 	return DefaultPageSize
 }
 
+// BoundedProductPage validates and bounds both pagination directions.
+func (p PageParams) BoundedProductPage() (PageParams, error) {
+	if p.First < 0 || p.Last < 0 {
+		return PageParams{}, ErrInvalidArgument
+	}
+	p.First = min(p.First, MaxProductPageSize)
+	p.Last = min(p.Last, MaxProductPageSize)
+	return p, nil
+}
+
 // PageCursor is a decoded keyset cursor position.
 type PageCursor struct {
 	CreatedAt time.Time
@@ -191,7 +207,41 @@ type OwnerReferenceStore interface {
 // lifecycle used by both Git admission and the existing deleteCategory API.
 type CategoryTaxonomyDeletionStore interface {
 	MarkCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string, at time.Time) (*CategoryTaxonomy, error)
-	CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*CategoryTaxonomy, error)
+	// Completion must compare the observed UID and resource version at the
+	// destructive boundary, never finalizing a same-name replacement.
+	CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string) (*CategoryTaxonomy, error)
+}
+
+// MaxCategoryHierarchyDepth is the deepest relative depth an ancestor index
+// row can hold. The controller resolves paths of at most 128 categories, so
+// depth (len(path)-1) is at most 127, which is also the range of the
+// status.resolved.depth field and the index's tinyint depth column.
+const MaxCategoryHierarchyDepth = 127
+
+// CategoryDescendant is one row of an ancestor's subtree.
+type CategoryDescendant struct {
+	Name  string
+	UID   string
+	Depth int // relative to the ancestor; 0 = the ancestor itself
+}
+
+// CategoryDescendantQuery selects an ancestor's subtree from the ancestor
+// closure index, ordered by (Depth, Name). Page cursors are closure cursors
+// (EncodeClosureCursor); keyset cursors fail with ErrInvalidArgument.
+type CategoryDescendantQuery struct {
+	Namespace   string
+	Ancestor    string // category name
+	IncludeSelf bool
+	MaxDepth    int // 0 = unbounded (<= MaxCategoryHierarchyDepth)
+	Page        PageParams
+}
+
+// CategoryAncestorIndex is implemented by stores that maintain the derived
+// ancestor closure index. The index is maintained inside
+// UpdateCategoryTaxonomyStatus (when the patch carries Resolved) and the
+// category delete paths; there is no direct write method.
+type CategoryAncestorIndex interface {
+	ListCategoryDescendants(ctx context.Context, q CategoryDescendantQuery) (*PageResult[CategoryDescendant], error)
 }
 
 // GlobalRepositoryLister is the optional contract for backends that provide a
@@ -304,6 +354,10 @@ func ApplyRepositoryStatusPatch(repository *Repository, patch RepositoryStatusPa
 	if err != nil {
 		return fmt.Errorf("datastore: marshal updated Repository status: %w", err)
 	}
+	data, err = PreserveDeletionStatus(repository.Status, data)
+	if err != nil {
+		return err
+	}
 	repository.Status = data
 	AdvanceRepositorySystemVersion(repository)
 	return nil
@@ -331,6 +385,10 @@ func ApplyNamespaceStatusPatch(namespace *Namespace, patch NamespaceStatusPatch)
 	data, err := json.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("datastore: marshal updated Namespace status: %w", err)
+	}
+	data, err = PreserveDeletionStatus(namespace.Status, data)
+	if err != nil {
+		return err
 	}
 	namespace.Status = data
 	AdvanceNamespaceSystemVersion(namespace)
@@ -401,9 +459,68 @@ type ProductStore interface {
 	GetProduct(ctx context.Context, uid string) (*Product, error)
 	GetProductByName(ctx context.Context, namespace, name string) (*Product, error)
 	ListProducts(ctx context.Context, namespace string, page PageParams) (*PageResult[Product], error)
-	UpdateProduct(ctx context.Context, p *Product) error
+	// UpdateProduct replaces only the authorized snapshot. The expected version
+	// must match the durable row and the replacement must advance it once.
+	UpdateProduct(ctx context.Context, p *Product, expectedResourceVersion string) error
+	// UpdateProductStatus applies a CAS patch to status and optional
+	// controller-managed category owner references, without replacing author fields.
+	UpdateProductStatus(ctx context.Context, namespace, name string, patch ProductStatusPatch) (*Product, error)
 	DeleteProduct(ctx context.Context, uid string) error
 	DeleteProductWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
+}
+
+// CategoryProductIndex is the materialized membership projection used by
+// Category.products.  It is deliberately separate from ProductStore: callers
+// must never implement this field by scanning products in a namespace.
+// CategoryUIDs contains the resolved category and every resolved ancestor.
+type CategoryProductIndex interface {
+	ReplaceCategoryProductMembership(ctx context.Context, product *Product, categoryUIDs []string) error
+	ListCategoryProducts(ctx context.Context, namespace, categoryUID string, page PageParams) (*PageResult[Product], error)
+}
+
+// ProductStatusPatch is a partial-merge update to a Product's status.
+// Conditions is a full replacement only when non-nil.
+type ProductStatusPatch struct {
+	ResourceVersion     string
+	ObservedGeneration  *int64
+	LastAppliedRevision *string
+	Conditions          []catalog.Condition
+	Resolved            *catalog.ResolvedProductDefinition
+	OwnerReferences     json.RawMessage // nil = unchanged; non-nil = controller-managed replacement
+}
+
+func ApplyProductStatusPatch(product *Product, patch ProductStatusPatch) error {
+	if patch.ResourceVersion != product.ResourceVersion {
+		return ErrConflict
+	}
+	var status catalog.ProductStatus
+	if len(product.Status) > 0 {
+		if err := json.Unmarshal(product.Status, &status); err != nil {
+			return fmt.Errorf("datastore: unmarshal existing Product status: %w", err)
+		}
+	}
+	if patch.ObservedGeneration != nil {
+		status.ObservedGeneration = *patch.ObservedGeneration
+	}
+	if patch.LastAppliedRevision != nil {
+		status.LastAppliedRevision = *patch.LastAppliedRevision
+	}
+	if patch.Conditions != nil {
+		status.Conditions = patch.Conditions
+	}
+	if patch.Resolved != nil {
+		status.Resolved = patch.Resolved
+	}
+	raw, err := json.Marshal(status)
+	if err != nil {
+		return err
+	}
+	product.Status = raw
+	if patch.OwnerReferences != nil {
+		product.OwnerReferences = append(json.RawMessage(nil), patch.OwnerReferences...)
+	}
+	AdvanceProductSystemVersion(product)
+	return nil
 }
 
 // ProductLifecycleStore provides the compare-and-swap transitions used by
@@ -420,7 +537,8 @@ type CategoryTaxonomyStore interface {
 	GetCategoryTaxonomy(ctx context.Context, uid string) (*CategoryTaxonomy, error)
 	GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*CategoryTaxonomy, error)
 	ListCategoryTaxonomies(ctx context.Context, namespace string, page PageParams) (*PageResult[CategoryTaxonomy], error)
-	UpdateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error
+	// UpdateCategoryTaxonomy has the same strict CAS contract as UpdateProduct.
+	UpdateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy, expectedResourceVersion string) error
 	DeleteCategoryTaxonomy(ctx context.Context, uid string) error
 	// UpdateCategoryTaxonomyStatus applies a partial-merge status-only
 	// write, distinct from UpdateCategoryTaxonomy (which replaces the full
@@ -439,7 +557,8 @@ type ProductVariantStore interface {
 	GetProductVariantBySKU(ctx context.Context, namespace, sku string) (*ProductVariant, error)
 	ListProductVariants(ctx context.Context, namespace string, page PageParams) (*PageResult[ProductVariant], error)
 	ListProductVariantsByProductRef(ctx context.Context, namespace, productRefName string) ([]*ProductVariant, error)
-	UpdateProductVariant(ctx context.Context, v *ProductVariant) error
+	// UpdateProductVariant has the same strict CAS contract as UpdateProduct.
+	UpdateProductVariant(ctx context.Context, v *ProductVariant, expectedResourceVersion string) error
 	DeleteProductVariant(ctx context.Context, uid string) error
 	DeleteProductVariantWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 }
@@ -450,7 +569,8 @@ type CollectionStore interface {
 	GetCollection(ctx context.Context, uid string) (*Collection, error)
 	GetCollectionByName(ctx context.Context, namespace, name string) (*Collection, error)
 	ListCollections(ctx context.Context, namespace string, page PageParams) (*PageResult[Collection], error)
-	UpdateCollection(ctx context.Context, c *Collection) error
+	// UpdateCollection has the same strict CAS contract as UpdateProduct.
+	UpdateCollection(ctx context.Context, c *Collection, expectedResourceVersion string) error
 	DeleteCollection(ctx context.Context, uid string) error
 	DeleteCollectionWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 	ListProductsByLabelSelector(ctx context.Context, namespace string, selector catalog.LabelSelector) ([]*Product, error)
@@ -463,10 +583,13 @@ type NamespaceStore interface {
 	GetNamespaceByName(ctx context.Context, name string) (*Namespace, error)
 	ListNamespaces(ctx context.Context, page PageParams) (*PageResult[Namespace], error)
 	UpdateNamespace(ctx context.Context, ns *Namespace, expectedResourceVersion string) error
-	// MarkNamespaceDeletion atomically verifies the resourceVersion and that no
-	// repository can commit across the empty-to-terminating transition.
+	// MarkNamespaceDeletion checks the deletion-specific blockers (allowing
+	// one empty provisioned system repository) and fences repository creation
+	// across the transition. Catalog admissions participate in the child fence.
 	MarkNamespaceDeletion(ctx context.Context, ns *Namespace, expectedResourceVersion string) error
 	DeleteNamespace(ctx context.Context, uid string) error
+	// DeleteNamespaceWithResourceVersion completes only a terminating Namespace
+	// with no repositories and no finalizers owned by another controller.
 	DeleteNamespaceWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error
 	// HasRepositories reports whether at least one Repository record
 	// currently belongs to namespace. Used by DeleteNamespace to
@@ -504,9 +627,6 @@ type RepositoryRoutingStore interface {
 	LookupRepository(ctx context.Context, namespace, name string) (*NamespaceMapping, error)
 	LookupNamespaceByRepoID(ctx context.Context, repositoryID string) (*NamespaceMapping, error)
 	RenameRepository(ctx context.Context, namespace, oldName, newName string) error
-	// TransferRepository moves the authoritative Repository and mapping only
-	// after durably reserving an active target Namespace.
-	TransferRepository(ctx context.Context, repositoryID, fromNamespace, toNamespace string) error
 	DeleteNamespaceMapping(ctx context.Context, namespace, name string) error
 }
 
@@ -514,7 +634,7 @@ type RepositoryRoutingStore interface {
 type ServiceAccountStore interface {
 	CreateServiceAccount(ctx context.Context, sa *ServiceAccount) error
 	GetServiceAccountByUID(ctx context.Context, uid string) (*ServiceAccount, error)
-	GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*ServiceAccount, error)
+	GetServiceAccountBySubject(ctx context.Context, name string) (*ServiceAccount, error)
 	ListServiceAccounts(ctx context.Context, page PageParams) (*PageResult[ServiceAccount], error)
 	// UpdateServiceAccountKeys adds/removes public keys and advances
 	// Generation; fails with ErrConflict if expectedResourceVersion is stale

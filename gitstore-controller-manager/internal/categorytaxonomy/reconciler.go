@@ -16,6 +16,9 @@ import (
 	"slices"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
@@ -30,6 +33,7 @@ type CategoryTaxonomy struct {
 	Name              string
 	Generation        int64
 	ResourceVersion   string
+	Revision          string
 	OwnerReferences   []OwnerReference
 	Finalizers        []string
 	DeletionTimestamp *time.Time
@@ -229,10 +233,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		}
 	}
 
-	// Any Apply failure -- including types.ErrConflict -- is retried: a
-	// conflict means the cache is stale and will be corrected on the next
-	// dispatch once the watch delivers the newer version (FR-014).
 	if err := r.statusClient.Apply(ctx, key, patch); err != nil {
+		if errors.Is(err, types.ErrConflict) {
+			// Keep the obligation pending while the watch catches up with
+			// the winning writer, without exhausting a stale retry budget.
+			health.ConflictRequeues.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", key.Kind)))
+			return types.ResultAfter(categoryConflictRequeueDelay)
+		}
 		return types.ResultTransient(err)
 	}
 	if current.DeletionTimestamp != nil || slices.Contains(current.Finalizers, datastoreForegroundDeletionFinalizer) {
@@ -253,6 +260,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 
 const (
 	datastoreForegroundDeletionFinalizer = "gitstore.dev/foreground-deletion"
+	categoryConflictRequeueDelay         = 100 * time.Millisecond
 	categoryDeletionRetryInterval        = time.Second
 )
 
@@ -262,18 +270,18 @@ func (r *Reconciler) reconcileDeletion(ctx context.Context, current CategoryTaxo
 	}
 	hasMore, err := r.deletion.DecoupleProducts(ctx, current.Namespace, current.Name, current.ResourceVersion)
 	if err != nil {
-		health.CategoryDeletionRetriesTotal.Inc()
+		health.CategoryDeletionRetriesTotal.Add(context.Background(), 1)
 		return types.ResultTransient(fmt.Errorf("categorytaxonomy: decouple Products: %w", err))
 	}
 	if hasMore {
-		health.CategoryDeletionProductPagesTotal.Inc()
+		health.CategoryDeletionProductPagesTotal.Add(context.Background(), 1)
 		return types.ResultAfter(categoryDeletionRetryInterval)
 	}
-	if err := r.deletion.CompleteDeletion(ctx, current.Namespace, current.Name, current.ResourceVersion); err != nil {
+	if err := r.deletion.CompleteDeletion(ctx, current.Namespace, current.Name, current.ResourceVersion, current.UID); err != nil {
 		if errors.Is(err, types.ErrConflict) {
-			health.CategoryDeletionConflictsTotal.Inc()
+			health.CategoryDeletionConflictsTotal.Add(context.Background(), 1)
 		} else {
-			health.CategoryDeletionRetriesTotal.Inc()
+			health.CategoryDeletionRetriesTotal.Add(context.Background(), 1)
 		}
 		return types.ResultTransient(fmt.Errorf("categorytaxonomy: complete deletion: %w", err))
 	}

@@ -72,11 +72,25 @@ semantics.
 
 ## Version transitions
 
+`generation` tracks desired state only: changes to the Repository `spec` or
+Markdown body advance both counters. Labels, annotations, canonical Namespace
+owner-reference projections, and Git provenance changes (including a source
+path move) advance only `resourceVersion`; exact re-admission changes neither.
+Admission preserves controller-owned status fields while refreshing its
+accepted revision and `AdmissionAccepted` condition.
+
 | Transition              | UID       | Generation | ResourceVersion | Status            |
 |-------------------------|-----------|------------|-----------------|-------------------|
 | Create                  | New       | `1`        | `"1"`           | Initial status    |
 | Manifest spec write     | Preserved | `+1`       | `+1`            | Admission updated |
 | Controller status write | Preserved | Unchanged  | `+1`            | Updated           |
+
+## Generation-semantics rollout
+
+Pause external GraphQL authoring and Git pushes, drain admissions, replace all
+API replicas, then resume authoring. Repeat that pause and drain before a
+rollback so an older replica cannot write under the prior semantics. Controller
+status writes can remain enabled because they do not advance generation.
 
 Rows created before this contract normalize to generation `1`,
 resourceVersion `"1"`, and
@@ -98,13 +112,26 @@ non-deprecated. Removal requires a future major GraphQL API release.
 
 ## Valid and invalid expectations
 
+Deletion removes the manifest in the namespace's system repository at initiation,
+not at `completeRepositoryDeletion`. Admission retains the terminating record and
+name mapping until UID-bound backing-storage cleanup completes. Catalog resources
+block deletion; other finalizers block final record removal. A pending authorized
+Git deletion is durable system state, not an authored manifest field. Direct
+user deletion of the system repository is not supported: Namespace completion
+removes it only when empty.
+
+`completeRepositoryDeletion` requires the observed Relay Node `id`, `namespace`,
+`name`, and `resourceVersion`. The input identity field is `id`, not `uid`;
+`metadata.uid` remains an output field. Completion verifies the exact resource
+incarnation before deleting backing storage, so a delayed request cannot delete a
+same-name replacement.
+
 Valid:
 
 - An existing row with no contract fields returns non-null metadata, spec,
   status, conditions, and resolved storage state.
 - Explicit zero policy limits remain visible as zero.
-- `renameRepository` and `transferRepository` are deprecated and return
-  `Unimplemented` until ADR-0003 Phase 2.
+- Repository rename and transfer between namespaces are not available.
 
 Invalid:
 

@@ -4,7 +4,7 @@ on:
   push:
     branches: [ main, 'feature/**', '[0-9]+-*' ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, 'codex/**' ]
   merge_group:
     branches: [ main ]
 
@@ -17,6 +17,26 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  observability-test:
+    name: Shared Go Module Tests (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        module: [observability, scylla-cdc-go]
+    defaults:
+      run:
+        working-directory: ./shared/${{ matrix.module }}
+    env:
+      GOWORK: 'off'
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: shared/${{ matrix.module }}/go.mod
+        cache: false
+    - name: Check, build and test independently
+      run: test -z "$(gofmt -l .)" && go build ./... && go vet ./... && go test -race -count=1 ./...
+
   secret-material-test:
     name: Shared Secret Material Tests
     runs-on: ubuntu-latest
@@ -29,7 +49,7 @@ jobs:
     - uses: actions/checkout@v6
     - uses: actions/setup-go@v6
       with:
-        go-version: '1.25.x'
+        go-version-file: shared/secretmaterial/go.mod
         cache: false
     - name: Check formatting
       run: test -z "$(gofmt -l .)"
@@ -49,7 +69,7 @@ jobs:
     - uses: actions/checkout@v6
 
     - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@1.99.1
       with:
         components: rustfmt, clippy
 
@@ -108,7 +128,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.26.0'
+        go-version: '1.27.2'
         cache-dependency-path: gitstore-api/go.sum
 
     - name: Install dependencies
@@ -168,7 +188,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.26.0'
+        go-version: '1.27.2'
         cache-dependency-path: gitstore-controller-manager/go.sum
 
     - name: Install dependencies
@@ -216,6 +236,11 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+    - uses: actions/setup-go@v6
+      with:
+        go-version: '1.27.2'
+        cache: false
+    - uses: dtolnay/rust-toolchain@1.99.1
 
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master

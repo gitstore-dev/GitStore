@@ -15,12 +15,13 @@ pub struct AuthContext {
     /// mechanism used (e.g. "basic", "bearer", "none")
     #[prost(string, tag="3")]
     pub auth_method: ::prost::alloc::string::String,
-    #[prost(string, repeated, tag="4")]
-    pub roles: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, repeated, tag="5")]
     pub groups: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, repeated, tag="6")]
     pub scopes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// verified immutable account identity, never a role
+    #[prost(string, tag="7")]
+    pub service_account_uid: ::prost::alloc::string::String,
 }
 /// RequestAuthorization is the API-approved, non-secret authorization decision
 /// for a single GitService call. Git service validates that the action and scope
@@ -300,6 +301,21 @@ pub struct DeleteFileRequest {
     pub author_name: ::prost::alloc::string::String,
     #[prost(string, tag="4")]
     pub author_email: ::prost::alloc::string::String,
+    /// Supply both fields for a conditional deletion on an explicit branch.
+    /// The branch must still point to expected_commit_sha when the commit is
+    /// published; mismatches without a receipt return ABORTED without changing it.
+    /// Retrying the same repository/ref/path/expected commit returns the original
+    /// deletion commit only with a private durable receipt, absent path, and proven
+    /// publication in bounded branch history. Restored paths or existing receipts
+    /// that cannot prove publication return FAILED_PRECONDITION, never re-delete.
+    /// Omitting both preserves the legacy default-branch behavior.
+    ///
+    /// Fully qualified refs/heads/... name.
+    #[prost(string, optional, tag="6")]
+    pub ref_name: ::core::option::Option<::prost::alloc::string::String>,
+    /// Full commit object ID.
+    #[prost(string, optional, tag="7")]
+    pub expected_commit_sha: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="14")]
     pub authorization: ::core::option::Option<RequestAuthorization>,
 }

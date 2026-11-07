@@ -6,7 +6,10 @@ package integration
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -175,40 +178,32 @@ type collectionQueryResult struct {
 	} `json:"products"`
 }
 
-// queryCollection fetches a collection by namespace + name via GraphQL.
+// queryCollection fetches the full fixture page with bounded quota recovery.
+// Functional reads share one principal across the suite; a throttled read may
+// wait for refill without reducing the membership assertions' page size.
 func queryCollection(t *testing.T, namespace, name string) *collectionQueryResult {
 	t.Helper()
-	resp := gqlQuery(t, `
-		query($namespace: String!, $name: String!) {
-			collection(by: {namespacePath: {namespace: $namespace, name: $name}}) {
-				id
-				apiVersion
-				kind
-				metadata { name uid }
-				spec { title }
-				status {
-					observedGeneration
-					lastAppliedRevision
-					conditions { type status reason message observedGeneration }
-					resolved { memberCount }
-				}
-				products(first: 50) {
-					edges { node { metadata { name } } }
-					pageInfo { hasNextPage }
-				}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		collection, errs := tryQueryCollection(t, namespace, name)
+		if len(errs) == 0 {
+			return collection
+		}
+		throttled := true
+		for _, raw := range errs {
+			var problem struct {
+				Extensions struct{ Code string }
+			}
+			if json.Unmarshal(raw, &problem) != nil || problem.Extensions.Code != "THROTTLED" {
+				throttled = false
+				break
 			}
 		}
-	`, map[string]any{"namespace": namespace, "name": name})
-	if len(resp.Errors) > 0 {
-		t.Fatalf("graphql errors querying collection %q: %s", name, resp.Errors)
+		if !throttled || !time.Now().Before(deadline) {
+			t.Fatalf("graphql errors querying collection %q: %s", name, errs)
+		}
+		time.Sleep(min(200*time.Millisecond, time.Until(deadline)))
 	}
-	var data struct {
-		Collection *collectionQueryResult `json:"collection"`
-	}
-	if err := json.Unmarshal(resp.Data, &data); err != nil {
-		t.Fatalf("unmarshal collection response: %v", err)
-	}
-	return data.Collection
 }
 
 // tryQueryCollection is queryCollection without the fatal-on-GraphQL-error
@@ -248,6 +243,42 @@ func tryQueryCollection(t *testing.T, namespace, name string) (*collectionQueryR
 		t.Fatalf("unmarshal collection response: %v", err)
 	}
 	return data.Collection, nil
+}
+
+func TestCollectionQueryRetriesThrottledRead(t *testing.T) {
+	var attempts atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/admin/graphql" {
+			t.Errorf("unexpected collection request: %s %s", r.Method, r.URL.Path)
+		}
+		var request gqlRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode collection request: %v", err)
+			return
+		}
+		if !strings.Contains(request.Query, "products(first: 50)") {
+			t.Error("quota recovery must retain the full membership fixture page")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"errors":[{"message":"operation admission exhausted","extensions":{"code":"THROTTLED"}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"collection":{"id":"fixture","metadata":{"name":"collection-fixture"}}}}`))
+	}))
+	t.Cleanup(server.Close)
+	previousURL := apiURL
+	apiURL = server.URL
+	integrationAdminTokens.Store(server.URL, "fixture-token")
+	t.Cleanup(func() {
+		apiURL = previousURL
+		integrationAdminTokens.Delete(server.URL)
+	})
+	collection := queryCollection(t, "fixture", "collection-fixture")
+	if collection == nil || collection.ID != "fixture" || attempts.Load() != 2 {
+		t.Fatalf("collection read did not recover after quota refill: collection=%+v attempts=%d", collection, attempts.Load())
+	}
 }
 
 // findCondition returns the first condition with the given type, or nil.

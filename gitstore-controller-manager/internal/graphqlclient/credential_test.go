@@ -17,9 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/time/rate"
@@ -62,7 +63,7 @@ type mockTokenSigner struct {
 	audience  string
 }
 
-func (m *mockTokenSigner) SignAssertion(ctx context.Context, namespace, name string, ttl time.Duration, audience string) (string, error) {
+func (m *mockTokenSigner) SignAssertion(ctx context.Context, name string, ttl time.Duration, audience string) (string, error) {
 	m.mu.Lock()
 	m.ttl = ttl
 	m.audience = audience
@@ -71,7 +72,7 @@ func (m *mockTokenSigner) SignAssertion(ctx context.Context, namespace, name str
 		return "", m.err
 	}
 	if m.assertion == "" {
-		return fmt.Sprintf("mock-assertion-%s-%s", namespace, name), nil
+		return fmt.Sprintf("mock-assertion-%s", name), nil
 	}
 	return m.assertion, nil
 }
@@ -80,7 +81,6 @@ func TestServiceAccountSource_FailsWithoutEndpoint(t *testing.T) {
 	signer := &mockTokenSigner{assertion: "mock-assertion"}
 	src := NewServiceAccountSource(
 		"",
-		"controllers",
 		"manager",
 		signer,
 		"gitstore-api/serviceaccount-token",
@@ -98,7 +98,6 @@ func TestServiceAccountSource_LastErrorTracking(t *testing.T) {
 	signer := &mockTokenSigner{err: fmt.Errorf("signing failed")}
 	src := NewServiceAccountSource(
 		"",
-		"controllers",
 		"manager",
 		signer,
 		"gitstore-api/serviceaccount-token",
@@ -118,7 +117,6 @@ func TestServiceAccountSource_BackoffOnFailure(t *testing.T) {
 	signer := &mockTokenSigner{}
 	src := NewServiceAccountSource(
 		"",
-		"controllers",
 		"manager",
 		signer,
 		"gitstore-api/serviceaccount-token",
@@ -141,7 +139,6 @@ func TestServiceAccountSource_ConcurrentCalls_UseSingleflight(t *testing.T) {
 	signer := &mockTokenSigner{}
 	src := NewServiceAccountSource(
 		"",
-		"controllers",
 		"manager",
 		signer,
 		"gitstore-api/serviceaccount-token",
@@ -174,7 +171,7 @@ func TestServiceAccountSourceKeepsValidTokenDuringFailedEarlyRenewal(t *testing.
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer server.Close()
-	src := NewServiceAccountSource(server.URL, "controllers", "manager", &mockTokenSigner{},
+	src := NewServiceAccountSource(server.URL, "manager", &mockTokenSigner{},
 		"gitstore-api/serviceaccount-token", "gitstore-api", time.Minute, time.Minute)
 	src.token = "cached-access-token"
 	src.expiresAt = time.Now().Add(20 * time.Second)
@@ -224,7 +221,7 @@ func TestServiceAccountSourceRenewalHasHeadroomUnderConcurrentAPIWork(t *testing
 				_, _ = io.WriteString(w, `{"data":{}}`)
 			}))
 			defer server.Close()
-			src = NewServiceAccountSource(server.URL, "controllers", "manager", &mockTokenSigner{},
+			src = NewServiceAccountSource(server.URL, "manager", &mockTokenSigner{},
 				"gitstore-api/serviceaccount-token", "gitstore-api", time.Minute, time.Minute)
 			client := New(server.URL, src)
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -267,7 +264,7 @@ func TestClientAcceptsFreshTokenInsideRenewalWindow(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":{}}`)
 	}))
 	defer server.Close()
-	src := NewServiceAccountSource(server.URL, "controllers", "manager", &mockTokenSigner{},
+	src := NewServiceAccountSource(server.URL, "manager", &mockTokenSigner{},
 		"gitstore-api/serviceaccount-token", "gitstore-api", 20*time.Second, 20*time.Second)
 	client := New(server.URL, src)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
@@ -283,7 +280,7 @@ func TestClientDoesNotSendTokenThatExpiresDuringBudgetWait(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer server.Close()
-	src := NewServiceAccountSource(server.URL, "controllers", "manager", &mockTokenSigner{},
+	src := NewServiceAccountSource(server.URL, "manager", &mockTokenSigner{},
 		"gitstore-api/serviceaccount-token", "gitstore-api", time.Minute, time.Minute)
 	src.token = "cached-access-token"
 	src.expiresAt = time.Now().Add(100 * time.Millisecond)
@@ -309,7 +306,7 @@ func TestServiceAccountSource_ExchangesAndReusesToken(t *testing.T) {
 	}))
 	defer server.Close()
 
-	src := NewServiceAccountSource(server.URL, "controllers", "manager", &mockTokenSigner{assertion: "signed-assertion"}, "gitstore-api/serviceaccount-token", "gitstore-api", 10*time.Minute, time.Hour)
+	src := NewServiceAccountSource(server.URL, "manager", &mockTokenSigner{assertion: "signed-assertion"}, "gitstore-api/serviceaccount-token", "gitstore-api", 10*time.Minute, time.Hour)
 	token, err := src.Current(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "access-token", token)
@@ -328,7 +325,7 @@ func TestServiceAccountSource_ConcurrentExchangeUsesSingleflight(t *testing.T) {
 	}))
 	defer server.Close()
 
-	src := NewServiceAccountSource(server.URL, "controllers", "manager", &mockTokenSigner{}, "gitstore-api/serviceaccount-token", "gitstore-api", 10*time.Minute, time.Hour)
+	src := NewServiceAccountSource(server.URL, "manager", &mockTokenSigner{}, "gitstore-api/serviceaccount-token", "gitstore-api", 10*time.Minute, time.Hour)
 	var wg sync.WaitGroup
 	errs := make(chan error, 5)
 	for range 5 {
@@ -350,6 +347,50 @@ func TestServiceAccountSource_ConcurrentExchangeUsesSingleflight(t *testing.T) {
 	assert.Equal(t, int32(1), calls.Load())
 }
 
+func TestServiceAccountSource_InvalidationIsGenerationSpecific(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		_ = json.NewEncoder(w).Encode(tokenExchangeResponse(fmt.Sprintf("generation-%d", n)))
+	}))
+	defer server.Close()
+	src := NewServiceAccountSource(server.URL, "manager", &mockTokenSigner{}, "assertion", "api", 10*time.Minute, time.Hour)
+	old, err := src.Current(t.Context())
+	require.NoError(t, err)
+	invalidator, ok := any(src).(interface{ Invalidate(string) })
+	require.True(t, ok, "credential source must support generation-specific rejection")
+	var wg sync.WaitGroup
+	errs := make(chan error, 32)
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			invalidator.Invalidate(old)
+			token, err := src.Current(t.Context())
+			if err == nil && token != "generation-2" {
+				err = fmt.Errorf("unexpected replacement token")
+			}
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.EqualValues(t, 2, calls.Load(), "one exchange for all rejected-generation users")
+	invalidator.Invalidate(old)
+	require.True(t, src.tokenValid("generation-2"), "stale rejection must not evict the replacement")
+	src.mu.Lock()
+	src.backoffUntil = time.Now().Add(time.Minute)
+	src.lastErr = errors.New("outage")
+	src.mu.Unlock()
+	invalidator.Invalidate("generation-2")
+	_, err = src.Current(t.Context())
+	require.ErrorContains(t, err, "backoff")
+	require.EqualValues(t, 2, calls.Load(), "invalidation must not reset the retry budget")
+}
+
 func TestServiceAccountSource_UsesConfiguredAudiencesAndSigningLifetime(t *testing.T) {
 	signer := &mockTokenSigner{assertion: "signed-assertion"}
 	var request struct {
@@ -369,7 +410,6 @@ func TestServiceAccountSource_UsesConfiguredAudiencesAndSigningLifetime(t *testi
 
 	src := NewServiceAccountSource(
 		server.URL,
-		"controllers",
 		"manager",
 		signer,
 		"controller-token-exchange",
@@ -398,7 +438,7 @@ func TestServiceAccountSource_RecoversAfterBackoff(t *testing.T) {
 	}))
 	defer server.Close()
 
-	src := NewServiceAccountSource(server.URL, "controllers", "manager", &mockTokenSigner{}, "gitstore-api/serviceaccount-token", "gitstore-api", 10*time.Minute, time.Hour)
+	src := NewServiceAccountSource(server.URL, "manager", &mockTokenSigner{}, "gitstore-api/serviceaccount-token", "gitstore-api", 10*time.Minute, time.Hour)
 	_, err := src.Current(context.Background())
 	require.Error(t, err)
 	src.mu.Lock()
@@ -414,7 +454,6 @@ func TestServiceAccountSource_RecoversAfterBackoff(t *testing.T) {
 func TestServiceAccountSourceReadinessRequiresUsableToken(t *testing.T) {
 	src := NewServiceAccountSource(
 		"",
-		"controllers",
 		"manager",
 		&mockTokenSigner{},
 		"gitstore-api/serviceaccount-token",
@@ -452,7 +491,7 @@ func TestServiceAccountSource_CancellationWhileExchangeInFlight(t *testing.T) {
 	}))
 	defer server.Close()
 
-	src := NewServiceAccountSource(server.URL, "controllers", "manager", &mockTokenSigner{}, "gitstore-api/serviceaccount-token", "gitstore-api", 10*time.Minute, time.Hour)
+	src := NewServiceAccountSource(server.URL, "manager", &mockTokenSigner{}, "gitstore-api/serviceaccount-token", "gitstore-api", 10*time.Minute, time.Hour)
 	leaderResult := make(chan error, 1)
 	go func() {
 		_, err := src.Current(context.Background())
@@ -495,7 +534,7 @@ func TestServiceAccountSource_ExchangeHasBoundedTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 
-	src := NewServiceAccountSource(server.URL, "controllers", "manager", &mockTokenSigner{}, "gitstore-api/serviceaccount-token", "gitstore-api", 10*time.Minute, time.Hour)
+	src := NewServiceAccountSource(server.URL, "manager", &mockTokenSigner{}, "gitstore-api/serviceaccount-token", "gitstore-api", 10*time.Minute, time.Hour)
 	src.exchangeTimeout = 50 * time.Millisecond
 
 	result := make(chan error, 1)
@@ -525,7 +564,7 @@ func tokenExchangeResponse(token string) map[string]any {
 
 func TestCredentialMetricsMeasureExchangeNotAcquisition(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	metrics := newCredentialMetrics(registry)
+	metrics := newCredentialMetrics(observabilitytest.Meter(t, registry, "gitstore/credentials"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
 			"issueServiceAccountToken": map[string]any{"tokenRequest": map[string]any{"status": map[string]any{
@@ -534,7 +573,7 @@ func TestCredentialMetricsMeasureExchangeNotAcquisition(t *testing.T) {
 		}})
 	}))
 	defer server.Close()
-	source := NewServiceAccountSource(server.URL, "private-namespace", "private-name",
+	source := NewServiceAccountSource(server.URL, "private-name",
 		&mockTokenSigner{assertion: "private-assertion"}, "assertion", "access", time.Minute, time.Minute)
 	source.metrics = metrics
 	var callers sync.WaitGroup
@@ -549,9 +588,9 @@ func TestCredentialMetricsMeasureExchangeNotAcquisition(t *testing.T) {
 		}()
 	}
 	callers.Wait()
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.exchanges.WithLabelValues("success")))
-	require.Zero(t, testutil.ToFloat64(metrics.inflight))
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.peakInflight))
+	require.Equal(t, float64(1), observabilitytest.Value(t, registry, "gitstore_controller_credential_exchange_total", map[string]string{"result": "success"}))
+	require.Zero(t, observabilitytest.Value(t, registry, "gitstore_controller_credential_exchange_inflight", nil))
+	require.Equal(t, float64(1), observabilitytest.Value(t, registry, "gitstore_controller_credential_exchange_peak_inflight", nil))
 	families, err := registry.Gather()
 	require.NoError(t, err)
 	data, err := json.Marshal(families)
@@ -562,32 +601,34 @@ func TestCredentialMetricsMeasureExchangeNotAcquisition(t *testing.T) {
 }
 
 func TestCredentialMetricsFailureCancellationAndRetry(t *testing.T) {
-	metrics := newCredentialMetrics(prometheus.NewRegistry())
-	source := NewServiceAccountSource("", "ns", "name", &mockTokenSigner{err: errors.New("private-provider-error")},
+	registry := prometheus.NewRegistry()
+	metrics := newCredentialMetrics(observabilitytest.Meter(t, registry, "gitstore/credentials"))
+	source := NewServiceAccountSource("", "name", &mockTokenSigner{err: errors.New("private-provider-error")},
 		"assertion", "access", time.Minute, time.Minute)
 	source.metrics = metrics
 	_, err := source.Current(t.Context())
 	require.Error(t, err)
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.exchanges.WithLabelValues("failed")))
-	require.Zero(t, testutil.ToFloat64(metrics.exchanges.WithLabelValues("success")))
-	require.Zero(t, testutil.ToFloat64(metrics.inflight))
-	require.Greater(t, testutil.ToFloat64(metrics.maxRetry), float64(0))
-	require.LessOrEqual(t, testutil.ToFloat64(metrics.maxRetry), float64(30))
+	require.Equal(t, float64(1), observabilitytest.Value(t, registry, "gitstore_controller_credential_exchange_total", map[string]string{"result": "failed"}))
+	require.Zero(t, observabilitytest.Value(t, registry, "gitstore_controller_credential_exchange_total", map[string]string{"result": "success"}))
+	require.Zero(t, observabilitytest.Value(t, registry, "gitstore_controller_credential_exchange_inflight", nil))
+	require.Greater(t, observabilitytest.Value(t, registry, "gitstore_controller_credential_retry_max_seconds", nil), float64(0))
+	require.LessOrEqual(t, observabilitytest.Value(t, registry, "gitstore_controller_credential_retry_max_seconds", nil), float64(30))
 	_, err = source.Current(t.Context())
 	require.Error(t, err)
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.exchanges.WithLabelValues("failed")), "backoff reuse is not another exchange")
+	require.Equal(t, float64(1), observabilitytest.Value(t, registry, "gitstore_controller_credential_exchange_total", map[string]string{"result": "failed"}), "backoff reuse is not another exchange")
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	source.backoffUntil = time.Time{}
 	_, err = source.Current(ctx)
 	require.ErrorIs(t, err, context.Canceled)
-	require.Zero(t, testutil.ToFloat64(metrics.exchanges.WithLabelValues("canceled")), "a canceled waiter did not attempt issuance")
+	require.Zero(t, observabilitytest.Value(t, registry, "gitstore_controller_credential_exchange_total", map[string]string{"result": "canceled"}), "a canceled waiter did not attempt issuance")
 }
 
 func TestCredentialMetricsCanceledExchangeReturnsToZero(t *testing.T) {
-	metrics := newCredentialMetrics(prometheus.NewRegistry())
-	source := NewServiceAccountSource("", "ns", "name", waitingSigner{}, "assertion", "access", time.Minute, time.Minute)
+	registry := prometheus.NewRegistry()
+	metrics := newCredentialMetrics(observabilitytest.Meter(t, registry, "gitstore/credentials"))
+	source := NewServiceAccountSource("", "name", waitingSigner{}, "assertion", "access", time.Minute, time.Minute)
 	source.metrics = metrics
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -596,11 +637,13 @@ func TestCredentialMetricsCanceledExchangeReturnsToZero(t *testing.T) {
 		_, err := source.Current(ctx)
 		done <- err
 	}()
-	require.Eventually(t, func() bool { return testutil.ToFloat64(metrics.inflight) == 1 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		return observabilitytest.Value(t, registry, "gitstore_controller_credential_exchange_inflight", nil) == 1
+	}, time.Second, time.Millisecond)
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
-	require.Equal(t, float64(1), testutil.ToFloat64(metrics.exchanges.WithLabelValues("canceled")))
-	require.Zero(t, testutil.ToFloat64(metrics.inflight))
-	require.Zero(t, testutil.ToFloat64(metrics.maxRetry))
+	require.Equal(t, float64(1), observabilitytest.Value(t, registry, "gitstore_controller_credential_exchange_total", map[string]string{"result": "canceled"}))
+	require.Zero(t, observabilitytest.Value(t, registry, "gitstore_controller_credential_exchange_inflight", nil))
+	require.Zero(t, observabilitytest.Value(t, registry, "gitstore_controller_credential_retry_max_seconds", nil))
 	require.Nil(t, source.LastError(), "caller cancellation must not poison shared backoff")
 }

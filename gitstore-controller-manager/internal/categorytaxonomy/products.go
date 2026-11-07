@@ -53,6 +53,7 @@ type Product struct {
 	Name              string
 	Generation        int64
 	ResourceVersion   string
+	Revision          string
 	Finalizers        []string
 	DeletionTimestamp *time.Time
 	// CategoryRefName is empty when the product has no category reference.

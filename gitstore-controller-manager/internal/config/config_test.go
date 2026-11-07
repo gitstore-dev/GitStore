@@ -13,13 +13,66 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
 )
 
+func TestRemovedServiceAccountNamespaceSettingIsRejected(t *testing.T) {
+	for _, source := range []string{"toml", "env"} {
+		t.Run(source, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			contents := ""
+			if source == "toml" {
+				contents = "[controller.serviceaccount]\nnamespace = 'legacy'\n"
+			} else {
+				t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE", "legacy")
+			}
+			if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := config.LoadFrom(path)
+			if err == nil || !strings.Contains(err.Error(), "cluster-scoped") {
+				t.Fatalf("expected actionable namespace removal error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestShippedComposeConfigUsesClusterIdentity(t *testing.T) {
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "enrolled-by-compose")
+	cfg, err := config.LoadFrom("../../../config/config.toml")
+	if err != nil {
+		t.Fatalf("shipped Compose configuration must load: %v", err)
+	}
+	if cfg.Controller.ServiceAccount.Name != "gitstore-controller-manager" {
+		t.Fatal("unexpected controller identity")
+	}
+}
+
+func TestProfilingConfigurationRequiresLoopbackAndToken(t *testing.T) {
+	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "enrolled-by-test")
+	t.Setenv("GITSTORE_CONTROLLER__PROFILING__URI", "http://127.0.0.1:6061")
+	_, err := config.LoadFrom("../../../config/config.toml")
+	if err == nil || !strings.Contains(err.Error(), "controller.profiling.token") {
+		t.Fatalf("expected profiling token validation, got %v", err)
+	}
+	t.Setenv("GITSTORE_CONTROLLER__PROFILING__TOKEN", strings.Repeat("x", 32))
+	cfg, err := config.LoadFrom("../../../config/config.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Controller.Profiling.URI != "http://127.0.0.1:6061" {
+		t.Fatal("profiling environment override was not decoded")
+	}
+	t.Setenv("GITSTORE_CONTROLLER__PROFILING__URI", "http://0.0.0.0:6061")
+	_, err = config.LoadFrom("../../../config/config.toml")
+	if err == nil || !strings.Contains(err.Error(), "controller.profiling.uri") || strings.Contains(err.Error(), cfg.Controller.Profiling.Token) {
+		t.Fatalf("expected safe loopback validation, got %v", err)
+	}
+}
+
 func TestLoadFrom_ExplicitSharedFileAndEnvPrecedence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "shared.toml")
 	content := `[controller]
 port = 6111
-api_uri = "http://api:4000/graphql"
+api_uri = "http://api:4000/admin/graphql"
 [controller.serviceaccount]
-namespace = "controllers"
 name = "gitstore-controller-manager"
 uid = "sa-uid-1"
 key_ref = { kind = "SecretRef", name = "controller-manager" }
@@ -63,9 +116,8 @@ func TestLoadFromFiles_OverlayMergesOnTopOfBase(t *testing.T) {
 	basePath := filepath.Join(dir, "base.toml")
 	base := `[controller]
 port = 5001
-api_uri = "http://api:4000/graphql"
+api_uri = "http://api:4000/admin/graphql"
 [controller.serviceaccount]
-namespace = "controllers"
 name = "gitstore-controller-manager"
 uid = "sa-uid-1"
 key_ref = { kind = "SecretRef", name = "controller-manager" }
@@ -79,7 +131,7 @@ format = "json"
 
 	overlayPath := filepath.Join(dir, "overlay.toml")
 	overlay := `[controller]
-api_uri = "http://overlay-api:4000/graphql"
+api_uri = "http://overlay-api:4000/admin/graphql"
 `
 	if err := os.WriteFile(overlayPath, []byte(overlay), 0600); err != nil {
 		t.Fatal(err)
@@ -89,7 +141,7 @@ api_uri = "http://overlay-api:4000/graphql"
 	if err != nil {
 		t.Fatalf("LoadFromFiles() error: %v", err)
 	}
-	if cfg.Controller.ApiURI != "http://overlay-api:4000/graphql" {
+	if cfg.Controller.ApiURI != "http://overlay-api:4000/admin/graphql" {
 		t.Fatalf("ApiURI = %q, want overlay value", cfg.Controller.ApiURI)
 	}
 	// Base-only key must survive the merge.
@@ -118,7 +170,6 @@ func TestLoadFromFiles_EmptyFails(t *testing.T) {
 // setenv sets environment variables for a test and clears them on cleanup.
 func setenv(t *testing.T, pairs ...string) {
 	t.Helper()
-	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE", "controllers")
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__NAME", "gitstore-controller-manager")
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "sa-uid-1")
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__KEY_REF__KIND", "SecretRef")
@@ -138,8 +189,8 @@ func TestLoad_Defaults(t *testing.T) {
 	if cfg.Controller.Port != 5001 {
 		t.Errorf("Port = %d, want 5001", cfg.Controller.Port)
 	}
-	if cfg.Controller.ApiURI != "http://localhost:4000/graphql" {
-		t.Errorf("ApiURI = %q, want http://localhost:4000/graphql", cfg.Controller.ApiURI)
+	if cfg.Controller.ApiURI != "http://localhost:4000/admin/graphql" {
+		t.Errorf("ApiURI = %q, want http://localhost:4000/admin/graphql", cfg.Controller.ApiURI)
 	}
 	if cfg.Controller.Reconcile.MaxAttempts != 5 {
 		t.Errorf("DefaultMaxAttempts = %d, want 5", cfg.Controller.Reconcile.MaxAttempts)
@@ -170,7 +221,7 @@ func TestLoad_Defaults(t *testing.T) {
 func TestLoad_EnvOverrides(t *testing.T) {
 	setenv(t,
 		"GITSTORE_CONTROLLER__PORT", "8080",
-		"GITSTORE_CONTROLLER__API_URI", "http://api.example.com/graphql",
+		"GITSTORE_CONTROLLER__API_URI", "http://api.example.com/admin/graphql",
 		"GITSTORE_CONTROLLER__RECONCILE__MAX_ATTEMPTS", "10",
 		"GITSTORE_CONTROLLER__RECONCILE__STALL_THRESHOLD", "2m",
 		"GITSTORE_CONTROLLER__CHECKPOINT__DIR", "/tmp/checkpoints",
@@ -191,7 +242,7 @@ func TestLoad_EnvOverrides(t *testing.T) {
 	if cfg.Controller.Port != 8080 {
 		t.Errorf("Port = %d, want 8080", cfg.Controller.Port)
 	}
-	if cfg.Controller.ApiURI != "http://api.example.com/graphql" {
+	if cfg.Controller.ApiURI != "http://api.example.com/admin/graphql" {
 		t.Errorf("ApiURI = %q", cfg.Controller.ApiURI)
 	}
 	if cfg.Controller.Reconcile.MaxAttempts != 10 {
@@ -389,8 +440,8 @@ func TestLoad_ServiceAccountCredentialModeRequiresCompleteIdentity(t *testing.T)
 	if err == nil {
 		t.Fatal("Load() error = nil")
 	}
-	if !strings.Contains(err.Error(), "controller.serviceaccount.namespace") {
-		t.Errorf("Load() error = %q, want missing namespace", err)
+	if !strings.Contains(err.Error(), "controller.serviceaccount.uid") {
+		t.Errorf("Load() error = %q, want missing UID", err)
 	}
 }
 

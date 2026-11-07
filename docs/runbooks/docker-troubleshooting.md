@@ -42,7 +42,7 @@ curl -s http://localhost:5001/health | jq .
 Check GraphQL:
 
 ```bash
-curl -s http://localhost:4000/graphql \
+curl -s http://localhost:4000/admin/graphql \
   -H "Content-Type: application/json" \
   -d '{"query":"query { namespaces(first: 1) { pageInfo { hasNextPage } } }"}' | jq .
 ```
@@ -116,8 +116,8 @@ CONFIG_FILE=./config/config.toml docker compose --profile local \
 
 For non-profile/manual startup, check the active auth settings:
 
-- `auth.staticusers.users_file` points to a readable users file
-- `GITSTORE_AUTH__JWT__SECRET`
+- `api.auth.static_users.users_file` points to a readable users file
+- `GITSTORE_API__AUTH__JWT__SECRET`
 
 Inspect logs:
 
@@ -130,7 +130,7 @@ make logs SERVICE=api
 Confirm the namespace and repository exist:
 
 ```bash
-curl -s http://localhost:4000/graphql \
+curl -s http://localhost:4000/admin/graphql \
   -H "Content-Type: application/json" \
   -d '{"query":"query { repository(by: { namespacePath: { namespace: \"gitstore-test\", name: \"catalog\" } }) { id name } }"}' | jq .
 ```
@@ -175,13 +175,16 @@ make logs SERVICE=api
 make logs SERVICE=controller-manager
 ```
 
-The compose default is:
+Configure the Admin client with a complete browser-accessible Admin URL, such
+as `http://localhost:4000/admin/graphql`. A server-side client on the Compose
+network uses:
 
 ```text
-GITSTORE_GRAPHQL_URL=http://api:4000/graphql
+http://api:4000/admin/graphql
 ```
 
-For more admin-specific checks, see [docs/admin/quickstart.md](../admin/quickstart.md).
+Configure CORS to allow the browser origin if it differs from the API origin.
+The external Admin client's environment-variable name depends on its release.
 
 ## Log Commands
 
@@ -200,19 +203,22 @@ make logs SERVICE=api 2>&1 | grep '{' | jq .
 
 ## Clean Restart
 
-Stop and remove containers:
+Stop and remove containers while retaining persistent state:
 
 ```bash
 make down
 ```
 
-Remove volumes when you explicitly want to discard local repository and datastore state:
+Normal restarts do not require deleting volumes or re-bootstrapping existing
+state. The following is a destructive reset, only for disposable local fixtures
+you explicitly intend to discard. Never use it for an operator deployment or a
+retained capacity baseline:
 
 ```bash
 docker compose -f compose.yml -f compose.scylla.yml down --volumes
 ```
 
-Start again:
+Start again; bootstrap only when initializing fresh state:
 
 ```bash
 make compose DETACH=1

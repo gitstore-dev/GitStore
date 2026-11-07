@@ -530,7 +530,7 @@ func (s *scyllaDatastore) releaseOwned(
 
 func resourceKindForProjection(tableName string) string {
 	switch tableName {
-	case "products_by_name", "products_by_uid", "products_by_namespace":
+	case "products_by_identity", "products_by_uid", "products_by_key", productsByNamespaceShard:
 		return "Product"
 	case "category_taxonomies_by_name", "category_taxonomies_by_uid", "category_taxonomies_by_namespace":
 		return "CategoryTaxonomy"
@@ -541,7 +541,7 @@ func resourceKindForProjection(tableName string) string {
 		return "ProductVariant"
 	case "namespace_mappings":
 		return "Repository"
-	case "service_accounts_by_name", "service_accounts_by_uid", "service_accounts_by_namespace":
+	case "service_accounts_by_cluster_name", "service_accounts_by_cluster_uid":
 		return "ServiceAccount"
 	default:
 		return "Unknown"

@@ -26,8 +26,10 @@ exclude:
   - name: All
     paths:
       - gitstore-git-service/gen
-      - gitstore-api/internal/graph/generated
-      - gitstore-api/internal/graph/model/models_gen.go
+      - gitstore-api/internal/admin/graph/generated
+      - gitstore-api/internal/admin/graph/model/models_gen.go
+      - gitstore-api/internal/storefront/graph/generated
+      - gitstore-api/internal/storefront/graph/model/models_gen.go
 
 #Specify Qodana linter for analysis (Applied in CI/CD pipeline)
 linter: jetbrains/qodana-poly:2026.2

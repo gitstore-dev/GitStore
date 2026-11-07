@@ -102,7 +102,7 @@ export default function () {
       break;
     }
     const rawErrors = JSON.stringify(result.body.errors || []);
-    if (!rawErrors.includes('NAMESPACE_CONFLICT') && !rawErrors.includes('RESOURCE_VERSION_CONFLICT')) {
+    if (!rawErrors.includes('"code":"CONFLICT"')) {
       break;
     }
     conflicts.add(1);

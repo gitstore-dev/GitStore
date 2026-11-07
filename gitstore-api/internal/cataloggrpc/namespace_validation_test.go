@@ -5,6 +5,7 @@ package cataloggrpc_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,6 +46,41 @@ func namespaceBlob(path, name, tier string) *catalogv1.ResourceBlob {
 	return &catalogv1.ResourceBlob{Path: path, Content: namespaceManifest(name, name, tier)}
 }
 
+func TestUserNamespacePreflightCannotBypassIdentityWithAdminOrMasters(t *testing.T) {
+	for _, actor := range []string{"alice", "admin"} {
+		for _, masters := range []bool{false, true} {
+			for _, name := range []string{"alice", "bob"} {
+				t.Run(actor+"/"+name+"/"+fmt.Sprint(masters), func(t *testing.T) {
+					srv := newCatalogServer(t, newNamespacePolicyDatastore(t), nil)
+					req := namespaceValidationRequest(nil, []*catalogv1.ResourceBlob{namespaceBlob("namespaces/"+name+".md", name, "USER")})
+					req.Authorization = fixtureValidationEnvelope(req.RepositoryId, req.Trees)
+					req.Authorization.Actor.Subject = actor
+					if masters {
+						req.Authorization.Actor.Groups = []string{"system:authenticated", "system:masters"}
+					}
+					resp, err := srv.Server.ValidateResources(srv.fixtureContext(context.Background(), req), req)
+					require.NoError(t, err)
+					require.Equal(t, actor == name, resp.Accepted)
+				})
+			}
+		}
+	}
+}
+
+func TestUserNamespaceRenameAsDeleteCreateIsRejected(t *testing.T) {
+	srv := newCatalogServer(t, newNamespacePolicyDatastore(t), nil)
+	req := namespaceValidationRequest(
+		[]*catalogv1.ResourceBlob{namespaceBlob("namespaces/alice.md", "alice", "USER")},
+		[]*catalogv1.ResourceBlob{namespaceBlob("namespaces/bob.md", "bob", "USER")},
+	)
+	req.Authorization = fixtureValidationEnvelope(req.RepositoryId, req.Trees)
+	req.Authorization.Actor.Subject = "alice"
+	req.Authorization.Actor.Groups = []string{"system:authenticated", "system:masters"}
+	resp, err := srv.Server.ValidateResources(srv.fixtureContext(context.Background(), req), req)
+	require.ErrorContains(t, err, "USER namespace rename is forbidden")
+	require.Nil(t, resp)
+}
+
 func withNamespacePolicySpy(spy namespaceadmission.PolicyEvaluator) func(*cataloggrpc.ServerDeps) {
 	return func(deps *cataloggrpc.ServerDeps) {
 		deps.NamespacePolicyEvaluator = spy
@@ -52,13 +89,14 @@ func withNamespacePolicySpy(spy namespaceadmission.PolicyEvaluator) func(*catalo
 
 func TestValidateResourcesStructuralFailureSuppressesNamespacePolicyForWholeRequest(t *testing.T) {
 	tests := map[string]*catalogv1.ResourceBlob{
-		"invalid Namespace": namespaceBlob("namespaces/invalid.md", "Invalid Name", "USER"),
+		"invalid Namespace": namespaceBlob("namespaces/invalid.md", "Invalid Name", "ORGANIZATION"),
 		"invalid other kind": {
 			Path: "products/invalid.md",
 			Content: []byte(`---
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: invalid
 spec: {}
 status:
@@ -71,7 +109,7 @@ status:
 		t.Run(name, func(t *testing.T) {
 			spy := &namespacePolicySpy{}
 			srv := newCatalogServer(t, newNamespacePolicyDatastore(t), nil, withNamespacePolicySpy(spy))
-			valid := namespaceBlob("namespaces/acme.md", "acme", "USER")
+			valid := namespaceBlob("namespaces/acme.md", "acme", "ORGANIZATION")
 
 			resp, err := srv.ValidateResources(context.Background(), namespaceValidationRequest(nil, []*catalogv1.ResourceBlob{invalid, valid}))
 
@@ -84,7 +122,7 @@ status:
 
 func TestValidateResourcesCountsOnlyMalformedNamespaceParserFailures(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	metrics := namespaceadmission.NewMetrics(registry)
+	metrics := namespaceadmission.NewMetrics(observabilitytest.Meter(t, registry, "gitstore/namespace"))
 	srv := newCatalogServer(t, newNamespacePolicyDatastore(t), nil, func(deps *cataloggrpc.ServerDeps) {
 		deps.NamespaceMetrics = metrics
 	})
@@ -97,7 +135,7 @@ metadata:
   name: invalid
 spec:
   title: [
-  tier: USER
+  tier: ORGANIZATION
 ---
 `),
 	}
@@ -107,6 +145,7 @@ spec:
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: invalid
 spec:
   title: [
@@ -153,7 +192,7 @@ func TestValidateResourcesNamespaceIdentifierRulesMatchGraphQL(t *testing.T) {
 			path := "namespaces/" + test.identifier + ".md"
 
 			resp, err := srv.ValidateResources(context.Background(), namespaceValidationRequest(nil, []*catalogv1.ResourceBlob{
-				namespaceBlob(path, test.identifier, "USER"),
+				namespaceBlob(path, test.identifier, "ORGANIZATION"),
 			}))
 
 			require.NoError(t, err)
@@ -167,13 +206,13 @@ func TestAdmitResourcesNamespaceUpdateMissingAfterConflictDoesNotCreate(t *testi
 	base := newNamespacePolicyDatastore(t)
 	store := &namespaceDeletedDuringUpdateStore{Datastore: base, name: "other"}
 	registry := prometheus.NewRegistry()
-	metrics := namespaceadmission.NewMetrics(registry)
+	metrics := namespaceadmission.NewMetrics(observabilitytest.Meter(t, registry, "gitstore/namespace"))
 	a := strings.Repeat("a", 40)
 	b := strings.Repeat("b", 40)
 	current := b
 	path := "namespaces/other.md"
 	git := newTreeGitReader(&current, map[string]map[string][]byte{
-		a: {path: namespaceManifest("other", "Other", "USER")},
+		a: {path: namespaceManifest("other", "Other", "ORGANIZATION")},
 		b: {path: namespaceManifest("other", "Updated", "ORGANIZATION")},
 	})
 	srv := newCatalogServer(t, store, git, func(deps *cataloggrpc.ServerDeps) {
@@ -181,10 +220,10 @@ func TestAdmitResourcesNamespaceUpdateMissingAfterConflictDoesNotCreate(t *testi
 	})
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: a,
-		NewCommitSha: b,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  a,
+		NewCommitSha:  b,
 
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
@@ -195,7 +234,7 @@ func TestAdmitResourcesNamespaceUpdateMissingAfterConflictDoesNotCreate(t *testi
 	assert.Equal(t, 0, store.createCalls)
 	_, err = base.GetNamespaceByName(context.Background(), "other")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
-	assert.Equal(t, float64(1), namespaceRejectionCount(t, registry, namespaceadmission.PhasePolicy, namespaceadmission.ReasonNamespaceNotFound))
+	assert.Equal(t, float64(1), namespaceRejectionCount(t, registry, namespaceadmission.ReasonNamespaceNotFound))
 }
 
 func TestAdmitResourcesNamespaceUpdateMissingInitiallyDoesNotCreate(t *testing.T) {
@@ -206,13 +245,13 @@ func TestAdmitResourcesNamespaceUpdateMissingInitiallyDoesNotCreate(t *testing.T
 
 	store := &namespaceDeletedDuringUpdateStore{Datastore: base, name: "other"}
 	registry := prometheus.NewRegistry()
-	metrics := namespaceadmission.NewMetrics(registry)
+	metrics := namespaceadmission.NewMetrics(observabilitytest.Meter(t, registry, "gitstore/namespace"))
 	a := strings.Repeat("c", 40)
 	b := strings.Repeat("d", 40)
 	current := b
 	path := "namespaces/other.md"
 	git := newTreeGitReader(&current, map[string]map[string][]byte{
-		a: {path: namespaceManifest("other", "Other", "USER")},
+		a: {path: namespaceManifest("other", "Other", "ORGANIZATION")},
 		b: {path: namespaceManifest("other", "Updated", "ORGANIZATION")},
 	})
 	srv := newCatalogServer(t, store, git, func(deps *cataloggrpc.ServerDeps) {
@@ -220,10 +259,10 @@ func TestAdmitResourcesNamespaceUpdateMissingInitiallyDoesNotCreate(t *testing.T
 	})
 
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: a,
-		NewCommitSha: b,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  a,
+		NewCommitSha:  b,
 
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
@@ -234,7 +273,7 @@ func TestAdmitResourcesNamespaceUpdateMissingInitiallyDoesNotCreate(t *testing.T
 	assert.Equal(t, 0, store.createCalls)
 	_, err = base.GetNamespaceByName(context.Background(), "other")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
-	assert.Equal(t, float64(1), namespaceRejectionCount(t, registry, namespaceadmission.PhasePolicy, namespaceadmission.ReasonNamespaceNotFound))
+	assert.Equal(t, float64(1), namespaceRejectionCount(t, registry, namespaceadmission.ReasonNamespaceNotFound))
 }
 
 func TestValidateResourcesSamePathNamespaceNameChangeIsImmutable(t *testing.T) {
@@ -243,8 +282,8 @@ func TestValidateResourcesSamePathNamespaceNameChangeIsImmutable(t *testing.T) {
 	path := "namespaces/old-name.md"
 
 	resp, err := srv.ValidateResources(context.Background(), namespaceValidationRequest(
-		[]*catalogv1.ResourceBlob{namespaceBlob(path, "old-name", "USER")},
-		[]*catalogv1.ResourceBlob{namespaceBlob(path, "new-name", "USER")},
+		[]*catalogv1.ResourceBlob{namespaceBlob(path, "old-name", "ORGANIZATION")},
+		[]*catalogv1.ResourceBlob{namespaceBlob(path, "new-name", "ORGANIZATION")},
 	))
 
 	require.NoError(t, err)
@@ -258,8 +297,8 @@ func TestValidateResourcesPathAndNameChangeIsNewDeclaration(t *testing.T) {
 	srv := newCatalogServer(t, newNamespacePolicyDatastore(t), nil, withNamespacePolicySpy(spy))
 
 	resp, err := srv.ValidateResources(context.Background(), namespaceValidationRequest(
-		[]*catalogv1.ResourceBlob{namespaceBlob("namespaces/old-name.md", "old-name", "USER")},
-		[]*catalogv1.ResourceBlob{namespaceBlob("namespaces/new-name.md", "new-name", "USER")},
+		[]*catalogv1.ResourceBlob{namespaceBlob("namespaces/old-name.md", "old-name", "ORGANIZATION")},
+		[]*catalogv1.ResourceBlob{namespaceBlob("namespaces/new-name.md", "new-name", "ORGANIZATION")},
 	))
 
 	require.NoError(t, err)
@@ -274,7 +313,7 @@ func TestValidateResourcesReintroducedNamespaceUsesUpdate(t *testing.T) {
 
 	resp, err := srv.ValidateResources(context.Background(), namespaceValidationRequest(
 		nil,
-		[]*catalogv1.ResourceBlob{namespaceBlob("namespaces/other.md", "other", "USER")},
+		[]*catalogv1.ResourceBlob{namespaceBlob("namespaces/other.md", "other", "ORGANIZATION")},
 	))
 
 	require.NoError(t, err)
@@ -296,10 +335,10 @@ func TestAdmitResourcesReintroducedNamespaceUpdatesDurableIdentity(t *testing.T)
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: oldCommit,
-		NewCommitSha: newCommit,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  oldCommit,
+		NewCommitSha:  newCommit,
 
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
@@ -315,7 +354,6 @@ func TestAdmitResourcesReintroducedNamespaceUpdatesDurableIdentity(t *testing.T)
 
 func TestValidateResourcesNamespacePolicyUsesStableConstraint(t *testing.T) {
 	spy := &namespacePolicySpy{decision: &namespaceadmission.Decision{
-		Phase:   namespaceadmission.PhasePolicy,
 		Reason:  namespaceadmission.ReasonTierDemotion,
 		Field:   "spec.tier",
 		Message: "namespace tier demotion is not allowed",
@@ -325,7 +363,7 @@ func TestValidateResourcesNamespacePolicyUsesStableConstraint(t *testing.T) {
 
 	resp, err := srv.ValidateResources(context.Background(), namespaceValidationRequest(
 		[]*catalogv1.ResourceBlob{namespaceBlob(path, "acme", "ORGANIZATION")},
-		[]*catalogv1.ResourceBlob{namespaceBlob(path, "acme", "USER")},
+		[]*catalogv1.ResourceBlob{namespaceBlob(path, "acme", "ORGANIZATION")},
 	))
 
 	require.NoError(t, err)
@@ -342,7 +380,7 @@ func TestValidateResourcesNamespacePolicyMatrix(t *testing.T) {
 		constraint string
 	}{
 		"bootstrap": {
-			old:        []*catalogv1.ResourceBlob{namespaceBlob("namespaces/default.md", "default", "USER")},
+			old:        []*catalogv1.ResourceBlob{namespaceBlob("namespaces/default.md", "default", "ORGANIZATION")},
 			proposed:   namespaceBlob("namespaces/default.md", "default", "ORGANIZATION"),
 			constraint: "metadata.name:policy/bootstrap-namespace",
 		},
@@ -360,6 +398,7 @@ func TestValidateResourcesNamespacePolicyMatrix(t *testing.T) {
 		},
 		"terminating target": {
 			prepare: func(t *testing.T, store datastore.Datastore) {
+				require.NoError(t, store.DeleteRepository(context.Background(), wrongNamespaceRepoID))
 				namespace, err := store.GetNamespaceByName(context.Background(), "other")
 				require.NoError(t, err)
 				expected := namespace.ResourceVersion
@@ -367,8 +406,8 @@ func TestValidateResourcesNamespacePolicyMatrix(t *testing.T) {
 				namespace.DeletionTimestamp = &deletedAt
 				require.NoError(t, store.UpdateNamespace(context.Background(), namespace, expected))
 			},
-			old:        []*catalogv1.ResourceBlob{namespaceBlob("namespaces/other.md", "other", "USER")},
-			proposed:   namespaceBlob("namespaces/other.md", "other", "USER"),
+			old:        []*catalogv1.ResourceBlob{namespaceBlob("namespaces/other.md", "other", "ORGANIZATION")},
+			proposed:   namespaceBlob("namespaces/other.md", "other", "ORGANIZATION"),
 			constraint: "metadata.name:policy/namespace-terminating",
 		},
 	}
@@ -396,7 +435,7 @@ func TestValidateResourcesLegacyBlobShapePreservesNamespaceUpsert(t *testing.T) 
 	resp, err := srv.ValidateResources(context.Background(), &catalogv1.ValidateResourcesRequest{
 		RepositoryId: testRepoID,
 		Trees: []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{
-			namespaceBlob("namespaces/other.md", "other", "USER"),
+			namespaceBlob("namespaces/other.md", "other", "ORGANIZATION"),
 		}}},
 	})
 
@@ -439,7 +478,7 @@ func namespaceStructuralRejectionCount(t *testing.T, registry *prometheus.Regist
 		}
 		for _, metric := range family.GetMetric() {
 			for _, label := range metric.GetLabel() {
-				if label.GetName() == "phase" && label.GetValue() == string(namespaceadmission.PhaseStructural) {
+				if label.GetName() == "code" && label.GetValue() == string(admission.CodeAdmissionRejected) {
 					total += metric.GetCounter().GetValue()
 				}
 			}
@@ -448,7 +487,7 @@ func namespaceStructuralRejectionCount(t *testing.T, registry *prometheus.Regist
 	return total
 }
 
-func namespaceRejectionCount(t *testing.T, registry *prometheus.Registry, phase namespaceadmission.Phase, reason namespaceadmission.Reason) float64 {
+func namespaceRejectionCount(t *testing.T, registry *prometheus.Registry, reason namespaceadmission.Reason) float64 {
 	t.Helper()
 	families, err := registry.Gather()
 	require.NoError(t, err)
@@ -460,7 +499,7 @@ func namespaceRejectionCount(t *testing.T, registry *prometheus.Registry, phase 
 			matchesPhase := false
 			matchesReason := false
 			for _, label := range metric.GetLabel() {
-				matchesPhase = matchesPhase || label.GetName() == "phase" && label.GetValue() == string(phase)
+				matchesPhase = matchesPhase || label.GetName() == "code" && label.GetValue() == string(namespaceadmission.CodeForReason(reason))
 				matchesReason = matchesReason || label.GetName() == "reason" && label.GetValue() == string(reason)
 			}
 			if matchesPhase && matchesReason {

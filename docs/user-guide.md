@@ -4,6 +4,9 @@ GitStore lets you manage a commerce catalogue as Markdown files in Git and read 
 
 This guide treats GitStore as a running product. It focuses on what you do as a user: start the stack, create a namespace and repository, push catalogue manifests, query GraphQL, and troubleshoot common issues.
 
+To grant users or groups access, see [Configure local authorization](authorization.md)
+for policy examples and namespace and resource-name restrictions.
+
 ## Prerequisites
 
 - Docker and Docker Compose
@@ -23,8 +26,8 @@ The core stack exposes:
 
 | Service | Local endpoint |
 |---|---|
-| GraphQL API | http://localhost:4000/graphql |
-| GraphQL Playground | http://localhost:4000/playground |
+| GraphQL API | http://localhost:4000/admin/graphql |
+| GraphQL Playground | http://localhost:4000/admin/playground |
 | Git Smart HTTP | http://localhost:9000 |
 | Controller manager health | http://localhost:5001/health |
 
@@ -96,6 +99,7 @@ catalog-work/
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore-test
   name: macbook-pro
   labels:
     gitstore.dev/brand: apple
@@ -124,6 +128,7 @@ Portable workstation for demanding creative and engineering work.
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: ProductVariant
 metadata:
+  namespace: gitstore-test
   name: macbook-pro-16-m4-64gb-1tb
 spec:
   title: MacBook Pro 16 M4 Max 64GB 1TB
@@ -160,6 +165,7 @@ High-memory configuration for large builds, media pipelines, and local AI work.
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore-test
   name: laptops
 spec:
   title: Laptops
@@ -219,7 +225,7 @@ Admission conflicts that require datastore state, such as a duplicate `ProductVa
 
 ## Query GraphQL
 
-Open http://localhost:4000/playground or use curl.
+Open http://localhost:4000/admin/playground or use curl.
 
 ### List Products
 
@@ -373,7 +379,7 @@ query ListCollections {
 ### Query With Curl
 
 ```bash
-curl -s http://localhost:4000/graphql \
+curl -s http://localhost:4000/admin/graphql \
   -H "Content-Type: application/json" \
   -d '{"query":"query { products(namespace: \"gitstore-test\", first: 5) { edges { node { metadata { name } } } } }"}' | jq .
 ```
@@ -434,7 +440,7 @@ make logs SERVICE=git-service
 make logs SERVICE=controller-manager
 ```
 
-If required auth configuration is missing, the API will not become healthy. Set `GITSTORE_AUTH__STATICUSERS__USERS_FILE` and `GITSTORE_AUTH__JWT__SECRET`, or use the provided compose defaults for local development.
+If required auth configuration is missing, the API will not become healthy. Set `GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE` and `GITSTORE_API__AUTH__JWT__SECRET`, or use the provided compose defaults for local development.
 
 ### Bootstrap Fails
 

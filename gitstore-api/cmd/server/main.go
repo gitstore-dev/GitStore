@@ -19,6 +19,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/app"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/logger"
+	"github.com/gitstore-dev/gitstore/observability"
 	"go.uber.org/zap"
 )
 
@@ -46,11 +47,37 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() { _ = log.Sync() }()
+	log, shutdownTelemetry, err := app.InitTelemetry(context.Background(), cfg.Observability.OTLP, log)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "Failed to initialize telemetry")
+		os.Exit(1)
+	}
+	logger.Log = log
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(ctx); err != nil {
+			log.Error("telemetry shutdown failed")
+		}
+	}()
+
+	shutdownProfiler, err := observability.StartCapacityProfiler(cfg.Api.Profiling, log)
+	if err != nil {
+		log.Fatal("Failed to initialize capacity profiler", zap.Error(err))
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownProfiler(ctx); err != nil {
+			log.Error("capacity profiler shutdown failed", zap.Error(err))
+		}
+	}()
 
 	log.Info("Starting GitStore GraphQL API",
-		zap.Int("port", cfg.Api.Port),
-		zap.String("git.grpc.uri", cfg.Git.Grpc.Uri),
-		zap.String("datastore_backend", cfg.Datastore.Backend),
+		zap.Int("admin_port", cfg.Api.AdminPort),
+		zap.Int("storefront_port", cfg.Api.StorefrontPort),
+		zap.String("api.git_service.uri", cfg.Api.GitService.Uri),
+		zap.String("datastore_backend", cfg.Api.Datastore.Backend),
 	)
 
 	server, err := app.NewServer(cfg, log)

@@ -19,7 +19,7 @@ Post-receive admission is operation-aware for current Git-backed catalog resourc
 
 ## Boundaries
 
-- Clients send GraphQL traffic to this service on port `4000`.
+- Admin clients use port `4000`; Storefront uses port `4001`.
 - Git clients use this service's Smart HTTP port `9000` in the default Compose deployment.
 - `gitstore-git-service` calls this service's CatalogService gRPC endpoint on port `6000`.
 - This service calls `gitstore-git-service` through GitService gRPC on port `50051`.
@@ -27,12 +27,17 @@ Post-receive admission is operation-aware for current Git-backed catalog resourc
 
 ## Ports And Paths
 
+The table uses listener/container ports. Compose publishes Storefront's 4001
+listener on host port 4100; native defaults use 4001 directly.
+
 |   Port | Path                                       | Purpose                             |
 |-------:|--------------------------------------------|-------------------------------------|
-| `4000` | `/graphql`                                 | GraphQL API                         |
-| `4000` | `/playground`                              | GraphQL Playground                  |
+| `4000` | `/admin/graphql`                                 | Admin GraphQL API                   |
+| `4000` | `/admin/playground`                              | GraphQL Playground                  |
 | `4000` | `/health`                                  | Liveness health check               |
 | `4000` | `/ready`                                   | Readiness check                     |
+| `4001` | `/storefront/graphql` | Public boundary (503 until publication is implemented) |
+| `4001` | `/storefront/playground` | Public API explorer |
 | `5000` | `/{namespace}/{repo}.git/info/refs`        | Git Smart HTTP ref advertisement    |
 | `5000` | `/{namespace}/{repo}.git/git-upload-pack`  | Git fetch/clone                     |
 | `5000` | `/{namespace}/{repo}.git/git-receive-pack` | Git push                            |
@@ -55,17 +60,36 @@ gitstore-api/
 │   ├── datastore/    # Datastore abstraction and backends
 │   ├── gitclient/    # GitService gRPC client
 │   ├── githttp/      # Git Smart HTTP handler
-│   ├── graph/        # gqlgen resolvers and generated code
+│   ├── admin/graph/  # Admin resolvers and generated code
+│   ├── storefront/   # Isolated public boundary and generated schema
 │   ├── health/       # Health and readiness handlers
 │   ├── middleware/   # HTTP middleware
 │   └── validate/     # Frontmatter validation
 ├── tests/            # Contract tests
 ├── generate.go       # gqlgen directive
-├── gqlgen.yml        # gqlgen configuration
+├── gqlgen.admin.yml  # Admin generation
+├── gqlgen.storefront.yml # Separate Storefront generation
 └── go.mod
 ```
 
 ## Configuration Highlights
+
+Admin and Storefront have separate named listeners with fixed prefixed paths.
+`api.admin_port` defaults to 4000; `api.storefront_port` defaults to 4001.
+The generic `api.port` and old `/graphql`/`/playground` routes are removed.
+Storefront has a separate generated schema but returns a fixed no-store 503
+until publication and target binding are implemented. Admin authentication and
+durable watches retain their existing contracts; introspection requires login.
+The playground selector accepts an explicit peer URL and clears headers on
+switch. Configure independent CORS policies to use it across listeners; see
+[configuration](../docs/configuration.md).
+
+Upgrade API images, controller/CLI/Admin clients and proxy routes together.
+Remove generic port settings and configure complete `/admin/graphql` URLs,
+including WebSocket clients. Keep health checks at the Admin root. Roll back
+images, client URLs and routes together, preserving authored data and Git
+storage. Mixed old/new routing is unsupported. Coordinate the standalone CLI, external Admin and
+quickstart consumers before release.
 
 Pass `--config-file PATH` to require and load an explicit TOML file. Environment
 variables override file values. Repeat the flag to layer additive overlays on
@@ -77,18 +101,17 @@ no API `.env` file.
 
 Required for local API startup unless provided by `.env`:
 
-| Variable                              | Default                  | Purpose                  |
-|---------------------------------------|--------------------------|--------------------------|
-| `GITSTORE_AUTH__STATICUSERS__USERS_FILE` | `users.yaml`          | Local users YAML         |
-| `GITSTORE_AUTH__JWT__SECRET`          | unset                    | JWT signing secret       |
-| `GITSTORE_API__PORT`                  | `4000`                   | GraphQL HTTP port        |
-| `GITSTORE_API__GIT_PORT`              | `5000`                   | Git Smart HTTP port      |
-| `GITSTORE_API__GRPC_PORT`             | `6000`                   | CatalogService gRPC port |
-| `GITSTORE_GIT__GRPC__URI`             | `dns:///localhost:50051` | GitService gRPC target   |
-| `GITSTORE_DATASTORE__BACKEND`         | `memdb`                  | `memdb` or `scylla`      |
-| `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE` | `auto` | Fence rollout gate; `auto` enables memdb and disables Scylla |
-| `GITSTORE_LOG__LEVEL`                 | `info`                   | Log level                |
-| `GITSTORE_LOG__FORMAT`                | `json`                   | `json` or `text`         |
+| Variable                                        | Default                  | Purpose                  |
+|---------------------------------------------------|--------------------------|--------------------------|
+| `GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE`  | `users.yaml`             | Local users YAML         |
+| `GITSTORE_API__AUTH__JWT__SECRET`               | unset                    | JWT signing secret       |
+| `GITSTORE_API__ADMIN_PORT`                            | `4000`                   | GraphQL HTTP port        |
+| `GITSTORE_API__GIT_PORT`                        | `5000`                   | Git Smart HTTP port      |
+| `GITSTORE_API__GRPC_PORT`                       | `6000`                   | CatalogService gRPC port |
+| `GITSTORE_API__GIT_SERVICE__URI`                | `dns:///localhost:50051` | GitService gRPC target   |
+| `GITSTORE_API__DATASTORE__BACKEND`              | `memdb`                  | `memdb` or `scylla`      |
+| `GITSTORE_LOG__LEVEL`                           | `info`                   | Log level                |
+| `GITSTORE_LOG__FORMAT`                          | `json`                   | `json` or `text`         |
 
 Copy the example file for local development:
 

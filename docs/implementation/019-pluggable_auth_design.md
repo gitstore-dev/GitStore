@@ -1,6 +1,11 @@
 # Pluggable Identity and Access Design
 **Status**: 🚫 SUPERSEDED by [020 (pluggable auth architecture)](020-pluggable_auth_architecture.md)
 
+Historical examples below are not active policy/configuration. The current
+baseline uses strict allow-only v1beta1 policy, canonical actions, trusted groups
+without principal roles, and cluster-scoped ServiceAccounts; see
+[configuration](../configuration.md#authorization-baseline-064).
+
 This document defines the target design for making authentication and authorisation pluggable in GitStore, while keeping user management independent.
 
 ## Goals

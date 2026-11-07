@@ -1,4 +1,6 @@
 # OPA Data-Aware Authorization for GraphQL Catalog Reads
+
+> **Endpoint boundary update (2026-11-04):** Admin uses the fixed `/admin/graphql` path on `api.admin_port`; Storefront uses `/storefront/graphql` on `api.storefront_port`. The coordinated pre-GA cutover removes the generic port and legacy route in one release. The identity-only Storefront schema currently returns a fixed unavailable response before authentication or data execution. Publication/target readers, buyer workflows and declarative authorization directives described below remain separate work; no enablement or compatibility layer is introduced.
 **Status**: 🟡 Proposed (architecture only; implementation requires a separate feature specification)
 
 > Extends `020-pluggable_auth_architecture.md` and `021-controller_service_account_auth.md`.
@@ -754,10 +756,10 @@ evaluation_timeout = "25ms"
 Environment variables follow existing Viper conventions:
 
 ```text
-GITSTORE_AUTH__AUTHZ__PROVIDER=opa
-GITSTORE_AUTH__OPA__BUNDLE_PATH=...
-GITSTORE_AUTH__OPA__DECISION_PATH=data.gitstore.authz.decision
-GITSTORE_AUTH__OPA__EVALUATION_TIMEOUT=25ms
+GITSTORE_API__AUTH__AUTHZ__PROVIDER=opa
+GITSTORE_API__AUTH__OPA__BUNDLE_PATH=...
+GITSTORE_API__AUTH__OPA__DECISION_PATH=data.gitstore.authz.decision
+GITSTORE_API__AUTH__OPA__EVALUATION_TIMEOUT=25ms
 ```
 
 Rules:
@@ -861,7 +863,7 @@ cardinality review.
    paths. Public ProductVariant exposure stays gated on publication eligibility.
 5. **Public projections:** build/backfill scope-specific memdb and ScyllaDB query paths, then enable
    public visibility behind a deployment feature flag.
-6. **Production opt-in:** enable `GITSTORE_AUTH__AUTHZ__PROVIDER=opa` only after parity, load,
+6. **Production opt-in:** enable `GITSTORE_API__AUTH__AUTHZ__PROVIDER=opa` only after parity, load,
    publication, and rollback tests pass. Changing the default is a separate decision.
 
 Compatibility guarantees:

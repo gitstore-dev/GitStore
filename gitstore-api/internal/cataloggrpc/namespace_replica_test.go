@@ -13,17 +13,11 @@ import (
 	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
-	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	"github.com/google/uuid"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/vektah/gqlparser/v2/gqlerror"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	"go.uber.org/zap/zaptest/observer"
 )
 
 type blockingNamespaceWriteStore struct {
@@ -95,20 +89,18 @@ func TestNamespaceReplicaStaleUpdateCannotOverwriteConcurrentDeletion(t *testing
 	}
 	current := newCommit
 	git := newTreeGitReader(&current, map[string]map[string][]byte{
-		oldCommit: {path: namespaceManifest(name, "Original", "USER")},
+		oldCommit: {path: namespaceManifest(name, "Original", "ORGANIZATION")},
 		newCommit: {path: namespaceManifest(name, "Stale Update", "ORGANIZATION")},
 	})
 	updateReplica := newCatalogServer(t, store, git)
-	deleteReplica, err := resolver.NewService(resolver.ServiceDeps{Store: store, Logger: zap.NewNop()})
-	require.NoError(t, err)
 
 	updateDone := make(chan error, 1)
 	go func() {
 		_, updateErr := updateReplica.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-			ActorSubject: "test-admission-actor",
-			RepositoryId: testRepoID,
-			OldCommitSha: oldCommit,
-			NewCommitSha: newCommit,
+			Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+			RepositoryId:  testRepoID,
+			OldCommitSha:  oldCommit,
+			NewCommitSha:  newCommit,
 
 			RefName:      "refs/heads/main",
 			ChangedPaths: []string{path},
@@ -119,9 +111,8 @@ func TestNamespaceReplicaStaleUpdateCannotOverwriteConcurrentDeletion(t *testing
 	waitForReplicaRace(t, store.started, "stale update did not reach its conditional write")
 	authorized, err := base.GetNamespaceByName(context.Background(), name)
 	require.NoError(t, err)
-	outcome, err := deleteReplica.DeleteNamespace(context.Background(), authorized)
+	err = admission.MarkInfrastructureDeletion(context.Background(), store, authorized, time.Now().UTC(), "alice")
 	require.NoError(t, err)
-	assert.Equal(t, "TERMINATION_STARTED", string(outcome))
 	close(store.release)
 	require.NoError(t, waitForReplicaResult(t, updateDone))
 
@@ -149,18 +140,9 @@ func TestNamespaceReplicaStaleDeleteCannotOverwriteConcurrentUpdate(t *testing.T
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	registry := prometheus.NewRegistry()
-	metrics := namespaceadmission.NewMetrics(registry)
-	core, logs := observer.New(zapcore.InfoLevel)
-	deleteReplica, err := resolver.NewService(resolver.ServiceDeps{
-		Store:            store,
-		Logger:           zap.New(core),
-		NamespaceMetrics: metrics,
-	})
-	require.NoError(t, err)
 	current := newCommit
 	updateReplica := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{
-		oldCommit: {path: namespaceManifest(name, "Original", "USER")},
+		oldCommit: {path: namespaceManifest(name, "Original", "ORGANIZATION")},
 		newCommit: {path: namespaceManifest(name, "Winning Update", "ORGANIZATION")},
 	}))
 
@@ -168,16 +150,16 @@ func TestNamespaceReplicaStaleDeleteCannotOverwriteConcurrentUpdate(t *testing.T
 	require.NoError(t, err)
 	deleteDone := make(chan error, 1)
 	go func() {
-		_, deleteErr := deleteReplica.DeleteNamespace(context.Background(), authorized)
+		deleteErr := admission.MarkInfrastructureDeletion(context.Background(), store, authorized, time.Now().UTC(), "alice")
 		deleteDone <- deleteErr
 	}()
 
 	waitForReplicaRace(t, store.started, "stale delete did not reach its conditional write")
 	_, err = updateReplica.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID,
-		OldCommitSha: oldCommit,
-		NewCommitSha: newCommit,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID,
+		OldCommitSha:  oldCommit,
+		NewCommitSha:  newCommit,
 
 		RefName:      "refs/heads/main",
 		ChangedPaths: []string{path},
@@ -185,11 +167,7 @@ func TestNamespaceReplicaStaleDeleteCannotOverwriteConcurrentUpdate(t *testing.T
 	require.NoError(t, err)
 	close(store.release)
 	deleteErr := waitForReplicaResult(t, deleteDone)
-	var graphErr *gqlerror.Error
-	require.ErrorAs(t, deleteErr, &graphErr)
-	assert.Equal(t, namespaceadmission.CodeConflict, graphErr.Extensions["code"])
-	assert.Equal(t, string(namespaceadmission.PhasePolicy), graphErr.Extensions["phase"])
-	assert.Equal(t, string(namespaceadmission.ReasonResourceVersionConflict), graphErr.Extensions["reason"])
+	require.ErrorIs(t, deleteErr, datastore.ErrConflict)
 
 	got, err := base.GetNamespaceByName(context.Background(), name)
 	require.NoError(t, err)
@@ -198,17 +176,6 @@ func TestNamespaceReplicaStaleDeleteCannotOverwriteConcurrentUpdate(t *testing.T
 	assert.Equal(t, newCommit, got.GitCommitSHA)
 	assert.Equal(t, "2", got.ResourceVersion)
 	assert.Equal(t, int64(1), store.conflicts.Load(), "the stale delete must observe exactly one resource-version conflict")
-	assert.Equal(t, float64(1), namespaceRejectionCount(t, registry,
-		namespaceadmission.PhasePolicy, namespaceadmission.ReasonResourceVersionConflict))
-
-	conflictLogs := logs.FilterMessage("Namespace mutation rejected").All()
-	require.Len(t, conflictLogs, 1)
-	fields := conflictLogs[0].ContextMap()
-	assert.Equal(t, "delete", fields["operation"])
-	assert.Equal(t, string(namespaceadmission.PhasePolicy), fields["phase"])
-	assert.Equal(t, string(namespaceadmission.ReasonResourceVersionConflict), fields["reason"])
-	assert.Equal(t, name, fields["namespace"])
-	assert.Equal(t, true, fields["conflict"])
 }
 
 func seedNamespaceForReplicaRace(
@@ -222,7 +189,7 @@ func seedNamespaceForReplicaRace(
 		UID:               uuid.NewString(),
 		Name:              name,
 		Title:             title,
-		Tier:              datastore.NamespaceTierUser,
+		Tier:              datastore.NamespaceTierOrganization,
 		Generation:        1,
 		ResourceVersion:   "1",
 		Revision:          "main@sha1:" + commit,

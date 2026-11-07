@@ -35,12 +35,15 @@ if [[ ! -f "${script}" ]]; then
 fi
 
 k6_image="${K6_IMAGE:-grafana/k6:2.1.0}"
-run_id="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+run_id="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dt%H%M%Sz)}"
 evidence_root="${CAPACITY_EVIDENCE_DIR:-${repo_root}/.gitstore/capacity}"
 target="${CAPACITY_TARGET:-api}"
 scenario="${CAPACITY_SCENARIO:-readiness}"
 evidence_dir="${evidence_root}/${target}/${scenario}/${mode}/${run_id}"
 mkdir -p "${evidence_dir}"
+if [[ "${profile}" == api-endpoint-split && -e "${evidence_dir}/metadata.json" ]]; then
+  echo 'endpoint-split evidence requires a fresh run ID' >&2;exit 2
+fi
 
 for manifest_kind in config environment; do
   case "${manifest_kind}" in
@@ -58,6 +61,11 @@ for manifest_kind in config environment; do
 done
 
 metadata="${evidence_dir}/metadata.json"
+source_state_sha256="$({
+  git status --porcelain=v1
+  git diff --binary HEAD
+  while IFS= read -r -d '' untracked; do shasum -a 256 "${untracked}"; done < <(git ls-files --others --exclude-standard -z)
+} | shasum -a 256 | awk '{print $1}')"
 git_dirty=false
 if [[ "${CAPACITY_TEST_FORCE_DIRTY:-0}" == "1" || -n "$(git -C "${repo_root}" status --porcelain --untracked-files=normal)" ]]; then
   git_dirty=true
@@ -71,12 +79,15 @@ jq -n \
   --arg run_id "${run_id}" \
   --arg started_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --arg git_revision "$(git -C "${repo_root}" rev-parse HEAD)" \
+  --arg source_state_sha256 "${source_state_sha256}" \
   --argjson git_dirty "${git_dirty}" \
   --arg k6_image "${k6_image}" \
   --arg config_digest "$(if [[ -f "${evidence_dir}/config.json" ]]; then shasum -a 256 "${evidence_dir}/config.json" | awk '{print $1}'; fi)" \
   --arg environment_digest "$(if [[ -f "${evidence_dir}/environment.json" ]]; then shasum -a 256 "${evidence_dir}/environment.json" | awk '{print $1}'; fi)" \
   '{schemaVersion:($schema_version|tonumber), target:$target, scenario:$scenario, profile:$profile, mode:$mode, evidenceClass:$mode, productionTargets:{visibilityP95Seconds:1,visibilityP99Seconds:3}, runId:$run_id, startedAt:$started_at, gitRevision:$git_revision, gitDirty:$git_dirty, loadGenerator:{name:"k6", image:$k6_image}} + (if $config_digest == "" then {} else {configDigest:$config_digest} end) + (if $environment_digest == "" then {} else {environmentDigest:$environment_digest} end)' \
   >"${metadata}"
+jq --arg source "${source_state_sha256}" '. + {sourceStateSha256:$source}' "${metadata}" >"${metadata}.tmp"
+mv "${metadata}.tmp" "${metadata}"
 
 if [[ "${mode}" != "diagnostic" && "${git_dirty}" == "true" ]]; then
   echo "${mode} capacity evidence requires a clean verifier checkout" | tee "${evidence_dir}/source-state.log" >&2
@@ -112,6 +123,66 @@ elif [[ "${mode}" != "diagnostic" ]]; then
 fi
 
 chaos_pid=""
+profile_children=()
+cleanup_profile_children() {
+  for child in "${profile_children[@]}"; do kill -TERM "${child}" 2>/dev/null || true; done
+  for child in "${profile_children[@]}"; do wait "${child}" 2>/dev/null || true; done
+  if [[ -n "${chaos_pid}" ]]; then
+    kill -TERM "${chaos_pid}" 2>/dev/null || true
+    wait "${chaos_pid}" 2>/dev/null || true
+  fi
+}
+trap cleanup_profile_children EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if [[ "${profile}" == api-endpoint-split && "${mode}" != diagnostic ]]; then
+  connected_dir="$(cd "${evidence_dir}" && pwd)/connected"
+  mkdir -p "${connected_dir}"
+  export CAPACITY_CONNECTED_EVIDENCE="${connected_dir}"
+  export CAPACITY_CONNECTED_READY_FILE="${connected_dir}/ready.json"
+  export CAPACITY_CONNECTED_STARTED_FILE="${connected_dir}/started.json"
+  export CAPACITY_PUSH_READY_FILE="${connected_dir}/push-ready.json"
+  export CAPACITY_PUSH_STARTED_FILE="${connected_dir}/push-started.json"
+  export CAPACITY_LOAD_START_FILE="${connected_dir}/load-start.json"
+  export CAPACITY_SOURCE_STATE_SHA256="${source_state_sha256}"
+  export CAPACITY_SOURCE_REVISION="$(git -C "${repo_root}" rev-parse HEAD)"
+  export CAPACITY_CONFIG_DIGEST="$(jq -r '.configDigest' "${metadata}")"
+  export CAPACITY_ENVIRONMENT_DIGEST="$(jq -r '.environmentDigest' "${metadata}")"
+  (cd "${repo_root}/gitstore-api" && CAPACITY_FIXTURE_EVIDENCE_FILE="${connected_dir%/connected}/publication-fixture.json" go test -count=1 -run '^TestStorefrontPublicationIdentityFixture$' ./internal/storefront)
+  export REPOSITORY_TOKEN_FILE="${REPOSITORY_TOKEN_FILE:-${CAPACITY_TOKEN_FILE:-}}"
+  [[ -n "${GIT_URL:-}" ]] || { echo 'explicit owned GIT_URL is required for connected deletion/push parity' >&2;exit 2; }
+  [[ -n "${CAPACITY_PUSH_REMOTE:-}" && -n "${CAPACITY_PUSH_REPOSITORY:-}" && -n "${CAPACITY_PUSH_TOKEN_FILE:-${CAPACITY_TOKEN_FILE:-}}" ]] || { echo 'owned push remote/repository and token file are required' >&2;exit 2; }
+  [[ "${CAPACITY_PUSH_NAMESPACE:-}" == endpoint-split-* && "${CAPACITY_PUSH_NAMESPACE}" == "${REPOSITORY_CAPACITY_NAMESPACE:-}" ]] || { echo 'push and management fixtures must use the same explicit endpoint-split-* test namespace' >&2;exit 2; }
+  [[ -n "${REPOSITORY_REPLACEMENT_TRIGGER_FILE:-}" ]] || { echo 'owned API replacement watcher/trigger is required' >&2;exit 2; }
+  (cd "${repo_root}/tests/integration" && GOWORK=off go test -c -o "${connected_dir}/workload.test" .)
+  API_ENDPOINT_SPLIT_CAPACITY_RUN=1 CAPACITY_EVIDENCE_DIR="${connected_dir}" \
+    python3 "${repo_root}/scripts/capacity-child.py" 4500 "${connected_dir}/workload.log" \
+      "${connected_dir}/workload.test" -test.v -test.timeout=75m -test.run='^TestEndpointSplitConnectedEvidenceGate$' &
+  connected_pid=$!
+  profile_children+=("${connected_pid}")
+  wait_profile_file() {
+    local file="$1" child="$2" deadline=$((SECONDS + 600))
+    until [[ -r "${file}" ]]; do
+      kill -0 "${child}" 2>/dev/null || { echo 'owned workload failed before its load barrier; see connected logs' >&2;exit 1; }
+      (( SECONDS < deadline )) || { echo 'owned workload setup exceeded ten minutes' >&2;exit 1; }
+      sleep 1
+    done
+  }
+  wait_profile_file "${CAPACITY_CONNECTED_READY_FILE}" "${connected_pid}"
+  export CAPACITY_PUSH_EVIDENCE="${connected_dir}/push-load.json"
+  CAPACITY_PUSH_DRIVER=1 CAPACITY_PUSH_DURATION=36m CAPACITY_PUSH_INTERVAL=1s \
+    CAPACITY_PUSH_VERIFY_API_A="${REPOSITORY_API_A}" CAPACITY_PUSH_VERIFY_API_B="${REPOSITORY_API_B}" \
+    CAPACITY_PUSH_WORKERS="${CAPACITY_PUSH_WORKERS:-1}" CAPACITY_PUSH_TOKEN_FILE="${CAPACITY_PUSH_TOKEN_FILE:-${CAPACITY_TOKEN_FILE}}" \
+    python3 "${repo_root}/scripts/capacity-child.py" 3000 "${connected_dir}/push.log" \
+      "${connected_dir}/workload.test" -test.v -test.timeout=50m -test.run='^TestCapacityGitPushDriver$' &
+  push_pid=$!
+  profile_children+=("${push_pid}")
+  wait_profile_file "${CAPACITY_PUSH_READY_FILE}" "${push_pid}"
+  jq -n --arg run "${run_id}" '{runId:$run}' >"${CAPACITY_LOAD_START_FILE}.tmp"
+  mv "${CAPACITY_LOAD_START_FILE}.tmp" "${CAPACITY_LOAD_START_FILE}"
+  wait_profile_file "${CAPACITY_CONNECTED_STARTED_FILE}" "${connected_pid}"
+  wait_profile_file "${CAPACITY_PUSH_STARTED_FILE}" "${push_pid}"
+fi
 if [[ -n "${CAPACITY_CHAOS_PROFILE:-}" ]]; then
   if [[ -z "${CAPACITY_CHAOS_TARGET:-}" || "${CAPACITY_CHAOS_CONFIRM:-0}" != "1" ]]; then
     echo "integrated chaos requires CAPACITY_CHAOS_TARGET and CAPACITY_CHAOS_CONFIRM=1" >&2
@@ -128,6 +199,8 @@ if [[ -n "${CAPACITY_CHAOS_PROFILE:-}" ]]; then
   chaos_pid=$!
 fi
 
+jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '. + {loadStartedAt:$at}' "${metadata}" >"${metadata}.tmp"
+mv "${metadata}.tmp" "${metadata}"
 set +e
 if [[ -n "${K6_BIN:-}" ]]; then
   "${K6_BIN}" run --summary-export "${evidence_dir}/summary.json" "${script}" 2>&1 | tee "${evidence_dir}/k6.log"
@@ -149,6 +222,16 @@ else
   status=${PIPESTATUS[0]}
 fi
 set -e
+jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '. + {loadCompletedAt:$at}' "${metadata}" >"${metadata}.tmp"
+mv "${metadata}.tmp" "${metadata}"
+if [[ "${profile}" == api-endpoint-split && "${mode}" != diagnostic ]]; then
+  set +e
+  wait "${connected_pid}"; connected_status=$?
+  wait "${push_pid}"; push_status=$?
+  set -e
+  if (( status==0 && (connected_status!=0 || push_status!=0) )); then status=1; fi
+  profile_children=()
+fi
 
 if [[ -n "${CAPACITY_DATASTORE_CONTAINERS:-}" ]]; then
   set +e
@@ -172,6 +255,27 @@ if [[ -n "${chaos_pid}" ]]; then
   chaos_status=$?
   set -e
   fi
+  chaos_pid=""
+fi
+
+prometheus_status=0
+export_prometheus() {
+  if [[ -n "${CAPACITY_PROMETHEUS_URL:-}" ]]; then
+    set +e
+    "${repo_root}/scripts/export-capacity-prometheus.sh" "${evidence_dir}" "${CAPACITY_PROMETHEUS_URL}" \
+      2>&1 | tee "${evidence_dir}/prometheus-export.log"
+    prometheus_status=${PIPESTATUS[0]}
+    set -e
+  fi
+}
+# This verifier consumes the same run's SDK resource samples. Preserve the
+# existing export order for profiles whose domain verifier precedes capture.
+if [[ "${profile}" == api-endpoint-split ]]; then
+  if [[ "${mode}" != diagnostic ]]; then
+    cp "${evidence_dir}/preflight-environment.json" "${evidence_dir}/preflight-environment-before.json"
+    "${preflight}" "${evidence_dir}" >"${evidence_dir}/postflight-environment.log" 2>&1
+  fi
+  export_prometheus
 fi
 
 verifier="${repo_root}/tests/capacity/verifiers/${profile}.sh"
@@ -191,14 +295,7 @@ elif [[ "${verifier_required}" == "true" ]]; then
   verifier_status=2
 fi
 
-prometheus_status=0
-if [[ -n "${CAPACITY_PROMETHEUS_URL:-}" ]]; then
-  set +e
-  "${repo_root}/scripts/export-capacity-prometheus.sh" "${evidence_dir}" "${CAPACITY_PROMETHEUS_URL}" \
-    2>&1 | tee "${evidence_dir}/prometheus-export.log"
-  prometheus_status=${PIPESTATUS[0]}
-  set -e
-fi
+if [[ "${profile}" != api-endpoint-split ]]; then export_prometheus; fi
 
 if (( status == 0 && chaos_status != 0 )); then
   status=${chaos_status}

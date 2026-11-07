@@ -20,7 +20,7 @@ Sync Impact Report:
   - ✅ README.md
   - ✅ docs/architecture/README.md
   - ✅ docs/developer-guide.md
-  - ✅ docs/runbooks/production-readiness-testing.md
+  - ✅ docs/development/production-readiness-testing.md
   - ✅ docs/ADRs/0015-resource-lifecycle-hooks.md
   - ✅ docs/ADRs/0018-controller-ownership-concurrency-and-fencing.md
   - ✅ docs/implementation/036-git-service-extension-architecture.md

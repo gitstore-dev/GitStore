@@ -16,11 +16,11 @@ import (
 )
 
 func adminPrincipal() *authpkg.Principal {
-	return &authpkg.Principal{Subject: "admin", Roles: []string{"admin"}, AuthMethod: "static-users"}
+	return &authpkg.Principal{Subject: "admin", AuthMethod: "static-users"}
 }
 
 func developerPrincipal() *authpkg.Principal {
-	return &authpkg.Principal{Subject: "dev", Roles: []string{"developer"}, AuthMethod: "static-users"}
+	return &authpkg.Principal{Subject: "dev", AuthMethod: "static-users"}
 }
 
 func anonPrincipal() *authpkg.Principal {

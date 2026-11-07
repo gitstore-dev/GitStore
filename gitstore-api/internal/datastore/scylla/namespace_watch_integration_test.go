@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gocql/gocql"
 	"github.com/stretchr/testify/assert"
@@ -219,8 +220,9 @@ func TestNamespaceWatchHidesStagedNamespaceFromBootstrapReads(t *testing.T) {
 	}
 }
 
-func TestNamespaceWatchRejectsBucketLayoutMismatch(t *testing.T) {
-	first := newTestStore(t).(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+func TestNamespaceWatchAdoptsPersistedBucketLayout(t *testing.T) {
+	legacyStore := newTestStoreWithWatchBucket(t, 3)
+	legacy := legacyStore.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
 	raw := newRawSession(t)
 	require.NoError(t, raw.Query("TRUNCATE resource_watch_events").Exec())
 	require.NoError(t, raw.Query("TRUNCATE resource_watch_clock").Exec())
@@ -232,13 +234,18 @@ func TestNamespaceWatchRejectsBucketLayoutMismatch(t *testing.T) {
 		require.NoError(t, cleanup.Query("TRUNCATE resource_watch_clock").Exec())
 	})
 
-	_, acquired, err := first.AcquireLease(context.Background(), "replica-a", time.Now().UTC(), time.Minute)
+	lease, acquired, err := legacy.AcquireLease(context.Background(), "replica-a", time.Now().UTC(), time.Minute)
 	require.NoError(t, err)
 	require.True(t, acquired)
+	require.NoError(t, legacy.ReleaseLease(context.Background(), lease))
 
-	second := newTestStoreWithWatchBucket(t, 3).(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
-	_, _, err = second.AcquireLease(context.Background(), "replica-b", time.Now().UTC(), time.Minute)
-	require.ErrorContains(t, err, "bucket size is 4096, configured 3")
+	upgradedStore := newTestStore(t)
+	upgraded := upgradedStore.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+	lease, acquired, err = upgraded.AcquireLease(context.Background(), "replica-b", time.Now().UTC(), time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	t.Cleanup(func() { require.NoError(t, upgraded.ReleaseLease(context.Background(), lease)) })
+	require.Equal(t, int64(3), scylla.WatchBucketSizeForTest(upgradedStore))
 }
 
 func TestNamespaceWatchInitializesBucketLayoutForMigrationFirstClock(t *testing.T) {
@@ -372,8 +379,14 @@ func TestNamespaceAuthoritativeCommitsProduceCDCButRejectedWritesDoNot(t *testin
 	time.Sleep(200 * time.Millisecond)
 	assert.Equal(t, afterUpdate, namespaceCDCRowCount(t), "conflict must not create CDC rows")
 
+	expected = current.ResourceVersion
+	deletedAt := time.Now().UTC().Truncate(time.Millisecond)
+	current.DeletionTimestamp = &deletedAt
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.NoError(t, store.MarkNamespaceDeletion(ctx, current, expected))
+	afterMark := waitForNamespaceCDCRows(t, afterUpdate)
 	require.NoError(t, store.DeleteNamespaceWithResourceVersion(ctx, current.UID, current.ResourceVersion))
-	assert.Greater(t, waitForNamespaceCDCRows(t, afterUpdate), afterUpdate)
+	assert.Greater(t, waitForNamespaceCDCRows(t, afterMark), afterMark)
 }
 
 func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
@@ -641,7 +654,7 @@ func TestFileCDCReaderReplaysCommittedWritesAcrossMaterializerReplacement(t *tes
 	file := &datastore.File{UID: newID(), Namespace: "cdc-files", Name: "hero-" + newID()[:8],
 		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", ResourceVersion: "1", Generation: 1,
 		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond), RepositoryID: newID(),
-		Labels: map[string]string{"team": "media"}, Spec: json.RawMessage(`{"contentType":"image/jpeg","source":{"type":"s3","uri":"s3://fixture"}}`)}
+		Labels: map[string]string{"team": "media"}, Spec: json.RawMessage(`{"contentType":"image/jpeg","provider":"s3","source":{"uri":"s3://fixture"}}`)}
 	next := func(eventType datastore.ResourceWatchEventType, version string) datastore.ResourceWatchEvent {
 		var found datastore.ResourceWatchEvent
 		require.Eventually(t, func() bool {
@@ -669,6 +682,12 @@ func TestFileCDCReaderReplaysCommittedWritesAcrossMaterializerReplacement(t *tes
 		}, 75*time.Second, 100*time.Millisecond, "File CDC event %s version %s was not persisted", eventType, version)
 		return found
 	}
+	require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{
+		UID: newID(), Name: file.Namespace, CreationTimestamp: file.CreationTimestamp,
+	}))
+	require.NoError(t, store.CreateRepositoryInActiveNamespace(t.Context(), &datastore.Repository{
+		UID: file.RepositoryID, Namespace: file.Namespace, Name: "catalog", CreationTimestamp: file.CreationTimestamp,
+	}))
 	require.NoError(t, store.CreateFile(t.Context(), file))
 	added := next(datastore.ResourceWatchAdded, "1")
 	require.Equal(t, file.Labels, added.SelectorLabels)
@@ -798,7 +817,7 @@ func TestCategoryTaxonomyCDCReaderMaterializesLifecycle(t *testing.T) {
 	require.Equal(t, terminating.ResourceVersion, observed.ResourceVersion)
 	require.NotNil(t, observed.DeletionTimestamp)
 
-	_, err = deletion.CompleteCategoryTaxonomyDeletion(context.Background(), category.Namespace, category.Name, terminating.ResourceVersion)
+	_, err = deletion.CompleteCategoryTaxonomyDeletion(context.Background(), category.Namespace, category.Name, terminating.ResourceVersion, category.UID)
 	require.NoError(t, err)
 	deleted := next(datastore.ResourceWatchDeleted)
 	require.Empty(t, deleted.Payload)

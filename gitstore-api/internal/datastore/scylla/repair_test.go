@@ -13,6 +13,168 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
 
+func TestProductListingReservationIsNotDeletedBeforeAuthorityAppears(t *testing.T) {
+	projection := ProjectionRecord{
+		Table: productsByNamespaceShard, UID: "11111111-1111-1111-1111-111111111111",
+		Namespace: "shop", CreationTimestamp: time.Now().UTC(), Shard: 1,
+	}
+	plan, err := BuildRepairPlan(ProjectionSnapshot{Projections: []ProjectionRecord{projection}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 0 || len(plan.Findings) != 1 || plan.Findings[0].Repairable {
+		t.Fatalf("an in-flight pre-authoritative listing reservation must be retained: %+v", plan)
+	}
+}
+
+func TestRepositoryCatalogProjectionIsIncludedInRepair(t *testing.T) {
+	for _, kind := range []string{"Product", "ProductVariant", "CategoryTaxonomy", "Collection", "File"} {
+		t.Run(kind, func(t *testing.T) {
+			resource := AuthoritativeResource{Kind: kind, UID: "11111111-1111-1111-1111-111111111111",
+				RepositoryID: "22222222-2222-2222-2222-222222222222", Namespace: "shop", Name: "product",
+				ResourceVersion: "1", CreationTimestamp: time.Now().UTC()}
+			projections := expectedProjections(resource)
+			expected := 3
+			if kind == "Product" {
+				expected++
+			}
+			if len(projections) != expected {
+				t.Fatalf("got %d projections, want %d", len(projections), expected)
+			}
+			index := projections[len(projections)-1]
+			if index.Table != repositoryResourcesTable || index.Kind != resource.Kind || index.RepositoryID != resource.RepositoryID || index.Shard != categoryProductShard(resource.UID) {
+				t.Fatalf("unexpected repository index: %+v", index)
+			}
+			if !index.Equal(index) || index.Key() == "" {
+				t.Fatal("repository index must be comparable and addressable")
+			}
+			plan, err := BuildRepairPlan(ProjectionSnapshot{Authoritative: []AuthoritativeResource{resource}, Projections: projections[:len(projections)-1]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(plan.Actions) != 1 || actionTable(plan.Actions[0]) != repositoryResourcesTable {
+				t.Fatalf("missing repository index not repaired: %+v", plan)
+			}
+			other := index
+			other.Kind = "FutureResource"
+			if other.Key() == index.Key() || index.Equal(other) || other.resourceKind() != "FutureResource" {
+				t.Fatal("membership identity must include the kind without adding a table")
+			}
+			requirePlanErr := ValidateRepairPlan(plan)
+			if requirePlanErr != nil {
+				t.Fatal(requirePlanErr)
+			}
+		})
+	}
+}
+
+func TestProjectionTableKinds(t *testing.T) {
+	t.Parallel()
+	tests := map[string]string{
+		"service_accounts_by_cluster_uid":    "ServiceAccount",
+		"service_accounts_by_cluster_bucket": "ServiceAccount",
+		"files_by_name":                      "File",
+		"files_by_uid":                       "File",
+		"namespaces_by_name":                 "Namespace",
+		"namespaces_by_bucket":               "Namespace",
+		"repositories_by_namespace":          "Repository",
+		"repositories_by_bucket":             "Repository",
+		"namespace_mappings":                 "Repository",
+		"namespace_mappings_by_repository":   "Repository",
+		"products_by_identity":               "Product",
+		"products_by_uid":                    "Product",
+		productsByNamespaceShard:             "Product",
+		"category_products_by_category":      "Product",
+		"category_products_by_product":       "Product",
+		"category_taxonomies_by_name":        "CategoryTaxonomy",
+		"category_taxonomies_by_uid":         "CategoryTaxonomy",
+		"category_ancestor_index":            "CategoryTaxonomy",
+		"collections_by_name":                "Collection",
+		"collections_by_uid":                 "Collection",
+		"product_variants_by_name":           "ProductVariant",
+		"product_variants_by_uid":            "ProductVariant",
+		"product_variants_by_sku":            "ProductVariant",
+		"product_variants_by_product_ref":    "ProductVariant",
+	}
+	if len(tests) != len(projectionTableKinds) {
+		t.Fatalf("projection table test coverage = %d tables, registry = %d", len(tests), len(projectionTableKinds))
+	}
+
+	for table, wantKind := range tests {
+		t.Run(table, func(t *testing.T) {
+			if got := projectionKind(table); got != wantKind {
+				t.Errorf("projectionKind(%q) = %q, want %q", table, got, wantKind)
+			}
+			if !knownProjectionTable(table) {
+				t.Errorf("knownProjectionTable(%q) = false, want true", table)
+			}
+		})
+	}
+
+	const unknown = "unknown_projection_table"
+	if got := projectionKind(unknown); got != "" {
+		t.Errorf("projectionKind(%q) = %q, want empty", unknown, got)
+	}
+	if knownProjectionTable(unknown) {
+		t.Errorf("knownProjectionTable(%q) = true, want false", unknown)
+	}
+}
+
+func TestServiceAccountRepairUsesGlobalAuthority(t *testing.T) {
+	account := AuthoritativeResource{Kind: "ServiceAccount", UID: "11111111-1111-1111-1111-111111111111", Name: "controller", ResourceVersion: "1", CreationTimestamp: time.Unix(100, 0).UTC()}
+	plan, err := BuildRepairPlan(ProjectionSnapshot{Authoritative: []AuthoritativeResource{account}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 2 {
+		t.Fatalf("missing reservation and listing repairs: %+v", plan)
+	}
+	for _, action := range plan.Actions {
+		if action.UID != account.UID || action.After.Name != account.Name || action.ExpectedResourceVersion != "1" {
+			t.Fatalf("repair lost identity guard: %+v", action)
+		}
+	}
+	if err := ValidateRepairPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+	projections := expectedProjections(account)
+	plan, err = BuildRepairPlan(ProjectionSnapshot{Projections: projections})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 2 {
+		t.Fatalf("interrupted deletion not repaired: %+v", plan)
+	}
+	for _, action := range plan.Actions {
+		if !action.RequireAbsentResource || action.Type != RepairDelete {
+			t.Fatalf("unguarded deletion: %+v", action)
+		}
+	}
+}
+
+func TestExpectedProductCategoryMembershipProjectionsAreSharded(t *testing.T) {
+	resource := AuthoritativeResource{
+		Kind: "Product", UID: "00000000-0000-0000-0000-000000000001", Namespace: "shop", Name: "widget",
+		CreationTimestamp: time.Unix(100, 0).UTC(), CategoryUIDs: []string{"cat-a", "cat-b"},
+	}
+	rows := expectedProjections(resource)
+	var forward, reverse int
+	for _, row := range rows {
+		switch row.Table {
+		case "category_products_by_category":
+			forward++
+			if row.Shard != categoryProductShard(resource.UID) {
+				t.Fatalf("forward shard = %d", row.Shard)
+			}
+		case "category_products_by_product":
+			reverse++
+		}
+	}
+	if forward != 2 || reverse != 2 {
+		t.Fatalf("membership projections = forward %d reverse %d, want 2 each", forward, reverse)
+	}
+}
+
 func TestBuildRepairPlanDeterministicFindings(t *testing.T) {
 	t.Parallel()
 	created := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
@@ -135,6 +297,40 @@ func TestProjectionRepairServiceClearsRetainedRepositoryFence(t *testing.T) {
 			result.PlannedRepositoryFences,
 			result.CompletedRepositoryFences,
 		)
+	}
+}
+
+func TestCatalogFenceRepairValidation(t *testing.T) {
+	snapshot := missingNamespaceBucketSnapshot()
+	snapshot.Projections = expectedProjections(snapshot.Authoritative[0])
+	fence := NamespaceRepositoryFenceRepair{
+		Namespace: snapshot.Authoritative[0].Name, UID: snapshot.Authoritative[0].UID,
+		RepositoryCreationEpoch: 7, PendingRepositoryCreations: 1,
+	}
+	snapshot.NamespaceRepositoryFences = []NamespaceRepositoryFenceRepair{fence, fence}
+	snapshot.NamespaceRepositoryFences[1].Catalog = true
+	plan, err := BuildRepairPlan(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateRepairPlan(plan); err != nil {
+		t.Fatalf("independent Repository and catalog fences must coexist: %v", err)
+	}
+	plan.NamespaceRepositoryFences[1].PendingRepositoryCreations = 2
+	if err := ValidateRepairPlan(plan); err == nil {
+		t.Fatal("an exclusive catalog fence cannot have two holders")
+	}
+	plan.NamespaceRepositoryFences[1] = plan.NamespaceRepositoryFences[0]
+	if err := ValidateRepairPlan(plan); err == nil {
+		t.Fatal("duplicate fences of the same type must be rejected")
+	}
+	fence.Catalog = true
+	plan, err = BuildRepairPlan(ProjectionSnapshot{NamespaceRepositoryFences: []NamespaceRepositoryFenceRepair{fence}})
+	if err != nil {
+		t.Fatalf("a held fence must remain repairable after Namespace deletion: %v", err)
+	}
+	if err := ValidateRepairPlan(plan); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -278,7 +474,7 @@ func TestBuildRepairPlanDoesNotOverwriteValidCompetingOwner(t *testing.T) {
 func TestBuildRepairPlanDoesNotDeleteWriteReservation(t *testing.T) {
 	t.Parallel()
 	reservation := ProjectionRecord{
-		Table:             "products_by_name",
+		Table:             "products_by_identity",
 		UID:               "99999999-9999-9999-9999-999999999999",
 		Namespace:         "shop",
 		Name:              "pending-product",
@@ -310,7 +506,7 @@ func TestValidateRepairPlanRejectsReservationProjectionDelete(t *testing.T) {
 		UID:                   "11111111-1111-1111-1111-111111111111",
 		RequireAbsentResource: true,
 		Before: &ProjectionRecord{
-			Table: "products_by_name", UID: "11111111-1111-1111-1111-111111111111", Namespace: "shop", Name: "name",
+			Table: "products_by_identity", UID: "11111111-1111-1111-1111-111111111111", Namespace: "shop", Name: "name",
 		},
 	}}})
 	if err == nil || !strings.Contains(err.Error(), "reservation projection") {
@@ -464,3 +660,171 @@ func (f *fakeRepairStore) CompleteRepositoryRepairs(
 }
 
 func (f *fakeRepairStore) Close() {}
+
+func categoryAncestorResource(name, uid, resourceVersion string, path ...string) AuthoritativeResource {
+	return AuthoritativeResource{
+		Kind: "CategoryTaxonomy", UID: uid, Namespace: "demo", Name: name,
+		ResourceVersion: resourceVersion, CreationTimestamp: time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC),
+		ResolvedPath: path,
+	}
+}
+
+func ancestorRows(resource AuthoritativeResource) []ProjectionRecord {
+	var rows []ProjectionRecord
+	for _, projection := range expectedProjections(resource) {
+		if projection.Table == "category_ancestor_index" {
+			rows = append(rows, projection)
+		}
+	}
+	return rows
+}
+
+func ancestorSnapshot(resources []AuthoritativeResource, rows ...ProjectionRecord) ProjectionSnapshot {
+	snapshot := ProjectionSnapshot{Authoritative: resources}
+	for _, resource := range resources {
+		for _, projection := range expectedProjections(resource) {
+			if projection.Table != "category_ancestor_index" {
+				snapshot.Projections = append(snapshot.Projections, projection)
+			}
+		}
+	}
+	snapshot.Projections = append(snapshot.Projections, rows...)
+	return snapshot
+}
+
+func TestExpectedProjectionsDeriveCategoryAncestorRowsFromResolvedPath(t *testing.T) {
+	t.Parallel()
+	laptops := categoryAncestorResource("laptops", "11111111-1111-1111-1111-111111111111", "4", "electronics", "computers", "laptops")
+	rows := ancestorRows(laptops)
+	got := make([]string, 0, len(rows))
+	for _, row := range rows {
+		got = append(got, row.Key())
+	}
+	want := []string{"demo/electronics/2/laptops", "demo/computers/1/laptops", "demo/laptops/0/laptops"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("ancestor rows = %v, want %v", got, want)
+	}
+	if rows := ancestorRows(categoryAncestorResource("draft", "22222222-2222-2222-2222-222222222222", "1")); len(rows) != 0 {
+		t.Fatalf("category without status.resolved owns rows: %v", rows)
+	}
+}
+
+func TestBuildRepairPlanReportsMissingDanglingAndStaleAncestorRows(t *testing.T) {
+	t.Parallel()
+	const laptopsUID = "11111111-1111-1111-1111-111111111111"
+	laptops := categoryAncestorResource("laptops", laptopsUID, "4", "electronics", "computers", "laptops")
+	rows := ancestorRows(laptops)
+
+	// computers/1 is missing; a re-parent left electronics/2 intact but also
+	// left a row under the old parent "gadgets"; an orphan references a
+	// removed category; and one row points at a recreated (different) UID.
+	oldParent := rows[0]
+	oldParent.Ancestor, oldParent.Depth = "gadgets", 1
+	orphan := rows[0]
+	orphan.UID, orphan.Name, orphan.Ancestor, orphan.Depth = "99999999-9999-9999-9999-999999999999", "removed", "electronics", 1
+	recreated := rows[2]
+	recreated.UID = "88888888-8888-8888-8888-888888888888"
+
+	snapshot := ancestorSnapshot([]AuthoritativeResource{laptops}, rows[0], oldParent, orphan, recreated)
+	plan, err := BuildRepairPlan(snapshot)
+	if err != nil {
+		t.Fatalf("BuildRepairPlan() error = %v", err)
+	}
+	got := map[string]FindingType{}
+	for _, finding := range plan.Findings {
+		if finding.Table == "category_ancestor_index" {
+			got[finding.Key] = finding.Type
+		}
+	}
+	want := map[string]FindingType{
+		"demo/computers/1/laptops":   FindingMissing,
+		"demo/gadgets/1/laptops":     FindingStale,
+		"demo/electronics/1/removed": FindingDangling,
+		"demo/laptops/0/laptops":     FindingStale,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("findings = %v, want %v", got, want)
+	}
+	for key, findingType := range want {
+		if got[key] != findingType {
+			t.Fatalf("finding[%s] = %q, want %q (all: %v)", key, got[key], findingType, got)
+		}
+	}
+	for _, finding := range plan.Findings {
+		if !finding.Repairable {
+			t.Fatalf("finding %s/%s is not repairable: %s", finding.Table, finding.Key, finding.Reason)
+		}
+	}
+	if err := ValidateRepairPlan(plan); err != nil {
+		t.Fatalf("ValidateRepairPlan() error = %v", err)
+	}
+}
+
+func TestProjectionRepairServiceConvergesAncestorIndex(t *testing.T) {
+	t.Parallel()
+	laptops := categoryAncestorResource("laptops", "11111111-1111-1111-1111-111111111111", "4", "electronics", "computers", "laptops")
+	rows := ancestorRows(laptops)
+	oldParent := rows[0]
+	oldParent.Ancestor, oldParent.Depth = "gadgets", 1
+	orphan := rows[0]
+	orphan.UID, orphan.Name, orphan.Depth = "99999999-9999-9999-9999-999999999999", "removed", 1
+
+	store := newFakeRepairStore(ancestorSnapshot([]AuthoritativeResource{laptops}, rows[0], oldParent, orphan))
+	service := &ProjectionRepairService{store: store}
+	plan, err := service.Audit(context.Background())
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	if len(plan.Actions) != 4 {
+		t.Fatalf("actions = %s, want 4 (insert 2 missing, delete stale, delete dangling)", stringifyPlan(plan))
+	}
+	result, err := service.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if result.AppliedActions != 4 || len(result.Verification.Findings) != 0 {
+		t.Fatalf("result = %+v, want 4 applied actions and a clean audit", result)
+	}
+	again, err := service.Audit(context.Background())
+	if err != nil || len(again.Findings) != 0 || len(again.Actions) != 0 {
+		t.Fatalf("second audit = %+v, %v; want clean", again, err)
+	}
+}
+
+// TestRollingUpgradeAncestorIndexGapIsBackfilledByRepair models categories
+// whose status was written by a replica that predates the ancestor index:
+// status.resolved is set but no index row exists. Repair must backfill every
+// row and leave a clean audit, so filtered lists are complete after rollout.
+func TestRollingUpgradeAncestorIndexGapIsBackfilledByRepair(t *testing.T) {
+	t.Parallel()
+	resources := []AuthoritativeResource{
+		categoryAncestorResource("electronics", "21111111-1111-1111-1111-111111111111", "3", "electronics"),
+		categoryAncestorResource("computers", "22222222-2222-2222-2222-222222222222", "5", "electronics", "computers"),
+		categoryAncestorResource("laptops", "23333333-3333-3333-3333-333333333333", "7", "electronics", "computers", "laptops"),
+		// Never reconciled: owns no rows before or after repair.
+		categoryAncestorResource("unreconciled", "24444444-4444-4444-4444-444444444444", "1"),
+	}
+	want := 0
+	for _, resource := range resources {
+		want += len(ancestorRows(resource))
+	}
+	if want != 6 {
+		t.Fatalf("expected 6 derived rows, got %d", want)
+	}
+
+	service := &ProjectionRepairService{store: newFakeRepairStore(ancestorSnapshot(resources))}
+	plan, err := service.Audit(context.Background())
+	if err != nil {
+		t.Fatalf("Audit() error = %v", err)
+	}
+	if len(plan.Actions) != want {
+		t.Fatalf("actions = %s, want %d inserts", stringifyPlan(plan), want)
+	}
+	result, err := service.Apply(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if len(result.Verification.Findings) != 0 {
+		t.Fatalf("verification findings = %+v, want none", result.Verification.Findings)
+	}
+}

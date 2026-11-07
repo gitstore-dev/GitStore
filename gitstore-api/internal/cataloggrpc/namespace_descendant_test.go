@@ -26,10 +26,10 @@ func TestNamespaceDescendantAdmissionConvergesDisjointResources(t *testing.T) {
 	current := newer
 	srv := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{
 		zero:  {},
-		older: {xPath: namespaceManifest("descendant-x", "X", "USER")},
+		older: {xPath: namespaceManifest("descendant-x", "X", "ORGANIZATION")},
 		newer: {
-			xPath: namespaceManifest("descendant-x", "X", "USER"),
-			yPath: namespaceManifest("descendant-y", "Y", "USER"),
+			xPath: namespaceManifest("descendant-x", "X", "ORGANIZATION"),
+			yPath: namespaceManifest("descendant-y", "Y", "ORGANIZATION"),
 		},
 	}))
 
@@ -38,9 +38,9 @@ func TestNamespaceDescendantAdmissionConvergesDisjointResources(t *testing.T) {
 		OldCommitSha: zero,
 		NewCommitSha: older,
 
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{xPath},
-		ActorSubject: "alice",
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{xPath},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "alice", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 	_, err = srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
@@ -48,9 +48,9 @@ func TestNamespaceDescendantAdmissionConvergesDisjointResources(t *testing.T) {
 		OldCommitSha: older,
 		NewCommitSha: newer,
 
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{yPath},
-		ActorSubject: "bob",
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{yPath},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "bob", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 
@@ -71,7 +71,7 @@ func TestNamespaceDescendantAdmissionSameResourceUsesNewestContent(t *testing.T)
 	current := newer
 	srv := newCatalogServer(t, store, newTreeGitReader(&current, map[string]map[string][]byte{
 		zero:  {},
-		older: {path: namespaceManifest("descendant-same", "Older", "USER")},
+		older: {path: namespaceManifest("descendant-same", "Older", "ORGANIZATION")},
 		newer: {path: namespaceManifest("descendant-same", "Newer", "ORGANIZATION")},
 	}))
 
@@ -80,9 +80,9 @@ func TestNamespaceDescendantAdmissionSameResourceUsesNewestContent(t *testing.T)
 		OldCommitSha: zero,
 		NewCommitSha: newer,
 
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{path},
-		ActorSubject: "bob",
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{path},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "bob", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 
@@ -102,8 +102,8 @@ func TestNamespaceDescendantSameResourceLeavesAuditToExactHeadHandler(t *testing
 	path := "namespaces/descendant-audit-same.md"
 	current := initial
 	files := map[string]map[string][]byte{
-		initial: {path: namespaceManifest("descendant-audit-same", "Initial", "USER")},
-		older:   {path: namespaceManifest("descendant-audit-same", "Older", "USER")},
+		initial: {path: namespaceManifest("descendant-audit-same", "Initial", "ORGANIZATION")},
+		older:   {path: namespaceManifest("descendant-audit-same", "Older", "ORGANIZATION")},
 		newer:   {path: namespaceManifest("descendant-audit-same", "Newer", "ORGANIZATION")},
 	}
 	seedTime := time.Date(2026, 8, 29, 9, 0, 0, 0, time.UTC)
@@ -118,9 +118,9 @@ func TestNamespaceDescendantSameResourceLeavesAuditToExactHeadHandler(t *testing
 		OldCommitSha: zero,
 		NewCommitSha: initial,
 
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{path},
-		ActorSubject: "seed",
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{path},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "seed", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 
@@ -133,9 +133,9 @@ func TestNamespaceDescendantSameResourceLeavesAuditToExactHeadHandler(t *testing
 		OldCommitSha: initial,
 		NewCommitSha: older,
 
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{path},
-		ActorSubject: "alice",
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{path},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "alice", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 
@@ -153,9 +153,9 @@ func TestNamespaceDescendantSameResourceLeavesAuditToExactHeadHandler(t *testing
 		OldCommitSha: older,
 		NewCommitSha: newer,
 
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{path},
-		ActorSubject: "bob",
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{path},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "bob", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 
@@ -176,10 +176,10 @@ func TestNamespaceDescendantDisjointCommitKeepsRequestAudit(t *testing.T) {
 	yPath := "namespaces/descendant-audit-y.md"
 	current := newer
 	files := map[string]map[string][]byte{
-		older: {xPath: namespaceManifest("descendant-audit-x", "X", "USER")},
+		older: {xPath: namespaceManifest("descendant-audit-x", "X", "ORGANIZATION")},
 		newer: {
-			xPath: namespaceManifest("descendant-audit-x", "X", "USER"),
-			yPath: namespaceManifest("descendant-audit-y", "Y", "USER"),
+			xPath: namespaceManifest("descendant-audit-x", "X", "ORGANIZATION"),
+			yPath: namespaceManifest("descendant-audit-y", "Y", "ORGANIZATION"),
 		},
 	}
 	staleTime := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
@@ -193,9 +193,9 @@ func TestNamespaceDescendantDisjointCommitKeepsRequestAudit(t *testing.T) {
 		OldCommitSha: zero,
 		NewCommitSha: older,
 
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{xPath},
-		ActorSubject: "alice",
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{xPath},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "alice", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 
@@ -215,9 +215,9 @@ func TestNamespaceDescendantDisjointCommitKeepsRequestAudit(t *testing.T) {
 		OldCommitSha: older,
 		NewCommitSha: newer,
 
-		RefName:      "refs/heads/main",
-		ChangedPaths: []string{yPath},
-		ActorSubject: "bob",
+		RefName:       "refs/heads/main",
+		ChangedPaths:  []string{yPath},
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "bob", AuthMethod: "static-users"}},
 	})
 	require.NoError(t, err)
 

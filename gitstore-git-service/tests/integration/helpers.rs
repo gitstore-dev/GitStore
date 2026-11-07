@@ -121,55 +121,6 @@ impl AdmissionHandler for RejectingAdmissionHandler {
     }
 }
 
-/// Rejects refs whose index (within the provided slice) is in the given set.
-pub struct PerRefRejectingHandler(pub std::collections::HashSet<usize>);
-
-#[async_trait]
-impl AdmissionHandler for PerRefRejectingHandler {
-    async fn admit(
-        &self,
-        _phase: &str,
-        updates: &[RefUpdate],
-        _repository_id: &str,
-        _git_dir: &std::path::Path,
-        _hook_ctx: &HookContext,
-    ) -> anyhow::Result<AdmissionDecision> {
-        // When called per-ref (single update), identify position by ref_name tag
-        // The handler is called once per ref, so updates.len() == 1 in update phase.
-        // We use the ref_name suffix "idx:<n>" to identify the position.
-        for u in updates {
-            if let Some(rest) = u.ref_name.strip_prefix("refs/test/idx/") {
-                if let Ok(idx) = rest.parse::<usize>() {
-                    if self.0.contains(&idx) {
-                        return Ok(AdmissionDecision::Reject(format!(
-                            "rejected ref at index {idx}"
-                        )));
-                    }
-                }
-            }
-        }
-        Ok(AdmissionDecision::Accept)
-    }
-}
-
-/// Sleeps longer than the pipeline timeout before returning, to trigger fail-closed.
-pub struct SlowAdmissionHandler;
-
-#[async_trait]
-impl AdmissionHandler for SlowAdmissionHandler {
-    async fn admit(
-        &self,
-        _phase: &str,
-        _updates: &[RefUpdate],
-        _repository_id: &str,
-        _git_dir: &std::path::Path,
-        _hook_ctx: &HookContext,
-    ) -> anyhow::Result<AdmissionDecision> {
-        tokio::time::sleep(Duration::from_secs(10)).await;
-        Ok(AdmissionDecision::Accept)
-    }
-}
-
 /// Counts how many times admit() is called.
 pub struct CountingAdmissionHandler(pub Arc<AtomicUsize>);
 
@@ -199,20 +150,6 @@ impl AdmissionHandler for CountingAdmissionHandler {
 // ValidationHandler test doubles (mirror of the AdmissionHandler variants above)
 // ---------------------------------------------------------------------------
 
-/// A no-op ValidationHandler used as a placeholder when per-ref logic lives in the admission slot.
-pub struct PerRefRejectingValidationHandler(pub std::collections::HashSet<usize>);
-
-#[async_trait]
-impl ValidationHandler for PerRefRejectingValidationHandler {
-    async fn validate(
-        &self,
-        _blobs: &[ResourceBlob],
-        _hook_ctx: &HookContext,
-    ) -> anyhow::Result<AdmissionDecision> {
-        Ok(AdmissionDecision::Accept)
-    }
-}
-
 /// Always rejects validation with the configured reason.
 pub struct RejectingValidationHandler(pub String);
 
@@ -238,28 +175,6 @@ impl ValidationHandler for SlowValidationHandler {
         _hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
         tokio::time::sleep(Duration::from_secs(10)).await;
-        Ok(AdmissionDecision::Accept)
-    }
-}
-
-/// Counts how many times validate() is called.
-pub struct CountingValidationHandler(pub Arc<AtomicUsize>);
-
-impl CountingValidationHandler {
-    pub fn new() -> (Self, Arc<AtomicUsize>) {
-        let counter = Arc::new(AtomicUsize::new(0));
-        (Self(Arc::clone(&counter)), counter)
-    }
-}
-
-#[async_trait]
-impl ValidationHandler for CountingValidationHandler {
-    async fn validate(
-        &self,
-        _blobs: &[ResourceBlob],
-        _hook_ctx: &HookContext,
-    ) -> anyhow::Result<AdmissionDecision> {
-        self.0.fetch_add(1, Ordering::SeqCst);
         Ok(AdmissionDecision::Accept)
     }
 }

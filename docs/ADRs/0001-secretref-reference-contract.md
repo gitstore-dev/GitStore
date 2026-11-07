@@ -1,6 +1,6 @@
 # ADR 0001: SecretRef Reference Contract
 
-**Status**: Proposed
+**Status**: Accepted (2026-10-04)
 
 **Date**: 2026-06-24
 
@@ -331,8 +331,8 @@ spec:
 Object storage credentials using the temporary direct `SecretRef` form:
 
 ```yaml
+provider: s3
 source:
-  type: s3
   uri: s3://catalog-assets/products/product-hero.jpg
   credentialsRef:
     kind: SecretRef
@@ -342,8 +342,8 @@ source:
 Future explicit credentials wrapper:
 
 ```yaml
+provider: s3
 source:
-  type: s3
   uri: s3://catalog-assets/products/product-hero.jpg
   credentialsRef:
     kind: CredentialsRef

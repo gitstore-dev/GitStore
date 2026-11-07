@@ -7,6 +7,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +26,44 @@ func newBackend(t *testing.T) datastore.Datastore {
 	require.NoError(t, err)
 	t.Cleanup(func() { ds.Close() }) //nolint:errcheck
 	return ds
+}
+
+func TestMemdbServiceAccountClusterUniquenessAndRecreate(t *testing.T) {
+	ds := newBackend(t)
+	ctx := t.Context()
+	var wg sync.WaitGroup
+	results := make(chan error, 16)
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- ds.CreateServiceAccount(ctx, &datastore.ServiceAccount{UID: fmt.Sprintf("00000000-0000-0000-0000-%012d", i), Name: "controller", ResourceVersion: "1", CreationTimestamp: time.Now()})
+		}()
+	}
+	wg.Wait()
+	close(results)
+	winners := 0
+	for err := range results {
+		if err == nil {
+			winners++
+		} else {
+			require.ErrorIs(t, err, datastore.ErrAlreadyExists)
+		}
+	}
+	require.Equal(t, 1, winners)
+	page, err := ds.ListServiceAccounts(ctx, datastore.PageParams{First: 20})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	original := page.Items[0]
+	err = ds.CreateServiceAccount(ctx, &datastore.ServiceAccount{UID: original.UID, Name: "different"})
+	require.ErrorIs(t, err, datastore.ErrAlreadyExists, "UID cannot be reserved by two names")
+	require.NoError(t, ds.DeleteServiceAccount(ctx, original.UID))
+	require.NoError(t, ds.CreateServiceAccount(ctx, &datastore.ServiceAccount{UID: "00000000-0000-0000-0001-000000000001", Name: "controller", ResourceVersion: "1", CreationTimestamp: time.Now()}))
+	_, err = ds.GetServiceAccountByUID(ctx, original.UID)
+	require.True(t, errors.Is(err, datastore.ErrNotFound), "old UID never routes to a replacement")
+	require.ErrorIs(t, ds.DeleteServiceAccount(ctx, original.UID), datastore.ErrNotFound)
+	_, err = ds.GetServiceAccountByUID(ctx, "00000000-0000-0000-0001-000000000001")
+	require.NoError(t, err, "stale deletion cannot remove replacement")
 }
 
 func productFixture(uid, namespace, name string) *datastore.Product {
@@ -202,17 +243,49 @@ func TestMemdb_UpdateProduct(t *testing.T) {
 	require.NoError(t, ds.CreateProduct(ctx, p))
 
 	p.GitRef = "main"
-	require.NoError(t, ds.UpdateProduct(ctx, p))
+	expected := p.ResourceVersion
+	datastore.AdvanceProductSystemVersion(p)
+	require.NoError(t, ds.UpdateProduct(ctx, p, expected))
 
 	got, err := ds.GetProduct(ctx, p.UID)
 	require.NoError(t, err)
 	assert.Equal(t, "main", got.GitRef)
 }
 
+func TestMemdb_UpdateProductStatus_PreservesResourceFieldsAndUsesCAS(t *testing.T) {
+	ds := newBackend(t)
+	ctx := context.Background()
+	p := productFixture("a0000000-0000-0000-0000-000000000031", "my-store", "product-status")
+	parentUID := "b0000000-0000-0000-0000-000000000031"
+	p.RepositoryID = "repo-status"
+	p.OwnerReferences, _ = json.Marshal([]catalog.OwnerReference{{
+		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy", Name: "category", UID: parentUID,
+	}})
+	p.Status = []byte(`{"lastAppliedRevision":"before","conditions":[{"type":"ControllerOwned","status":"True"}]}`)
+	require.NoError(t, ds.CreateProduct(ctx, p))
+	revision := "main@sha1:after"
+	updated, err := ds.UpdateProductStatus(ctx, p.Namespace, p.Name, datastore.ProductStatusPatch{ResourceVersion: p.ResourceVersion, LastAppliedRevision: &revision})
+	require.NoError(t, err)
+	assert.Equal(t, p.Spec, updated.Spec)
+	assert.Equal(t, p.Generation, updated.Generation)
+	assert.NotEqual(t, p.ResourceVersion, updated.ResourceVersion)
+	var status catalog.ProductStatus
+	require.NoError(t, json.Unmarshal(updated.Status, &status))
+	assert.Equal(t, revision, status.LastAppliedRevision)
+	require.Len(t, status.Conditions, 1)
+	owners := ds.(datastore.OwnerReferenceStore)
+	page, err := owners.ListNonBlockingProductOwnerDependents(ctx, datastore.OwnerReferenceScope{Namespace: p.Namespace, RepositoryID: p.RepositoryID}, parentUID, "", 1)
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, updated.ResourceVersion, page.Items[0].ResourceVersion)
+	_, err = ds.UpdateProductStatus(ctx, p.Namespace, p.Name, datastore.ProductStatusPatch{ResourceVersion: p.ResourceVersion})
+	require.ErrorIs(t, err, datastore.ErrConflict)
+}
+
 func TestMemdb_UpdateProduct_NotFound(t *testing.T) {
 	ds := newBackend(t)
 	p := productFixture("a0000000-0000-0000-0000-000000000099", "my-store", "no-such")
-	err := ds.UpdateProduct(context.Background(), p)
+	err := ds.UpdateProduct(context.Background(), p, "1")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
@@ -272,7 +345,7 @@ func TestMemdb_CreateCategoryTaxonomy_DuplicateNameReturnsAlreadyExists(t *testi
 func TestMemdb_UpdateCategoryTaxonomy_NotFound(t *testing.T) {
 	ds := newBackend(t)
 	c := categoryTaxonomyFixture("b0000000-0000-0000-0000-000000000099", "ghost-cat")
-	err := ds.UpdateCategoryTaxonomy(context.Background(), c)
+	err := ds.UpdateCategoryTaxonomy(context.Background(), c, "1")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
@@ -430,14 +503,6 @@ func mappingFixture(namespace, name, repositoryID string) *datastore.NamespaceMa
 		Namespace:    namespace,
 		Name:         name,
 		RepositoryID: repositoryID,
-	}
-}
-
-func namespaceFixture(uid, name string) *datastore.Namespace {
-	return &datastore.Namespace{
-		UID:               uid,
-		Name:              name,
-		CreationTimestamp: time.Now(),
 	}
 }
 
@@ -826,42 +891,6 @@ func TestMemdb_RenameRepository_TargetConflictPreservesOldMapping(t *testing.T) 
 	require.ErrorIs(t, err, datastore.ErrAlreadyExists)
 
 	got, lookupErr := ds.LookupRepository(ctx, namespace1, "old-name")
-	require.NoError(t, lookupErr)
-	assert.Equal(t, repoID1, got.RepositoryID)
-}
-
-func TestMemdb_TransferRepository_OldNSNotFoundNewNSReturnsSameRepoID(t *testing.T) {
-	ds := newBackend(t)
-	ctx := context.Background()
-	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000011", namespace1)))
-	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000012", namespace2)))
-	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(namespace1, "app", repoID1)))
-
-	require.NoError(t, ds.TransferRepository(ctx, repoID1, namespace1, namespace2))
-
-	_, err := ds.LookupRepository(ctx, namespace1, "app")
-	require.ErrorIs(t, err, datastore.ErrNotFound)
-
-	got, err := ds.LookupRepository(ctx, namespace2, "app")
-	require.NoError(t, err)
-	assert.Equal(t, repoID1, got.RepositoryID)
-}
-
-func TestMemdb_TransferRepository_ValidatesSourceAndTarget(t *testing.T) {
-	ds := newBackend(t)
-	ctx := context.Background()
-	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000013", namespace1)))
-	require.NoError(t, ds.CreateNamespace(ctx, namespaceFixture("01960000-0000-7000-8000-000000000014", namespace2)))
-	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(namespace1, "app", repoID1)))
-	require.NoError(t, ds.CreateNamespaceMapping(ctx, mappingFixture(namespace2, "app", repoID2)))
-
-	err := ds.TransferRepository(ctx, repoID1, "wrong-source", namespace2)
-	require.ErrorIs(t, err, datastore.ErrNotFound)
-
-	err = ds.TransferRepository(ctx, repoID1, namespace1, namespace2)
-	require.ErrorIs(t, err, datastore.ErrAlreadyExists)
-
-	got, lookupErr := ds.LookupRepository(ctx, namespace1, "app")
 	require.NoError(t, lookupErr)
 	assert.Equal(t, repoID1, got.RepositoryID)
 }

@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
-	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -296,19 +296,19 @@ func TestRunner_Backpressure_PausesOnWriteFailure_ResumesOnSuccess(t *testing.T)
 	defer cancel()
 
 	done := make(chan error, 1)
-	failureBaseline := testutil.ToFloat64(health.CheckpointWriteFailuresTotal.WithLabelValues("Widget"))
+	failureBaseline := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_checkpoint_write_failures_total", map[string]string{"kind": "Widget"})
 	go func() { done <- r.Run(ctx) }()
 
 	// Wait for both injected failures instead of sleeping for the nominal
 	// retry interval: exponential backoff jitter may schedule retry two at the
 	// edge of that interval on a busy CI runner.
 	deadline := time.After(1 * time.Second)
-	for testutil.ToFloat64(health.CheckpointWriteFailuresTotal.WithLabelValues("Widget"))-failureBaseline < 2 {
+	for observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_checkpoint_write_failures_total", map[string]string{"kind": "Widget"})-failureBaseline < 2 {
 		select {
 		case <-deadline:
 			t.Fatalf("expected 2 recorded checkpoint write failures, got %d Save attempts and metric delta %v",
 				store.saveCalls.Load(),
-				testutil.ToFloat64(health.CheckpointWriteFailuresTotal.WithLabelValues("Widget"))-failureBaseline)
+				observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_checkpoint_write_failures_total", map[string]string{"kind": "Widget"})-failureBaseline)
 		case <-time.After(10 * time.Millisecond):
 		}
 	}

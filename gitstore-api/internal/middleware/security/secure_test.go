@@ -10,12 +10,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -23,17 +25,73 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 )
+
+func TestDeniedReadPresentationUsesFactsNotReason(t *testing.T) {
+	deny := testutil.NewDenyAllAuthZ(t)
+	for _, action := range []string{"repository.read", "repository.contents.read", "product.management.read", "product.read", "repository.list", "repository.watch", "repository.update"} {
+		for _, fact := range []any{nil, "public", "private", "internal", true, []string{"private"}} {
+			resource := auth.ResourceContext{Kind: strings.Split(action, ".")[0], Name: "secret", Attrs: map[string]any{}}
+			if fact != nil {
+				resource.Attrs["visibility"] = fact
+			}
+			err := authorizeCategoryAction(t.Context(), deny, &auth.Principal{Subject: "alice", AuthMethod: "static-users"}, action, resource)
+			var gqlErr *gqlerror.Error
+			require.ErrorAs(t, err, &gqlErr)
+			want := "FORBIDDEN"
+			if strings.HasSuffix(action, ".read") && (fact == "private" || fact == "internal") {
+				want = "NOT_FOUND"
+			}
+			require.Equal(t, want, gqlErr.Extensions["code"], "%s %#v", action, fact)
+		}
+	}
+}
+
+func TestManagementGrantIsIndependentlySufficient(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("apiVersion: rbac.authorization.gitstore.dev/v1beta1\nkind: RbacLocalConfiguration\nclusterRoles:\n  manager:\n    rules: [{resources: [product/management, productVariant/management], verbs: [read, list]}]\nclusterRoleBindings:\n  - roleRef: {kind: ClusterRole, name: manager}\n    subjects: [{kind: User, name: alice}]\n"), 0600))
+	provider, err := rbaclocal.New(config.RBACConfig{PolicyFile: path}, zap.NewNop())
+	require.NoError(t, err)
+	for _, kind := range []string{"product", "productVariant"} {
+		for _, verb := range []string{"read", "list"} {
+			resource := auth.ResourceContext{Kind: kind, Name: "widget", Attrs: map[string]any{"namespace": "acme"}}
+			require.NoError(t, authorizeCategoryAction(t.Context(), provider, &auth.Principal{Subject: "alice", AuthMethod: "static-users"}, kind+"."+verb, resource))
+			require.Error(t, authorizeCategoryAction(t.Context(), provider, &auth.Principal{Subject: "bob", AuthMethod: "static-users"}, kind+"."+verb, resource))
+		}
+	}
+}
+
+func TestRepositoryAuthorizationPassesFactsWithoutOwnerActionSelection(t *testing.T) {
+	for _, subject := range []string{"owner", "outsider"} {
+		for _, operation := range []string{"read", "list", "create", "update", "delete", "contents.read", "contents.write"} {
+			recorder := testutil.NewAllowAllAuthZ()
+			mw := NewAuthorize(auth.NewProviderRegistry(nil, recorder, nil), zap.NewNop())
+			repo := &datastore.Repository{Name: "catalog", CreationActor: "resource-owner"}
+			ns := &datastore.Namespace{Name: "acme", CreationActor: "owner"}
+			action, err := mw.authorizeRepositoryTenant(t.Context(), &auth.Principal{Subject: subject, AuthMethod: "static-users"}, operation, repo, ns)
+			require.NoError(t, err)
+			require.Equal(t, "repository."+operation, action)
+			require.Len(t, recorder.Calls, 1)
+			owner := "resource-owner"
+			if operation == "create" || operation == "list" {
+				owner = "owner"
+			}
+			require.Equal(t, owner, recorder.Resource.OwnerSub)
+			require.Equal(t, "acme", recorder.Resource.Attrs["namespace"])
+		}
+	}
+}
 
 func TestRateLimiterIsolatesOperationalEndpointsWithoutExemptingThem(t *testing.T) {
 	router := gin.New()
 	limiter := NewRateLimit(0.000001, 1)
 	router.Use(limiter.RateLimiter)
 	handler := func(c *gin.Context) { c.Status(http.StatusNoContent) }
-	router.POST("/graphql", handler)
-	router.GET("/graphql", handler)
+	router.POST("/admin/graphql", handler)
+	router.GET("/admin/graphql", handler)
 	router.GET("/playground", handler)
 	for _, path := range []string{"/metrics", "/health", "/ready"} {
 		router.GET(path, handler)
@@ -46,14 +104,14 @@ func TestRateLimiterIsolatesOperationalEndpointsWithoutExemptingThem(t *testing.
 		router.ServeHTTP(response, req)
 		require.Equal(t, want, response.Code, "%s %s", method, path)
 	}
-	request(http.MethodPost, "/graphql", http.StatusNoContent)
-	request(http.MethodGet, "/graphql", http.StatusTooManyRequests)
+	request(http.MethodPost, "/admin/graphql", http.StatusNoContent)
+	request(http.MethodGet, "/admin/graphql", http.StatusTooManyRequests)
 	request(http.MethodGet, "/playground", http.StatusTooManyRequests)
 	for _, path := range []string{"/metrics", "/health", "/ready"} {
 		request(http.MethodGet, path, http.StatusNoContent)
 		request(http.MethodGet, path, http.StatusTooManyRequests)
 	}
-	request(http.MethodPost, "/graphql", http.StatusTooManyRequests)
+	request(http.MethodPost, "/admin/graphql", http.StatusTooManyRequests)
 }
 
 func newTestRegistry(t *testing.T) (*auth.ProviderRegistry, *staticusers.StaticUsersProvider) {
@@ -66,9 +124,9 @@ func newTestRegistry(t *testing.T) (*auth.ProviderRegistry, *staticusers.StaticU
 	cfg := config.AuthConfig{
 		StaticUsers: config.StaticUsersConfig{UsersFile: usersFile},
 		JWT: config.JWTConfig{
-			Secret:   "dev-secret-change-in-production",
-			Issuer:   "gitstore",
-			Duration: "24h",
+			Secret: "dev-secret-change-in-production",
+			Issuer: "gitstore",
+			TTL:    24 * time.Hour,
 		},
 	}
 
@@ -89,7 +147,7 @@ func TestAuthenticatorValidBearerSetsPrincipal(t *testing.T) {
 	token, _, err := staticUsers.IssueSession(t.Context(), "admin")
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/graphql", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -104,14 +162,14 @@ func TestAuthenticatorValidBearerSetsPrincipal(t *testing.T) {
 	require.NotNil(t, captured)
 	assert.Equal(t, "admin", captured.Subject)
 	assert.Equal(t, "static-users", captured.AuthMethod)
-	assert.False(t, captured.IsAdmin())
+
 	assert.NotEmpty(t, captured.TokenID)
 }
 
 func TestAuthenticatorNoCredentialsSetsAnonymousPrincipal(t *testing.T) {
 	registry, _ := newTestRegistry(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/graphql", nil)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = req
@@ -130,7 +188,7 @@ func TestAuthenticatorNoCredentialsSetsAnonymousPrincipal(t *testing.T) {
 func TestAuthenticatorInvalidCredentialsReturnUnauthorized(t *testing.T) {
 	registry, _ := newTestRegistry(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/graphql", nil)
+	req := httptest.NewRequest(http.MethodGet, "/admin/graphql", nil)
 	req.Header.Set("Authorization", "Bearer invalid-token")
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -224,7 +282,7 @@ func TestPushContextInserter(t *testing.T) {
 
 	const repoID = "01960000-0000-7000-8000-000000000001"
 	const nsID = "01960000-0000-7000-8000-000000000010"
-	principal := &auth.Principal{Subject: "admin", Issuer: "static-users", AuthMethod: "basic", Roles: []string{"admin"}}
+	principal := &auth.Principal{Subject: "admin", Issuer: "static-users", AuthMethod: "basic"}
 
 	store := &testutil.StubStore{
 		GetRepositoryFunc: func(_ context.Context, id string) (*datastore.Repository, error) {

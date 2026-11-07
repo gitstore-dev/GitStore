@@ -24,6 +24,41 @@ pub struct ResourceValidationTree {
     pub old_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
     #[prost(message, repeated, tag="2")]
     pub proposed_blobs: ::prost::alloc::vec::Vec<ResourceBlob>,
+    #[prost(message, optional, tag="3")]
+    pub r#ref: ::core::option::Option<ReceiveRef>,
+}
+/// Only the authenticated Git service forwards these verified identity facts.
+/// No bearer token, role name, or unverified Git author metadata is accepted.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CallbackActor {
+    #[prost(string, tag="1")]
+    pub subject: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag="2")]
+    pub groups: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag="3")]
+    pub auth_method: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub service_account_uid: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReceiveRef {
+    #[prost(string, tag="1")]
+    pub ref_name: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub old_commit_sha: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub new_commit_sha: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CallbackAuthorization {
+    #[prost(string, tag="1")]
+    pub repository_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub receive_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub actor: ::core::option::Option<CallbackActor>,
+    #[prost(message, repeated, tag="4")]
+    pub refs: ::prost::alloc::vec::Vec<ReceiveRef>,
 }
 /// ValidationError is a single field-level violation returned by ValidateResources.
 /// Matches the ParseError shape from spec#015 (validate.Parse).
@@ -52,6 +87,8 @@ pub struct ValidateResourcesRequest {
     /// trees is the receive-aware representation used by all callers.
     #[prost(message, repeated, tag="2")]
     pub trees: ::prost::alloc::vec::Vec<ResourceValidationTree>,
+    #[prost(message, optional, tag="3")]
+    pub authorization: ::core::option::Option<CallbackAuthorization>,
 }
 /// ValidateResourcesResponse carries the aggregate validation outcome.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -75,6 +112,8 @@ pub struct ValidateResourceDeletionsRequest {
     pub repository_id: ::prost::alloc::string::String,
     #[prost(message, repeated, tag="1")]
     pub trees: ::prost::alloc::vec::Vec<ResourceValidationTree>,
+    #[prost(message, optional, tag="2")]
+    pub authorization: ::core::option::Option<CallbackAuthorization>,
 }
 /// ValidateResourceDeletionsResponse is a stable, non-sensitive precondition
 /// result for generic OperationDelete validation.
@@ -88,7 +127,7 @@ pub struct ValidateResourceDeletionsResponse {
 /// AdmitResourcesRequest identifies the accepted push commit to admit into the catalog.
 /// gitstore-api fetches, parses, and stores resources independently using its own
 /// GitService client — the git service does not send blobs for admission.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AdmitResourcesRequest {
     /// repository_id is the stable UUIDv7 of the repository.
     #[prost(string, tag="15")]
@@ -108,10 +147,8 @@ pub struct AdmitResourcesRequest {
     /// changed resource set by comparing old_commit_sha and new_commit_sha.
     #[prost(string, repeated, tag="5")]
     pub changed_paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// actor_subject is the authenticated principal that performed the push.
-    /// It contains only the stable subject identifier, never raw credentials.
-    #[prost(string, tag="6")]
-    pub actor_subject: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="7")]
+    pub authorization: ::core::option::Option<CallbackAuthorization>,
 }
 /// AdmitResourcesResponse is intentionally empty.
 /// The git service does not inspect this response; it is fire-and-forget.

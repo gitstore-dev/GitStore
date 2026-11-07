@@ -11,7 +11,7 @@ failure before making it pass.
 
 - [X] T001 Confirm the 051 resource paths and test targets in `gitstore-api/internal/catalog`, `gitstore-api/internal/validate`, `gitstore-api/internal/cataloggrpc`, and `gitstore-api/internal/datastore`
 - [X] T002 [P] Add the File worked-example fixture from `specs/051-file-resource-contract/contracts/file-frontmatter.md` to validator contract-test fixtures under `gitstore-api/internal/validate/testdata/file`
-- [X] T003 [P] Record the File storage API version, kind, and deferred Phase 2 boundaries in `docs/resource-storage/git-backed.md`
+- [X] T003 [P] Record the File storage API version, kind, and deferred Phase 2 boundaries in `docs/storage-groups/git-backed.md`
 
 ## Phase 2: Foundational
 
@@ -109,7 +109,7 @@ Ready=True without a phase field.
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [X] T038 [P] Add File schema and admission documentation, including the worked example and deferred Phase 2 boundaries, in `docs/resource-storage/git-backed.md` and `docs/resource-storage/README.md`
+- [X] T038 [P] Add File schema and admission documentation, including the worked example and deferred Phase 2 boundaries, in `docs/storage-groups/git-backed.md` and `docs/storage-groups/README.md`
 - [X] T039 [P] Add multi-replica/process-replacement tests for File identity, status writes, and duplicate admission behavior in `gitstore-api/internal/cataloggrpc` and `gitstore-api/internal/datastore`
   - `gitstore-api/internal/datastore/memdb/file_concurrency_test.go`: concurrent `CreateFile` calls racing the same namespace/name identity resolve to exactly one durable winner; concurrent `UpdateFileStatus` calls built from the same stale resourceVersion linearize to exactly one success.
   - `gitstore-api/internal/cataloggrpc/file_replica_test.go`: two `Server` instances sharing one store admit a duplicate push delivery idempotently; an older in-flight commit cannot clobber a newer already-durable admission; a freshly constructed `Server` (simulating a replica process replacement) correctly continues a prior replica's File identity using only durable state.

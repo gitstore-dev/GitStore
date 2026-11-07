@@ -16,6 +16,8 @@ import (
 	"unicode"
 
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -27,6 +29,91 @@ type remoteAddrContextKey struct{}
 type authorizedNamespaceDeleteContextKey struct{}
 type authorizedNamespaceTransferContextKey struct{}
 type authorizationLedgerContextKey struct{}
+type authorizedFileNodesContextKey struct{}
+type authorizedFileReadContextKey struct{}
+type authorizedRepositoryReadContextKey struct{}
+type authorizedMissingNodesContextKey struct{}
+
+type nodeIdentity struct{ kind, uid string }
+type authorizedMissingNodes struct {
+	field *graphql.FieldContext
+	nodes map[nodeIdentity]*gqlerror.Error
+}
+
+// AuthorizedNodeError preserves absence observed by this field's authorization.
+// A later create must not be exposed by a second, unauthorized lookup.
+func AuthorizedNodeError(ctx context.Context, kind, uid string) error {
+	missing, _ := ctx.Value(authorizedMissingNodesContextKey{}).(*authorizedMissingNodes)
+	if missing == nil || missing.field != graphql.GetFieldContext(ctx) {
+		return nil
+	}
+	err := missing.nodes[nodeIdentity{kind, uid}]
+	if err == nil {
+		return nil
+	}
+	result := *err
+	return &result
+}
+
+func preserveMissingNode(ctx context.Context, kind, uid string, cause error) {
+	missing, _ := ctx.Value(authorizedMissingNodesContextKey{}).(*authorizedMissingNodes)
+	if missing != nil {
+		result := admission.ResourceNotFound(kind, strings.ToLower(kind)+" not found")
+		var notFound *authFieldNotFoundError
+		if errors.As(cause, &notFound) {
+			result = notFound.render()
+		}
+		result.Err = cause
+		missing.nodes[nodeIdentity{kind, uid}] = result
+	}
+}
+
+type authorizedRepositoryRead struct {
+	repository *datastore.Repository
+	namespace  *datastore.Namespace
+	field      *graphql.FieldContext
+}
+
+// AuthorizedRepositoryRead returns only the exact field-scoped read checked
+// by repository.read; mutations and sibling fields do not share this record.
+func AuthorizedRepositoryRead(ctx context.Context, by model.RepositoryBy) (*datastore.Repository, *datastore.Namespace, bool) {
+	read, ok := ctx.Value(authorizedRepositoryReadContextKey{}).(*authorizedRepositoryRead)
+	if !ok || read == nil || graphql.GetFieldContext(ctx) != read.field {
+		return nil, nil, false
+	}
+	if by.ID != nil {
+		uid, err := decodeGlobalIDAs("Repository", *by.ID)
+		if err != nil || uid != read.repository.UID {
+			return nil, nil, false
+		}
+	} else if by.NamespacePath == nil || by.NamespacePath.Namespace != read.namespace.Name || by.NamespacePath.Name != read.repository.Name {
+		return nil, nil, false
+	}
+	return read.repository, read.namespace, true
+}
+
+// AuthorizedFileNode returns the exact field-scoped lookup checked by file.read.
+// A present nil record preserves a missing lookup without a second datastore read.
+func AuthorizedFileNode(ctx context.Context, uid string) (*datastore.File, bool) {
+	files, _ := ctx.Value(authorizedFileNodesContextKey{}).(map[string]*datastore.File)
+	file, ok := files[uid]
+	return file, ok
+}
+
+type authorizedFileRead struct {
+	file  *datastore.File
+	field *graphql.FieldContext
+}
+
+// AuthorizedFileRead preserves the exact record (including absence) checked
+// for this field, so concurrent replacement cannot expose an unchecked File.
+func AuthorizedFileRead(ctx context.Context) (*datastore.File, bool) {
+	read, ok := ctx.Value(authorizedFileReadContextKey{}).(*authorizedFileRead)
+	if !ok || read == nil || read.field != graphql.GetFieldContext(ctx) {
+		return nil, false
+	}
+	return read.file, true
+}
 
 // AuthorizedNamespaceTransfer carries the exact namespace record and encoded
 // target owner subject authorized by GraphQLFieldAuthorizer's
@@ -132,16 +219,24 @@ func (a *Authenticate) GraphQLAuthenticator(ctx context.Context, next graphql.Op
 	principal, decision, err := a.registry.AuthN().Authenticate(authCtx, req)
 	if err != nil {
 		a.logger.Warn("graphql auth chain error", zap.Error(err))
-		return graphql.OneShot(graphql.ErrorResponse(ctx, "invalid or expired credentials"))
+		return unauthenticatedGraphQLResponse()
 	}
 	if decision.Outcome != auth.OutcomeAllow {
-		return graphql.OneShot(graphql.ErrorResponse(ctx, "invalid or expired credentials"))
+		return unauthenticatedGraphQLResponse()
 	}
 	if principal == nil {
 		principal = auth.Anonymous()
 	}
 
 	return next(auth.ContextWithPrincipal(authCtx, principal))
+}
+
+// This code is emitted only before operation execution, so a credential source
+// may safely invalidate the rejected token without replaying an executed mutation.
+func unauthenticatedGraphQLResponse() graphql.ResponseHandler {
+	return graphql.OneShot(&graphql.Response{Errors: gqlerror.List{&gqlerror.Error{
+		Message: "invalid or expired credentials", Extensions: map[string]any{"code": "UNAUTHENTICATED"},
+	}}})
 }
 
 // GraphQLAuthorizer enforces cross-cutting GraphQL authz guardrails and
@@ -214,6 +309,11 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	if fc == nil {
 		return next(ctx)
 	}
+	if fc.Object == "Query" && (fc.Field.Name == "node" || fc.Field.Name == "nodes") {
+		ctx = context.WithValue(ctx, authorizedMissingNodesContextKey{}, &authorizedMissingNodes{
+			field: fc, nodes: make(map[nodeIdentity]*gqlerror.Error),
+		})
+	}
 	var finishDecision func(bool)
 	if ledger, ok := ctx.Value(authorizationLedgerContextKey{}).(*authorizationLedger); ok && ledger != nil && graphqlFieldRequiresAuthorization(fc) {
 		finishDecision = ledger.begin()
@@ -236,8 +336,47 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			Extensions: map[string]any{"code": "FORBIDDEN"},
 		}
 	}
-	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isFileQueryField(fc) {
+	// A well-formed public identity is absent from the Admin type universe.
+	// Reject it before typed selector authorization can look up a current row
+	// or reinterpret it as a malformed management ID. nodes keeps its indexed
+	// per-entry presentation in the resolver rather than rejecting the batch.
+	if fc.Object == "Query" && fc.Field.Name != "nodes" {
+		id, _ := directStringArg(fc.Args, "id")
+		if id == "" {
+			id, _ = nestedStringPath(fc.Args, "by", "id")
+		}
+		if id != "" {
+			kind, _, err := decodeGlobalID(id)
+			if err == nil && kind == "StorefrontProduct" {
+				return nil, admission.ResourceNotFound(kind, "resource not found")
+			}
+		}
+	}
+	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isAdditionalCatalogField(fc) && !isNamespaceQueryField(fc) && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isCategoryProductsField(fc) && !isFileQueryField(fc) && !isCategoryQueryField(fc) {
 		return next(ctx)
+	}
+	if fc.Object == "Mutation" {
+		var kind string
+		switch fc.Field.Name {
+		case "createProduct", "updateProduct":
+			kind = "Product"
+		case "createCategory", "updateCategory":
+			kind = "CategoryTaxonomy"
+		case "createRepository", "updateRepository":
+			kind = "Repository"
+		case "createNamespace", "updateNamespace":
+			kind = "Namespace"
+		case "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount", "issueServiceAccountToken":
+			kind = "ServiceAccount"
+		}
+		value, present := nestedStringPath(fc.Args, "input", "metadata", "namespace")
+		var namespace *string
+		if present {
+			namespace = &value
+		}
+		if err := admission.ValidateNamespaceScope(kind, namespace); err != nil {
+			return nil, err.ToGQLError()
+		}
 	}
 	var authz auth.AuthZProvider
 	if a.registry != nil {
@@ -252,26 +391,49 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		})
 	}
 	if isFileQueryField(fc) {
-		namespace, _ := directStringArg(fc.Args, "namespace")
-		name, _ := directStringArg(fc.Args, "name")
-		if err := a.authorizeFileRead(ctx, principal, authz, namespace, name); err != nil {
+		var err error
+		ctx, err = a.authorizeFileRead(ctx, fc, principal, authz)
+		if err != nil {
 			return nil, err
 		}
 	} else if isProductQueryField(fc) {
 		if err := a.authorizeProductQueryField(ctx, fc, principal, authz); err != nil {
 			return nil, err
 		}
-	} else if err := a.authorizeRepositoryField(ctx, fc, principal); err != nil {
-		var notFound *authFieldNotFoundError
-		if errors.As(err, &notFound) {
-			return nil, notFound.render()
+	} else if isCategoryProductsField(fc) {
+		if err := a.authorizeCategoryProductsField(ctx, fc, principal, authz); err != nil {
+			return nil, err
 		}
-		return nil, err
+	} else if isCategoryQueryField(fc) {
+		if err := a.authorizeCategoryQueryField(ctx, fc, principal, authz); err != nil {
+			return nil, err
+		}
+	} else {
+		repositoryCtx, err := a.authorizeRepositoryField(ctx, fc, principal)
+		if err != nil {
+			var notFound *authFieldNotFoundError
+			if errors.As(err, &notFound) {
+				return nil, notFound.render()
+			}
+			return nil, err
+		}
+		ctx = repositoryCtx
 	}
 	if err := a.authorizeProductNodeField(ctx, fc, principal, authz); err != nil {
 		return nil, err
 	}
-	if err := a.authorizeFileNodeField(ctx, fc, principal, authz); err != nil {
+	fileCtx, err := a.authorizeFileNodeField(ctx, fc, principal, authz)
+	if err != nil {
+		return nil, err
+	}
+	ctx = fileCtx
+	if err := a.authorizeCategoryNodeField(ctx, fc, principal, authz); err != nil {
+		return nil, err
+	}
+	if err := a.authorizeNamespaceField(ctx, fc, principal, authz); err != nil {
+		return nil, err
+	}
+	if err := a.authorizeAdditionalCatalogField(ctx, fc, principal, authz); err != nil {
 		return nil, err
 	}
 
@@ -279,7 +441,11 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	case "createProduct":
 		namespace, _ := nestedStringPath(fc.Args, "input", "metadata", "namespace")
 		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
-		if err := authorizeProductAction(ctx, authz, principal, "product.create", name, namespace, ""); err != nil {
+		owner, err := a.namespaceOwnerFact(ctx, namespace)
+		if err != nil {
+			return nil, err
+		}
+		if err := authorizeProductAction(ctx, authz, principal, "product.create", name, namespace, owner); err != nil {
 			return nil, err
 		}
 	case "updateProduct":
@@ -300,19 +466,20 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	case "completeProductDeletion":
 		namespace, _ := nestedStringArg(fc.Args, "input", "namespace")
 		name, _ := nestedStringArg(fc.Args, "input", "name")
-		if err := a.authorizeStoredProductAction(ctx, authz, principal, "product.delete.complete", namespace, name, ""); err != nil {
+		if err := a.authorizeStoredProductAction(ctx, authz, principal, "product.purge", namespace, name, ""); err != nil {
 			return nil, err
 		}
 	case "createNamespace":
 		tier, ok := nestedStringPath(fc.Args, "input", "spec", "tier")
-		if !ok || tier != "ORGANIZATION" {
-			return next(ctx)
+		if !ok || tier == "" {
+			tier = "USER"
 		}
+		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
-		decision, err := authz.Authorize(ctx, principal, "namespace.create.organization", auth.ResourceContext{
-			Kind: "namespace",
+		decision, err := authz.Authorize(ctx, principal, auth.ActionNamespaceCreate, auth.ResourceContext{
+			Kind: "namespace", Name: name,
 			Attrs: map[string]any{
 				"tier": tier,
 			},
@@ -320,7 +487,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
 		}
 	case "deleteNamespace":
@@ -339,20 +506,16 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		_, action, err := a.namespaceDeleteAction(ctx, ns.Name, principal)
-		if err != nil {
-			return nil, gqlerror.Errorf("authorization error")
-		}
-
-		decision, err := authz.Authorize(ctx, principal, action, auth.ResourceContext{
+		decision, err := authz.Authorize(ctx, principal, auth.ActionNamespaceDelete, auth.ResourceContext{
 			Kind:     "namespace",
 			Name:     ns.Name,
 			OwnerSub: ns.EffectiveOwnerSub(),
+			Attrs:    namespaceAuthorizationAttrs(ns),
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
 		}
 		ctx = context.WithValue(ctx, authorizedNamespaceDeleteContextKey{}, ns)
@@ -374,20 +537,21 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		}
 		targetKind, _ := nestedStringPath(fc.Args, "input", "targetOwnerRef", "kind")
 		targetName, _ := nestedStringPath(fc.Args, "input", "targetOwnerRef", "name")
-		// Enforced here rather than by AuthZProvider (see the TODO on
-		// ownerMatchesPrincipal).
-		targetOwnerSub, err := checkOwnerTransfer(ns.EffectiveOwnerSub(), targetKind, targetName, principal)
+		targetOwnerSub, err := normalizeTransferTarget(targetKind, targetName)
 		if err != nil {
 			return nil, gqlerror.Errorf("%s", err.Error())
 		}
+		ownerKind, ownerName := datastore.DecodeOwnerSubject(targetOwnerSub)
+		attrs := namespaceAuthorizationAttrs(ns)
+		attrs["targetOwnerRef"] = map[string]any{"kind": string(ownerKind), "name": ownerName}
 		decision, err := authz.Authorize(ctx, principal, "namespace.transfer", auth.ResourceContext{
 			Kind: "namespace", Name: ns.Name, OwnerSub: ns.EffectiveOwnerSub(),
-			Attrs: map[string]any{"targetOwnerSub": targetOwnerSub},
+			Attrs: attrs,
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
 		}
 		ctx = context.WithValue(ctx, authorizedNamespaceTransferContextKey{}, &AuthorizedNamespaceTransfer{Namespace: ns, TargetOwnerSub: targetOwnerSub})
@@ -395,15 +559,21 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
-		identifier, _ := nestedStringArg(fc.Args, "input", "identifier")
-		decision, err := authz.Authorize(ctx, principal, "namespace.status.write", auth.ResourceContext{
+		targetName, ok := nestedStringArg(fc.Args, "input", "name")
+		if !ok {
+			return nil, &gqlerror.Error{Message: "name is required", Extensions: map[string]any{"code": "BAD_USER_INPUT"}}
+		}
+		if strings.TrimSpace(targetName) == "" {
+			return nil, &gqlerror.Error{Message: "name must not be empty", Extensions: map[string]any{"code": "BAD_USER_INPUT"}}
+		}
+		decision, err := authz.Authorize(ctx, principal, "namespace.purge", auth.ResourceContext{
 			Kind: "namespace",
-			Name: identifier,
+			Name: targetName,
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, &gqlerror.Error{
 				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
 				Extensions: map[string]any{"code": "FORBIDDEN"},
@@ -414,13 +584,13 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
 		namespace, _ := nestedStringArg(fc.Args, "input", "namespace")
-		decision, err := authz.Authorize(ctx, principal, "namespace.system-repository.provision", auth.ResourceContext{
+		decision, err := authz.Authorize(ctx, principal, auth.ActionNamespaceSystemRepositoryProvision, auth.ResourceContext{
 			Kind: "namespace", Name: namespace,
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, &gqlerror.Error{
 				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
 				Extensions: map[string]any{"code": "FORBIDDEN"},
@@ -432,13 +602,13 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		}
 		name, _ := nestedStringArg(fc.Args, "input", "name")
 		namespace, _ := nestedStringArg(fc.Args, "input", "namespace")
-		decision, err := authz.Authorize(ctx, principal, "repository.status.write", auth.ResourceContext{
+		decision, err := authz.Authorize(ctx, principal, "repository.purge", auth.ResourceContext{
 			Kind: "repository", Name: name, Attrs: map[string]any{"namespace": namespace},
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, &gqlerror.Error{
 				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
 				Extensions: map[string]any{"code": "FORBIDDEN"},
@@ -456,7 +626,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, &gqlerror.Error{
 				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
 				Extensions: map[string]any{"code": "FORBIDDEN"},
@@ -467,14 +637,16 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
 		name, _ := nestedStringArg(fc.Args, "input", "name")
-		decision, err := authz.Authorize(ctx, principal, "category.status.write", auth.ResourceContext{
-			Kind: "categoryTaxonomy",
-			Name: name,
+		namespace, _ := nestedStringArg(fc.Args, "input", "namespace")
+		decision, err := authz.Authorize(ctx, principal, auth.ActionCategoryTaxonomyStatusWrite, auth.ResourceContext{
+			Kind:  "categoryTaxonomy",
+			Name:  name,
+			Attrs: map[string]any{"namespace": namespace},
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, &gqlerror.Error{
 				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
 				Extensions: map[string]any{"code": "FORBIDDEN"},
@@ -492,7 +664,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, &gqlerror.Error{Message: fmt.Sprintf("permission denied: %s", decision.Reason), Extensions: map[string]any{"code": "FORBIDDEN"}}
 		}
 	case "updateRepositoryStatus":
@@ -507,7 +679,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, &gqlerror.Error{Message: fmt.Sprintf("permission denied: %s", decision.Reason), Extensions: map[string]any{"code": "FORBIDDEN"}}
 		}
 	case "updateNamespaceStatus":
@@ -521,50 +693,74 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, &gqlerror.Error{Message: fmt.Sprintf("permission denied: %s", decision.Reason), Extensions: map[string]any{"code": "FORBIDDEN"}}
 		}
-	case "deleteCategory":
-		if authz == nil {
-			return nil, gqlerror.Errorf("authorization service unavailable")
+	case "createCategory":
+		namespace, _ := nestedStringPath(fc.Args, "input", "metadata", "namespace")
+		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
+		owner, err := a.namespaceOwnerFact(ctx, namespace)
+		if err != nil {
+			return nil, err
 		}
+		if err := authorizeCategoryAction(ctx, authz, principal, "categoryTaxonomy.create", auth.ResourceContext{
+			Kind: "categoryTaxonomy", Name: name, OwnerSub: owner, Attrs: map[string]any{"namespace": namespace},
+		}); err != nil {
+			return nil, err
+		}
+	case "updateCategory":
+		namespace, _ := nestedStringPath(fc.Args, "input", "metadata", "namespace")
+		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
+		if err := a.authorizeStoredCategoryAction(ctx, authz, principal, "categoryTaxonomy.update", func() (*datastore.CategoryTaxonomy, error) {
+			return a.store.GetCategoryTaxonomyByName(ctx, namespace, name)
+		}); err != nil {
+			return nil, err
+		}
+	case "deleteCategory":
 		encodedID, _ := nestedStringArg(fc.Args, "input", "id")
 		uid, err := decodeCategoryID(encodedID)
 		if err != nil {
 			return nil, gqlerror.Errorf("invalid category ID")
 		}
-		category, err := a.store.GetCategoryTaxonomy(ctx, uid)
-		if err != nil {
-			if errors.Is(err, datastore.ErrNotFound) {
-				return nil, gqlerror.Errorf("category not found")
-			}
-			return nil, gqlerror.Errorf("authorization error")
+		if err := a.authorizeStoredCategoryAction(ctx, authz, principal, "categoryTaxonomy.delete", func() (*datastore.CategoryTaxonomy, error) {
+			return a.store.GetCategoryTaxonomy(ctx, uid)
+		}); err != nil {
+			return nil, err
 		}
-		decision, err := authz.Authorize(ctx, principal, "category.delete", auth.ResourceContext{
-			Kind: "categoryTaxonomy", Name: category.Name, OwnerSub: category.EffectiveOwnerSub(),
-			Attrs: map[string]any{"namespace": category.Namespace, "repositoryID": category.RepositoryID},
-		})
-		if err != nil {
-			return nil, gqlerror.Errorf("authorization error")
-		}
-		if decision.Outcome == auth.OutcomeDeny {
-			return nil, &gqlerror.Error{Message: fmt.Sprintf("permission denied: %s", decision.Reason), Extensions: map[string]any{"code": "FORBIDDEN"}}
+	case "completeCategoryDeletion":
+		namespace, _ := nestedStringArg(fc.Args, "input", "namespace")
+		name, _ := nestedStringArg(fc.Args, "input", "name")
+		if err := authorizeCategoryAction(ctx, authz, principal, "categoryTaxonomy.purge", auth.ResourceContext{
+			Kind: "categoryTaxonomy", Name: name, Attrs: map[string]any{"namespace": namespace},
+		}); err != nil {
+			return nil, err
 		}
 	case "updateResourceStatus":
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
 		kind, _ := nestedStringArg(fc.Args, "input", "kind")
+		// Match the concrete generic status backends. Catalog membership alone
+		// does not expose an operation (Product has only a typed status mutation).
+		if kind != "Namespace" && kind != "Repository" && kind != "CategoryTaxonomy" && kind != "File" {
+			return nil, &gqlerror.Error{Message: "unsupported status kind", Extensions: map[string]any{"code": "UNSUPPORTED_KIND"}}
+		}
 		name, _ := nestedStringArg(fc.Args, "input", "name")
 		action := lowerCamelFirst(kind) + ".status.write"
+		definition, found := auth.LookupAction(action)
+		if !found || definition.Reserved {
+			return nil, &gqlerror.Error{Message: "unsupported status kind", Extensions: map[string]any{"code": "UNSUPPORTED_KIND"}}
+		}
+		namespace, _ := nestedStringArg(fc.Args, "input", "namespace")
 		decision, err := authz.Authorize(ctx, principal, action, auth.ResourceContext{
-			Kind: kind,
-			Name: name,
+			Kind:  definition.Kind,
+			Name:  name,
+			Attrs: map[string]any{"namespace": namespace},
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, &gqlerror.Error{
 				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
 				Extensions: map[string]any{"code": "FORBIDDEN"},
@@ -579,7 +775,10 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		}
 		namespace, _ := nestedStringPath(fc.Args, "input", "metadata", "namespace")
 		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
-		expectedSubject := datastore.ServiceAccountSubject(namespace, name)
+		if namespace != "" {
+			return nil, gqlerror.Errorf("ServiceAccount is cluster-scoped; omit metadata.namespace")
+		}
+		expectedSubject := datastore.ServiceAccountSubject(name)
 		if principal.Subject != expectedSubject {
 			return nil, &gqlerror.Error{
 				Message:    "service account can only issue tokens for itself",
@@ -590,14 +789,14 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
-		decision, err := authz.Authorize(ctx, principal, "serviceaccount.token.issue", auth.ResourceContext{
+		decision, err := authz.Authorize(ctx, principal, auth.ActionServiceAccountTokenIssue, auth.ResourceContext{
 			Kind: "serviceAccount",
-			Name: datastore.ServiceAccountSubject(namespace, name),
+			Name: name,
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, &gqlerror.Error{
 				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
 				Extensions: map[string]any{"code": "FORBIDDEN"},
@@ -614,13 +813,15 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
-		decision, err := authz.Authorize(ctx, principal, "serviceaccount.create", auth.ResourceContext{
+		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
+		decision, err := authz.Authorize(ctx, principal, auth.ActionServiceAccountCreate, auth.ResourceContext{
 			Kind: "serviceAccount",
+			Name: name,
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, &gqlerror.Error{
 				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
 				Extensions: map[string]any{"code": "FORBIDDEN"},
@@ -637,13 +838,15 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
-		decision, err := authz.Authorize(ctx, principal, "serviceaccount.key.rotate", auth.ResourceContext{
+		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
+		decision, err := authz.Authorize(ctx, principal, auth.ActionServiceAccountKeyRotate, auth.ResourceContext{
 			Kind: "serviceAccount",
+			Name: name,
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, &gqlerror.Error{
 				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
 				Extensions: map[string]any{"code": "FORBIDDEN"},
@@ -660,13 +863,15 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
-		decision, err := authz.Authorize(ctx, principal, "serviceaccount.delete", auth.ResourceContext{
+		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
+		decision, err := authz.Authorize(ctx, principal, auth.ActionServiceAccountDelete, auth.ResourceContext{
 			Kind: "serviceAccount",
+			Name: name,
 		})
 		if err != nil {
 			return nil, gqlerror.Errorf("authorization error")
 		}
-		if decision.Outcome == auth.OutcomeDeny {
+		if decision.Outcome != auth.OutcomeAllow {
 			return nil, &gqlerror.Error{
 				Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
 				Extensions: map[string]any{"code": "FORBIDDEN"},
@@ -681,6 +886,273 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 	return next(ctx)
 }
 
+// authorizeCategoryProductsField preserves the category parent's namespace
+// and namespace owner when checking product.list. gqlgen exposes the resolved
+// parent through FieldContext.Parent.Result before child field middleware is
+// invoked, so this check remains ahead of the membership-index read.
+func (a *Authorize) authorizeCategoryProductsField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) error {
+	var category *model.Category
+	if fc != nil && fc.Parent != nil {
+		category, _ = fc.Parent.Result.(*model.Category)
+	}
+	if category == nil || category.Metadata == nil || (category.Metadata.Namespace == nil || *category.Metadata.Namespace == "") {
+		return gqlerror.Errorf("authorization error")
+	}
+	namespace := *category.Metadata.Namespace
+	owner := ""
+	if a.store != nil {
+		ns, err := a.store.GetNamespaceByName(ctx, namespace)
+		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+			return gqlerror.Errorf("authorization error")
+		}
+		if ns != nil {
+			owner = ns.EffectiveOwnerSub()
+		}
+	}
+	return authorizeProductAction(ctx, authz, principal, "product.list", "", namespace, owner)
+}
+
+func isAdditionalCatalogField(fc *graphql.FieldContext) bool {
+	if fc == nil {
+		return false
+	}
+	switch fc.Object + "." + fc.Field.Name {
+	case "Query.collection", "Query.collections", "Query.productVariant", "Query.productVariants", "Collection.products", "Product.productVariants":
+		return true
+	}
+	return false
+}
+
+// These existing catalog reads use the same action/fact contract as Product.
+// A parent read never grants permission to enumerate its related resources.
+func (a *Authorize) authorizeAdditionalCatalogField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) error {
+	if fc == nil {
+		return nil
+	}
+	list := func(kind, namespace string) error {
+		if a.store == nil || namespace == "" {
+			return gqlerror.Errorf("authorization context is incomplete")
+		}
+		ns, err := a.store.GetNamespaceByName(ctx, namespace)
+		if err != nil {
+			return gqlerror.Errorf("authorization error")
+		}
+		return authorizeCategoryAction(ctx, authz, principal, kind+".list", auth.ResourceContext{Kind: kind, OwnerSub: ns.EffectiveOwnerSub(), Attrs: map[string]any{"namespace": namespace}})
+	}
+	if fc.Object == "Collection" && fc.Field.Name == "products" {
+		if fc.Parent == nil {
+			return gqlerror.Errorf("authorization context is incomplete")
+		}
+		parent, ok := fc.Parent.Result.(*model.Collection)
+		if !ok || parent == nil || parent.Metadata == nil || parent.Metadata.Namespace == nil {
+			return gqlerror.Errorf("authorization context is incomplete")
+		}
+		return list("product", *parent.Metadata.Namespace)
+	}
+	if fc.Object == "Product" && fc.Field.Name == "productVariants" {
+		if fc.Parent == nil {
+			return gqlerror.Errorf("authorization context is incomplete")
+		}
+		parent, ok := fc.Parent.Result.(*model.Product)
+		if !ok || parent == nil || parent.Metadata == nil || parent.Metadata.Namespace == nil {
+			return gqlerror.Errorf("authorization context is incomplete")
+		}
+		return list("productVariant", *parent.Metadata.Namespace)
+	}
+	if fc.Object != "Query" {
+		return nil
+	}
+	if fc.Field.Name == "collections" || fc.Field.Name == "productVariants" {
+		namespace, _ := directStringArg(fc.Args, "namespace")
+		return list(strings.TrimSuffix(fc.Field.Name, "s"), namespace)
+	}
+	type lookup struct{ kind, uid, namespace, name string }
+	var lookups []lookup
+	if fc.Field.Name == "node" || fc.Field.Name == "nodes" {
+		ids, _ := directStringsArg(fc.Args, "ids")
+		if fc.Field.Name == "node" {
+			id, _ := directStringArg(fc.Args, "id")
+			ids = []string{id}
+		}
+		for _, id := range ids {
+			kind, uid, err := decodeGlobalID(id)
+			if err == nil && (kind == "Collection" || kind == "ProductVariant") {
+				lookups = append(lookups, lookup{kind: lowerCamelFirst(kind), uid: uid})
+			}
+		}
+	} else if fc.Field.Name == "collection" || fc.Field.Name == "productVariant" {
+		item := lookup{kind: fc.Field.Name}
+		if id, ok := nestedStringPath(fc.Args, "by", "id"); ok && id != "" {
+			kind, uid, err := decodeGlobalID(id)
+			if err != nil || lowerCamelFirst(kind) != item.kind {
+				return admission.NewError(admission.CodeBadUserInput, "INVALID_GLOBAL_ID", "invalid resource ID").ToGQLError()
+			}
+			item.uid = uid
+		} else {
+			item.namespace, _ = nestedStringPath(fc.Args, "by", "namespacePath", "namespace")
+			item.name, _ = nestedStringPath(fc.Args, "by", "namespacePath", "name")
+		}
+		lookups = append(lookups, item)
+	}
+	for _, item := range lookups {
+		store, ok := a.store.(interface {
+			GetCollection(context.Context, string) (*datastore.Collection, error)
+			GetCollectionByName(context.Context, string, string) (*datastore.Collection, error)
+			GetProductVariant(context.Context, string) (*datastore.ProductVariant, error)
+			GetProductVariantByName(context.Context, string, string) (*datastore.ProductVariant, error)
+		})
+		if !ok {
+			return gqlerror.Errorf("authorization service unavailable")
+		}
+		resource := auth.ResourceContext{Kind: item.kind}
+		var err error
+		if item.kind == "collection" {
+			var entity *datastore.Collection
+			if item.uid != "" {
+				entity, err = store.GetCollection(ctx, item.uid)
+			} else {
+				entity, err = store.GetCollectionByName(ctx, item.namespace, item.name)
+			}
+			if err == nil && entity != nil {
+				resource.Name = entity.Name
+				resource.OwnerSub = entity.EffectiveOwnerSub()
+				resource.Attrs = map[string]any{"namespace": entity.Namespace}
+			}
+		} else {
+			var entity *datastore.ProductVariant
+			if item.uid != "" {
+				entity, err = store.GetProductVariant(ctx, item.uid)
+			} else {
+				entity, err = store.GetProductVariantByName(ctx, item.namespace, item.name)
+			}
+			if err == nil && entity != nil {
+				resource.Name = entity.Name
+				resource.OwnerSub = entity.EffectiveOwnerSub()
+				resource.Attrs = map[string]any{"namespace": entity.Namespace}
+			}
+		}
+		if errors.Is(err, datastore.ErrNotFound) {
+			if fc.Field.Name != "node" && fc.Field.Name != "nodes" {
+				return admission.ResourceNotFound(item.kind, item.kind+" not found")
+			}
+			kind := "Collection"
+			if item.kind == "productVariant" {
+				kind = "ProductVariant"
+			}
+			preserveMissingNode(ctx, kind, item.uid, err)
+			continue
+		}
+		if err != nil || resource.Name == "" {
+			return gqlerror.Errorf("authorization error")
+		}
+		if err := authorizeCategoryAction(ctx, authz, principal, item.kind+".read", resource); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isNamespaceQueryField(fc *graphql.FieldContext) bool {
+	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "namespace" || fc.Field.Name == "namespaces")
+}
+
+// Stored tiers use lowercase encoding; authorization facts use the same enum
+// spelling as GraphQL and Git manifests. Unknown tiers remain missing facts.
+func namespaceAuthorizationAttrs(ns *datastore.Namespace) map[string]any {
+	attrs := map[string]any{}
+	if ns != nil {
+		switch ns.Tier {
+		case datastore.NamespaceTierUser:
+			attrs["tier"] = "USER"
+		case datastore.NamespaceTierOrganization:
+			attrs["tier"] = "ORGANIZATION"
+		}
+	}
+	return attrs
+}
+
+// Namespace reads must be checked through every selector, including Node.
+func (a *Authorize) authorizeNamespaceField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) error {
+	if fc == nil {
+		return nil
+	}
+	check := func(action string, ns *datastore.Namespace) error {
+		resource := auth.ResourceContext{Kind: "namespace"}
+		if ns != nil {
+			resource.Name = ns.Name
+			resource.OwnerSub = ns.EffectiveOwnerSub()
+			resource.Attrs = namespaceAuthorizationAttrs(ns)
+		}
+		return authorizeCategoryAction(ctx, authz, principal, action, resource)
+	}
+	if fc.Object == "Query" && fc.Field.Name == "namespaces" {
+		return check(auth.ActionNamespaceList, nil)
+	}
+	var names, ids []string
+	switch fc.Object + "." + fc.Field.Name {
+	case "Query.namespace":
+		if id, ok := nestedStringPath(fc.Args, "by", "id"); ok && id != "" {
+			ids = []string{id}
+		} else {
+			name, _ := nestedStringPath(fc.Args, "by", "name")
+			names = []string{name}
+		}
+	case "Query.node":
+		id, _ := directStringArg(fc.Args, "id")
+		ids = []string{id}
+	case "Query.nodes":
+		ids, _ = directStringsArg(fc.Args, "ids")
+	case "Mutation.updateNamespace":
+		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
+		names = []string{name}
+	default:
+		return nil
+	}
+	action := auth.ActionNamespaceRead
+	if fc.Object == "Mutation" {
+		action = auth.ActionNamespaceUpdate
+	}
+	for _, id := range ids {
+		kind, uid, err := decodeGlobalID(id)
+		if err != nil || kind != "Namespace" {
+			continue
+		}
+		if a.store == nil {
+			return gqlerror.Errorf("authorization service unavailable")
+		}
+		ns, err := a.store.GetNamespace(ctx, uid)
+		if errors.Is(err, datastore.ErrNotFound) {
+			if fc.Field.Name == "namespace" {
+				return namespaceNotFoundError(uid)
+			}
+			preserveMissingNode(ctx, "Namespace", uid, err)
+			continue
+		}
+		if err != nil {
+			return gqlerror.Errorf("authorization error")
+		}
+		if err := check(action, ns); err != nil {
+			return err
+		}
+	}
+	for _, name := range names {
+		if a.store == nil {
+			return gqlerror.Errorf("authorization service unavailable")
+		}
+		ns, err := a.store.GetNamespaceByName(ctx, name)
+		if errors.Is(err, datastore.ErrNotFound) {
+			return namespaceNotFoundError(name)
+		}
+		if err != nil {
+			return gqlerror.Errorf("authorization error")
+		}
+		if err := check(action, ns); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func isRepositoryQueryField(fc *graphql.FieldContext) bool {
 	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node" || fc.Field.Name == "nodes")
 }
@@ -689,24 +1161,185 @@ func isProductQueryField(fc *graphql.FieldContext) bool {
 	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "product" || fc.Field.Name == "products")
 }
 
+// The parent Category has already been authorized for read. gqlgen field
+// middleware does not expose its hydrated parent value, so this action check
+// deliberately uses the global list scope; resource-aware Category scoping is
+// enforced at the parent read boundary.
+func isCategoryProductsField(fc *graphql.FieldContext) bool {
+	return fc != nil && fc.Object == "Category" && fc.Field.Name == "products"
+}
+
+func isCategoryQueryField(fc *graphql.FieldContext) bool {
+	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "category" || fc.Field.Name == "categories")
+}
+
+// authorizeCategoryQueryField checks categoryTaxonomy.list for lists (filtered
+// or not) and categoryTaxonomy.read for single reads, scoped to the namespace.
+// A by-name read is checked against the requested name, so a denied caller
+// learns nothing about whether the category exists.
+func (a *Authorize) authorizeCategoryQueryField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) error {
+	if fc.Field.Name == "categories" {
+		namespace, _ := directStringArg(fc.Args, "namespace")
+		owner := ""
+		if a.store != nil && namespace != "" {
+			ns, err := a.store.GetNamespaceByName(ctx, namespace)
+			if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+				return gqlerror.Errorf("authorization error")
+			}
+			if ns != nil {
+				owner = ns.EffectiveOwnerSub()
+			}
+		}
+		return authorizeCategoryAction(ctx, authz, principal, "categoryTaxonomy.list", auth.ResourceContext{
+			Kind: "categoryTaxonomy", OwnerSub: owner, Attrs: map[string]any{"namespace": namespace},
+		})
+	}
+	if encodedID, ok := nestedStringPath(fc.Args, "by", "id"); ok && encodedID != "" {
+		uid, err := decodeCategoryID(encodedID)
+		if err != nil {
+			return err
+		}
+		if a.store == nil {
+			return gqlerror.Errorf("authorization service unavailable")
+		}
+		category, err := a.store.GetCategoryTaxonomy(ctx, uid)
+		if errors.Is(err, datastore.ErrNotFound) {
+			return admission.ResourceNotFound("Category", "category not found")
+		}
+		if err != nil {
+			return gqlerror.Errorf("authorization error")
+		}
+		return authorizeCategoryAction(ctx, authz, principal, "categoryTaxonomy.read", auth.ResourceContext{
+			Kind: "categoryTaxonomy", Name: category.Name, OwnerSub: category.EffectiveOwnerSub(),
+			Attrs: map[string]any{"namespace": category.Namespace, "repositoryID": category.RepositoryID},
+		})
+	}
+	namespace, _ := nestedStringPath(fc.Args, "by", "namespacePath", "namespace")
+	name, _ := nestedStringPath(fc.Args, "by", "namespacePath", "name")
+	if a.store == nil {
+		return gqlerror.Errorf("authorization service unavailable")
+	}
+	category, err := a.store.GetCategoryTaxonomyByName(ctx, namespace, name)
+	if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+		return gqlerror.Errorf("authorization error")
+	}
+	owner := ""
+	if category != nil {
+		owner = category.EffectiveOwnerSub()
+	}
+	if authErr := authorizeCategoryAction(ctx, authz, principal, "categoryTaxonomy.read", auth.ResourceContext{
+		Kind: "categoryTaxonomy", Name: name, OwnerSub: owner, Attrs: map[string]any{"namespace": namespace},
+	}); authErr != nil {
+		return authErr
+	}
+	if errors.Is(err, datastore.ErrNotFound) {
+		return admission.ResourceNotFound("Category", "category not found")
+	}
+	return nil
+}
+
+// authorizeCategoryNodeField applies categoryTaxonomy.read to Category IDs
+// fetched through node/nodes, so the Node interface is not a read bypass.
+func (a *Authorize) authorizeCategoryNodeField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) error {
+	if fc.Object != "Query" || (fc.Field.Name != "node" && fc.Field.Name != "nodes") {
+		return nil
+	}
+	ids, _ := directStringsArg(fc.Args, "ids")
+	if fc.Field.Name == "node" {
+		id, _ := directStringArg(fc.Args, "id")
+		ids = []string{id}
+	}
+	for _, id := range ids {
+		uid, err := decodeCategoryID(id)
+		if err != nil {
+			continue
+		}
+		if a.store == nil {
+			return gqlerror.Errorf("authorization service unavailable")
+		}
+		category, err := a.store.GetCategoryTaxonomy(ctx, uid)
+		if errors.Is(err, datastore.ErrNotFound) {
+			preserveMissingNode(ctx, "Category", uid, err)
+			continue
+		}
+		if err != nil {
+			return gqlerror.Errorf("authorization error")
+		}
+		if err := authorizeCategoryAction(ctx, authz, principal, "categoryTaxonomy.read", auth.ResourceContext{
+			Kind: "categoryTaxonomy", Name: category.Name, OwnerSub: category.EffectiveOwnerSub(),
+			Attrs: map[string]any{"namespace": category.Namespace, "repositoryID": category.RepositoryID},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func isFileQueryField(fc *graphql.FieldContext) bool {
 	return fc != nil && fc.Object == "Query" && fc.Field.Name == "file"
 }
 
-func (a *Authorize) authorizeFileRead(ctx context.Context, principal *auth.Principal, authz auth.AuthZProvider, namespace, name string) error {
+func (a *Authorize) authorizeFileRead(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) (context.Context, error) {
+	id, hasID := nestedStringPath(fc.Args, "by", "id")
+	namespace, namespaceOK := nestedStringPath(fc.Args, "by", "namespacePath", "namespace")
+	name, nameOK := nestedStringPath(fc.Args, "by", "namespacePath", "name")
+	validSelector := (hasID && !namespaceOK && !nameOK) || (!hasID && namespaceOK && nameOK)
+	// Variable coercion does not enforce @oneOf, and typed inputs lose explicit
+	// null members. Check the original variable's key count before any lookup.
+	if argument := fc.Field.Arguments.ForName("by"); argument != nil && argument.Value.Kind == ast.Variable && graphql.HasOperationContext(ctx) {
+		value, err := argument.Value.Value(graphql.GetOperationContext(ctx).Variables)
+		fields, ok := value.(map[string]any)
+		validSelector = validSelector && err == nil && ok && len(fields) == 1
+	}
+	if !validSelector {
+		return ctx, admission.NewError(admission.CodeBadUserInput, "INVALID_SELECTOR", "FileBy: exactly one selector required").ToGQLError()
+	}
 	if authz == nil || a.store == nil {
-		return gqlerror.Errorf("authorization service unavailable")
+		return ctx, gqlerror.Errorf("authorization service unavailable")
+	}
+	store, ok := a.store.(interface {
+		GetFile(context.Context, string) (*datastore.File, error)
+		GetFileByName(context.Context, string, string) (*datastore.File, error)
+	})
+	if !ok {
+		return ctx, gqlerror.Errorf("authorization service unavailable")
+	}
+	var file *datastore.File
+	var err error
+	if hasID {
+		uid, decodeErr := decodeGlobalIDAs("File", id)
+		if decodeErr != nil {
+			return ctx, decodeErr
+		}
+		file, err = store.GetFile(ctx, uid)
+	} else {
+		file, err = store.GetFileByName(ctx, namespace, name)
+	}
+	if errors.Is(err, datastore.ErrNotFound) {
+		file = nil
+	} else if err != nil || file == nil {
+		return ctx, gqlerror.Errorf("authorization error")
+	}
+	if ctx.Err() != nil {
+		return ctx, gqlerror.Errorf("authorization error")
 	}
 	owner := ""
-	ns, err := a.store.GetNamespaceByName(ctx, namespace)
-	if err != nil && !errors.Is(err, datastore.ErrNotFound) {
-		return gqlerror.Errorf("authorization error")
+	if file != nil {
+		namespace, name = file.Namespace, file.Name
+		owner = file.EffectiveOwnerSub()
 	}
-	if ns != nil {
-		owner = ns.EffectiveOwnerSub()
+	if err := authorizeFileReadResource(ctx, principal, authz, namespace, name, owner); err != nil {
+		return ctx, err
+	}
+	return context.WithValue(ctx, authorizedFileReadContextKey{}, &authorizedFileRead{file: file, field: fc}), nil
+}
+
+func authorizeFileReadResource(ctx context.Context, principal *auth.Principal, authz auth.AuthZProvider, namespace, name, owner string) error {
+	if authz == nil {
+		return gqlerror.Errorf("authorization service unavailable")
 	}
 	decision, err := authz.Authorize(ctx, principal, "file.read", auth.ResourceContext{
-		Kind: "File", Name: name, OwnerSub: owner, Attrs: map[string]any{"namespace": namespace},
+		Kind: "file", Name: name, OwnerSub: owner, Attrs: map[string]any{"namespace": namespace},
 	})
 	if err != nil {
 		return gqlerror.Errorf("authorization error")
@@ -717,36 +1350,128 @@ func (a *Authorize) authorizeFileRead(ctx context.Context, principal *auth.Princ
 	return nil
 }
 
-func (a *Authorize) authorizeFileNodeField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) error {
+func (a *Authorize) namespaceOwnerFact(ctx context.Context, name string) (string, error) {
+	if a.store == nil {
+		return "", gqlerror.Errorf("authorization service unavailable")
+	}
+	ns, err := a.store.GetNamespaceByName(ctx, name)
+	if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+		return "", gqlerror.Errorf("authorization error")
+	}
+	if ns == nil {
+		return "", nil
+	}
+	return ns.EffectiveOwnerSub(), nil
+}
+
+func (a *Authorize) authorizeFileNodeField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) (authorizedCtx context.Context, resultErr error) {
 	if fc.Object != "Query" || (fc.Field.Name != "node" && fc.Field.Name != "nodes") {
-		return nil
+		return ctx, nil
 	}
 	ids, _ := directStringsArg(fc.Args, "ids")
 	if fc.Field.Name == "node" {
 		id, _ := directStringArg(fc.Args, "id")
 		ids = []string{id}
 	}
-	for _, id := range ids {
+	files := make([]*datastore.File, len(ids))
+	uids := make([]string, len(ids))
+	errs := make([]error, len(ids))
+	filePositions := make([]int, 0, len(ids))
+	for i, id := range ids {
+		if ctx.Err() != nil {
+			return ctx, gqlerror.Errorf("authorization error")
+		}
 		kind, uid, err := decodeGlobalID(id)
 		if err != nil || kind != "File" {
 			continue
 		}
-		fileStore, ok := a.store.(interface {
-			GetFile(context.Context, string) (*datastore.File, error)
-		})
-		if !ok {
-			return gqlerror.Errorf("authorization service unavailable")
+		uids[i] = uid
+		filePositions = append(filePositions, i)
+	}
+	if len(filePositions) == 0 {
+		return ctx, nil
+	}
+	fileStore, ok := a.store.(interface {
+		GetFile(context.Context, string) (*datastore.File, error)
+	})
+	if !ok {
+		return ctx, gqlerror.Errorf("authorization service unavailable")
+	}
+	for _, position := range filePositions {
+		if ctx.Err() != nil {
+			return ctx, gqlerror.Errorf("authorization error")
 		}
-		file, err := fileStore.GetFile(ctx, uid)
-		if errors.Is(err, datastore.ErrNotFound) {
+		file, err := fileStore.GetFile(ctx, uids[position])
+		if !errors.Is(err, datastore.ErrNotFound) {
+			if err == nil && file == nil {
+				err = errors.New("file authorization lookup returned no record")
+			}
+			files[position], errs[position] = file, err
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx, gqlerror.Errorf("authorization error")
+	}
+	authorized := make(map[string]*datastore.File)
+	for i, file := range files {
+		if errs[i] != nil {
+			return ctx, gqlerror.Errorf("authorization error")
+		}
+		if file == nil {
+			if uids[i] != "" {
+				authorized[uids[i]] = nil
+			}
 			continue
 		}
+		if file.UID != uids[i] {
+			return ctx, gqlerror.Errorf("authorization error")
+		}
+		if err := authorizeFileReadResource(ctx, principal, authz, file.Namespace, file.Name, file.EffectiveOwnerSub()); err != nil {
+			return ctx, err
+		}
+		authorized[uids[i]] = file
+	}
+	return context.WithValue(ctx, authorizedFileNodesContextKey{}, authorized), nil
+}
+
+// authorizeStoredCategoryAction scopes the decision by the stored record, never
+// by caller-supplied fields.
+func (a *Authorize) authorizeStoredCategoryAction(ctx context.Context, authz auth.AuthZProvider, principal *auth.Principal, action string, load func() (*datastore.CategoryTaxonomy, error)) error {
+	if a.store == nil {
+		return gqlerror.Errorf("authorization service unavailable")
+	}
+	category, err := load()
+	if err != nil {
+		if errors.Is(err, datastore.ErrNotFound) {
+			return admission.ResourceNotFound("Category", "category not found")
+		}
+		return gqlerror.Errorf("authorization error")
+	}
+	return authorizeCategoryAction(ctx, authz, principal, action, auth.ResourceContext{
+		Kind: "categoryTaxonomy", Name: category.Name, OwnerSub: category.EffectiveOwnerSub(),
+		Attrs: map[string]any{"namespace": category.Namespace, "repositoryID": category.RepositoryID},
+	})
+}
+
+func authorizeCategoryAction(ctx context.Context, authz auth.AuthZProvider, principal *auth.Principal, action string, resource auth.ResourceContext) error {
+	if authz == nil {
+		return gqlerror.Errorf("authorization service unavailable")
+	}
+	decision, err := authz.Authorize(ctx, principal, action, resource)
+	if err != nil {
+		return gqlerror.Errorf("authorization error")
+	}
+	// The same endpoint can be read using either ordinary or management
+	// capability. There is no role-name shortcut and no requirement to hold both.
+	if decision.Outcome != auth.OutcomeAllow && (resource.Kind == "product" || resource.Kind == "productVariant") && (action == resource.Kind+".read" || action == resource.Kind+".list") {
+		verb := strings.TrimPrefix(action, resource.Kind+".")
+		decision, err = authz.Authorize(ctx, principal, resource.Kind+".management."+verb, resource)
 		if err != nil {
 			return gqlerror.Errorf("authorization error")
 		}
-		if err := a.authorizeFileRead(ctx, principal, authz, file.Namespace, file.Name); err != nil {
-			return err
-		}
+	}
+	if decision.Outcome != auth.OutcomeAllow {
+		return deniedResourceError(action, resource)
 	}
 	return nil
 }
@@ -755,19 +1480,21 @@ func graphqlFieldRequiresAuthorization(fc *graphql.FieldContext) bool {
 	if fc == nil {
 		return false
 	}
+	if isAdditionalCatalogField(fc) || isCategoryProductsField(fc) {
+		return true
+	}
 	switch fc.Object {
 	case "Query":
-		return isFileQueryField(fc) || fc.Field.Name == "repository" || fc.Field.Name == "repositories" || fc.Field.Name == "node" || fc.Field.Name == "nodes"
+		return isNamespaceQueryField(fc) || isProductQueryField(fc) || isFileQueryField(fc) || isCategoryQueryField(fc) || isRepositoryQueryField(fc)
 	case "Mutation":
 		switch fc.Field.Name {
-		case "createProduct", "updateProduct", "deleteProduct", "completeProductDeletion", "createRepository", "deleteRepository", "deleteNamespace", "completeNamespaceDeletion", "provisionNamespaceSystemRepository", "completeRepositoryDeletion", "provisionRepositoryStorage", "updateCategoryStatus", "updateProductStatus", "updateNamespaceStatus", "deleteCategory", "updateResourceStatus", "issueServiceAccountToken", "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount":
+		case "createProduct", "updateProduct", "deleteProduct", "completeProductDeletion", "createRepository", "deleteRepository", "deleteNamespace", "completeNamespaceDeletion", "provisionNamespaceSystemRepository", "completeRepositoryDeletion", "provisionRepositoryStorage", "updateCategoryStatus", "updateProductStatus", "updateNamespaceStatus", "createCategory", "updateCategory", "deleteCategory", "completeCategoryDeletion", "updateResourceStatus", "issueServiceAccountToken", "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount":
 			return true
-		case "createNamespace":
-			tier, ok := nestedStringPath(fc.Args, "input", "spec", "tier")
-			return ok && tier == "ORGANIZATION"
+		case "createNamespace", "updateNamespace", "transferNamespaceOwner", "updateRepository", "updateRepositoryStatus":
+			return true
 		}
 	case "Subscription":
-		return fc.Field.Name == "watchFiles" || fc.Field.Name == "watchNamespaces" || fc.Field.Name == "watchRepositories" || fc.Field.Name == "watchProducts" || fc.Field.Name == "watchResources"
+		return fc.Field.Name == "watchFiles" || fc.Field.Name == "watchNamespaces" || fc.Field.Name == "watchRepositories" || fc.Field.Name == "watchProducts" || fc.Field.Name == "watchCategories" || fc.Field.Name == "watchResources"
 	}
 	return false
 }
@@ -787,7 +1514,7 @@ func (a *Authorize) authorizeStoredProductAction(ctx context.Context, authz auth
 	}
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
-			return &gqlerror.Error{Message: "product not found", Extensions: map[string]any{"code": "NOT_FOUND"}}
+			return admission.ResourceNotFound("Product", "product not found")
 		}
 		return gqlerror.Errorf("authorization error")
 	}
@@ -795,20 +1522,10 @@ func (a *Authorize) authorizeStoredProductAction(ctx context.Context, authz auth
 }
 
 func authorizeProductAction(ctx context.Context, authz auth.AuthZProvider, principal *auth.Principal, action, name, namespace, ownerSub string) error {
-	if authz == nil {
-		return gqlerror.Errorf("authorization service unavailable")
-	}
-	decision, err := authz.Authorize(ctx, principal, action, auth.ResourceContext{
-		Kind: "Product", Name: name, OwnerSub: ownerSub,
+	return authorizeCategoryAction(ctx, authz, principal, action, auth.ResourceContext{
+		Kind: "product", Name: name, OwnerSub: ownerSub,
 		Attrs: map[string]any{"namespace": namespace},
 	})
-	if err != nil {
-		return gqlerror.Errorf("authorization error")
-	}
-	if decision.Outcome == auth.OutcomeDeny {
-		return &gqlerror.Error{Message: fmt.Sprintf("permission denied: %s", decision.Reason), Extensions: map[string]any{"code": "FORBIDDEN"}}
-	}
-	return nil
 }
 
 func (a *Authorize) authorizeProductQueryField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) error {
@@ -831,7 +1548,7 @@ func (a *Authorize) authorizeProductQueryField(ctx context.Context, fc *graphql.
 				owner = ns.EffectiveOwnerSub()
 			}
 		}
-		return authorizeProductAction(ctx, authz, principal, "product.read", "", namespace, owner)
+		return authorizeProductAction(ctx, authz, principal, "product.list", "", namespace, owner)
 	}
 	if a.store == nil {
 		return gqlerror.Errorf("authorization service unavailable")
@@ -843,7 +1560,7 @@ func (a *Authorize) authorizeProductQueryField(ctx context.Context, fc *graphql.
 	if encodedID, ok := nestedStringPath(fc.Args, "by", "id"); ok && encodedID != "" {
 		rawID, decodeErr := decodeGlobalIDAs("Product", encodedID)
 		if decodeErr != nil {
-			return gqlerror.Errorf("invalid product ID")
+			return decodeErr
 		}
 		product, err = a.store.GetProduct(ctx, rawID)
 	} else {
@@ -856,7 +1573,7 @@ func (a *Authorize) authorizeProductQueryField(ctx context.Context, fc *graphql.
 	}
 	if err != nil {
 		if errors.Is(err, datastore.ErrNotFound) {
-			return &gqlerror.Error{Message: "product not found", Extensions: map[string]any{"code": "NOT_FOUND"}}
+			return admission.ResourceNotFound("Product", "product not found")
 		}
 		return gqlerror.Errorf("authorization error")
 	}
@@ -886,6 +1603,7 @@ func (a *Authorize) authorizeProductNodeField(ctx context.Context, fc *graphql.F
 		product, err := a.store.GetProduct(ctx, rawID)
 		if err != nil {
 			if errors.Is(err, datastore.ErrNotFound) {
+				preserveMissingNode(ctx, "Product", rawID, err)
 				continue
 			}
 			return gqlerror.Errorf("authorization error")
@@ -908,20 +1626,14 @@ func (a *Authorize) authorizeProductNodeField(ctx context.Context, fc *graphql.F
 // authorization, which callers could not recognize as a normal not-found
 // response.
 func repositoryNotFoundError() *gqlerror.Error {
-	return &gqlerror.Error{
-		Message:    "repository not found",
-		Extensions: map[string]any{"code": "NOT_FOUND"},
-	}
+	return admission.ResourceNotFound("Repository", "repository not found")
 }
 
 // namespaceNotFoundError mirrors resolver.Service.GetNamespaceByName's
 // not-found shape (graph/resolver/service.go) for the same reason as
 // repositoryNotFoundError above.
 func namespaceNotFoundError(name string) *gqlerror.Error {
-	return &gqlerror.Error{
-		Message:    fmt.Sprintf("namespace %q not found", name),
-		Extensions: map[string]any{"code": "NOT_FOUND"},
-	}
+	return admission.ResourceNotFound("Namespace", fmt.Sprintf("namespace %q not found", name))
 }
 
 // authFieldNotFoundError marks a datastore.ErrNotFound observed while
@@ -951,9 +1663,9 @@ func asAuthorizeFieldError(err error, notFound func() *gqlerror.Error) error {
 	return err
 }
 
-func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal) error {
+func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal) (context.Context, error) {
 	if fc == nil || a.store == nil {
-		return nil
+		return ctx, nil
 	}
 	var operation string
 	var namespaces []*datastore.Namespace
@@ -981,63 +1693,63 @@ func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.Fi
 		name, nameOK := nestedStringPath(fc.Args, "input", "metadata", "name")
 		namespace, namespaceOK := nestedStringPath(fc.Args, "input", "metadata", "namespace")
 		if !nameOK || !namespaceOK {
-			return nil
+			return ctx, nil
 		}
 		ns, err := a.store.GetNamespaceByName(ctx, namespace)
 		if err != nil {
-			return asAuthorizeFieldError(err, func() *gqlerror.Error { return namespaceNotFoundError(namespace) })
+			return ctx, asAuthorizeFieldError(err, func() *gqlerror.Error { return namespaceNotFoundError(namespace) })
 		}
 		operation, namespaces, repo = "create", []*datastore.Namespace{ns}, &datastore.Repository{Name: name}
 	case "Mutation.updateRepository":
 		name, nameOK := nestedStringPath(fc.Args, "input", "metadata", "name")
 		namespace, namespaceOK := nestedStringPath(fc.Args, "input", "metadata", "namespace")
 		if !nameOK || !namespaceOK {
-			return nil
+			return ctx, nil
 		}
 		ns, err := a.store.GetNamespaceByName(ctx, namespace)
 		if err != nil {
-			return asAuthorizeFieldError(err, func() *gqlerror.Error { return namespaceNotFoundError(namespace) })
+			return ctx, asAuthorizeFieldError(err, func() *gqlerror.Error { return namespaceNotFoundError(namespace) })
 		}
 		mapping, err := a.store.LookupRepository(ctx, ns.Name, name)
 		if err != nil {
-			return asAuthorizeFieldError(err, repositoryNotFoundError)
+			return ctx, asAuthorizeFieldError(err, repositoryNotFoundError)
 		}
 		repo, err = a.store.GetRepository(ctx, mapping.RepositoryID)
 		if err != nil {
-			return asAuthorizeFieldError(err, repositoryNotFoundError)
+			return ctx, asAuthorizeFieldError(err, repositoryNotFoundError)
 		}
 		operation, namespaces = "update", []*datastore.Namespace{ns}
 	case "Mutation.deleteRepository":
 		encodedID, ok := nestedStringArg(fc.Args, "input", "id")
 		if !ok {
-			return nil
+			return ctx, nil
 		}
 		if err := loadRepository(encodedID); err != nil {
-			return err
+			return ctx, err
 		}
 		operation = "delete"
 	case "Query.repository":
 		if encodedID, ok := nestedStringPath(fc.Args, "by", "id"); ok && encodedID != "" {
 			if err := loadRepository(encodedID); err != nil {
-				return err
+				return ctx, err
 			}
 		} else {
 			namespace, namespaceOK := nestedStringPath(fc.Args, "by", "namespacePath", "namespace")
 			name, nameOK := nestedStringPath(fc.Args, "by", "namespacePath", "name")
 			if !namespaceOK || !nameOK {
-				return nil
+				return ctx, nil
 			}
 			ns, err := a.store.GetNamespaceByName(ctx, namespace)
 			if err != nil {
-				return asAuthorizeFieldError(err, func() *gqlerror.Error { return namespaceNotFoundError(namespace) })
+				return ctx, asAuthorizeFieldError(err, func() *gqlerror.Error { return namespaceNotFoundError(namespace) })
 			}
 			mapping, err := a.store.LookupRepository(ctx, ns.Name, name)
 			if err != nil {
-				return asAuthorizeFieldError(err, repositoryNotFoundError)
+				return ctx, asAuthorizeFieldError(err, repositoryNotFoundError)
 			}
 			repo, err = a.store.GetRepository(ctx, mapping.RepositoryID)
 			if err != nil {
-				return asAuthorizeFieldError(err, repositoryNotFoundError)
+				return ctx, asAuthorizeFieldError(err, repositoryNotFoundError)
 			}
 			namespaces = []*datastore.Namespace{ns}
 		}
@@ -1045,30 +1757,33 @@ func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.Fi
 	case "Query.repositories":
 		namespace, ok := directStringArg(fc.Args, "namespace")
 		if !ok {
-			return nil
+			return ctx, nil
 		}
 		ns, err := a.store.GetNamespaceByName(ctx, namespace)
 		if err != nil {
-			return asAuthorizeFieldError(err, func() *gqlerror.Error { return namespaceNotFoundError(namespace) })
+			return ctx, asAuthorizeFieldError(err, func() *gqlerror.Error { return namespaceNotFoundError(namespace) })
 		}
-		operation, namespaces, repo = "read", []*datastore.Namespace{ns}, &datastore.Repository{Name: namespace}
+		operation, namespaces, repo = "list", []*datastore.Namespace{ns}, &datastore.Repository{}
 	case "Query.node":
 		encodedID, ok := directStringArg(fc.Args, "id")
 		if !ok {
-			return nil
+			return ctx, nil
 		}
 		kind, _, err := decodeGlobalID(encodedID)
-		if err != nil || kind != "Repository" {
-			return err
+		if err != nil {
+			return ctx, admission.NewError(admission.CodeBadUserInput, "INVALID_GLOBAL_ID", "invalid global ID").ToGQLError()
+		}
+		if kind != "Repository" {
+			return ctx, nil
 		}
 		if err := loadRepository(encodedID); err != nil {
-			return err
+			return ctx, err
 		}
 		operation = "read"
 	case "Query.nodes":
 		encodedIDs, ok := directStringsArg(fc.Args, "ids")
 		if !ok {
-			return nil
+			return ctx, nil
 		}
 		for _, encodedID := range encodedIDs {
 			kind, _, err := decodeGlobalID(encodedID)
@@ -1079,35 +1794,44 @@ func (a *Authorize) authorizeRepositoryField(ctx context.Context, fc *graphql.Fi
 			}
 			if err := loadRepository(encodedID); err != nil {
 				if errors.Is(err, datastore.ErrNotFound) {
+					_, uid, _ := decodeGlobalID(encodedID)
+					preserveMissingNode(ctx, "Repository", uid, err)
 					continue
 				}
-				return err
+				return ctx, err
 			}
 			if _, err := a.authorizeRepositoryTenant(ctx, principal, "read", repo, namespaces[len(namespaces)-1]); err != nil {
-				return gqlerror.Errorf("%v", err)
+				return ctx, err
 			}
 		}
-		return nil
+		return ctx, nil
 	default:
-		return nil
+		return ctx, nil
 	}
 
 	if repo == nil || len(namespaces) == 0 {
-		return nil
+		return ctx, nil
 	}
 	if _, err := a.authorizeRepositoryTenant(ctx, principal, operation, repo, namespaces...); err != nil {
-		return gqlerror.Errorf("%v", err)
+		return ctx, err
 	}
-	return nil
+	if fc.Object == "Query" && fc.Field.Name == "repository" {
+		ctx = context.WithValue(ctx, authorizedRepositoryReadContextKey{}, &authorizedRepositoryRead{
+			repository: repo,
+			namespace:  namespaces[0],
+			field:      fc,
+		})
+	}
+	return ctx, nil
 }
 
 func decodeGlobalIDAs(expectedKind, encoded string) (string, error) {
 	kind, rawID, err := decodeGlobalID(encoded)
 	if err != nil {
-		return "", gqlerror.Errorf("invalid global ID: %v", err)
+		return "", admission.NewError(admission.CodeBadUserInput, "INVALID_GLOBAL_ID", fmt.Sprintf("invalid global ID: %v", err)).ToGQLError()
 	}
 	if kind != expectedKind {
-		return "", gqlerror.Errorf("invalid global ID kind: expected %s, got %s", expectedKind, kind)
+		return "", admission.NewError(admission.CodeBadUserInput, "INVALID_GLOBAL_ID", fmt.Sprintf("invalid global ID kind: expected %s, got %s", expectedKind, kind)).ToGQLError()
 	}
 	return rawID, nil
 }
@@ -1172,7 +1896,11 @@ func (a *Authorize) authorizeSubscription(
 	// Every kind, including CategoryTaxonomy, uses the ADR 0010 slug
 	// grammar: lowerCamel(kind).watch.
 	action := lowerCamelFirst(kind) + ".watch"
-	resource := auth.ResourceContext{Kind: kind, Attrs: map[string]any{}}
+	definition, found := auth.LookupAction(action)
+	if !found || definition.Reserved {
+		return nil, &gqlerror.Error{Message: "unsupported watch kind", Extensions: map[string]any{"code": "UNSUPPORTED_KIND"}}
+	}
+	resource := auth.ResourceContext{Kind: definition.Kind, Attrs: map[string]any{}}
 	if kind == "File" || kind == "Repository" || kind == "Product" || kind == "CategoryTaxonomy" {
 		namespace, _ := directStringArg(fc.Args, "namespace")
 		resource.Attrs["namespace"] = namespace
@@ -1184,7 +1912,7 @@ func (a *Authorize) authorizeSubscription(
 	if err != nil {
 		return nil, gqlerror.Errorf("authorization error")
 	}
-	if decision.Outcome == auth.OutcomeDeny {
+	if decision.Outcome != auth.OutcomeAllow {
 		return nil, &gqlerror.Error{
 			Message:    fmt.Sprintf("permission denied: %s", decision.Reason),
 			Extensions: map[string]any{"code": "FORBIDDEN"},
@@ -1197,23 +1925,7 @@ func (a *Authorize) authorizeSubscription(
 }
 
 func decodeCategoryID(encoded string) (string, error) {
-	decoded, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return "", err
-	}
-	u, err := url.Parse(string(decoded))
-	if err != nil || u.Scheme != "gid" || u.Host != "GitStore" {
-		return "", fmt.Errorf("invalid global ID")
-	}
-	parts := strings.SplitN(strings.TrimPrefix(u.EscapedPath(), "/"), "/", 2)
-	if len(parts) != 2 || parts[0] != "Category" {
-		return "", fmt.Errorf("invalid category global ID")
-	}
-	uid, err := url.PathUnescape(parts[1])
-	if err != nil || uid == "" {
-		return "", fmt.Errorf("invalid category UID")
-	}
-	return uid, nil
+	return decodeGlobalIDAs("Category", encoded)
 }
 
 // lowerCamelFirst lowercases the first rune of s, matching GraphQL's
@@ -1227,25 +1939,6 @@ func lowerCamelFirst(s string) string {
 	r := []rune(s)
 	r[0] = unicode.ToLower(r[0])
 	return string(r)
-}
-
-func (a *Authorize) namespaceDeleteAction(ctx context.Context, name string, principal *auth.Principal) (ns *datastore.Namespace, action string, err error) {
-	if a.store == nil {
-		return nil, "", fmt.Errorf("authorization store is not configured")
-	}
-	ns, err = a.store.GetNamespaceByName(ctx, name)
-	if err != nil {
-		return nil, "", err
-	}
-	// TODO(ADR-0010 §14, follow-up vocabulary spec): this pre-computes
-	// .own/.any in Go against the mutable owner subject; Authorize does not
-	// yet consume ResourceContext.OwnerSub itself (rbaclocal discards it).
-	// See ownerMatchesPrincipal and the ADR-0010 §14 addendum in
-	// docs/ADRs/0010-authorization-model.md.
-	if ownerMatchesPrincipal(ns.EffectiveOwnerSub(), principal) {
-		return ns, "namespace.delete.own", nil
-	}
-	return ns, "namespace.delete.any", nil
 }
 
 // nestedStringArg reads a string field off a gqlgen-generated input struct
@@ -1321,6 +2014,19 @@ func nestedStringPath(args map[string]any, path ...string) (string, bool) {
 				return "", false
 			}
 			rv = rv.Elem()
+		}
+		if rv.Kind() == reflect.Map {
+			rv = rv.MapIndex(reflect.ValueOf(key))
+			if !rv.IsValid() {
+				return "", false
+			}
+			if rv.Kind() == reflect.Interface {
+				if rv.IsNil() {
+					return "", false
+				}
+				rv = rv.Elem()
+			}
+			continue
 		}
 		if rv.Kind() != reflect.Struct {
 			return "", false

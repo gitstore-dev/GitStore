@@ -46,16 +46,14 @@ func authoritativeColumns(includeNamespace, includeRepository bool, specific ...
 
 var (
 	ProductByNamespace = table.New(table.Metadata{
-		Name:    "products_by_namespace",
+		Name:    "products_by_key",
 		Columns: authoritativeColumns(true, true),
-		PartKey: []string{"namespace"},
-		SortKey: []string{"creation_timestamp", "uid"},
+		PartKey: []string{"namespace", "creation_timestamp", "uid"},
 	})
 	ProductByName = table.New(table.Metadata{
-		Name:    "products_by_name",
+		Name:    "products_by_identity",
 		Columns: []string{"namespace", "name", "uid", "creation_timestamp"},
-		PartKey: []string{"namespace"},
-		SortKey: []string{"name"},
+		PartKey: []string{"namespace", "name"},
 	})
 	ProductByUID = table.New(table.Metadata{
 		Name:    "products_by_uid",
@@ -196,30 +194,24 @@ var (
 	// does not use resourceColumns()/authoritativeColumns() — it has its own,
 	// smaller envelope (no api_version/kind/labels/annotations/owner
 	// references/finalizers/repository_id/spec/body/status).
-	ServiceAccountByNamespace = table.New(table.Metadata{
-		Name: "service_accounts_by_namespace",
+	ServiceAccountByName = table.New(table.Metadata{
+		Name: "service_accounts_by_cluster_name",
 		Columns: []string{
-			"namespace", "creation_timestamp", "uid", "name",
+			"creation_timestamp", "uid", "name",
 			"generation", "resource_version",
 			"creation_actor", "update_timestamp", "update_actor",
-			"deletion_timestamp", "disabled", "public_keys",
+			"deletion_timestamp", "disabled", "public_keys", "enrollment_complete",
 		},
-		PartKey: []string{"namespace"},
-		SortKey: []string{"creation_timestamp", "uid"},
-	})
-	ServiceAccountByName = table.New(table.Metadata{
-		Name:    "service_accounts_by_name",
-		Columns: []string{"namespace", "name", "uid", "creation_timestamp"},
-		PartKey: []string{"namespace"}, SortKey: []string{"name"},
+		PartKey: []string{"name"},
 	})
 	ServiceAccountByUID = table.New(table.Metadata{
-		Name:    "service_accounts_by_uid",
-		Columns: []string{"uid", "namespace", "creation_timestamp"},
+		Name:    "service_accounts_by_cluster_uid",
+		Columns: []string{"uid", "name", "creation_timestamp"},
 		PartKey: []string{"uid"},
 	})
 	ServiceAccountByBucket = table.New(table.Metadata{
-		Name:    "service_accounts_by_bucket",
-		Columns: []string{"bucket", "creation_timestamp", "uid", "namespace"},
+		Name:    "service_accounts_by_cluster_bucket",
+		Columns: []string{"bucket", "creation_timestamp", "uid", "name"},
 		PartKey: []string{"bucket"},
 		SortKey: []string{"creation_timestamp", "uid"},
 	})

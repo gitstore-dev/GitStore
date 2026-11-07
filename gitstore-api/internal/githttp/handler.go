@@ -17,7 +17,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
-	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 )
 
@@ -166,7 +166,7 @@ func NewMux(deps SmartHttpDeps) http.Handler {
 	r := gin.New()
 
 	requestIdMiddleware := middleware.NewRequestId(deps.Ids)
-	authenticateMiddleware := security.NewAuthenticate(deps.Registry, deps.Logger, prometheus.DefaultRegisterer)
+	authenticateMiddleware := security.NewAuthenticate(deps.Registry, deps.Logger, otel.Meter("gitstore/authentication"))
 
 	authorizeMiddleware := security.NewAuthorizeWithStore(deps.Registry, deps.Store, deps.Logger)
 

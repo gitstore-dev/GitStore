@@ -11,7 +11,9 @@ import (
 	"testing"
 
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -47,7 +49,8 @@ func startBufconn(t *testing.T, svc gitv1.GitServiceServer) *gitclient.Client {
 	require.NoError(t, err)
 	t.Cleanup(func() { conn.Close() })
 
-	client := gitclient.NewClientFromConn(conn)
+	client := gitclient.NewClientFromConn(conn, "fixture-key")
 	client.RepositoryID = "01960000-0000-7000-8000-000000000001"
+	client.Registry = auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil)
 	return client
 }

@@ -1403,8 +1403,8 @@ func TestSecretCapacityProjectionReadsNullableGraphQLFields(t *testing.T) {
 	var projection secretCapacityFileProjection
 	data := []byte(fmt.Sprintf(`{
 		"id":"file-id","metadata":{"name":%q,"namespace":"ns","annotations":{"secret-capacity.gitstore.dev/sequence":"1"}},
-		"spec":{"contentType":"image/jpeg","type":"gitstore.dev/media","source":{
-			"type":"s3","uri":%q,"credentialsRef":{"kind":"CredentialsRef","type":"aws-access-key/v1",
+		"spec":{"contentType":"image/jpeg","type":"gitstore.dev/media","provider":"s3","source":{
+			"uri":%q,"credentialsRef":{"kind":"CredentialsRef","type":"aws-access-key/v1",
 				"secretRef":{"kind":"SecretRef","name":"capacity-media","key":null,"namespace":null}}}}}`, name, "s3://capacity-fixture/"+name+".jpg"))
 	require.NoError(t, json.Unmarshal(data, &projection))
 	require.NoError(t, validateSecretCapacityFile(projection, "ns", name, 1))
@@ -1438,8 +1438,8 @@ func TestSecretCapacityFilePoolReadsPersistedStateWithoutWatchHistory(t *testing
 			data[fmt.Sprintf("file%d", i)] = map[string]any{
 				"id": id, "metadata": map[string]any{"name": name, "namespace": namespace,
 					"annotations": map[string]string{"secret-capacity.gitstore.dev/sequence": "0"}},
-				"spec": map[string]any{"contentType": "image/jpeg", "type": "gitstore.dev/media",
-					"source": map[string]any{"type": "s3", "uri": "s3://capacity-fixture/" + name + ".jpg",
+				"spec": map[string]any{"contentType": "image/jpeg", "type": "gitstore.dev/media", "provider": "s3",
+					"source": map[string]any{"uri": "s3://capacity-fixture/" + name + ".jpg",
 						"credentialsRef": map[string]any{"kind": "CredentialsRef", "type": "aws-access-key/v1",
 							"secretRef": map[string]any{"kind": "SecretRef", "name": "capacity-media"}}}},
 			}
@@ -1579,8 +1579,8 @@ func TestSecretCapacityVerifiesEveryFileThroughBothAPIs(t *testing.T) {
 			"id": id,
 			"metadata": map[string]any{"name": name, "namespace": "ns",
 				"annotations": map[string]string{"secret-capacity.gitstore.dev/sequence": "1"}},
-			"spec": map[string]any{"contentType": "image/jpeg", "type": "gitstore.dev/media",
-				"source": map[string]any{"type": "s3", "uri": "s3://capacity-fixture/" + name + ".jpg",
+			"spec": map[string]any{"contentType": "image/jpeg", "type": "gitstore.dev/media", "provider": "s3",
+				"source": map[string]any{"uri": "s3://capacity-fixture/" + name + ".jpg",
 					"credentialsRef": map[string]any{"kind": "CredentialsRef", "type": "aws-access-key/v1",
 						"secretRef": map[string]any{"kind": "SecretRef", "name": "capacity-media", "key": nil, "namespace": nil}}}},
 		})

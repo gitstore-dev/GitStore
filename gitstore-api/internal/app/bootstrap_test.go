@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
@@ -18,10 +19,12 @@ import (
 
 type bootstrapGitProvisioner struct {
 	repositoryIDs []string
+	actors        []*auth.Principal
 }
 
-func (p *bootstrapGitProvisioner) CreateRepository(_ context.Context, repositoryID, _ string) (string, error) {
+func (p *bootstrapGitProvisioner) CreateRepository(ctx context.Context, repositoryID, _ string) (string, error) {
 	p.repositoryIDs = append(p.repositoryIDs, repositoryID)
+	p.actors = append(p.actors, auth.PrincipalFromContext(ctx))
 	return "/repos/" + repositoryID, nil
 }
 
@@ -45,11 +48,17 @@ func TestEnsureBootstrapResourcesCreatesExactlyTwoNamespacesAndRepositoriesIdemp
 	require.NoError(t, err)
 	require.Len(t, namespaces.Items, 2)
 	assert.Len(t, git.repositoryIDs, 2)
+	for _, actor := range git.actors {
+		require.NotNil(t, actor, "bootstrap must explicitly identify its internal backing actor")
+		require.Equal(t, "system:api", actor.Subject)
+		require.Equal(t, "internal", actor.AuthMethod)
+	}
 
 	for _, identifier := range []string{"gitstore-system", "default"} {
 		namespace, getErr := store.GetNamespaceByName(context.Background(), identifier)
 		require.NoError(t, getErr)
 		assert.Equal(t, bootstrapActor, namespace.CreationActor)
+		assert.Equal(t, datastore.NamespaceTierOrganization, namespace.Tier)
 		assert.Equal(t, datastore.NamespaceInitialResourceVersion, namespace.ResourceVersion)
 
 		mapping, lookupErr := store.LookupRepository(context.Background(), namespace.Name, bootstrapRepositoryName)

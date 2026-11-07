@@ -26,10 +26,10 @@ type deletionCompletionAPI struct {
 	removals        int
 }
 
-func (a *deletionCompletionAPI) CompleteDeletion(_ context.Context, _, _, resourceVersion string) error {
+func (a *deletionCompletionAPI) CompleteDeletion(_ context.Context, _, _, resourceVersion, uid string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !a.present || resourceVersion != a.resourceVersion {
+	if !a.present || resourceVersion != a.resourceVersion || uid != "product-uid" {
 		return types.ErrConflict
 	}
 	a.present = false

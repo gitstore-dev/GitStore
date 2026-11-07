@@ -29,6 +29,8 @@ type CommittedManifestRequest struct {
 	// exists at CommitSHA. They are used only for OperationDelete.
 	Kind string
 	Name string
+	// ExpectedUID binds infrastructure deletion to the admitted incarnation.
+	ExpectedUID string
 }
 
 // CommittedManifestResult identifies the resource admitted from a committed
@@ -38,6 +40,34 @@ type CommittedManifestResult struct {
 	Namespace string
 	Name      string
 	CommitSHA string
+	// NoOp is set when admission found nothing to change, so the stored
+	// record may carry an earlier commit with identical content.
+	NoOp bool
+	// Warnings are non-fatal post-receive diagnostics.
+	Warnings []Diagnostic
+}
+
+// EntryOutcome classifies the admission of one manifest.
+type EntryOutcome string
+
+const (
+	EntryAccepted EntryOutcome = "ACCEPTED"
+	EntryNoOp     EntryOutcome = "NO_OP"
+	EntryDenied   EntryOutcome = "DENIED"
+	EntryFailed   EntryOutcome = "FAILED"
+)
+
+// EntryDecision is the admission result for one manifest. Denied carries
+// diagnostics; Failed carries the underlying error.
+type EntryDecision struct {
+	Kind        string
+	Namespace   string
+	Name        string
+	Path        string
+	Outcome     EntryOutcome
+	Diagnostics []Diagnostic
+	Warnings    []Diagnostic
+	Err         error
 }
 
 // CommittedManifestAdmitter is implemented by the catalog admission runtime.

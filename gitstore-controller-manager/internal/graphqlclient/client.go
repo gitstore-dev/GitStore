@@ -23,7 +23,9 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/time/rate"
 )
 
@@ -41,8 +43,8 @@ type Client struct {
 	subIDs atomic.Uint64
 }
 
-// New returns a Client targeting baseURL (e.g. "http://localhost:4000/graphql"
-// or "ws://localhost:4000/graphql" for a dedicated subscription dialer —
+// New returns a Client targeting baseURL (e.g. "http://localhost:4000/admin/graphql"
+// or "ws://localhost:4000/admin/graphql" for a dedicated subscription dialer —
 // Subscribe rewrites an http(s) baseURL to ws(s) automatically).
 // credentials must not be nil. NewStaticToken is available for isolated tests.
 func New(baseURL string, credentials CredentialSource) *Client {
@@ -68,7 +70,7 @@ func NewWithRateLimit(baseURL string, credentials CredentialSource, requestsPerS
 	return &Client{
 		baseURL:     baseURL,
 		credentials: credentials,
-		http:        &http.Client{Transport: transport},
+		http:        &http.Client{Transport: observability.Transport(transport)},
 		dialer:      websocket.DefaultDialer,
 		limiter:     rate.NewLimiter(rate.Limit(requestsPerSecond), burst),
 	}, nil
@@ -147,6 +149,7 @@ func (c *Client) requestToken(ctx context.Context) (string, error) {
 // by Subscription.Err().
 type Error struct {
 	Message    string         `json:"message"`
+	Path       []any          `json:"path,omitempty"`
 	Extensions map[string]any `json:"extensions,omitempty"`
 }
 
@@ -155,6 +158,18 @@ func (e *Error) Error() string {
 		return "<nil>"
 	}
 	return e.Message
+}
+
+// IsConflictCode reports whether a GraphQL error's extensions["code"] value
+// signals an optimistic-concurrency conflict. RESOURCE_VERSION_CONFLICT is
+// the per-kind code every existing status/completion mutation returns today;
+// CONFLICT is the forward-compatible kind-neutral code an upcoming API
+// change folds it into. Every controller GraphQL client should map either
+// code to types.ErrConflict through this shared check rather than matching
+// RESOURCE_VERSION_CONFLICT alone.
+func IsConflictCode(code any) bool {
+	c, _ := code.(string)
+	return c == "RESOURCE_VERSION_CONFLICT" || c == "CONFLICT"
 }
 
 type gqlRequest struct {
@@ -178,6 +193,32 @@ func (c *Client) Mutate(ctx context.Context, mutation string, vars map[string]an
 }
 
 func (c *Client) do(ctx context.Context, doc string, vars map[string]any, out any) error {
+	return c.doAttempt(ctx, doc, vars, out, true)
+}
+
+func (c *Client) invalidateCredential(token string) bool {
+	if source, ok := c.credentials.(interface{ Invalidate(string) }); ok {
+		source.Invalidate(token)
+		return true
+	}
+	return false
+}
+
+// preexecutionAuthenticationFailure is deliberately conservative: data or a
+// resolver path means a mutation may have executed and must not be replayed.
+func preexecutionAuthenticationFailure(data json.RawMessage, errs []*Error) bool {
+	if len(errs) == 0 || (len(bytes.TrimSpace(data)) != 0 && !bytes.Equal(bytes.TrimSpace(data), []byte("null"))) {
+		return false
+	}
+	for _, err := range errs {
+		if err == nil || len(err.Path) != 0 || err.Extensions["code"] != "UNAUTHENTICATED" {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Client) doAttempt(ctx context.Context, doc string, vars map[string]any, out any, mayRetry bool) error {
 	body, err := json.Marshal(gqlRequest{Query: doc, Variables: vars})
 	if err != nil {
 		return fmt.Errorf("graphqlclient: marshal request: %w", err)
@@ -211,6 +252,13 @@ func (c *Client) do(ctx context.Context, doc string, vars map[string]any, out an
 		// keeps the body available in the error instead of silently losing
 		// diagnostic detail like a GraphQL schema-validation message.
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		if resp.StatusCode == http.StatusUnauthorized {
+			refreshable := c.invalidateCredential(token)
+			if mayRetry && refreshable {
+				_ = resp.Body.Close()
+				return c.doAttempt(ctx, doc, vars, out, false)
+			}
+		}
 		if resp.StatusCode == http.StatusTooManyRequests {
 			c.recordThrottle()
 			return fmt.Errorf("%w: HTTP status %d", types.ErrRateLimited, resp.StatusCode)
@@ -223,6 +271,13 @@ func (c *Client) do(ctx context.Context, doc string, vars map[string]any, out an
 		return fmt.Errorf("graphqlclient: decode response: %w", err)
 	}
 	if len(gr.Errors) > 0 {
+		if preexecutionAuthenticationFailure(gr.Data, gr.Errors) {
+			refreshable := c.invalidateCredential(token)
+			if mayRetry && refreshable {
+				_ = resp.Body.Close()
+				return c.doAttempt(ctx, doc, vars, out, false)
+			}
+		}
 		return gr.Errors[0]
 	}
 	if out != nil && len(gr.Data) > 0 {
@@ -248,8 +303,9 @@ type Subscription interface {
 }
 
 type subscription struct {
-	conn *websocket.Conn
-	id   string
+	conn       *websocket.Conn
+	id         string
+	invalidate func()
 
 	next    chan json.RawMessage
 	errOnce sync.Once
@@ -302,10 +358,19 @@ func (c *Client) Subscribe(ctx context.Context, subscriptionDoc string, vars map
 
 	header := http.Header{}
 	header.Set("Sec-WebSocket-Protocol", "graphql-transport-ws")
+	if token != "" {
+		header.Set("Authorization", "Bearer "+token)
+	}
 
-	conn, response, err := c.dialer.DialContext(ctx, wsURL, header)
+	dialCtx, span := otel.Tracer("gitstore/controller").Start(ctx, "websocket.dial")
+	observability.Inject(dialCtx, header)
+	conn, response, err := c.dialer.DialContext(dialCtx, wsURL, header)
+	span.End()
 	if err != nil {
 		if response != nil {
+			if response.StatusCode == http.StatusUnauthorized {
+				c.invalidateCredential(token)
+			}
 			if response.Body != nil {
 				_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 1<<20))
 				_ = response.Body.Close()
@@ -334,6 +399,9 @@ func (c *Client) Subscribe(ctx context.Context, subscriptionDoc string, vars map
 
 	var ack wsMessage
 	if err := conn.ReadJSON(&ack); err != nil {
+		if websocket.IsCloseError(err, 4401) {
+			c.invalidateCredential(token)
+		}
 		_ = conn.Close()
 		return nil, fmt.Errorf("graphqlclient: read connection_ack: %w", err)
 	}
@@ -354,10 +422,11 @@ func (c *Client) Subscribe(ctx context.Context, subscriptionDoc string, vars map
 	}
 
 	sub := &subscription{
-		conn: conn,
-		id:   id,
-		next: make(chan json.RawMessage, 16),
-		done: make(chan struct{}),
+		conn:       conn,
+		id:         id,
+		invalidate: func() { c.invalidateCredential(token) },
+		next:       make(chan json.RawMessage, 16),
+		done:       make(chan struct{}),
 	}
 	go sub.readLoop()
 	return sub, nil
@@ -365,9 +434,13 @@ func (c *Client) Subscribe(ctx context.Context, subscriptionDoc string, vars map
 
 func (s *subscription) readLoop() {
 	defer close(s.next)
+	defer s.conn.Close() //nolint:errcheck
 	for {
 		var msg wsMessage
 		if err := s.conn.ReadJSON(&msg); err != nil {
+			if websocket.IsCloseError(err, 4401) && s.invalidate != nil {
+				s.invalidate()
+			}
 			select {
 			case <-s.done:
 				// Stop() already closed the connection; not a real error.
@@ -394,6 +467,9 @@ func (s *subscription) readLoop() {
 			// failures during an already-open stream. Treat both the same
 			// way: surface the error and end the subscription.
 			if len(payload.Errors) > 0 {
+				if preexecutionAuthenticationFailure(payload.Data, payload.Errors) && s.invalidate != nil {
+					s.invalidate()
+				}
 				s.setErr(payload.Errors[0])
 				return
 			}
@@ -409,6 +485,9 @@ func (s *subscription) readLoop() {
 				return
 			}
 			s.setErr(gqlErrs[0])
+			if preexecutionAuthenticationFailure(nil, gqlErrs) && s.invalidate != nil {
+				s.invalidate()
+			}
 			return
 		case "complete":
 			return

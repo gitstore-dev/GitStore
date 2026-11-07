@@ -1,3 +1,9 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/branding/readme-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/branding/readme-light.png">
+  <img src="docs/branding/readme-light.png" alt="GitStore — Change boldly. Keep a way back. Git-backed catalogs for teams and AI agents." width="100%">
+</picture>
+
 # GitStore - Agent-safe Catalogue Operations
 
 > [!CAUTION]
@@ -47,6 +53,9 @@ graph TD
 - **`gitstore-controller-manager`**: Go controller runtime that reconciles through the API and exposes health, metrics, and poison-item endpoints.
 
 The API, controller manager, and Git service are the three core services.
+Use `make compose OBSERVABILITY=otel` for collector-routed metrics, logs and
+traces with local Prometheus, Loki and Tempo. See
+[telemetry configuration](docs/configuration.md#collector-routed-telemetry).
 API/controller features must verify concurrent-replica behavior; this is not a
 blanket claim of production HA. **Git service is stateful and singleton-only**
 until repository sharding, placement-aware routing and writer safety are
@@ -93,9 +102,16 @@ See the [user guide](docs/user-guide.md) for the complete Docker workflow, catal
 
 ## Documentation
 
+For DigitalOcean infrastructure without Kubernetes, see the
+[OpenTofu provisioning runbook](docs/runbooks/digitalocean-provisioning.md).
+It provisions hosts, networking and storage; application deployment and
+production acceptance remain separate operations.
+
 - **User Guide**: [docs/user-guide.md](docs/user-guide.md)
 - **Developer Guide**: [docs/developer-guide.md](docs/developer-guide.md)
 - **Architecture**: [docs/architecture/](docs/architecture/README.md)
+- **Resource Envelope Storage Groups**: [docs/storage-groups/](docs/storage-groups/README.md)
+- **Operations and Recovery**: [docs/runbooks/](docs/runbooks/README.md)
 - **API Reference**: [docs/api-reference.md](docs/api-reference.md)
 - **Configuration**: [docs/configuration.md](docs/configuration.md)
 - **Storefront**: [docs/storefront.md](docs/storefront.md)

@@ -2,6 +2,10 @@
 
 This document describes the architecture of the AI-native commerce engine: the service topology, GraphQL API design principles, write pipeline proposals, and the controller-manager model for reconciling catalogue state.
 
+For resource placement, see [Resource Envelope Storage Groups](../storage-groups/README.md).
+For authoritative rows, query projections, Product pagination, CDC, and namespace
+fences, see [Datastore Resource Storage](datastore-resource-storage.md).
+
 ## System Goals
 
 - Keep catalogue history auditable and reversible.
@@ -96,28 +100,28 @@ Business packages receive dependencies through plain `Deps` structs rather than 
 
 Key environment variables:
 
-| Service                | Variable                   | Purpose                                                          |
-|------------------------|----------------------------|------------------------------------------------------------------|
-| `gitstore-api`         | `GITSTORE_GIT__GRPC__URI`  | gRPC address of git-service (e.g. `dns:///git-service:50051`)    |
-| `gitstore-api`         | `GITSTORE_API__GIT_PORT`   | Port the Git smart HTTP server binds on (default `9000`)         |
-| `gitstore-git-service` | `GITSTORE_GRPC__PORT`      | Port the gRPC server binds on (default `50051`)                  |
-| `gitstore-git-service` | `GITSTORE_GIT__DATA_DIR`   | Path to the bare repository directory                            |
+| Service                | Variable                            | Purpose                                                          |
+|------------------------|---------------------------------------|------------------------------------------------------------------|
+| `gitstore-api`         | `GITSTORE_API__GIT_SERVICE__URI`    | gRPC address of git-service (e.g. `dns:///git-service:50051`)    |
+| `gitstore-api`         | `GITSTORE_API__GIT_PORT`            | Port the Git smart HTTP server binds on (default `9000`)         |
+| `gitstore-git-service` | `GITSTORE_GIT_SERVICE__GRPC_PORT`   | Port the gRPC server binds on (default `50051`)                  |
+| `gitstore-git-service` | `GITSTORE_GIT_SERVICE__DATA_DIR`    | Path to the bare repository directory                            |
 
 ### Git Engine — gitoxide (gix)
 
-`gitstore-git-service` uses [gitoxide (`gix 0.83.0`)](https://github.com/GitoxideLabs/gitoxide), a pure-Rust Git implementation, as its only Git library. The `git2` / libgit2 C binding was removed entirely in feature `007-migrate-gitoxide`.
+`gitstore-git-service` uses [gitoxide (`gix 0.89.0`)](https://github.com/GitoxideLabs/gitoxide), a pure-Rust Git implementation, as its only Git library. The `git2` / libgit2 C binding was removed entirely in feature `007-migrate-gitoxide`.
 
 Key consequences of this change:
 
 - **No native library dependency**: the service binary links only Rust crates; no libgit2 or OpenSSL linkage.
 - **Tree-editor writes**: `commit_file` and `delete_file` use gix's built-in tree-editor API to mutate bare repository trees directly, eliminating the previous clone-to-tmpdir pattern.
-- **MSRV 1.82**: required by `gix 0.83.0`; the Rust toolchain must be ≥ 1.82.
+- **Minimum Rust version 1.99.1**: enforced by `gitstore-git-service/Cargo.toml`, matching the pinned development, CI and container toolchain. This replaces the previously documented Rust 1.88 minimum: Rust 1.88 no longer satisfies the service's build requirements, and older compilers are not validated. Tree editing remains available without the removed `tree-editor` Cargo feature.
 
 ### Multi-Repository Hosting
 
 The git service supports **named repositories** created and deleted at runtime via gRPC — no service restart is required.
 
-- Each repository is stored as `<GITSTORE_GIT__DATA_DIR>/<repository_id>.git` on disk.
+- Each repository is stored as `<git_service.data_dir>/<repository_id>.git` on disk (env `GITSTORE_GIT_SERVICE__DATA_DIR`).
 - Every gRPC request carries a `repository_id` field that identifies the target repository.
 - Requests with an unknown or invalid `repository_id` return `NOT_FOUND` or `INVALID_ARGUMENT` respectively.
 - Concurrent requests to different repositories are isolated via a per-repository `RwLock`.
@@ -761,6 +765,15 @@ Validation is layered, not monolithic. The layers map to the Kubernetes model:
 Pre-receive stays stateless and rejects structurally invalid resource blobs before refs are updated. DB-backed semantic checks and lifecycle projection run asynchronously in the post-receive admission pipeline so large pushes are not blocked by datastore lookups.
 
 Git-originated and API-originated mutations converge at the schema and admission layers — they are evaluated identically.
+
+For an API-authored manifest, the Git commit is durable before synchronous
+admission runs. If that admission fails after the write, the API retains the
+original mutation error but makes up to three repair attempts within two
+seconds. A repair re-reads the path and is permitted only while that exact
+commit is still the ref tip; it derives create versus update from the current
+projection and uses the original actor. It never admits a newer writer's
+commit, and policy denials are not retried. This is bounded best effort, not a
+replacement for durable delivery after a process crash.
 
 ### Resource Status — Conditions
 

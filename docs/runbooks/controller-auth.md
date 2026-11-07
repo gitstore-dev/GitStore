@@ -28,25 +28,61 @@ administrator-issued bearer token.
    its public key through `gitctl enroll-serviceaccount`, `createServiceAccount`,
    or `rotateServiceAccountKey`. Give the key a unique `kid`; record the
    returned ServiceAccount UID.
-3. Ensure the RBAC policy binds
-   `serviceaccount:<namespace>:<name>` to only the controller role. Enrollment
-   does not grant authorization by itself.
-4. Configure `controller.serviceaccount_namespace`, `_name`, `_key_id`, and
-   `_uid`, plus a complete `controller.serviceaccount_key_ref`. For a file
-   resolver, `SecretRef{name: "controller-manager", key: "privateKey"}`
-   resolves `/run/secrets/controller-manager/privateKey`.
-5. Mount `/run/secrets/controller-manager` read-only into the
+3. In a v1beta1 policy, bind `{kind: ServiceAccount, name: <name>}` to the
+   controller role and a separate `serviceAccount/token` issue role restricted
+   by `resourceNames: [<name>]`. The authenticated subject is
+   `system:serviceaccount:<name>`. Enrollment does not grant authorization.
+4. Configure `controller.serviceaccount.name` and `.uid`, plus
+   a complete `controller.serviceaccount.key_ref` (`kind = "SecretRef"`,
+   `name = "<logical-secret-name>"`; `key` must be omitted — the resolver
+   reads one atomic JSON signing record, not an individual field). For the
+   `file` bootstrap resolver, a `key_ref.name` of `controller-manager`
+   resolves `<base_path>/controller-manager.json` (default base path
+   `/run/secrets`).
+5. Mount the resolved signing-record path read-only into the
    controller-manager alone. Configure the API issuer key independently with
-   `GITSTORE_AUTH__SERVICEACCOUNT__SIGNING_KEY`; no other service may receive
+   `GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY`; no other service may receive
    that mount.
 6. Roll out the controller and check `GET /health`. A working credential source
    returns HTTP 200 with `"credentialReady":true`. The response intentionally
    contains no credential value or exchange error.
 
-The controller requires `controller.serviceaccount_key_ref`; static controller
+The controller requires `controller.serviceaccount.key_ref`; static controller
 API tokens are not supported.
 
+ServiceAccounts are cluster-scoped. `--namespace`,
+`controller.serviceaccount.namespace`, its environment equivalent and the
+`CONTROLLER_SERVICEACCOUNT_NAMESPACE` Make variable are errors, even when empty.
+Old v1 policies and namespaced token subjects are rejected; there is no
+translation or dual-format period. The shipped Compose enrollment job uses
+name-only enrollment and keeps the existing isolated key/UID mounts.
+
 ## Renewal, readiness, and backoff
+
+### Policy reload diagnostics
+
+Validate the replacement with `make check TARGET=config CONFIG_FILE=<path>`
+before installing it. Send SIGHUP to each intended API process to rebuild and
+atomically swap its complete authentication/authorization provider set. A local
+signal does not update another replica, and editing a mounted file alone does
+not prove the running policy changed.
+
+The API's `auth providers reloaded atomically` message confirms publication.
+`rbac-local policy reloaded` carries the candidate `policy_digest`; correlate it
+with the registry success message because construction precedes publication.
+On `auth provider reload failed; previous configuration remains active`, fix the
+candidate and retry: do not restart merely to discard the valid old snapshot.
+Malformed/v1 policy, legacy settings and ineffective local-user grants fail
+validation. Decision logs include provider, request ID, action, canonical kind,
+outcome and reason; rbac-local reasons identify the policy digest and matching
+binding/role/rule or bounded denial category. Compare exact allow/deny probes on
+each replica after success, not just HTTP status or a matching file on disk.
+Do not copy tokens, assertions, private material or arbitrary resource attributes
+into diagnostics. Sustained-load/replacement acceptance is tracked in
+[#451](https://github.com/gitstore-dev/GitStore/issues/451), not established by
+these operator checks.
+
+### Token lifecycle
 
 The controller signs a fresh, 45-second proof-of-possession assertion and
 exchanges it for a short-lived access token. It reuses an access token only
@@ -60,7 +96,7 @@ capped at 30 seconds.
 2. Confirm the API is reachable at `controller.api_uri`, then verify the API
    authentication chain includes both `serviceaccount-assertion` and
    `serviceaccount-jwt`.
-3. Compare only non-secret identity metadata: namespace, name, UID, `kid`, and
+3. Compare only non-secret identity metadata: name, UID, `kid`, and
    both configured audiences. Confirm the `kid` remains enrolled and the
    ServiceAccount is enabled.
 4. For a file resolver, verify the mounted directory and logical
@@ -71,7 +107,7 @@ capped at 30 seconds.
 5. If credential readiness is true but a watch still reconnects, diagnose the
    watch/replay layer with
    [controller-watch-status](controller-watch-status.md) and
-   [controller-replay-window-exceeded](controller-replay-window-exceeded.md).
+   [expired-cursor recovery](controller-recovery.md#expired-replay-cursor).
    Credential backoff and cursor-expiry recovery are separate failure modes.
 
 ## Controller public-key rotation and re-enrollment
@@ -117,7 +153,7 @@ overlap first and validate every replica before promotion.
 
 ## Recover an accidentally deleted ServiceAccount
 
-Deletion invalidates the old UID. Recreating the same namespace/name does not
+Deletion invalidates the old UID. Recreating the same name does not
 restore the old identity.
 
 1. Keep the controller stopped or remove it from service while it is not ready.

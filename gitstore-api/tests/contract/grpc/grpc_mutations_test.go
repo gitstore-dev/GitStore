@@ -33,7 +33,7 @@ func startMutationContainer(t *testing.T) (*gitclient.Client, func()) {
 		t.Fatalf("shared gRPC test container is not initialized")
 	}
 
-	client, err := gitclient.NewClientWithAddr(sharedGRPCAddr, testHmacSecret)
+	client, err := newContractClient(sharedGRPCAddr)
 	require.NoError(t, err)
 
 	// git-service requires repo_id to be a 36-character UUID for fanout pathing.

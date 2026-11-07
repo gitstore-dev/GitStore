@@ -27,7 +27,7 @@
       "type": "object",
       "description": "Author-writable resource metadata. Do not set uid, resourceVersion, generation, creationTimestamp, revision, ownerReferences, or finalizers — those fields are system-managed and any of them present in an authored file causes the push to be rejected.",
       "additionalProperties": false,
-      "required": ["name"],
+      "required": ["name", "namespace"],
       "properties": {
         "name": {
           "type": "string",
@@ -37,7 +37,8 @@
         },
         "namespace": {
           "type": "string",
-          "description": "Optional. When omitted, the namespace is inferred from the owning repository at push time. When present, it is validated to match the inferred namespace — it does not select a different namespace."
+          "pattern": "\\S",
+          "description": "Required nonblank namespace of the owning repository. It must match the repository namespace."
         },
         "labels": {
           "type": "object",

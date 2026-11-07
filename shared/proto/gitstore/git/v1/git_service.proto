@@ -42,9 +42,11 @@ message AuthContext {
   string subject     = 1; // principal identifier (e.g. "admin", OIDC sub claim)
   string issuer      = 2; // auth provider (e.g. "static-admin", OIDC issuer URL)
   string auth_method = 3; // mechanism used (e.g. "basic", "bearer", "none")
-  repeated string roles  = 4;
+  reserved 4;
+  reserved "roles";
   repeated string groups = 5;
   repeated string scopes = 6;
+  string service_account_uid = 7; // verified immutable account identity, never a role
 }
 
 // RequestAuthorization is the API-approved, non-secret authorization decision
@@ -317,6 +319,16 @@ message DeleteFileRequest {
   string commit_message = 2;
   string author_name    = 3;
   string author_email   = 4;
+  // Supply both fields for a conditional deletion on an explicit branch.
+  // The branch must still point to expected_commit_sha when the commit is
+  // published; mismatches without a receipt return ABORTED without changing it.
+  // Retrying the same repository/ref/path/expected commit returns the original
+  // deletion commit only with a private durable receipt, absent path, and proven
+  // publication in bounded branch history. Restored paths or existing receipts
+  // that cannot prove publication return FAILED_PRECONDITION, never re-delete.
+  // Omitting both preserves the legacy default-branch behavior.
+  optional string ref_name = 6; // Fully qualified refs/heads/... name.
+  optional string expected_commit_sha = 7; // Full commit object ID.
   RequestAuthorization authorization = 14;
 }
 

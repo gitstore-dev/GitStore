@@ -1,7 +1,7 @@
 # users.yaml.example — static-users provider user list
 #
 # Copy this file to `users.yaml` (or any path referenced by
-# GITSTORE_AUTH__STATICUSERS__USERS_FILE) and replace the placeholder
+# GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE) and replace the placeholder
 # password hashes below with real bcrypt hashes generated via:
 #
 #   go run ./cmd/gitctl hash-password '<password>'

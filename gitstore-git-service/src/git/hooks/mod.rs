@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use tracing::{error, info, warn};
 
-use crate::config::GitReceivePackHooks;
 use crate::git::tree_diff::{decode_tree, get_tree_id, make_path};
 
 // ---------------------------------------------------------------------------
@@ -38,12 +37,45 @@ pub struct HookContext {
     pub actor_subject: String,
     /// Auth mechanism (e.g. "basic", "bearer").
     pub actor_auth_method: String,
+    pub actor_groups: Vec<String>,
+    pub actor_service_account_uid: String,
+    pub receive_id: String,
     /// Pack size limit; 0 = unlimited.
     pub max_pack_size_bytes: i64,
     /// Per-blob size limit; 0 = unlimited.
     pub max_file_size_bytes: i64,
     /// Opaque audit tag from the datastore record.
     pub config_resource_version: String,
+}
+
+impl HookContext {
+    pub fn callback_authorization(
+        &self,
+        refs: Vec<validation_handler::catalog_proto::ReceiveRef>,
+    ) -> validation_handler::catalog_proto::CallbackAuthorization {
+        use validation_handler::catalog_proto::{CallbackActor, CallbackAuthorization};
+        CallbackAuthorization {
+            repository_id: self.repository_id.clone(),
+            receive_id: self.receive_id.clone(),
+            refs,
+            actor: Some(CallbackActor {
+                subject: self.actor_subject.clone(),
+                groups: self.actor_groups.clone(),
+                auth_method: self.actor_auth_method.clone(),
+                service_account_uid: self.actor_service_account_uid.clone(),
+            }),
+        }
+    }
+}
+
+impl From<&RefUpdate> for validation_handler::catalog_proto::ReceiveRef {
+    fn from(update: &RefUpdate) -> Self {
+        Self {
+            ref_name: update.ref_name.clone(),
+            old_commit_sha: update.old_oid.clone(),
+            new_commit_sha: update.new_oid.clone(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -221,51 +253,40 @@ impl AdmissionHandler for NoopAdmissionHandler {
 // ---------------------------------------------------------------------------
 
 /// Orchestrates the in-process hook execution pipeline for a single push event.
+///
+/// pre-receive schema validation and post-receive admission control are
+/// always on — there is no toggle. Earlier phases (`update`, `proc-receive`,
+/// `post-update`, `reference-transaction`) have been removed: they were
+/// disabled by default and never carried real policy logic.
 pub struct HookPipeline {
-    pub config: GitReceivePackHooks,
-
-    // Schema validation slot (blocking, pre-receive by default)
-    pub schema_validation_phase: String,
     pub schema_validation_timeout: Duration,
     pub validation_handler: Arc<dyn ValidationHandler + Send + Sync>,
-
-    // Admission control slot (fire-and-forget, post-receive by default)
-    pub admission_control_phase: String,
-    pub admission_branch_pattern: String,
     pub admission_handler: Arc<dyn AdmissionHandler + Send + Sync>,
 }
 
 impl HookPipeline {
     pub fn new(
-        config: GitReceivePackHooks,
-        schema_validation_phase: String,
         schema_validation_timeout: Duration,
-        admission_control_phase: String,
-        admission_branch_pattern: String,
         validation_handler: Arc<dyn ValidationHandler + Send + Sync>,
         admission_handler: Arc<dyn AdmissionHandler + Send + Sync>,
     ) -> Self {
         Self {
-            config,
-            schema_validation_phase,
             schema_validation_timeout,
             validation_handler,
-            admission_control_phase,
-            admission_branch_pattern,
             admission_handler,
         }
     }
 
-    /// Run the pre-receive → proc-receive → update phases.
+    /// Run pre-receive schema validation (blocking, fail-closed, always on).
     ///
     /// `quarantine_dir`: path to the staged quarantine TempDir written by
     /// `stage_pack_from_reader`. When present, blob extraction opens the repo
     /// with this directory listed as an alternate object store so that pushed
     /// objects (not yet promoted to the live ODB) are visible during validation.
     ///
-    /// Returns `Ok(accepted_indices)` where each entry is an index into `updates`
-    /// that was accepted by the update phase.
-    /// Returns `Err(HookRejection)` if pre-receive or proc-receive rejects the push.
+    /// Returns `Ok(accepted_indices)` — every index into `updates` — when
+    /// validation accepts the push.
+    /// Returns `Err(HookRejection)` if pre-receive rejects the push.
     pub async fn run(
         &self,
         git_dir: &Path,
@@ -273,171 +294,28 @@ impl HookPipeline {
         quarantine_dir: Option<&Path>,
         hook_ctx: &HookContext,
     ) -> Result<Vec<usize>, HookRejection> {
-        // --- pre-receive (once per push, all-or-nothing) ---
-        if self.config.pre_receive.enabled {
-            let decision = self
-                .run_schema_validation(
-                    "pre-receive",
-                    git_dir,
-                    updates,
-                    quarantine_dir,
-                    hook_ctx,
-                    || run_pre_receive(git_dir, updates),
-                )
-                .await;
-            if let HookDecision::Reject(reason) = decision {
-                let reason = non_empty(reason, "rejected by pre-receive");
-                warn!(
-                    phase = "pre-receive",
-                    outcome = "rejected",
-                    reason = %reason,
-                    "hook_phase_complete"
-                );
-                return Err(HookRejection {
-                    phase: "pre-receive".to_string(),
-                    reason,
-                });
-            }
-            log_phase("pre-receive", None, "accepted", None);
-        }
-
-        // --- proc-receive (once per push, all-or-nothing) ---
-        if self.config.proc_receive.enabled {
-            let decision = self
-                .run_schema_validation(
-                    "proc-receive",
-                    git_dir,
-                    updates,
-                    quarantine_dir,
-                    hook_ctx,
-                    || run_proc_receive(git_dir, updates),
-                )
-                .await;
-            if let HookDecision::Reject(reason) = decision {
-                let reason = non_empty(reason, "rejected by proc-receive");
-                warn!(
-                    phase = "proc-receive",
-                    outcome = "rejected",
-                    reason = %reason,
-                    "hook_phase_complete"
-                );
-                return Err(HookRejection {
-                    phase: "proc-receive".to_string(),
-                    reason,
-                });
-            }
-            log_phase("proc-receive", None, "accepted", None);
-        }
-
-        // --- update (once per ref, per-ref semantics) ---
-        let mut accepted = Vec::new();
-        for (i, update) in updates.iter().enumerate() {
-            if !self.config.update.enabled {
-                accepted.push(i);
-                continue;
-            }
-            let single = std::slice::from_ref(update);
-            let decision = self
-                .run_schema_validation("update", git_dir, single, quarantine_dir, hook_ctx, || {
-                    run_update(git_dir, update)
-                })
-                .await;
-            match decision {
-                HookDecision::Accept => {
-                    log_phase("update", Some(&update.ref_name), "accepted", None);
-                    accepted.push(i);
-                }
-                HookDecision::Reject(reason) => {
-                    let reason = non_empty(reason, "rejected by update");
-                    warn!(
-                        phase = "update",
-                        ref_name = %update.ref_name,
-                        outcome = "rejected",
-                        reason = %reason,
-                        "hook_phase_complete"
-                    );
-                    // per-ref: continue processing remaining refs
-                }
-            }
-        }
-
-        Ok(accepted)
-    }
-
-    /// Called after ref lock files are acquired (gix two-phase transaction prepare step).
-    /// Returns `Ok(())` to allow the commit, or `Err(HookRejection)` to trigger rollback.
-    pub async fn run_reference_transaction_prepared(
-        &self,
-        git_dir: &Path,
-        updates: &[RefUpdate],
-        hook_ctx: &HookContext,
-    ) -> Result<(), HookRejection> {
-        if !self.config.reference_transaction.enabled {
-            return Ok(());
-        }
-        let start = Instant::now();
         let decision = self
-            .run_schema_validation(
-                "reference-transaction/prepared",
-                git_dir,
-                updates,
-                None,
-                hook_ctx,
-                || HookDecision::Accept,
-            )
+            .run_schema_validation(git_dir, updates, quarantine_dir, hook_ctx)
             .await;
-        let duration_ms = start.elapsed().as_millis() as u64;
-        match decision {
-            HookDecision::Accept => {
-                info!(
-                    phase = "reference-transaction/prepared",
-                    duration_ms,
-                    outcome = "accepted",
-                    "hook_phase_complete"
-                );
-                Ok(())
-            }
-            HookDecision::Reject(reason) => {
-                let reason = non_empty(reason, "rejected by reference-transaction");
-                warn!(
-                    phase = "reference-transaction/prepared",
-                    duration_ms,
-                    outcome = "rejected",
-                    reason = %reason,
-                    "hook_phase_complete"
-                );
-                Err(HookRejection {
-                    phase: "reference-transaction/prepared".to_string(),
-                    reason,
-                })
-            }
-        }
-    }
-
-    /// Called after refs are committed. Observation only — cannot fail.
-    pub fn run_reference_transaction_committed(&self, _git_dir: &Path, _updates: &[RefUpdate]) {
-        if self.config.reference_transaction.enabled {
-            info!(
-                phase = "reference-transaction/committed",
-                outcome = "accepted",
+        if let HookDecision::Reject(reason) = decision {
+            let reason = non_empty(reason, "rejected by pre-receive");
+            warn!(
+                phase = "pre-receive",
+                outcome = "rejected",
+                reason = %reason,
                 "hook_phase_complete"
             );
+            return Err(HookRejection {
+                phase: "pre-receive".to_string(),
+                reason,
+            });
         }
-    }
-
-    /// Called on rollback. Observation only — cannot fail.
-    pub fn run_reference_transaction_aborted(&self, _git_dir: &Path, _updates: &[RefUpdate]) {
-        if self.config.reference_transaction.enabled {
-            info!(
-                phase = "reference-transaction/aborted",
-                outcome = "aborted",
-                "hook_phase_complete"
-            );
-        }
+        log_phase("pre-receive", None, "accepted", None);
+        Ok((0..updates.len()).collect())
     }
 
     /// Called after refs are committed. Spawns the admission control handler
-    /// (fire-and-forget) and logs phase completion.
+    /// (fire-and-forget, always on) and logs phase completion.
     pub fn run_post_receive(
         &self,
         git_dir: &Path,
@@ -445,38 +323,31 @@ impl HookPipeline {
         repository_id: &str,
         hook_ctx: &HookContext,
     ) {
-        if !self.config.post_receive.enabled {
-            return;
-        }
         let start = Instant::now();
 
-        if self.admission_control_phase == "post-receive" {
-            let handler = Arc::clone(&self.admission_handler);
-            let updates_owned = updates.to_vec();
-            let repository_id = repository_id.to_string();
-            let git_dir_owned = git_dir.to_path_buf();
-            let hook_ctx_owned = hook_ctx.clone();
-            tokio::spawn(async move {
-                if let Err(e) = handler
-                    .admit(
-                        "post-receive",
-                        &updates_owned,
-                        &repository_id,
-                        &git_dir_owned,
-                        &hook_ctx_owned,
-                    )
-                    .await
-                {
-                    error!(
-                        phase = "post-receive",
-                        reason = %e,
-                        "admission_handler_error"
-                    );
-                }
-            });
-        } else {
-            run_post_receive(git_dir, updates);
-        }
+        let handler = Arc::clone(&self.admission_handler);
+        let updates_owned = updates.to_vec();
+        let repository_id = repository_id.to_string();
+        let git_dir_owned = git_dir.to_path_buf();
+        let hook_ctx_owned = hook_ctx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = handler
+                .admit(
+                    "post-receive",
+                    &updates_owned,
+                    &repository_id,
+                    &git_dir_owned,
+                    &hook_ctx_owned,
+                )
+                .await
+            {
+                error!(
+                    phase = "post-receive",
+                    reason = %e,
+                    "admission_handler_error"
+                );
+            }
+        });
 
         let duration_ms = start.elapsed().as_millis() as u64;
         info!(
@@ -489,90 +360,41 @@ impl HookPipeline {
 
     // -- internal helpers --
 
-    /// Run `phase_fn` then, if this is the configured schema validation phase, call the
-    /// validation handler with the configured timeout (fail-closed).
+    /// Call the validation handler with the configured timeout (fail-closed).
     /// Returns the final `HookDecision`.
-    async fn run_schema_validation<F>(
+    async fn run_schema_validation(
         &self,
-        phase: &str,
         git_dir: &Path,
         updates: &[RefUpdate],
         quarantine_dir: Option<&Path>,
         hook_ctx: &HookContext,
-        phase_fn: F,
-    ) -> HookDecision
-    where
-        F: FnOnce() -> HookDecision,
-    {
+    ) -> HookDecision {
+        let phase = "pre-receive";
         let start = Instant::now();
-        let decision = phase_fn();
-        if let HookDecision::Reject(_) = &decision {
-            return decision;
-        }
-        // Invoke the validation handler at its configured phase (blocking, fail-closed).
-        if phase == self.schema_validation_phase {
-            let result = tokio::time::timeout(
-                self.schema_validation_timeout,
-                self.validation_handler.validate_receive(
-                    git_dir,
-                    updates,
-                    quarantine_dir,
-                    hook_ctx,
-                ),
-            )
-            .await;
-            let duration_ms = start.elapsed().as_millis() as u64;
-            match result {
-                Ok(Ok(AdmissionDecision::Accept)) => {}
-                Ok(Ok(AdmissionDecision::Reject(reason))) => {
-                    return HookDecision::Reject(reason);
-                }
-                Ok(Err(e)) => {
-                    error!(phase, duration_ms, reason = %e, "hook_phase_error");
-                    return HookDecision::Reject("validation handler error".to_string());
-                }
-                Err(_elapsed) => {
-                    error!(
-                        phase,
-                        duration_ms,
-                        reason = "validation service timeout",
-                        "hook_phase_error"
-                    );
-                    return HookDecision::Reject("validation service unavailable".to_string());
-                }
+        let result = tokio::time::timeout(
+            self.schema_validation_timeout,
+            self.validation_handler
+                .validate_receive(git_dir, updates, quarantine_dir, hook_ctx),
+        )
+        .await;
+        let duration_ms = start.elapsed().as_millis() as u64;
+        match result {
+            Ok(Ok(AdmissionDecision::Accept)) => HookDecision::Accept,
+            Ok(Ok(AdmissionDecision::Reject(reason))) => HookDecision::Reject(reason),
+            Ok(Err(e)) => {
+                error!(phase, duration_ms, reason = %e, "hook_phase_error");
+                HookDecision::Reject("validation handler error".to_string())
+            }
+            Err(_elapsed) => {
+                error!(
+                    phase,
+                    duration_ms,
+                    reason = "validation service timeout",
+                    "hook_phase_error"
+                );
+                HookDecision::Reject("validation service unavailable".to_string())
             }
         }
-
-        // Also invoke the admission handler at its configured phase when that phase is blocking
-        // (i.e., when admission_control_phase is not post-receive). This allows the admission
-        // slot to veto pushes at any pre/proc/update phase — used by integration tests.
-        if phase == self.admission_control_phase && phase != "post-receive" {
-            let result = tokio::time::timeout(
-                self.schema_validation_timeout,
-                self.admission_handler
-                    .admit(phase, updates, "", git_dir, hook_ctx),
-            )
-            .await;
-            match result {
-                Ok(Ok(AdmissionDecision::Accept)) => {}
-                Ok(Ok(AdmissionDecision::Reject(reason))) => {
-                    return HookDecision::Reject(reason);
-                }
-                Ok(Err(e)) => {
-                    error!(phase, reason = %e, "hook_phase_error");
-                    return HookDecision::Reject("admission handler error".to_string());
-                }
-                Err(_elapsed) => {
-                    error!(
-                        phase,
-                        reason = "admission service timeout",
-                        "hook_phase_error"
-                    );
-                    return HookDecision::Reject("admission service timeout".to_string());
-                }
-            }
-        }
-        decision
     }
 }
 
@@ -587,6 +409,11 @@ pub(crate) fn with_quarantine_repo<T>(
     quarantine_dir: Option<&Path>,
     operation: impl FnOnce(&gix::Repository) -> Result<T, String>,
 ) -> Result<T, String> {
+    if let Some(repository) =
+        quarantine_dir.and_then(|directory| small_quarantine_view(git_dir, directory))
+    {
+        return operation(&repository);
+    }
     let pack_dir = git_dir.join("objects").join("pack");
     let mut staged_files: Vec<std::path::PathBuf> = Vec::new();
     if let Some(q) = quarantine_dir {
@@ -608,7 +435,7 @@ pub(crate) fn with_quarantine_repo<T>(
         }
     }
 
-    let result = gix::open(git_dir)
+    let result = crate::git::repo::open_repository_uncached(git_dir)
         .map_err(|e| format!("open repository: {e}"))
         .and_then(|repo| operation(&repo));
 
@@ -618,13 +445,39 @@ pub(crate) fn with_quarantine_repo<T>(
     result
 }
 
+fn small_quarantine_view(git_dir: &Path, quarantine: &Path) -> Option<gix::Repository> {
+    use gix::objs::Write;
+    let path = std::fs::read_dir(quarantine)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "pack")
+        })?;
+    let objects = crate::git::pack_server::small_pack_objects(&path)?;
+    let repository = crate::git::repo::open_repository(git_dir)
+        .ok()?
+        .with_object_memory();
+    for (id, kind, data) in objects {
+        let actual = repository
+            .objects
+            .write_buf_with_known_id(kind, &data, id)
+            .ok()?;
+        if actual != id {
+            return None;
+        }
+    }
+    Some(repository)
+}
+
 /// Walk the commit trees for all ref updates and collect resource blobs (files
 /// beginning with `---`).
 ///
-/// `quarantine_dir` is the TempDir written by `stage_pack_from_reader`. When
-/// present its path is written to `{git_dir}/objects/info/alternates` so that
-/// gix-odb resolves pushed objects that are not yet promoted to the live ODB.
-/// The alternates entry is removed after extraction regardless of outcome.
+/// `quarantine_dir` is the TempDir written by `stage_pack_from_reader`.
+/// Small packs use bounded request-local object memory; larger packs use the
+/// isolated temporary-link view owned by `with_quarantine_repo`. Neither view
+/// publishes objects to the live repository after extraction.
 ///
 /// Returns an empty vec if git_dir is not a valid repo or any update fails.
 fn extract_resource_blobs(
@@ -632,78 +485,39 @@ fn extract_resource_blobs(
     updates: &[RefUpdate],
     quarantine_dir: Option<&Path>,
 ) -> Vec<ResourceBlob> {
-    let zero = "0".repeat(40);
-
-    // To make pushed objects visible before promote_quarantine runs, temporarily
-    // hard-link the quarantine pack/index files into the live objects/pack dir.
-    // Hard-links are instant and atomic; the files are removed after extraction.
-    // This mirrors what native git does with GIT_ALTERNATE_OBJECT_DIRECTORIES.
-    let pack_dir = git_dir.join("objects").join("pack");
-    let mut staged_files: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(q) = quarantine_dir {
-        let _ = std::fs::create_dir_all(&pack_dir);
-        if let Ok(entries) = std::fs::read_dir(q) {
-            for entry in entries.flatten() {
-                let src = entry.path();
-                let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if ext == "pack" || ext == "idx" {
-                    let dst = pack_dir.join(entry.file_name());
-                    if !dst.exists() {
-                        // Try hard link first (free); fall back to copy across filesystems.
-                        let ok = std::fs::hard_link(&src, &dst).is_ok()
-                            || std::fs::copy(&src, &dst).is_ok();
-                        if ok {
-                            staged_files.push(dst);
-                        }
-                    }
-                }
+    with_quarantine_repo(git_dir, quarantine_dir, |repo| {
+        let zero = "0".repeat(40);
+        let mut blobs = Vec::new();
+        for update in updates {
+            let new_oid_hex = &update.new_oid;
+            let old_oid_hex = &update.old_oid;
+            if new_oid_hex == &zero {
+                continue; // branch deletion — no blobs to extract
             }
-        }
-    }
-
-    let repo = match gix::open(git_dir) {
-        Ok(r) => r,
-        Err(_) => {
-            for f in &staged_files {
-                let _ = std::fs::remove_file(f);
-            }
-            return vec![];
-        }
-    };
-
-    let mut blobs = Vec::new();
-    for update in updates {
-        let new_oid_hex = &update.new_oid;
-        let old_oid_hex = &update.old_oid;
-        if new_oid_hex == &zero {
-            continue; // branch deletion — no blobs to extract
-        }
-        let new_oid = match gix::ObjectId::from_hex(new_oid_hex.as_bytes()) {
-            Ok(id) => id,
-            Err(_) => continue,
-        };
-        if old_oid_hex == &zero {
-            // New branch creation — scan the full new tree.
-            collect_blobs_from_commit(&repo, new_oid, &mut blobs);
-        } else {
-            // Ref update — only validate files changed in the push delta.
-            // This avoids re-validating files that already passed in prior commits.
-            let old_oid = match gix::ObjectId::from_hex(old_oid_hex.as_bytes()) {
+            let new_oid = match gix::ObjectId::from_hex(new_oid_hex.as_bytes()) {
                 Ok(id) => id,
-                Err(_) => {
-                    collect_blobs_from_commit(&repo, new_oid, &mut blobs);
-                    continue;
-                }
+                Err(_) => continue,
             };
-            collect_changed_blobs(&repo, old_oid, new_oid, &mut blobs);
+            if old_oid_hex == &zero {
+                // New branch creation — scan the full new tree.
+                collect_blobs_from_commit(repo, new_oid, &mut blobs);
+            } else {
+                // Ref update — only validate files changed in the push delta.
+                // This avoids re-validating files that already passed in prior commits.
+                let old_oid = match gix::ObjectId::from_hex(old_oid_hex.as_bytes()) {
+                    Ok(id) => id,
+                    Err(_) => {
+                        collect_blobs_from_commit(repo, new_oid, &mut blobs);
+                        continue;
+                    }
+                };
+                collect_changed_blobs(repo, old_oid, new_oid, &mut blobs);
+            }
         }
-    }
 
-    for f in &staged_files {
-        let _ = std::fs::remove_file(f);
-    }
-
-    blobs
+        Ok(blobs)
+    })
+    .unwrap_or_default()
 }
 
 fn collect_blobs_from_commit(
@@ -902,26 +716,6 @@ pub(crate) fn collect_blobs_from_tree(
 }
 
 // ---------------------------------------------------------------------------
-// Phase functions (stubs — replaced by real logic in future features)
-// ---------------------------------------------------------------------------
-
-fn run_pre_receive(_git_dir: &Path, _updates: &[RefUpdate]) -> HookDecision {
-    HookDecision::Accept
-}
-
-fn run_proc_receive(_git_dir: &Path, _updates: &[RefUpdate]) -> HookDecision {
-    HookDecision::Accept
-}
-
-fn run_update(_git_dir: &Path, _update: &RefUpdate) -> HookDecision {
-    HookDecision::Accept
-}
-
-fn run_post_receive(_git_dir: &Path, _updates: &[RefUpdate]) {
-    // fire-and-forget: future features will fan out events here
-}
-
-// ---------------------------------------------------------------------------
 // Legacy helpers (kept for tag utilities used elsewhere)
 // ---------------------------------------------------------------------------
 
@@ -1036,26 +830,11 @@ mod tests {
         assert!(matches!(result, AdmissionDecision::Accept));
     }
 
-    // T005: HookPipeline toggle enforcement
-    fn make_disabled_config() -> GitReceivePackHooks {
-        use crate::config::HookToggle;
-        GitReceivePackHooks {
-            pre_receive: HookToggle { enabled: false },
-            update: HookToggle { enabled: false },
-            post_receive: HookToggle { enabled: false },
-            proc_receive: HookToggle { enabled: false },
-            post_update: HookToggle { enabled: false },
-            reference_transaction: HookToggle { enabled: false },
-        }
-    }
-
-    fn make_pipeline(config: GitReceivePackHooks) -> HookPipeline {
+    // Pre-receive validation and post-receive admission are always on now —
+    // no per-phase toggles to construct.
+    fn make_pipeline() -> HookPipeline {
         HookPipeline::new(
-            config,
-            "pre-receive".to_string(),
             Duration::from_secs(10),
-            "post-receive".to_string(),
-            "refs/heads/main".to_string(),
             Arc::new(NoopValidationHandler),
             Arc::new(NoopAdmissionHandler),
         )
@@ -1070,8 +849,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_all_disabled_accepts_all_indices() {
-        let pipeline = make_pipeline(make_disabled_config());
+    async fn test_pre_receive_accepts_all_indices() {
+        let pipeline = make_pipeline();
         let updates = vec![
             make_update("refs/heads/main"),
             make_update("refs/heads/dev"),
@@ -1086,25 +865,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result, vec![0, 1]);
-    }
-
-    #[tokio::test]
-    async fn test_pre_receive_only_enabled_accepts() {
-        use crate::config::HookToggle;
-        let mut cfg = make_disabled_config();
-        cfg.pre_receive = HookToggle { enabled: true };
-        let pipeline = make_pipeline(cfg);
-        let updates = vec![make_update("refs/heads/main")];
-        let result = pipeline
-            .run(
-                std::path::Path::new("/tmp"),
-                &updates,
-                None,
-                &HookContext::default(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(result, vec![0]);
     }
 
     #[test]

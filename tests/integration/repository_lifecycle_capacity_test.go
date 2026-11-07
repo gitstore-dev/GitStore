@@ -45,9 +45,11 @@ const (
 	repositoryCapacitySentAtAnnotation    = "capacity.gitstore.dev/sent-at"
 	repositoryCapacityPaddingAnnotation   = "capacity.gitstore.dev/padding"
 	repositoryCapacityMinimumOverflowWait = 31 * time.Second
+	repositoryCapacityResponseLimit       = 1 << 20
 )
 
 type repositoryCapacityConfig struct {
+	endpointSplit               bool
 	apiA, apiB                  string
 	overflowAPI                 string
 	controllerA, controllerB    string
@@ -83,17 +85,30 @@ type repositoryCapacityEvent struct {
 }
 
 type repositoryCapacitySubscriber struct {
-	endpoint string
-	cursor   string
-	seen     *capacityBitset
-	latency  []time.Duration
-	mu       sync.Mutex
+	endpoint  string
+	cursor    string
+	seen      *capacityBitset
+	latency   []time.Duration
+	mu        sync.Mutex
+	ready     chan struct{}
+	readyOnce sync.Once
 }
 
 type repositoryCapacityLoadResult struct {
 	produced, admitted, failed, backpressured int64
 	acknowledged                              *capacityBitset
 	maxSequence                               int
+	latencies                                 []time.Duration
+	queueFull, missedSchedules                int64
+	slowMutations                             []repositoryCapacitySlowMutation
+	windowComplete                            bool
+}
+
+type repositoryCapacitySlowMutation struct {
+	Sequence        int   `json:"sequence"`
+	DispatchDelayMs int64 `json:"dispatchDelayMs"`
+	ExecutionMs     int64 `json:"executionMs"`
+	Failed          bool  `json:"failed"`
 }
 
 func runRepositoryLifecycleCapacity(t *testing.T) {
@@ -104,7 +119,11 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	}
 	cfg := loadRepositoryCapacityConfig(t)
 	require.NoError(t, validateRepositoryCapacityScale(cfg))
+	runRepositoryCapacityWorkload(t, cfg)
+}
 
+func runRepositoryCapacityWorkload(t *testing.T, cfg repositoryCapacityConfig) {
+	t.Helper()
 	client := &http.Client{Timeout: 20 * time.Second}
 	require.NotEqual(t, cfg.apiA, cfg.apiB, "API endpoints must identify distinct replicas")
 	require.NotEqual(t, cfg.controllerA, cfg.controllerB, "controller endpoints must identify distinct replicas")
@@ -134,6 +153,7 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	poolPrefix := "rcp-" + runID + "-"
 	createRepositoryCapacityPool(t, client, cfg, poolPrefix)
 	assertRepositoryCrossReplicaRead(t, cfg, poolPrefix+"1")
+	assertRepositoryCapacityDeletionParity(t, client, cfg, "rcd-"+runID)
 	var fileWorkload *secretCapacityFileWorkload
 	if secretCapacityRequested() {
 		fileWorkload = prepareSecretCapacityFileWorkload(t, cfg, poolPrefix, runID)
@@ -172,7 +192,7 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	}
 	replayP95 := percentileDuration(replayDurations, .95)
 	if cfg.mode != capacityModeDiagnostic {
-		require.LessOrEqual(t, replayP95, 5*time.Second, "10,000-event Repository replay p95 must be <=5s")
+		require.LessOrEqual(t, replayP95, 5*time.Second, "%d-event Repository replay p95 must be <=5s", cfg.replayEvents)
 	}
 
 	livePrefix := "rcl-" + runID + "-"
@@ -180,6 +200,7 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		(int(cfg.duration/cfg.burstInterval)+2)*cfg.burstSize + 128
 	subscribers := openRepositoryCapacitySubscribers(t, cfg, maxTransitions)
 	readCtx, cancelReaders := context.WithCancel(context.Background())
+	t.Cleanup(cancelReaders)
 	readerErrors := make(chan error, len(subscribers))
 	var readers sync.WaitGroup
 	for _, subscriber := range subscribers {
@@ -190,6 +211,20 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 				readerErrors <- err
 			}
 		}(subscriber)
+	}
+	if cfg.endpointSplit {
+		// Prove every typed subscription executed before beginning the timed
+		// workload; merely launching reader goroutines is insufficient.
+		require.NoError(t, repositoryCapacityMutation(t.Context(), client, cfg.apiA, cfg.token, false, cfg.namespace, poolPrefix+"1", "setup-", 1, ""))
+		readyCtx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		for _, subscriber := range subscribers {
+			select {
+			case <-subscriber.ready:
+			case <-readyCtx.Done():
+				require.NoError(t, readyCtx.Err(), "all twenty observers must receive a durable event before load")
+			}
+		}
 	}
 
 	var secretControllersBefore [2]secretCapacityControllerSample
@@ -204,7 +239,14 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, secretLogs.stop()) })
 		require.NoError(t, secretLogs.capture(t.Context(), secretResourcesBefore))
 	}
+	if cfg.endpointSplit {
+		require.NoError(t, writeSecretCapacityPrivateJSON(os.Getenv("CAPACITY_CONNECTED_READY_FILE"), map[string]any{"runId": os.Getenv("CAPACITY_RUN_ID"), "subscribers": cfg.subscribers}))
+		require.NoError(t, awaitEndpointLoadStart(t.Context()))
+	}
 	soakStarted := time.Now()
+	if cfg.endpointSplit {
+		require.NoError(t, writeSecretCapacityPrivateJSON(os.Getenv("CAPACITY_CONNECTED_STARTED_FILE"), map[string]any{"runId": os.Getenv("CAPACITY_RUN_ID"), "startedAt": soakStarted.UTC().Format(time.RFC3339)}))
+	}
 	var fileLoad <-chan secretCapacityFileLoadResult
 	var secretFaults <-chan secretCapacityFaultResult
 	if fileWorkload != nil {
@@ -235,9 +277,33 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 		secretResourcesLoadEnd = captureSecretCapacityResources(t, cfg, "load-end")
 		require.NoError(t, secretLogs.capture(t.Context(), secretResourcesLoadEnd))
 	}
+	if cfg.endpointSplit {
+		// Persist diagnostic accounting before assertions: a failed load must
+		// retain why work was dropped without producing a passing receipt.
+		require.NoError(t, writeSecretCapacityPrivateJSON(filepath.Join(os.Getenv("CAPACITY_EVIDENCE_DIR"), "connected-load.json"), map[string]any{
+			"component": "endpoint-split-load/v1", "runId": os.Getenv("CAPACITY_RUN_ID"),
+			"offered": load.produced, "admitted": load.admitted, "failed": load.failed, "dropped": load.backpressured,
+			"queueFull": load.queueFull, "missedSchedules": load.missedSchedules, "slowMutations": load.slowMutations,
+		}))
+	}
 	require.Zero(t, load.failed, "Repository mutations failed under load")
 	require.Zero(t, load.backpressured, "bounded mutation queue shed load")
+	require.Zero(t, load.missedSchedules, "Repository load producer missed scheduled transitions")
 	require.Equal(t, load.produced, load.admitted, "all offered Repository transitions must be admitted")
+	firstSustained := cfg.transitionInterval
+	includeBursts := !cfg.endpointSplit
+	if cfg.endpointSplit {
+		firstSustained = 0
+	}
+	require.True(t, load.windowComplete, "Repository load did not cover its complete offered window")
+	require.Equal(t, repositoryCapacityExpectedOffers(cfg.duration, cfg.transitionInterval,
+		cfg.burstInterval, cfg.burstSize, firstSustained, includeBursts),
+		load.produced, "Repository load must cover the complete scheduled window")
+	if cfg.endpointSplit {
+		sort.Slice(load.latencies, func(i, j int) bool { return load.latencies[i] < load.latencies[j] })
+		require.NotEmpty(t, load.latencies)
+		require.LessOrEqual(t, percentileDuration(load.latencies, .95), 2*time.Second, "Admin authoring p95 must include actual mutations")
+	}
 	recovery := <-replacementDone
 	require.NoError(t, recovery.err)
 	waitRepositoryCapacitySubscribers(t, subscribers, load.acknowledged, 60*time.Second)
@@ -266,8 +332,8 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 	}
 
 	assertRepositoryCrossReplicaRead(t, cfg, poolPrefix+"1")
-	waitForRepositoryControllerAdvance(t, client, cfg.controllerA, controllerBeforeA)
-	waitForRepositoryControllerAdvance(t, client, cfg.controllerB, controllerBeforeB)
+	controllerAfterA := waitForRepositoryControllerAdvance(t, client, cfg.controllerA, controllerBeforeA)
+	controllerAfterB := waitForRepositoryControllerAdvance(t, client, cfg.controllerB, controllerBeforeB)
 	require.Empty(t, repositoryControllerPoison(t, client, cfg.controllerA))
 	require.Empty(t, repositoryControllerPoison(t, client, cfg.controllerB))
 	metricsEnd := map[string]capacityProcessMetrics{
@@ -302,7 +368,21 @@ func runRepositoryLifecycleCapacity(t *testing.T) {
 			ControllersBefore: secretControllersBefore[:], ControllersAfter: secretControllersAfter[:], RepositoryLifecyclePassed: true,
 		}))
 	}
-	t.Logf("Repository lifecycle capacity passed: mode=%s replay=%d replay_p95=%s subscribers=%d admitted=%d duration=%s", cfg.mode, cfg.replayEvents, replayP95, cfg.subscribers, load.admitted, time.Since(soakStarted))
+	t.Logf("Repository lifecycle capacity passed: mode=%s replay=%d replay_p95=%s subscribers=%d admitted=%d missed_schedules=%d queue_drops=%d duration=%s",
+		cfg.mode, cfg.replayEvents, replayP95, cfg.subscribers, load.admitted, load.missedSchedules, load.backpressured, time.Since(soakStarted))
+	if cfg.endpointSplit {
+		require.NoError(t, writeSecretCapacityPrivateJSON(filepath.Join(os.Getenv("CAPACITY_EVIDENCE_DIR"), "connected-result.json"), map[string]any{
+			"schemaVersion": 1, "component": "endpoint-split-connected/v1", "passed": true, "mode": cfg.mode, "runId": os.Getenv("CAPACITY_RUN_ID"),
+			"sourceStateSha256": os.Getenv("CAPACITY_SOURCE_STATE_SHA256"), "gitRevision": os.Getenv("CAPACITY_SOURCE_REVISION"), "configDigest": os.Getenv("CAPACITY_CONFIG_DIGEST"), "environmentDigest": os.Getenv("CAPACITY_ENVIRONMENT_DIGEST"),
+			"startedAt": soakStarted.UTC().Format(time.RFC3339), "completedAt": time.Now().UTC().Format(time.RFC3339), "subscribers": cfg.subscribers,
+			"durationSeconds": cfg.duration.Seconds(), "offered": load.produced, "admitted": load.admitted, "failed": load.failed, "dropped": load.backpressured,
+			"missedSchedules":     load.missedSchedules,
+			"adminAuthoringP95Ms": percentileDuration(load.latencies, .95).Milliseconds(), "apiRecoveryMs": recovery.duration.Milliseconds(),
+			"visibilityP95Ms": percentileDuration(latencies, .95).Milliseconds(), "visibilityP99Ms": percentileDuration(latencies, .99).Milliseconds(), "replayEvents": cfg.replayEvents, "replayP95Ms": replayP95.Milliseconds(),
+			"processesBefore": metricsStart, "processesAfter": metricsEnd, "apiInstancesBefore": []string{identityA, identityB},
+			"controllersBefore": []repositoryControllerSample{controllerBeforeA, controllerBeforeB}, "controllersAfter": []repositoryControllerSample{controllerAfterA, controllerAfterB},
+		}))
+	}
 }
 
 func validateSecretCapacityAvailability(value string) error {
@@ -646,7 +726,9 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 	jobs := make(chan int, repositoryCapacityQueueDepth(cfg.mutationWorkers, cfg.burstSize))
 	locks := make([]sync.Mutex, cfg.resourcePool)
 	var wg sync.WaitGroup
-	var produced, admitted, failed, backpressured atomic.Int64
+	var produced, admitted, failed, backpressured, queueFull atomic.Int64
+	var latencyMu sync.Mutex
+	loadStarted := time.Now()
 	for worker := 0; worker < cfg.mutationWorkers; worker++ {
 		wg.Add(1)
 		go func() {
@@ -658,7 +740,24 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 				if sequence%2 == 0 {
 					endpoint = cfg.apiB
 				}
+				started := time.Now()
+				if cfg.endpointSplit {
+					started = loadStarted.Add(time.Duration(sequence-1) * cfg.transitionInterval)
+				}
+				dispatched := time.Now()
 				err := repositoryCapacityMutation(context.Background(), client, endpoint, cfg.token, false, cfg.namespace, poolPrefix+strconv.Itoa(index+1), eventPrefix, sequence, "")
+				if cfg.endpointSplit {
+					elapsed := time.Since(started)
+					latencyMu.Lock()
+					result.latencies = append(result.latencies, elapsed)
+					if elapsed > 2*time.Second && len(result.slowMutations) < 32 {
+						result.slowMutations = append(result.slowMutations, repositoryCapacitySlowMutation{
+							Sequence: sequence, DispatchDelayMs: dispatched.Sub(started).Milliseconds(),
+							ExecutionMs: time.Since(dispatched).Milliseconds(), Failed: err != nil,
+						})
+					}
+					latencyMu.Unlock()
+				}
 				locks[index].Unlock()
 				if err != nil {
 					failed.Add(1)
@@ -670,34 +769,146 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 		}()
 	}
 	started := time.Now()
-	ticker := time.NewTicker(cfg.transitionInterval)
-	burst := time.NewTicker(cfg.burstInterval)
 	sequence := 0
-	enqueue := func() {
+	var missedSchedules atomic.Int64
+	recordOffer := func(missed bool) {
 		sequence++
 		produced.Add(1)
+		if missed {
+			missedSchedules.Add(1)
+			backpressured.Add(1)
+			return
+		}
 		select {
 		case jobs <- sequence:
 		default:
 			backpressured.Add(1)
+			queueFull.Add(1)
 		}
 	}
-	for time.Since(started) < cfg.duration {
+	firstSustained := cfg.transitionInterval
+	includeBursts := true
+	if cfg.endpointSplit {
+		firstSustained = 0
+		includeBursts = false
+	}
+	waitUntil := func(target time.Time) bool {
+		delay := time.Until(target)
+		if delay <= 0 {
+			return t.Context().Err() == nil
+		}
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
 		select {
-		case <-ticker.C:
-			enqueue()
-		case <-burst.C:
-			for i := 0; i < cfg.burstSize; i++ {
-				enqueue()
-			}
+		case <-t.Context().Done():
+			return false
+		case <-timer.C:
+			return true
 		}
 	}
-	ticker.Stop()
-	burst.Stop()
+	schedule := runRepositoryCapacitySchedule(
+		started, cfg.duration, cfg.transitionInterval, cfg.burstInterval, cfg.burstSize,
+		firstSustained, includeBursts, time.Now, waitUntil, recordOffer,
+	)
 	close(jobs)
 	wg.Wait()
 	result.produced, result.admitted, result.failed, result.backpressured = produced.Load(), admitted.Load(), failed.Load(), backpressured.Load()
+	result.missedSchedules = schedule.missed
+	result.windowComplete = schedule.windowComplete
 	result.maxSequence = sequence
+	result.queueFull = queueFull.Load()
+	return result
+}
+
+func TestEndpointCapacityLoadAccountsForQueueSaturation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(20 * time.Millisecond)
+		_, _ = io.WriteString(w, `{"data":{}}`)
+	}))
+	defer server.Close()
+	cfg := repositoryCapacityConfig{
+		apiA: server.URL, apiB: server.URL, endpointSplit: true,
+		duration: 400 * time.Millisecond, transitionInterval: 5 * time.Millisecond,
+		burstInterval: time.Hour, mutationWorkers: 2, resourcePool: 20,
+	}
+	load := runRepositoryCapacityLoad(t, server.Client(), cfg, "pool-", "event-", 100)
+	require.EqualValues(t, 80, load.produced)
+	require.Zero(t, load.failed)
+	require.Positive(t, load.queueFull)
+	require.Equal(t, load.backpressured, load.queueFull+load.missedSchedules)
+	require.Equal(t, load.produced, load.admitted+load.failed+load.backpressured)
+	require.LessOrEqual(t, len(load.slowMutations), 32)
+	require.True(t, load.windowComplete)
+}
+
+type repositoryCapacityScheduleResult struct {
+	scheduled, missed int64
+	windowComplete    bool
+}
+
+func repositoryCapacityExpectedOffers(
+	duration, interval, burstInterval time.Duration,
+	burstSize int,
+	firstSustained time.Duration,
+	includeBursts bool,
+) int64 {
+	if duration <= 0 {
+		return 0
+	}
+	var sustained int64
+	if firstSustained < duration {
+		sustained = 1 + int64((duration-1-firstSustained)/interval)
+	}
+	var bursts int64
+	if includeBursts {
+		bursts = int64((duration - 1) / burstInterval)
+	}
+	return sustained + bursts*int64(burstSize)
+}
+
+func runRepositoryCapacitySchedule(
+	start time.Time,
+	duration, interval, burstInterval time.Duration,
+	burstSize int,
+	firstSustained time.Duration,
+	includeBursts bool,
+	now func() time.Time,
+	waitUntil func(time.Time) bool,
+	offer func(missed bool),
+) repositoryCapacityScheduleResult {
+	var result repositoryCapacityScheduleResult
+	sustainedAt, burstAt := firstSustained, burstInterval
+	for sustainedAt < duration || (includeBursts && burstAt < duration) {
+		if sustainedAt < duration && (!includeBursts || burstAt >= duration || sustainedAt <= burstAt) {
+			scheduled := start.Add(sustainedAt)
+			if !waitUntil(scheduled) {
+				return result
+			}
+			missed := now().Sub(scheduled) >= interval
+			result.scheduled++
+			if missed {
+				result.missed++
+			}
+			offer(missed)
+			sustainedAt += interval
+			continue
+		}
+
+		scheduled := start.Add(burstAt)
+		if !waitUntil(scheduled) {
+			return result
+		}
+		missed := now().Sub(scheduled) >= interval
+		for i := 0; i < burstSize; i++ {
+			result.scheduled++
+			if missed {
+				result.missed++
+			}
+			offer(missed)
+		}
+		burstAt += burstInterval
+	}
+	result.windowComplete = waitUntil(start.Add(duration))
 	return result
 }
 
@@ -710,6 +921,111 @@ func repositoryCapacityQueueDepth(workers, burstSize int) int {
 func TestRepositoryCapacityQueueDepthIncludesOneFullBurst(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, 180, repositoryCapacityQueueDepth(20, 100))
+}
+
+func TestRepositoryCapacityScheduleCountsMissedOffersAndCoversWindow(t *testing.T) {
+	t.Parallel()
+	start := time.Unix(1, 0)
+	now := start
+	var offered, missed int
+	result := runRepositoryCapacitySchedule(
+		start, 50*time.Millisecond, 10*time.Millisecond, 20*time.Millisecond, 2,
+		10*time.Millisecond, true,
+		func() time.Time { return now },
+		func(target time.Time) bool {
+			if target.After(now) {
+				now = target
+			}
+			return true
+		},
+		func(wasMissed bool) {
+			if wasMissed {
+				missed++
+				return
+			}
+			offered++
+			if offered == 1 {
+				now = start.Add(31 * time.Millisecond)
+			}
+		},
+	)
+
+	require.EqualValues(t, 8, result.scheduled)
+	require.EqualValues(t, 3, result.missed)
+	require.Equal(t, 5, offered)
+	require.Equal(t, 3, missed)
+	require.True(t, result.windowComplete)
+	require.EqualValues(t, 8, repositoryCapacityExpectedOffers(
+		50*time.Millisecond, 10*time.Millisecond, 20*time.Millisecond, 2, 10*time.Millisecond, true))
+
+	start = time.Unix(2, 0)
+	now = start
+	var connectedOffers int
+	connected := runRepositoryCapacitySchedule(
+		start, 50*time.Millisecond, 10*time.Millisecond, 20*time.Millisecond, 2,
+		0, false,
+		func() time.Time { return now },
+		func(target time.Time) bool {
+			if target.After(now) {
+				now = target
+			}
+			return true
+		},
+		func(wasMissed bool) {
+			require.False(t, wasMissed)
+			connectedOffers++
+		},
+	)
+	require.EqualValues(t, 5, connected.scheduled)
+	require.Equal(t, 5, connectedOffers)
+	require.EqualValues(t, 5, repositoryCapacityExpectedOffers(
+		50*time.Millisecond, 10*time.Millisecond, 20*time.Millisecond, 2, 0, false))
+}
+
+func TestRepositoryCapacityScheduleReportsIncompleteWindow(t *testing.T) {
+	t.Parallel()
+	start := time.Unix(1, 0)
+	waitCalls := 0
+	result := runRepositoryCapacitySchedule(
+		start, time.Second, 500*time.Millisecond, time.Second, 1,
+		500*time.Millisecond, false,
+		func() time.Time { return start.Add(500 * time.Millisecond) },
+		func(time.Time) bool {
+			waitCalls++
+			return waitCalls == 1
+		},
+		func(bool) {},
+	)
+	require.EqualValues(t, 1, result.scheduled)
+	require.False(t, result.windowComplete)
+}
+
+func TestRepositoryCapacityMutationDoesNotRetryOrExposeResponseBody(t *testing.T) {
+	for _, response := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "rate limited", status: http.StatusTooManyRequests, body: "private response content"},
+		{name: "GraphQL error", status: http.StatusOK, body: `{"errors":[{"message":"private response content"}]}`},
+		{name: "oversized response", status: http.StatusOK, body: strings.Repeat("x", repositoryCapacityResponseLimit+1)},
+	} {
+		t.Run(response.name, func(t *testing.T) {
+			var requests atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(response.status)
+				_, _ = io.WriteString(w, response.body)
+			}))
+			defer server.Close()
+
+			err := repositoryCapacityMutation(context.Background(), server.Client(), server.URL,
+				"test-token", false, "capacity-test", "product", "", 1, "")
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), "private response content")
+			require.EqualValues(t, 1, requests.Load(), "failed writes must not be retried")
+		})
+	}
 }
 
 func repositoryCapacityMutation(ctx context.Context, client *http.Client, endpoint, token string, create bool, namespace, name, prefix string, sequence int, padding string) error {
@@ -734,37 +1050,38 @@ func repositoryCapacityMutation(ctx context.Context, client *http.Client, endpoi
 	if err != nil {
 		return err
 	}
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(endpoint, "/")+"/graphql", bytes.NewReader(payload))
-		if reqErr != nil {
-			return reqErr
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+token)
-		response, doErr := client.Do(req)
-		if doErr == nil {
-			contents, readErr := io.ReadAll(response.Body)
-			response.Body.Close()
-			if readErr == nil && response.StatusCode == http.StatusOK {
-				var result struct {
-					Errors []json.RawMessage `json:"errors"`
-				}
-				if json.Unmarshal(contents, &result) == nil && len(result.Errors) == 0 {
-					return nil
-				}
-				doErr = fmt.Errorf("GraphQL errors: %s", result.Errors)
-			} else if readErr != nil {
-				doErr = readErr
-			} else {
-				doErr = fmt.Errorf("HTTP %s: %s", response.Status, contents)
-			}
-		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
-			return doErr
-		}
-		time.Sleep(100 * time.Millisecond)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimSuffix(endpoint, "/")+"/admin/graphql", bytes.NewReader(payload))
+	if err != nil {
+		return err
 	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	response, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	contents, err := io.ReadAll(io.LimitReader(response.Body, repositoryCapacityResponseLimit+1))
+	if err != nil {
+		return err
+	}
+	if len(contents) > repositoryCapacityResponseLimit {
+		return errors.New("capacity GraphQL response exceeded capture bound")
+	}
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %s", response.Status)
+	}
+	var result struct {
+		Errors []json.RawMessage `json:"errors"`
+	}
+	if err := json.Unmarshal(contents, &result); err != nil {
+		return errors.New("invalid capacity GraphQL response")
+	}
+	if len(result.Errors) != 0 {
+		return fmt.Errorf("GraphQL returned %d operation errors", len(result.Errors))
+	}
+	return nil
 }
 
 func repositoryCapacityBootstrapCursor(t *testing.T, endpoint string, cfg repositoryCapacityConfig) string {
@@ -837,7 +1154,7 @@ func TestDialRepositoryCapacityWatchRetriesTransientHandshake(t *testing.T) {
 }
 
 func dialRepositoryCapacityWatchSelection(endpoint string, cfg repositoryCapacityConfig, cursor, selection string) (*websocket.Conn, error) {
-	wsURL := strings.Replace(strings.TrimSuffix(endpoint, "/"), "http", "ws", 1) + "/graphql"
+	wsURL := strings.Replace(strings.TrimSuffix(endpoint, "/"), "http", "ws", 1) + "/admin/graphql"
 	header := http.Header{"Authorization": []string{"Bearer " + cfg.token}}
 	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}, HandshakeTimeout: 10 * time.Second}
 	conn, response, err := dialer.Dial(wsURL, header)
@@ -919,6 +1236,9 @@ func openRepositoryCapacitySubscribers(t *testing.T, cfg repositoryCapacityConfi
 			endpoint = cfg.apiB
 		}
 		states = append(states, &repositoryCapacitySubscriber{endpoint: endpoint, cursor: repositoryCapacityBootstrapCursor(t, endpoint, cfg), seen: newCapacityBitset(maxTransitions + 1)})
+		if cfg.endpointSplit {
+			states[len(states)-1].ready = make(chan struct{})
+		}
 	}
 	return states
 }
@@ -930,14 +1250,22 @@ func (s *repositoryCapacitySubscriber) read(ctx context.Context, cfg repositoryC
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
+		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 		for ctx.Err() == nil {
-			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			timeout := 5 * time.Second
+			if cfg.endpointSplit {
+				timeout = 45 * time.Second
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(timeout))
 			event, readErr := readRepositoryCapacityEvent(conn)
 			if readErr != nil {
 				break
 			}
 			if event.ResourceVersion != "" {
 				s.cursor = event.ResourceVersion
+				if s.ready != nil {
+					s.readyOnce.Do(func() { close(s.ready) })
+				}
 			}
 			if sequence, ok := repositoryCapacitySequence(event, prefix); ok {
 				first := s.seen.mark(sequence)
@@ -952,6 +1280,7 @@ func (s *repositoryCapacitySubscriber) read(ctx context.Context, cfg repositoryC
 				}
 			}
 		}
+		stop()
 		conn.Close()
 	}
 	return ctx.Err()
@@ -1197,6 +1526,346 @@ func TestOpenRepositoryCapacityOverflowSubscriberWaitsForBookmark(t *testing.T) 
 		require.NoError(t, opened.conn.Close())
 	case <-time.After(2 * time.Second):
 		t.Fatal("overflow subscriber did not return after its registration BOOKMARK")
+	}
+}
+
+func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, name string) {
+	t.Helper()
+	ctx := context.Background()
+	gitURL := strings.TrimRight(os.Getenv("GIT_URL"), "/")
+	require.NoError(t, validateSecretCapacityGitEndpoint(gitURL))
+	assertRepositoryCapacityOwnerReferenceDeletionParity(t, client, cfg, name)
+	var previousUID string
+	directory := filepath.Join(t.TempDir(), "authoring")
+	for _, mode := range []string{"mutation", "push"} {
+		require.NoError(t, repositoryCapacityMutation(ctx, client, cfg.apiA, cfg.token, true, cfg.namespace, name, "deletion", 0, ""))
+		response := gqlQueryWithURL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
+			repository(by: {namespacePath: {namespace: $namespace, name: $name}}) {
+				id metadata {
+					resourceVersion
+					ownerReferences { apiVersion kind name uid blockOwnerDeletion }
+				}
+			}
+		}`, map[string]any{"namespace": cfg.namespace, "name": name})
+		require.Empty(t, response.Errors)
+		var current struct {
+			Repository struct {
+				ID       string `json:"id"`
+				Metadata struct {
+					ResourceVersion string `json:"resourceVersion"`
+					OwnerReferences []struct {
+						APIVersion         string `json:"apiVersion"`
+						Kind               string `json:"kind"`
+						Name               string `json:"name"`
+						UID                string `json:"uid"`
+						BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+					} `json:"ownerReferences"`
+				} `json:"metadata"`
+			} `json:"repository"`
+		}
+		require.NoError(t, json.Unmarshal(response.Data, &current))
+		require.NotEmpty(t, current.Repository.ID)
+		require.Len(t, current.Repository.Metadata.OwnerReferences, 1, "Repository must report its Namespace owner")
+		namespaceOwner := current.Repository.Metadata.OwnerReferences[0]
+		require.Equal(t, "Namespace", namespaceOwner.Kind)
+		require.Equal(t, cfg.namespace, namespaceOwner.Name)
+		require.NotEmpty(t, namespaceOwner.UID)
+		require.True(t, namespaceOwner.BlockOwnerDeletion)
+		if previousUID != "" {
+			require.NotEqual(t, previousUID, current.Repository.ID)
+			stale := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($ns: String!, $name: String!, $uid: ID!, $rv: String!) {
+				completeRepositoryDeletion(input: {namespace: $ns, name: $name, id: $uid, resourceVersion: $rv}) { id }
+			}`, map[string]any{"ns": cfg.namespace, "name": name, "uid": previousUID, "rv": current.Repository.Metadata.ResourceVersion})
+			require.NotEmpty(t, stale.Errors, "stale completion must reject a same-name replacement")
+			var staleError struct {
+				Extensions struct {
+					Code string `json:"code"`
+				} `json:"extensions"`
+			}
+			require.NoError(t, json.Unmarshal(stale.Errors[0], &staleError))
+			require.Equal(t, "CONFLICT", staleError.Extensions.Code)
+		}
+		path := "repositories/" + name + ".md"
+		if mode == "mutation" {
+			_, err := newSecretCapacityGitWorker(ctx, directory, gitURL+"/"+cfg.namespace+"/gitstore-system.git", cfg.namespace, name, cfg.token, 0)
+			require.NoError(t, err)
+		} else {
+			_, err := secretCapacityGit(ctx, directory, cfg.token, "fetch", "--quiet", "origin", "refs/heads/main")
+			require.NoError(t, err)
+			_, err = secretCapacityGit(ctx, directory, "", "checkout", "--quiet", "--detach", "FETCH_HEAD")
+			require.NoError(t, err)
+		}
+		contents, err := secretCapacityGit(ctx, directory, "", "ls-tree", "--name-only", "HEAD", "--", path)
+		require.NoError(t, err)
+		require.Equal(t, path, strings.TrimSpace(string(contents)), "created manifest must exist")
+		if mode == "mutation" {
+			deleted := gqlQueryWithURL(t, cfg.apiB, cfg.token, `mutation($id: ID!) {
+				deleteRepository(input: {id: $id}) { outcome repository { metadata { deletionTimestamp } } }
+			}`, map[string]any{"id": current.Repository.ID})
+			require.Empty(t, deleted.Errors)
+			require.Contains(t, string(deleted.Data), "TERMINATION_STARTED")
+		} else {
+			_, err := secretCapacityGit(ctx, directory, "", "rm", "--", path)
+			require.NoError(t, err)
+			_, err = secretCapacityGit(ctx, directory, "", "commit", "--quiet", "-m", "Delete capacity Repository")
+			require.NoError(t, err)
+			_, err = secretCapacityGit(ctx, directory, cfg.token, "push", "--quiet", "origin", "HEAD:refs/heads/main")
+			require.NoError(t, err)
+		}
+		_, err = secretCapacityGit(ctx, directory, cfg.token, "fetch", "--quiet", "origin", "refs/heads/main")
+		require.NoError(t, err)
+		contents, err = secretCapacityGit(ctx, directory, "", "ls-tree", "--name-only", "FETCH_HEAD", "--", path)
+		require.NoError(t, err)
+		require.Empty(t, strings.TrimSpace(string(contents)), "initiation must remove the authoring manifest")
+		require.Eventually(t, func() bool {
+			for _, endpoint := range []string{cfg.apiA, cfg.apiB} {
+				read := gqlQueryWithURL(t, endpoint, cfg.token, `query($id: ID!) { node(id: $id) { id } }`, map[string]any{"id": current.Repository.ID})
+				if !repositoryCapacityDeletionObserved(read) {
+					return false
+				}
+			}
+			return true
+		}, 60*time.Second, 250*time.Millisecond, "controllers must complete deletion on both replicas")
+		previousUID = current.Repository.ID
+	}
+	t.Log("repository deletion parity: mutation/push manifest removal, controller completion, name reuse and stale UID rejection verified")
+}
+
+func assertRepositoryCapacityOwnerReferenceDeletionParity(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, runID string) {
+	t.Helper()
+
+	createCategory := func(name string, parent string) string {
+		t.Helper()
+		var parentRef any
+		if parent != "" {
+			parentRef = map[string]any{"name": parent}
+		}
+		created := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($namespace: String!, $name: String!, $parent: CatalogObjectReferenceInput) {
+			createCategory(input: {
+				metadata: {namespace: $namespace, name: $name}
+				spec: {title: $name, parentRef: $parent}
+			}) {
+				category { id metadata { ownerReferences { kind name uid blockOwnerDeletion } } }
+			}
+		}`, map[string]any{"namespace": cfg.namespace, "name": name, "parent": parentRef})
+		require.Empty(t, created.Errors, string(created.Data))
+		var data struct {
+			CreateCategory struct {
+				Category struct {
+					ID       string `json:"id"`
+					Metadata struct {
+						OwnerReferences []struct {
+							Kind               string `json:"kind"`
+							Name               string `json:"name"`
+							UID                string `json:"uid"`
+							BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+						} `json:"ownerReferences"`
+					} `json:"metadata"`
+				} `json:"category"`
+			} `json:"createCategory"`
+		}
+		require.NoError(t, json.Unmarshal(created.Data, &data))
+		require.NotEmpty(t, data.CreateCategory.Category.ID)
+		return data.CreateCategory.Category.ID
+	}
+	categoryExists := func(name string) bool {
+		t.Helper()
+		response := gqlQueryWithURL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
+			category(by: {namespacePath: {namespace: $namespace, name: $name}}) { id }
+		}`, map[string]any{"namespace": cfg.namespace, "name": name})
+		var data struct {
+			Category json.RawMessage `json:"category"`
+		}
+		if json.Unmarshal(response.Data, &data) != nil {
+			return true
+		}
+		return len(data.Category) != 0 && string(data.Category) != "null"
+	}
+	productOwnerReferences := func(name string) (bool, string, []struct {
+		Kind               string `json:"kind"`
+		Name               string `json:"name"`
+		UID                string `json:"uid"`
+		BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+	}) {
+		t.Helper()
+		response := gqlQueryWithURL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
+			product(by: {namespacePath: {namespace: $namespace, name: $name}}) {
+				id
+				metadata { ownerReferences { kind name uid blockOwnerDeletion } }
+			}
+		}`, map[string]any{"namespace": cfg.namespace, "name": name})
+		if len(response.Errors) != 0 {
+			return false, "", nil
+		}
+		var data struct {
+			Product *struct {
+				ID       string `json:"id"`
+				Metadata struct {
+					OwnerReferences []struct {
+						Kind               string `json:"kind"`
+						Name               string `json:"name"`
+						UID                string `json:"uid"`
+						BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+					} `json:"ownerReferences"`
+				} `json:"metadata"`
+			} `json:"product"`
+		}
+		if json.Unmarshal(response.Data, &data) != nil || data.Product == nil {
+			return false, "", nil
+		}
+		return true, data.Product.ID, data.Product.Metadata.OwnerReferences
+	}
+
+	blockingParent := "rcb-" + runID
+	blockingChild := blockingParent + "-child"
+	parentID := createCategory(blockingParent, "")
+	childID := createCategory(blockingChild, blockingParent)
+	child := gqlQueryWithURL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
+		category(by: {namespacePath: {namespace: $namespace, name: $name}}) {
+			metadata { ownerReferences { kind name uid blockOwnerDeletion } }
+		}
+	}`, map[string]any{"namespace": cfg.namespace, "name": blockingChild})
+	require.Empty(t, child.Errors, string(child.Data))
+	var childData struct {
+		Category struct {
+			Metadata struct {
+				OwnerReferences []struct {
+					Kind               string `json:"kind"`
+					Name               string `json:"name"`
+					UID                string `json:"uid"`
+					BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+				} `json:"ownerReferences"`
+			} `json:"metadata"`
+		} `json:"category"`
+	}
+	require.NoError(t, json.Unmarshal(child.Data, &childData))
+	var blocksParent bool
+	for _, reference := range childData.Category.Metadata.OwnerReferences {
+		if reference.Kind == "CategoryTaxonomy" && reference.Name == blockingParent {
+			require.True(t, reference.BlockOwnerDeletion)
+			blocksParent = true
+		}
+	}
+	require.True(t, blocksParent, "child category must carry a blocking owner reference")
+	blocked := gqlQueryWithURL(t, cfg.apiB, cfg.token, `mutation($id: ID!) {
+		deleteCategory(input: {id: $id}) { outcome }
+	}`, map[string]any{"id": parentID})
+	require.NotEmpty(t, blocked.Errors, "a live blocking child must reject parent deletion")
+	require.Eventually(t, func() bool {
+		return categoryExists(blockingParent) && categoryExists(blockingChild)
+	}, 10*time.Second, 250*time.Millisecond, "blocked deletion must preserve owner and dependent")
+
+	for _, id := range []string{childID, parentID} {
+		deleted := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($id: ID!) {
+			deleteCategory(input: {id: $id}) { outcome }
+		}`, map[string]any{"id": id})
+		require.Empty(t, deleted.Errors, string(deleted.Data))
+		require.Eventually(t, func() bool {
+			name := blockingParent
+			if id == childID {
+				name = blockingChild
+			}
+			return !categoryExists(name)
+		}, 60*time.Second, 250*time.Millisecond, "category deletion must finalize")
+	}
+
+	orphanOwner := "rco-" + runID
+	orphanProduct := orphanOwner + "-product"
+	orphanID := createCategory(orphanOwner, "")
+	createdProduct := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($namespace: String!, $name: String!, $category: String!) {
+		createProduct(input: {
+			metadata: {namespace: $namespace, name: $name}
+			spec: {title: $name, categoryRef: {name: $category}}
+		}) {
+			product { metadata { ownerReferences { kind name uid blockOwnerDeletion } } }
+		}
+	}`, map[string]any{"namespace": cfg.namespace, "name": orphanProduct, "category": orphanOwner})
+	require.Empty(t, createdProduct.Errors, string(createdProduct.Data))
+	var initialProduct struct {
+		CreateProduct struct {
+			Product struct {
+				Metadata struct {
+					OwnerReferences []struct {
+						Kind               string `json:"kind"`
+						Name               string `json:"name"`
+						UID                string `json:"uid"`
+						BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+					} `json:"ownerReferences"`
+				} `json:"metadata"`
+			} `json:"product"`
+		} `json:"createProduct"`
+	}
+	require.NoError(t, json.Unmarshal(createdProduct.Data, &initialProduct))
+	var orphanReferenceFound bool
+	var orphanCategoryUID string
+	for _, reference := range initialProduct.CreateProduct.Product.Metadata.OwnerReferences {
+		if reference.Kind == "CategoryTaxonomy" && reference.Name == orphanOwner {
+			require.False(t, reference.BlockOwnerDeletion)
+			orphanReferenceFound = true
+			orphanCategoryUID = reference.UID
+		}
+	}
+	require.True(t, orphanReferenceFound, "Product must expose its non-blocking category owner")
+	require.NotEmpty(t, orphanCategoryUID)
+
+	deletedOrphanOwner := gqlQueryWithURL(t, cfg.apiB, cfg.token, `mutation($id: ID!) {
+		deleteCategory(input: {id: $id}) { outcome }
+	}`, map[string]any{"id": orphanID})
+	require.Empty(t, deletedOrphanOwner.Errors, string(deletedOrphanOwner.Data))
+	var orphanProductID string
+	require.Eventually(t, func() bool {
+		exists, id, references := productOwnerReferences(orphanProduct)
+		if !exists {
+			return false
+		}
+		orphanProductID = id
+		for _, reference := range references {
+			if reference.Kind == "CategoryTaxonomy" && reference.UID == orphanCategoryUID {
+				return false
+			}
+		}
+		return !categoryExists(orphanOwner)
+	}, 60*time.Second, 250*time.Millisecond, "non-blocking owner removal must preserve Product and clear its stale owner reference")
+	require.NotEmpty(t, orphanProductID)
+	deletedProduct := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($id: ID!) {
+		deleteProduct(input: {id: $id}) { outcome }
+	}`, map[string]any{"id": orphanProductID})
+	require.Empty(t, deletedProduct.Errors)
+	require.Eventually(t, func() bool {
+		exists, _, _ := productOwnerReferences(orphanProduct)
+		return !exists
+	}, 60*time.Second, 250*time.Millisecond, "capacity orphan fixture must be cleaned up")
+}
+
+func repositoryCapacityDeletionObserved(response gqlResponse) bool {
+	var data map[string]json.RawMessage
+	if json.Unmarshal(response.Data, &data) != nil || len(data) != 1 || string(data["node"]) != "null" || len(response.Errors) != 1 {
+		return false
+	}
+	var failure struct {
+		Path       []string `json:"path"`
+		Extensions struct {
+			Code        string                    `json:"code"`
+			Diagnostics []struct{ Reason string } `json:"diagnostics"`
+		} `json:"extensions"`
+	}
+	return json.Unmarshal(response.Errors[0], &failure) == nil && len(failure.Path) == 1 && failure.Path[0] == "node" &&
+		failure.Extensions.Code == "NOT_FOUND" && len(failure.Extensions.Diagnostics) == 1 && failure.Extensions.Diagnostics[0].Reason == "REPOSITORY_NOT_FOUND"
+}
+
+func TestRepositoryCapacityDeletionRequiresTheRepositoryNotFoundContract(t *testing.T) {
+	missing := gqlResponse{Data: json.RawMessage(`{"node":null}`), Errors: []json.RawMessage{json.RawMessage(`{"path":["node"],"extensions":{"code":"NOT_FOUND","diagnostics":[{"reason":"REPOSITORY_NOT_FOUND"}]}}`)}}
+	require.True(t, repositoryCapacityDeletionObserved(missing))
+	for _, response := range []gqlResponse{
+		{Data: json.RawMessage(`{"node":{"id":"still-present"}}`), Errors: missing.Errors},
+		{Data: json.RawMessage(`{}`), Errors: missing.Errors},
+		{Data: json.RawMessage(`null`), Errors: missing.Errors},
+		{Data: missing.Data},
+		{Data: missing.Data, Errors: []json.RawMessage{json.RawMessage(`{"path":["node"],"extensions":{"code":"FORBIDDEN"}}`)}},
+		{Data: missing.Data, Errors: []json.RawMessage{json.RawMessage(`{"path":["node"],"extensions":{"code":"NOT_FOUND","diagnostics":[{"reason":"PRODUCT_NOT_FOUND"}]}}`)}},
+		{Data: missing.Data, Errors: append(append([]json.RawMessage{}, missing.Errors...), missing.Errors...)},
+	} {
+		require.False(t, repositoryCapacityDeletionObserved(response))
 	}
 }
 
@@ -1498,12 +2167,13 @@ func newSecretCapacityGitWorker(ctx context.Context, directory, remote, namespac
 			return nil, errors.New("secret capacity: invalid namespace or File pool name")
 		}
 	}
-	if _, err := secretCapacityGit(ctx, filepath.Dir(directory), token, "clone", "--quiet", "--no-tags", "--depth=1", "--", remote, directory); err != nil {
+	if _, err := secretCapacityGit(ctx, filepath.Dir(directory), token, "clone", "--quiet", "--no-tags", "--", remote, directory); err != nil {
 		return nil, err
 	}
 	for _, setting := range [][2]string{
 		{"user.name", "GitStore Capacity"}, {"user.email", "capacity@gitstore.dev"},
 		{"commit.gpgSign", "false"}, {"core.hooksPath", os.DevNull},
+		{"fetch.negotiationAlgorithm", "noop"},
 	} {
 		if _, err := secretCapacityGit(ctx, directory, "", "config", setting[0], setting[1]); err != nil {
 			return nil, err
@@ -1546,8 +2216,8 @@ metadata:
 spec:
   contentType: image/jpeg
   type: gitstore.dev/media
+  provider: s3
   source:
-    type: s3
     uri: s3://capacity-fixture/%s.jpg
     credentialsRef:
       kind: CredentialsRef
@@ -1652,8 +2322,8 @@ type secretCapacityFileProjection struct {
 	Spec struct {
 		ContentType string `json:"contentType"`
 		Type        string `json:"type"`
+		Provider    string `json:"provider"`
 		Source      struct {
-			Type           string `json:"type"`
 			URI            string `json:"uri"`
 			CredentialsRef *struct {
 				Kind      string `json:"kind"`
@@ -1670,7 +2340,7 @@ type secretCapacityFileProjection struct {
 }
 
 const secretCapacityFileSelection = `id metadata { name namespace annotations }
-	spec { contentType type source { type uri credentialsRef { kind type secretRef { kind name key namespace } } } }`
+	spec { contentType type provider source { uri credentialsRef { kind type secretRef { kind name key namespace } } } }`
 
 func secretCapacityReadFileIDs(ctx context.Context, endpoint, token, namespace, runID string) (map[string]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -1685,7 +2355,7 @@ func secretCapacityReadFileIDs(ctx context.Context, endpoint, token, namespace, 
 		variables := map[string]any{"namespace": namespace}
 		for index := range 10 {
 			fmt.Fprintf(&definitions, ",$name%d:String!", index)
-			fmt.Fprintf(&fields, "file%d:file(namespace:$namespace,name:$name%d){%s}\n", index, index, secretCapacityFileSelection)
+			fmt.Fprintf(&fields, "file%d:file(by:{namespacePath:{namespace:$namespace,name:$name%d}}){%s}\n", index, index, secretCapacityFileSelection)
 			variables[fmt.Sprintf("name%d", index)] = secretCapacityFileName(runID, offset+index)
 		}
 		query := "query(" + definitions.String() + "){" + fields.String() + "}"
@@ -1724,7 +2394,7 @@ func validateSecretCapacityFile(file secretCapacityFileProjection, namespace, na
 	if file.ID == "" || file.Metadata.Namespace != namespace || file.Metadata.Name != name ||
 		file.Metadata.Annotations["secret-capacity.gitstore.dev/sequence"] != strconv.FormatInt(sequence, 10) ||
 		file.Spec.ContentType != "image/jpeg" || file.Spec.Type != "gitstore.dev/media" ||
-		file.Spec.Source.Type != "s3" || file.Spec.Source.URI != "s3://capacity-fixture/"+name+".jpg" ||
+		file.Spec.Provider != "s3" || file.Spec.Source.URI != "s3://capacity-fixture/"+name+".jpg" ||
 		secretmaterial.ValidateCredentialsRef(authoredRef, namespace) != nil ||
 		ref.Type != "aws-access-key/v1" || ref.SecretRef.Name != "capacity-media" ||
 		ref.SecretRef.Key != nil || ref.SecretRef.Namespace != nil {
@@ -1746,7 +2416,7 @@ func secretCapacityGraphQLBounded(ctx context.Context, client *http.Client, endp
 	if err != nil {
 		return invalid
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/graphql", bytes.NewReader(data))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+"/admin/graphql", bytes.NewReader(data))
 	if err != nil {
 		return invalid
 	}

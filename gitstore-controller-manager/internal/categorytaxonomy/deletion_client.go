@@ -15,8 +15,9 @@ import (
 // categoryDeletionStatusMutation queries only fields UpdateCategoryStatusPayload
 // actually declares (category, hasMoreProductDependents) — a resourceVersion
 // conflict is reported as a GraphQL error with a RESOURCE_VERSION_CONFLICT
-// extension (see mapConflictErr below), not a payload field, matching every
-// other status mutation in this codebase (graphql_status_client.go et al.).
+// (or forward-compatible CONFLICT) extension (see mapConflictErr below), not
+// a payload field, matching every other status mutation in this codebase
+// (graphql_status_client.go et al.).
 const categoryDeletionStatusMutation = `
 mutation($input: UpdateCategoryStatusInput!) {
   updateCategoryStatus(input: $input) {
@@ -24,23 +25,32 @@ mutation($input: UpdateCategoryStatusInput!) {
   }
 }`
 
-// mapConflictErr maps a RESOURCE_VERSION_CONFLICT GraphQL error to
-// types.ErrConflict; any other error (including a NOT_FOUND-coded one)
-// passes through wrapped but otherwise unchanged.
+// completeCategoryDeletionMutation finishes a terminating category's
+// foreground deletion.
+const completeCategoryDeletionMutation = `
+mutation($input: CompleteCategoryDeletionInput!) {
+  completeCategoryDeletion(input: $input) {
+    id
+  }
+}`
+
+// mapConflictErr maps a RESOURCE_VERSION_CONFLICT or forward-compatible
+// CONFLICT GraphQL error to types.ErrConflict; any other error (including a
+// NOT_FOUND-coded one) passes through wrapped but otherwise unchanged.
 func mapConflictErr(err error) error {
 	var gqlErr *graphqlclient.Error
-	if errors.As(err, &gqlErr) && gqlErr.Extensions["code"] == "RESOURCE_VERSION_CONFLICT" {
+	if errors.As(err, &gqlErr) && graphqlclient.IsConflictCode(gqlErr.Extensions["code"]) {
 		return fmt.Errorf("%w: current resourceVersion %q: %w", types.ErrConflict, gqlErr.Extensions["resourceVersion"], err)
 	}
 	return err
 }
 
-// DeletionClient invokes lifecycle operations through the existing
-// updateCategoryStatus subresource mutation. No parallel CategoryTaxonomy
-// GraphQL mutation is introduced.
+// DeletionClient invokes the controller-only lifecycle operations: the
+// bounded Product drain through updateCategoryStatus, and final removal
+// through completeCategoryDeletion.
 type DeletionClient interface {
 	DecoupleProducts(ctx context.Context, namespace, name, resourceVersion string) (bool, error)
-	CompleteDeletion(ctx context.Context, namespace, name, resourceVersion string) error
+	CompleteDeletion(ctx context.Context, namespace, name, resourceVersion, uid string) error
 }
 
 type graphqlDeletionClient struct {
@@ -70,16 +80,16 @@ func (c *graphqlDeletionClient) DecoupleProducts(ctx context.Context, namespace,
 	return response.UpdateCategoryStatus.HasMoreProductDependents, nil
 }
 
-func (c *graphqlDeletionClient) CompleteDeletion(ctx context.Context, namespace, name, resourceVersion string) error {
+func (c *graphqlDeletionClient) CompleteDeletion(ctx context.Context, namespace, name, resourceVersion, uid string) error {
 	var response struct {
-		UpdateCategoryStatus struct{} `json:"updateCategoryStatus"`
+		CompleteCategoryDeletion struct{} `json:"completeCategoryDeletion"`
 	}
-	if err := c.client.Mutate(ctx, categoryDeletionStatusMutation, map[string]any{
+	if err := c.client.Mutate(ctx, completeCategoryDeletionMutation, map[string]any{
 		"input": map[string]any{
-			"namespace":        namespace,
-			"name":             name,
-			"resourceVersion":  resourceVersion,
-			"completeDeletion": true,
+			"id":              uid,
+			"namespace":       namespace,
+			"name":            name,
+			"resourceVersion": resourceVersion,
 		},
 	}, &response); err != nil {
 		return fmt.Errorf("category deletion client: complete deletion: %w", mapConflictErr(err))

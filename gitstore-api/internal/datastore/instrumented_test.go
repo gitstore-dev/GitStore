@@ -12,12 +12,47 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+func TestInstrumentedDatastoreForwardsRepositoryCompletion(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	wrapped := datastore.NewInstrumentedDatastoreWithMeter(store, "memdb", zap.NewNop(), observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/datastore"))
+	completion, ok := any(wrapped).(datastore.RepositoryDeletionStore)
+	require.True(t, ok)
+	require.ErrorIs(t, completion.CompleteRepositoryDeletion(context.Background(), "00000000-0000-0000-0000-000000000299", "1"), datastore.ErrNotFound)
+}
+
+func TestInstrumentedDatastoreForwardsCategoryCompletionIdentity(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := t.Context()
+	now := time.Now().UTC()
+	category := &datastore.CategoryTaxonomy{
+		UID: "00000000-0000-0000-0000-000000000298", Namespace: "acme", Name: "category",
+		ResourceVersion: "7", CreationTimestamp: now, DeletionTimestamp: &now,
+		Finalizers: []string{datastore.CategoryTaxonomyForegroundDeletionFinalizer},
+	}
+	require.NoError(t, store.CreateCategoryTaxonomy(ctx, category))
+	wrapped := datastore.NewInstrumentedDatastoreWithMeter(store, "memdb", zap.NewNop(), observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/datastore"))
+	completion := wrapped.(datastore.CategoryTaxonomyDeletionStore)
+	_, err = completion.CompleteCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion,
+		"00000000-0000-0000-0000-000000000297")
+	require.ErrorIs(t, err, datastore.ErrConflict)
+	_, err = completion.CompleteCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, "stale", category.UID)
+	require.ErrorIs(t, err, datastore.ErrConflict)
+	deleted, err := completion.CompleteCategoryTaxonomyDeletion(ctx, category.Namespace, category.Name, category.ResourceVersion, category.UID)
+	require.NoError(t, err)
+	require.Equal(t, category.UID, deleted.UID)
+}
 
 // stubDatastore is a minimal Datastore stub for decorator tests.
 type stubDatastore struct {
@@ -65,8 +100,11 @@ func (s *stubDatastore) GetProductByName(_ context.Context, _, _ string) (*datas
 func (s *stubDatastore) ListProducts(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) UpdateProduct(_ context.Context, _ *datastore.Product) error {
+func (s *stubDatastore) UpdateProduct(_ context.Context, _ *datastore.Product, expectedResourceVersion string) error {
 	return s.getProductErr
+}
+func (s *stubDatastore) UpdateProductStatus(_ context.Context, _, _ string, _ datastore.ProductStatusPatch) (*datastore.Product, error) {
+	return nil, s.getProductErr
 }
 func (s *stubDatastore) DeleteProduct(_ context.Context, _ string) error {
 	return s.getProductErr
@@ -84,7 +122,7 @@ func TestInstrumentedDatastorePreservesProductLifecycleCapability(t *testing.T) 
 		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "Product", ResourceVersion: "1", Generation: 1,
 	}
 	require.NoError(t, store.CreateProduct(context.Background(), product))
-	wrapped := datastore.NewInstrumentedDatastoreWithRegistry(store, "memdb", zap.NewNop(), prometheus.NewRegistry())
+	wrapped := datastore.NewInstrumentedDatastoreWithMeter(store, "memdb", zap.NewNop(), observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/datastore"))
 	lifecycle, ok := wrapped.(datastore.ProductLifecycleStore)
 	require.True(t, ok, "instrumentation must not erase Product deletion capability")
 
@@ -105,7 +143,7 @@ func (s *stubDatastore) GetCategoryTaxonomyByName(_ context.Context, _, _ string
 func (s *stubDatastore) ListCategoryTaxonomies(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) UpdateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
+func (s *stubDatastore) UpdateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy, expectedResourceVersion string) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) DeleteCategoryTaxonomy(_ context.Context, _ string) error {
@@ -132,7 +170,7 @@ func (s *stubDatastore) ListProductVariants(_ context.Context, _ string, _ datas
 func (s *stubDatastore) ListProductVariantsByProductRef(_ context.Context, _, _ string) ([]*datastore.ProductVariant, error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) UpdateProductVariant(_ context.Context, _ *datastore.ProductVariant) error {
+func (s *stubDatastore) UpdateProductVariant(_ context.Context, _ *datastore.ProductVariant, expectedResourceVersion string) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) DeleteProductVariant(_ context.Context, _ string) error {
@@ -153,7 +191,7 @@ func (s *stubDatastore) GetCollectionByName(_ context.Context, _, _ string) (*da
 func (s *stubDatastore) ListCollections(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) UpdateCollection(_ context.Context, _ *datastore.Collection) error {
+func (s *stubDatastore) UpdateCollection(_ context.Context, _ *datastore.Collection, expectedResourceVersion string) error {
 	return s.getProductErr
 }
 func (s *stubDatastore) DeleteCollection(_ context.Context, _ string) error {
@@ -225,9 +263,6 @@ func (s *stubDatastore) LookupNamespaceByRepoID(_ context.Context, _ string) (*d
 func (s *stubDatastore) RenameRepository(_ context.Context, _, _, _ string) error {
 	return s.getProductErr
 }
-func (s *stubDatastore) TransferRepository(_ context.Context, _, _, _ string) error {
-	return s.getProductErr
-}
 func (s *stubDatastore) DeleteNamespaceMapping(_ context.Context, _, _ string) error {
 	return s.getProductErr
 }
@@ -238,7 +273,7 @@ func (s *stubDatastore) CreateServiceAccount(_ context.Context, _ *datastore.Ser
 func (s *stubDatastore) GetServiceAccountByUID(_ context.Context, _ string) (*datastore.ServiceAccount, error) {
 	return nil, s.getProductErr
 }
-func (s *stubDatastore) GetServiceAccountBySubject(_ context.Context, _, _ string) (*datastore.ServiceAccount, error) {
+func (s *stubDatastore) GetServiceAccountBySubject(_ context.Context, _ string) (*datastore.ServiceAccount, error) {
 	return nil, s.getProductErr
 }
 func (s *stubDatastore) ListServiceAccounts(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.ServiceAccount], error) {
@@ -266,7 +301,7 @@ func newTestInstrumented(t *testing.T, stub datastore.Datastore) (datastore.Data
 	core, logs := observer.New(zap.DebugLevel)
 	log := zap.New(core)
 	reg := prometheus.NewRegistry()
-	return datastore.NewInstrumentedDatastoreWithRegistry(stub, "test-backend", log, reg), logs, reg
+	return datastore.NewInstrumentedDatastoreWithMeter(stub, "test-backend", log, observabilitytest.Meter(t, reg, "gitstore/datastore")), logs, reg
 }
 
 func counterValue(t *testing.T, reg *prometheus.Registry, op, backend string) float64 {

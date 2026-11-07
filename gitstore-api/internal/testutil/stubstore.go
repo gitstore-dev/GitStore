@@ -16,22 +16,31 @@ import (
 // githttp and security middleware tests have override hooks; all other methods
 // are no-ops that satisfy the full datastore.Datastore interface.
 type StubStore struct {
-	GetNamespaceByNameFunc  func(ctx context.Context, name string) (*datastore.Namespace, error)
-	GetNamespaceFunc        func(ctx context.Context, id string) (*datastore.Namespace, error)
-	LookupRepositoryFunc    func(ctx context.Context, namespaceID, name string) (*datastore.NamespaceMapping, error)
-	GetRepositoryFunc       func(ctx context.Context, id string) (*datastore.Repository, error)
-	HasRepositoriesFunc     func(ctx context.Context, namespaceID string) (bool, error)
-	HasCatalogResourcesFunc func(ctx context.Context, repoID string) (bool, error)
-	GetCategoryTaxonomyFunc func(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error)
-	GetProductFunc          func(ctx context.Context, uid string) (*datastore.Product, error)
-	GetProductByNameFunc    func(ctx context.Context, namespace, name string) (*datastore.Product, error)
+	GetFileByNameFunc             func(context.Context, string, string) (*datastore.File, error)
+	GetProductVariantFunc         func(context.Context, string) (*datastore.ProductVariant, error)
+	GetProductVariantByNameFunc   func(context.Context, string, string) (*datastore.ProductVariant, error)
+	GetCollectionFunc             func(context.Context, string) (*datastore.Collection, error)
+	GetCollectionByNameFunc       func(context.Context, string, string) (*datastore.Collection, error)
+	GetNamespaceByNameFunc        func(ctx context.Context, name string) (*datastore.Namespace, error)
+	GetNamespaceFunc              func(ctx context.Context, id string) (*datastore.Namespace, error)
+	LookupRepositoryFunc          func(ctx context.Context, namespaceID, name string) (*datastore.NamespaceMapping, error)
+	GetRepositoryFunc             func(ctx context.Context, id string) (*datastore.Repository, error)
+	HasRepositoriesFunc           func(ctx context.Context, namespaceID string) (bool, error)
+	HasCatalogResourcesFunc       func(ctx context.Context, repoID string) (bool, error)
+	GetCategoryTaxonomyFunc       func(ctx context.Context, uid string) (*datastore.CategoryTaxonomy, error)
+	GetCategoryTaxonomyByNameFunc func(ctx context.Context, namespace, name string) (*datastore.CategoryTaxonomy, error)
+	GetProductFunc                func(ctx context.Context, uid string) (*datastore.Product, error)
+	GetProductByNameFunc          func(ctx context.Context, namespace, name string) (*datastore.Product, error)
 }
 
 func (s *StubStore) CreateFile(_ context.Context, _ *datastore.File) error { return nil }
 func (s *StubStore) GetFile(_ context.Context, _ string) (*datastore.File, error) {
 	return nil, datastore.ErrNotFound
 }
-func (s *StubStore) GetFileByName(_ context.Context, _, _ string) (*datastore.File, error) {
+func (s *StubStore) GetFileByName(ctx context.Context, namespace, name string) (*datastore.File, error) {
+	if s.GetFileByNameFunc != nil {
+		return s.GetFileByNameFunc(ctx, namespace, name)
+	}
 	return nil, datastore.ErrNotFound
 }
 func (s *StubStore) ListFiles(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
@@ -98,8 +107,13 @@ func (s *StubStore) GetProductByName(ctx context.Context, namespace, name string
 func (s *StubStore) ListProducts(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
 	return &datastore.PageResult[datastore.Product]{}, nil
 }
-func (s *StubStore) UpdateProduct(_ context.Context, _ *datastore.Product) error { return nil }
-func (s *StubStore) DeleteProduct(_ context.Context, _ string) error             { return nil }
+func (s *StubStore) UpdateProduct(_ context.Context, _ *datastore.Product, expectedResourceVersion string) error {
+	return nil
+}
+func (s *StubStore) UpdateProductStatus(_ context.Context, _, _ string, _ datastore.ProductStatusPatch) (*datastore.Product, error) {
+	return nil, nil
+}
+func (s *StubStore) DeleteProduct(_ context.Context, _ string) error { return nil }
 func (s *StubStore) DeleteProductWithResourceVersion(_ context.Context, _, _ string) error {
 	return nil
 }
@@ -112,13 +126,16 @@ func (s *StubStore) GetCategoryTaxonomy(ctx context.Context, uid string) (*datas
 	}
 	return nil, datastore.ErrNotFound
 }
-func (s *StubStore) GetCategoryTaxonomyByName(_ context.Context, _, _ string) (*datastore.CategoryTaxonomy, error) {
+func (s *StubStore) GetCategoryTaxonomyByName(ctx context.Context, namespace, name string) (*datastore.CategoryTaxonomy, error) {
+	if s.GetCategoryTaxonomyByNameFunc != nil {
+		return s.GetCategoryTaxonomyByNameFunc(ctx, namespace, name)
+	}
 	return nil, datastore.ErrNotFound
 }
 func (s *StubStore) ListCategoryTaxonomies(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
 	return &datastore.PageResult[datastore.CategoryTaxonomy]{}, nil
 }
-func (s *StubStore) UpdateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy) error {
+func (s *StubStore) UpdateCategoryTaxonomy(_ context.Context, _ *datastore.CategoryTaxonomy, expectedResourceVersion string) error {
 	return nil
 }
 func (s *StubStore) DeleteCategoryTaxonomy(_ context.Context, _ string) error { return nil }
@@ -128,10 +145,16 @@ func (s *StubStore) UpdateCategoryTaxonomyStatus(_ context.Context, _, _ string,
 func (s *StubStore) CreateProductVariant(_ context.Context, _ *datastore.ProductVariant) error {
 	return nil
 }
-func (s *StubStore) GetProductVariant(_ context.Context, _ string) (*datastore.ProductVariant, error) {
+func (s *StubStore) GetProductVariant(ctx context.Context, id string) (*datastore.ProductVariant, error) {
+	if s.GetProductVariantFunc != nil {
+		return s.GetProductVariantFunc(ctx, id)
+	}
 	return nil, datastore.ErrNotFound
 }
-func (s *StubStore) GetProductVariantByName(_ context.Context, _, _ string) (*datastore.ProductVariant, error) {
+func (s *StubStore) GetProductVariantByName(ctx context.Context, namespace, name string) (*datastore.ProductVariant, error) {
+	if s.GetProductVariantByNameFunc != nil {
+		return s.GetProductVariantByNameFunc(ctx, namespace, name)
+	}
 	return nil, datastore.ErrNotFound
 }
 func (s *StubStore) GetProductVariantBySKU(_ context.Context, _, _ string) (*datastore.ProductVariant, error) {
@@ -143,7 +166,7 @@ func (s *StubStore) ListProductVariants(_ context.Context, _ string, _ datastore
 func (s *StubStore) ListProductVariantsByProductRef(_ context.Context, _, _ string) ([]*datastore.ProductVariant, error) {
 	return nil, nil
 }
-func (s *StubStore) UpdateProductVariant(_ context.Context, _ *datastore.ProductVariant) error {
+func (s *StubStore) UpdateProductVariant(_ context.Context, _ *datastore.ProductVariant, expectedResourceVersion string) error {
 	return nil
 }
 func (s *StubStore) DeleteProductVariant(_ context.Context, _ string) error { return nil }
@@ -153,17 +176,25 @@ func (s *StubStore) DeleteProductVariantWithResourceVersion(_ context.Context, _
 func (s *StubStore) CreateCollection(_ context.Context, _ *datastore.Collection) error {
 	return nil
 }
-func (s *StubStore) GetCollection(_ context.Context, _ string) (*datastore.Collection, error) {
+func (s *StubStore) GetCollection(ctx context.Context, id string) (*datastore.Collection, error) {
+	if s.GetCollectionFunc != nil {
+		return s.GetCollectionFunc(ctx, id)
+	}
 	return nil, datastore.ErrNotFound
 }
-func (s *StubStore) GetCollectionByName(_ context.Context, _, _ string) (*datastore.Collection, error) {
+func (s *StubStore) GetCollectionByName(ctx context.Context, namespace, name string) (*datastore.Collection, error) {
+	if s.GetCollectionByNameFunc != nil {
+		return s.GetCollectionByNameFunc(ctx, namespace, name)
+	}
 	return nil, datastore.ErrNotFound
 }
 func (s *StubStore) ListCollections(_ context.Context, _ string, _ datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
 	return &datastore.PageResult[datastore.Collection]{}, nil
 }
-func (s *StubStore) UpdateCollection(_ context.Context, _ *datastore.Collection) error { return nil }
-func (s *StubStore) DeleteCollection(_ context.Context, _ string) error                { return nil }
+func (s *StubStore) UpdateCollection(_ context.Context, _ *datastore.Collection, expectedResourceVersion string) error {
+	return nil
+}
+func (s *StubStore) DeleteCollection(_ context.Context, _ string) error { return nil }
 func (s *StubStore) DeleteCollectionWithResourceVersion(_ context.Context, _, _ string) error {
 	return nil
 }
@@ -208,7 +239,6 @@ func (s *StubStore) LookupNamespaceByRepoID(_ context.Context, _ string) (*datas
 	return nil, datastore.ErrNotFound
 }
 func (s *StubStore) RenameRepository(_ context.Context, _, _, _ string) error    { return nil }
-func (s *StubStore) TransferRepository(_ context.Context, _, _, _ string) error  { return nil }
 func (s *StubStore) DeleteNamespaceMapping(_ context.Context, _, _ string) error { return nil }
 
 func (s *StubStore) CreateServiceAccount(_ context.Context, _ *datastore.ServiceAccount) error {
@@ -217,7 +247,7 @@ func (s *StubStore) CreateServiceAccount(_ context.Context, _ *datastore.Service
 func (s *StubStore) GetServiceAccountByUID(_ context.Context, _ string) (*datastore.ServiceAccount, error) {
 	return nil, datastore.ErrNotFound
 }
-func (s *StubStore) GetServiceAccountBySubject(_ context.Context, _, _ string) (*datastore.ServiceAccount, error) {
+func (s *StubStore) GetServiceAccountBySubject(_ context.Context, _ string) (*datastore.ServiceAccount, error) {
 	return nil, datastore.ErrNotFound
 }
 func (s *StubStore) ListServiceAccounts(_ context.Context, _ datastore.PageParams) (*datastore.PageResult[datastore.ServiceAccount], error) {

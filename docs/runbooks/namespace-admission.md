@@ -7,110 +7,222 @@ GraphQL create/update/delete behavior, and the server-first activation of
 `DeleteNamespacePayload.outcome`. Authorization must complete before validation,
 policy, lifecycle, or blocker details are returned.
 
-## Rollout
+## Repository lifecycle fence
 
-The additive GraphQL field and the repository lifecycle fence have separate
-activation gates.
+### Git-backed deletion safety
 
-### Phase 1: quiesce and deploy
+Use matching current Git service, API, and controller builds. GitStore is under
+active development; mixed-version writers and upgrade compatibility with older
+binaries are not supported. Concurrent current-version API/controller replicas
+and restart recovery must remain correct. Keep exactly one active Git service,
+with retained storage and non-overlapping replacement.
 
-1. Before replacing the first production API replica, install a fleet-wide
-   ingress/AuthZ maintenance deny for `deleteNamespace`,
-   `completeNamespaceDeletion`, `createRepository`, and `transferRepository`.
-   This is mandatory: legacy replicas do not understand the new feature gate
-   and would otherwise bypass the fence.
-2. Keep clients selecting only the terminating `namespace { id }` envelope and `outcome`.
-3. Provision Scylla with the baseline schema. The fence columns are part of
-   the Namespace table (`002_namespace.cql`); there is no separate migration.
-4. Deploy every API replica with
-   `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=disabled` (or `auto`, which
-   resolves to disabled for Scylla).
-5. Verify legacy delete selections and the unchanged validation protobuf
-   against every old and new replica.
-6. Confirm every API replica is the new build, its schema exposes
-   `DeleteNamespacePayload.outcome`, and Scylla records the full baseline
-   migration set.
+All implemented `complete*Deletion` inputs require the resource's GraphQL
+`id: ID!`, its current `resourceVersion`, and its existing name/namespace scope.
+A conflict requires a fresh resource read, never retrying stale work against a
+same-name replacement. The check applies equally to Namespace, Repository,
+Product, and CategoryTaxonomy.
+An error-free empty Namespace completion payload means the resource is already
+absent and is successful on retry; transport, authorization, and conflict errors
+remain failures.
 
-The external deny stays active for the whole mixed-version window. New replicas
-also return `NAMESPACE_REPOSITORY_FENCE_DISABLED` if one of the four mutations
-reaches them.
+An empty, verified system repository does not block Namespace initiation.
+Contained resources, including Files, do, as do all ordinary repositories
+(including terminating ones). Completion cleans up system storage by UID before
+releasing the Namespace. Neither path cascades resources or ordinary repositories.
 
-### Phase 2: activate
+### Repository membership index
 
-1. Deploy
-   `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=enabled` to every API replica.
-   Keep the external deny active while this setting rolls out; disabled replicas
-   reject rather than execute.
-2. Verify every replica reports the enabled configuration and run create/delete
-   plus transfer/delete race probes.
-3. Remove the fleet-wide mutation deny.
-4. Only after GraphQL schema convergence, activate clients that select
-   `outcome`.
-5. Keep Git-service rollout independent: `ValidateResourcesRequest`,
-   `ValidateResourcesResponse`, and `ValidationError` retain their legacy field
-   numbers and wire types.
+Repository emptiness uses one polymorphic `resources_by_repository` table:
+`PRIMARY KEY ((repository_id, shard), kind, uid)`. A new kind adds rows, not a new
+table or another per-kind query. Product, ProductVariant, CategoryTaxonomy,
+Collection, and File use the same membership-write and deletion-fence protocol.
+Both datastores reject their creates and updates when the referenced repository
+UUID has no live repository row.
+Namespace/Repository child checks continue using their existing indexed
+relationships; no parallel per-kind membership tables are needed.
 
-## Rollback
+Membership is distinct from optional semantic owner references: a Product
+without a Category owner still occupies its repository, and a nonblocking owner
+reference must not permit deletion of its backing repository. Membership cannot
+be removed by editing `ownerReferences`. The existing owner-dependent index
+continues to answer its different, owner-specific queries.
 
-1. Restore the fleet-wide deny for `deleteNamespace`,
-   `completeNamespaceDeletion`, `createRepository`, and `transferRepository`.
-2. Disable client selections of `outcome` only when rolling back to a compatible
-   API artifact; current clients use `namespace { id }`.
-3. Set `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=disabled` on the current
-   fleet and verify gate rejections.
-4. Roll back replicas only with an artifact that embeds the same baseline
-   migration set, even if its behavior code is reverted.
-5. Verify legacy GraphQL selections and Git-service validation after each
-   replacement.
-6. Keep the external mutation deny active until a forward-capable fenced fleet
-   is restored. Do not remove status conditions, finalizers, resource versions,
-   or the fence columns.
+An emptiness check performs at most 32 partition-key lookups with `LIMIT 1`,
+short-circuiting on the first member. It never enumerates kinds, uses
+`ALLOW FILTERING`, or performs a live count. Membership is written conservatively
+before authoritative admission and removed only after authoritative removal is
+confirmed; errors cannot be interpreted as emptiness. The shared fence excludes
+admission while the parent transitions to deletion.
 
-A binary built before the per-resource schema baseline is **not** a supported
-rollback artifact. gocqlx correctly rejects a keyspace whose migration history
-it does not recognise. Reverting an API replica before disabling `outcome`
-selections also causes GraphQL validation failures on requests routed to the old
-schema.
+These are separate bounds: table count and query fan-out are independent of
+kind count, but index storage necessarily grows with resource count. Fixed hash
+sharding spreads rows; it does **not** impose a hard partition-size limit, and
+`LIMIT 1` bounds returned rows, not tombstone or SSTable read work. Request
+deadlines and datastore errors fail closed. Capacity acceptance must measure
+worst-case partition size, skew, churn/tombstones, and empty-check latency.
+Do not claim unlimited-cardinality performance or introduce an undocumented
+resource quota. More buckets or adaptive partitioning require measured evidence.
 
-## Fence gate configuration
+The design follows Cassandra's
+[partition sizing and bucketing guidance](https://github.com/apache/cassandra/blob/trunk/doc/modules/cassandra/pages/developing/data-modeling/data-modeling_refining.adoc)
+and [CQL key restrictions, limits, and filtering semantics](https://github.com/apache/cassandra/blob/trunk/doc/modules/cassandra/pages/developing/cql/dml.adoc).
+ScyllaDB's engineering discussion of
+[hot partitions and goodput](https://www.scylladb.com/2024/04/17/per-partition-query-rate-limiting/)
+explains why a single large, hot parent partition is not an adequate alternative.
+A native counter or asynchronously materialized total is not deletion proof:
+an ambiguous update or lagging projection must never authorize storage removal.
 
-| Value | memdb | Scylla | Intended use |
-|---|---|---|---|
-| `auto` (default) | enabled | disabled | Development-safe default; production activation must be explicit |
-| `disabled` | disabled | disabled | Phase 1 rollout and safe rollback |
-| `enabled` | enabled | enabled | Phase 2 after full fleet convergence |
+The schema contains one shared membership table and its per-repository
+readiness/tombstone metadata, not separate membership tables per resource kind.
+Released migration history remains immutable and non-destructive.
+
+### Repairing incomplete projections
+
+Missing membership readiness fails closed. Fresh repositories initialize it
+when their empty authoritative record is created. For retained development data
+or a damaged projection, stop relevant mutations and controller writes while
+running the existing maintenance commands from `gitstore-api/`:
+
+```bash
+go run ./cmd/gitctl scylla-projection-audit --hosts "$HOSTS" --keyspace "$KEYSPACE"
+go run ./cmd/gitctl scylla-projection-repair --dry-run --hosts "$HOSTS" --keyspace "$KEYSPACE"
+go run ./cmd/gitctl scylla-projection-repair --confirm --hosts "$HOSTS" --keyspace "$KEYSPACE"
+go run ./cmd/gitctl scylla-projection-audit --hosts "$HOSTS" --keyspace "$KEYSPACE"
+```
+
+Supply database passwords through `GITSTORE_API__DATASTORE__SCYLLA__PASSWORD`.
+The repair commands cover all projections, not just repository membership.
+Repair publishes readiness only after complete verification;
+an interrupted repair can be retried with a fresh audit and confirmed repair.
+Readiness is not a detector of subsequent manual index corruption.
+Resume writers only after the final audit is clean.
+
+`DeletionPending=True` records recoverable mutation work before the Git call.
+Controllers resume that work after API replacement. `SUPERSEDED` means the
+manifest content changed: do not overwrite it or clear the operation blindly.
+`DELETION_REPAIR_REQUIRED` blocks termination without removal evidence.
+Inspect retained manifests and terminating rows, compare
+their UID, admitted path/ref/revision and current tree, and resolve ambiguous
+ownership before allowing cleanup. A missing file alone is not proof of a
+successful authorized mutation.
+For `GetFile` and `GetFileStream`, `NOT_FOUND` means the path is absent from a
+readable tree.
+A missing authoring repository/ref or a path occupied by a non-file entry returns
+`FAILED_PRECONDITION`. Unavailable or unreadable authoring storage blocks both
+Namespace and Repository completion even when a prior removal commit is recorded.
+Product and Category creation may initialize an unborn branch through the Git
+commit operation, which still requires existing repository storage. This
+write-only handling does not apply to updates or deletion verification.
+
+Catalog admission retries transient Namespace fence contention within a bounded
+request budget rather than immediately rejecting a committed push. A confirmed
+failed repository cleanup restores both name mappings and list projections
+before releasing its fence. Controllers can also resume a known terminating UID
+when its name mapping is missing; a different name, version, or UID is rejected.
+If restoration itself fails, the fence remains held for projection repair.
+
+Keep the Git service's UID tombstones permanently and include its private
+operation refs in repository backups. They fence stale provisioning and prove
+uncertain deletion outcomes. A prepared receipt can resume only while its durable
+preparation marker and original expected tip still prove it was not published.
+Unprovable interrupted publication, restored files, legacy unmarked receipts, and
+ancestry exceeding the bounded recovery walk fail closed and require operator
+reconciliation; retrying an arbitrary absent path is not sufficient.
+
+For a terminating resource with a retained manifest, use an authenticated
+Git checkout of the canonical authoring repository as the maintenance surface.
+Record the GraphQL `metadata.uid` and `resourceVersion`, fetch `main`, and compare
+the exact file against its admitted revision. Re-read the resource to confirm
+the same UID/version, remove only that file, commit, and push with an explicit
+`--force-with-lease=refs/heads/main:<reviewed-head>` precondition. Admission
+records removal evidence for that terminating UID; controller completion can
+then proceed. A changed manifest is rejected rather than silently discarded.
+Do not fabricate a removal for an absent row, restore a manifest just to delete
+it again, or clear finalizers directly. Retained files with missing records and
+unverifiable provenance require manual ownership reconciliation while writers
+remain quiesced.
+
+The repository lifecycle fence (Scylla LWT columns on the Namespace row that
+serialize namespace deletion against in-flight repository creation) is always
+enabled on every backend; it is not configurable and has no rollout gate.
+`deleteNamespace`, `completeNamespaceDeletion`, and `createRepository` always
+enforce it.
 
 ## Stable response codes
 
-| Code | Phase | Typical reasons |
-|---|---|---|
-| `NAMESPACE_STRUCTURAL_VALIDATION_FAILED` | `STRUCTURAL` | `INVALID_ENVELOPE`, `INVALID_IDENTIFIER`, `RESERVED_IDENTIFIER`, `INVALID_TIER`, `INVALID_AUTHORING_TARGET`, `DUPLICATE_IDENTITY` |
-| `NAMESPACE_IMMUTABLE_FIELD` | `STRUCTURAL` | `IMMUTABLE_NAME` |
-| `NAMESPACE_POLICY_REJECTED` | `POLICY` | `BOOTSTRAP_NAMESPACE`, `TIER_DEMOTION`, `NAMESPACE_TERMINATING`, `NAMESPACE_ALREADY_EXISTS`, `NAMESPACE_NOT_FOUND` |
-| `NAMESPACE_DELETION_BLOCKED` | deletion | `BOOTSTRAP_NAMESPACE`, `NAMESPACE_NOT_EMPTY` |
-| `NAMESPACE_CONFLICT` | write | `RESOURCE_VERSION_CONFLICT` |
-| `NAMESPACE_REPOSITORY_FENCE_DISABLED` | rollout gate | `ROLLOUT_GATE_DISABLED`; operation is `DELETE_NAMESPACE`, `COMPLETE_NAMESPACE_DELETION`, `CREATE_REPOSITORY`, or `TRANSFER_REPOSITORY` |
+Namespace mutations use the shared mutation error envelope: `extensions.code`,
+plus `diagnostics[]` (each with a stable `reason`), and for
+`ADMISSION_REJECTED` only, `phase` (`PRE_RECEIVE` or `POST_RECEIVE`) and, for
+`POST_RECEIVE`, `commit`. No other keys are returned. Clients branch on `code`
+first and on `diagnostics[].reason` for detail. Reason values are unchanged
+from earlier releases.
 
-Deletion blockers are ordered `BOOTSTRAP_NAMESPACE`, then
-`NAMESPACE_NOT_EMPTY`. Successful deletion returns `TERMINATION_STARTED` or the
-idempotent no-write result `ALREADY_TERMINATING`, including when another replica
-wins a concurrent deletion request.
+| Code | Reasons |
+|---|---|
+| `ADMISSION_REJECTED` | `INVALID_ENVELOPE`, `INVALID_IDENTIFIER`, `RESERVED_IDENTIFIER`, `INVALID_TIER`, `INVALID_AUTHORING_TARGET`, `DUPLICATE_IDENTITY`, `IMMUTABLE_NAME`, `TIER_DEMOTION` |
+| `FAILED_PRECONDITION` | `BOOTSTRAP_NAMESPACE`, `NAMESPACE_TERMINATING`, and for deletion `NAMESPACE_NOT_EMPTY` |
+| `ALREADY_EXISTS` | `NAMESPACE_ALREADY_EXISTS` |
+| `NOT_FOUND` | `NAMESPACE_NOT_FOUND` |
+| `CONFLICT` | `RESOURCE_VERSION_CONFLICT`, `SUPERSEDED` |
+
+### Migrating from the earlier codes
+
+| Earlier `code` | Earlier extensions | Now |
+|---|---|---|
+| `NAMESPACE_STRUCTURAL_VALIDATION_FAILED` | `phase: STRUCTURAL`, `reason` | `ADMISSION_REJECTED`; same reason in `diagnostics[0].reason` |
+| `NAMESPACE_IMMUTABLE_FIELD` | `phase: STRUCTURAL`, `reason` | `ADMISSION_REJECTED`, reason `IMMUTABLE_NAME` |
+| `NAMESPACE_POLICY_REJECTED` | `phase: POLICY`, `reason` | By reason: `TIER_DEMOTION` is `ADMISSION_REJECTED`; `BOOTSTRAP_NAMESPACE` and `NAMESPACE_TERMINATING` are `FAILED_PRECONDITION`; `NAMESPACE_ALREADY_EXISTS` is `ALREADY_EXISTS`; `NAMESPACE_NOT_FOUND` is `NOT_FOUND` |
+| `NAMESPACE_CONFLICT` | `phase: POLICY`, `reason` | `CONFLICT`, reason `RESOURCE_VERSION_CONFLICT` or `SUPERSEDED` |
+| `NOT_FOUND` | `phase: POLICY`, `reason` | `NOT_FOUND`, reason `NAMESPACE_NOT_FOUND` |
+| `NAMESPACE_DELETION_BLOCKED` | `reasons[]` | `FAILED_PRECONDITION`, one diagnostic per blocker |
+| `RESOURCE_VERSION_CONFLICT` (status writes and `complete*Deletion`, all kinds) | `resourceVersion` | `CONFLICT`, reason `RESOURCE_VERSION_CONFLICT`; the current version is in the diagnostic `message` (`current resourceVersion is N`), not a `resourceVersion` key |
+
+The `phase` values `STRUCTURAL` and `POLICY` and the top-level `reason` and
+`reasons` keys no longer appear in error extensions. Update client and alert
+matchers that used them.
+
+Deletion blockers are returned as one diagnostic each, ordered
+`BOOTSTRAP_NAMESPACE`, then `NAMESPACE_NOT_EMPTY`. Successful deletion returns
+`TERMINATION_STARTED` or the idempotent no-write result `ALREADY_TERMINATING`,
+including when another replica wins a concurrent deletion request.
+
+Controllers accept both the earlier `RESOURCE_VERSION_CONFLICT` code and
+`CONFLICT` and treat either as "re-read and retry", so the API and controller
+manager can be upgraded in either order for the error-code change alone.
 
 ## Metrics
 
 Monitor:
 
-- `gitstore_namespace_validation_rejections_total{phase,reason}`
-- `gitstore_namespace_validation_duration_seconds{phase}`
+- `gitstore_namespace_validation_rejections_total{code,reason}`
+- `gitstore_namespace_validation_duration_seconds{stage}`
 - `gitstore_namespace_deletion_rejections_total{reason}`
 - `gitstore_namespace_deletion_outcomes_total{outcome}`
+- `gitstore_admission_rejections_total{kind,phase}` (manifests rejected by
+  admission; emitted for `CategoryTaxonomy/POST_RECEIVE`,
+  `Product/PRE_RECEIVE`, and `Product/POST_RECEIVE`, not for Namespace)
 
-Alert on a sustained increase in `RESOURCE_VERSION_CONFLICT`,
-`NAMESPACE_TERMINATING`, or internal GraphQL/gRPC errors. Correlate policy
-rejections with deployments and client changes; do not treat expected user
-rejections as server failures.
+The `phase` label on the two `validation` series was replaced: rejections are
+now labelled by `code` (keeping `reason`), and duration by `stage`
+(`STRUCTURAL` or `POLICY`). Dashboards and alerts that selected on
+`phase="STRUCTURAL"` or `phase="POLICY"` must be rewritten, for example
+`stage="POLICY"` for latency or `code="ADMISSION_REJECTED"` for rejections.
+
+Alert on a sustained increase in `reason="RESOURCE_VERSION_CONFLICT"` or
+`code="CONFLICT"`, `NAMESPACE_TERMINATING`, or internal GraphQL/gRPC errors.
+Correlate policy rejections with deployments and client changes; do not treat
+expected user rejections as server failures.
 
 ## Capacity and saturation
+
+The Repository lifecycle gate (`make capacity TARGET=repository PROFILE=lifecycle
+MODE=production`) includes a bounded mutation/push deletion probe against the two
+API replicas and active controllers. It fetches the authoring repository to prove
+manifest removal, waits for final resource deletion, recreates the same name with
+a new UID, and rejects completion carrying the old UID. It requires the existing
+`GIT_URL` and an identity authorized for deletion and controller completion.
+Local service tests do not replace this deployed evidence.
 
 Run the opt-in production harness:
 
@@ -169,6 +281,8 @@ datastore directly.
 
 ### Update rejected with `NAMESPACE_TERMINATING`
 
+The response code is `FAILED_PRECONDITION` with reason `NAMESPACE_TERMINATING`.
+
 The Namespace already has a deletion timestamp. Stop retries that modify its
 spec and either let foreground deletion complete or resolve its deletion
 blockers.
@@ -195,13 +309,6 @@ Namespace, remove or transfer all repositories, then retry deletion.
    retain the fence until a quiesced `scylla-projection-repair --confirm` run
    completes projection repair, verifies a clean audit, and clears the retained
    reservation.
-
-### Mutation rejected by the fence rollout gate
-
-Do not bypass the gate on one replica. Confirm the baseline schema is applied, every
-API replica is upgraded, the external mutation deny is still active, and every
-replica has `GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE=enabled`. Remove the
-external deny only after all four checks pass.
 
 ### High conflict or latency rate
 

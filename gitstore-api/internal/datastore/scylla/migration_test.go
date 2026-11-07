@@ -26,6 +26,10 @@ import (
 )
 
 func newRawSession(t *testing.T) *gocql.Session {
+	return newRawSessionForKeyspace(t, scyllaKeyspace)
+}
+
+func newRawSessionForKeyspace(t *testing.T, keyspace string) *gocql.Session {
 	t.Helper()
 	host, portStr, err := net.SplitHostPort(scyllaAddr)
 	if err != nil {
@@ -37,7 +41,7 @@ func newRawSession(t *testing.T) *gocql.Session {
 	if port > 0 {
 		cluster.Port = port
 	}
-	cluster.Keyspace = scyllaKeyspace // keyspace provisioned by TestMain in backend_test.go
+	cluster.Keyspace = keyspace
 	cluster.Consistency = gocql.Quorum
 	cluster.DisableShardAwarePort = true
 	cluster.IgnorePeerAddr = true
@@ -63,8 +67,10 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 
 	// Verify representative lookup tables exist.
 	for _, expectedTable := range []string{
-		"products_by_namespace",
-		"products_by_name",
+		"products_by_key",
+		"products_by_identity",
+		"products_by_namespace_shard",
+		"namespace_catalog_fences_by_uid",
 		"products_by_uid",
 		"category_taxonomies_by_uid",
 		"namespaces_by_uid",
@@ -73,7 +79,8 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 		"repositories_by_bucket",
 		"namespace_mappings_by_repository",
 		"service_account_assertion_replays",
-		"service_accounts_by_bucket",
+		"service_accounts_by_cluster_bucket",
+		"category_ancestor_index",
 	} {
 		var tblName string
 		err = session.Query(
@@ -158,7 +165,7 @@ func TestRunMigrations_CanonicalEnvelopeColumnsMatch(t *testing.T) {
 	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), zap.NewNop()))
 
 	tables := []string{
-		"products_by_namespace",
+		"products_by_key",
 		"product_variants_by_namespace",
 		"collections_by_namespace",
 		"category_taxonomies_by_namespace",
@@ -241,7 +248,7 @@ func TestRunMigrations_ServiceAccountSchemaMatchesEnvelopeConventions(t *testing
 
 	iter = session.Query(
 		`SELECT column_name, type FROM system_schema.columns WHERE keyspace_name = ? AND table_name = ?`,
-		scyllaKeyspace, "service_accounts_by_namespace",
+		scyllaKeyspace, "service_accounts_by_cluster_name",
 	).Iter()
 	var columnName, columnType string
 	seen := map[string]string{}
@@ -252,7 +259,7 @@ func TestRunMigrations_ServiceAccountSchemaMatchesEnvelopeConventions(t *testing
 
 	for column, wantType := range wantColumnTypes {
 		gotType, ok := seen[column]
-		require.Truef(t, ok, "expected column %q on service_accounts_by_namespace", column)
+		require.Truef(t, ok, "expected column %q on service_accounts_by_cluster_name", column)
 		assert.Equalf(t, wantType, gotType, "column %q type mismatch", column)
 	}
 }
@@ -362,11 +369,11 @@ func TestRunMigrations_BaselinePrefixRefusesNewerKeyspace(t *testing.T) {
 	require.NoError(t, scylla.RunMigrations(ctx, session, scyllaKeyspace, uuid.New().String(), log))
 
 	err := scylla.RunMigrationsWithFS(ctx, session, scyllaKeyspace, uuid.New().String(), log,
-		migrationSetThrough(t, "008_file.cql"))
+		migrationSetThrough(t, "009_service_account.cql"))
 	require.ErrorContains(t, err, "database is ahead")
 
 	require.NoError(t, scylla.RunMigrationsWithFS(ctx, session, scyllaKeyspace, uuid.New().String(), log,
-		migrationSetThrough(t, "009_service_account.cql")))
+		migrations.Files))
 }
 
 func migrationSetThrough(t *testing.T, last string) fstest.MapFS {

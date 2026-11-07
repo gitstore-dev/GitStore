@@ -22,6 +22,7 @@ esac
 capacity_target="${CAPACITY_STACK_TARGET:-repository}"
 capacity_profile="${CAPACITY_STACK_PROFILE:-lifecycle}"
 controller_kind="${CAPACITY_STACK_CONTROLLER_KIND:-${capacity_target^}}"
+controller_readiness_filter='length == 1 and (.[0] | .ready == true and .credentialReady == true and .kinds[$kind].registered == true)'
 state_dir="${REPOSITORY_CAPACITY_STATE_DIR:-${repo_root}/.gitstore/repository-capacity}"
 token_file="${REPOSITORY_TOKEN_FILE:-${state_dir}/token}"
 trigger_file="${REPOSITORY_REPLACEMENT_TRIGGER_FILE:-${state_dir}/replace-api-b}"
@@ -41,7 +42,7 @@ export CAPACITY_GIT_REVISION="${revision}"
 # The nested dispatcher uses this identity for its evidence directory. Keep it
 # in the parent harness too, so the post-k6 Git/watch probe appends to that
 # same immutable run directory rather than a sibling with an empty name.
-export CAPACITY_RUN_ID="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+export CAPACITY_RUN_ID="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dt%H%M%Sz)}"
 if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]]; then
   export REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR="${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR:-${state_dir}/secret-fixtures/${CAPACITY_RUN_ID}}"
   export REPOSITORY_CAPACITY_SECRET_OWNED_DEPLOYMENT=1
@@ -60,7 +61,9 @@ export GITSTORE_BOOTSTRAP_ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
 
 wait_http() {
   local url="$1" label="$2" deadline=$((SECONDS + ${REPOSITORY_CAPACITY_WAIT_SECONDS:-300}))
-  until curl -fsS --max-time 2 "${url}" >/dev/null 2>&1; do
+  local response condition="${3:-}"
+  until response="$(curl -fsS --max-time 2 "${url}" 2>/dev/null)" &&
+    { [[ -z "${condition}" ]] || jq -es --arg kind "${controller_kind}" "${condition}" <<<"${response}" >/dev/null 2>&1; }; do
     if (( SECONDS >= deadline )); then
       echo "timed out waiting for ${label}: ${url}" >&2
       return 1
@@ -72,21 +75,14 @@ wait_http() {
 wait_stack() {
   wait_http http://127.0.0.1:4000/ready "API A readiness"
   wait_http http://127.0.0.1:4001/ready "API B readiness"
-  wait_http http://127.0.0.1:5001/health "controller A health"
-  wait_http http://127.0.0.1:5002/health "controller B health"
-  for endpoint in http://127.0.0.1:5001 http://127.0.0.1:5002; do
-    health="$(curl -fsS --max-time 2 "${endpoint}/health")"
-    jq -e --arg kind "${controller_kind}" '.credentialReady == true and .kinds[$kind].registered == true' <<<"${health}" >/dev/null || {
-      echo "${controller_kind} controller is not ready at ${endpoint}" >&2
-      return 1
-    }
-  done
+  wait_http http://127.0.0.1:5001/health "controller A readiness" "${controller_readiness_filter}"
+  wait_http http://127.0.0.1:5002/health "controller B readiness" "${controller_readiness_filter}"
 }
 
 controller_instance_id() {
   local endpoint="$1" metrics instance_id
-  metrics="$(curl -fsS --max-time 5 "${endpoint}/metrics")"
-  instance_id="$(sed -n 's/^gitstore_controller_process_instance_info{instance_id="\([^"]*\)"} [01]$/\1/p' <<<"${metrics}" | head -1)"
+  metrics="$(curl -fsS --max-time 5 "${endpoint}/metrics")" || return 1
+  instance_id="$(sed -n 's/^gitstore_controller_process_instance_info{instance_id="\([^"]*\)"} [01]$/\1/p' <<<"${metrics}" | head -1)" || return 1
   [[ -n "${instance_id}" ]] || {
     echo "controller does not expose a process identity at ${endpoint}" >&2
     return 1
@@ -99,14 +95,14 @@ validate_controllers_post_run() {
   for endpoint in http://127.0.0.1:5001 http://127.0.0.1:5002; do
     # curl -f makes this an explicit HTTP 200 requirement, not merely a JSON
     # parse of an unhealthy response body.
-    health="$(curl -fsS --max-time 5 "${endpoint}/health")"
-    jq -e --arg kind "${controller_kind}" '.credentialReady == true and .kinds[$kind].registered == true' <<<"${health}" >/dev/null || {
-      echo "${controller_kind} controller failed post-run registration validation at ${endpoint}" >&2
+    if ! health="$(curl -fsS --max-time 5 "${endpoint}/health")" ||
+      ! jq -es --arg kind "${controller_kind}" "${controller_readiness_filter}" <<<"${health}" >/dev/null 2>&1; then
+      echo "${controller_kind} controller failed post-run readiness validation at ${endpoint}" >&2
       return 1
-    }
+    fi
   done
-  identity_a="$(controller_instance_id http://127.0.0.1:5001)"
-  identity_b="$(controller_instance_id http://127.0.0.1:5002)"
+  identity_a="$(controller_instance_id http://127.0.0.1:5001)" || return 1
+  identity_b="$(controller_instance_id http://127.0.0.1:5002)" || return 1
   [[ "${identity_a}" != "${identity_b}" ]] || {
     echo "post-run controller endpoints resolve to the same process identity" >&2
     return 1
@@ -161,7 +157,7 @@ bootstrap_token() {
   local query payload response token
   query='mutation Login($username: String!, $password: String!) { login(input: { username: $username, password: $password }) { token { accessToken } } }'
   payload="$(jq -n --arg query "${query}" --arg username "${ADMIN_USERNAME:-admin}" --arg password "${ADMIN_PASSWORD:-admin123}" '{query:$query,variables:{username:$username,password:$password}}')"
-  response="$(curl -fsS --max-time 10 -H 'Content-Type: application/json' --data "${payload}" http://127.0.0.1:4000/graphql)"
+  response="$(curl -fsS --max-time 10 -H 'Content-Type: application/json' --data "${payload}" http://127.0.0.1:4000/admin/graphql)"
   token="$(jq -er 'if ((.errors // []) | length) == 0 then .data.login.token.accessToken else empty end' <<<"${response}")" || {
     jq -r '.errors[]?.message' <<<"${response}" >&2
     return 1
@@ -239,8 +235,8 @@ run_alpha() {
   CAPACITY_ENVIRONMENT_MANIFEST="${state_dir}/environment-manifest.json" \
   CAPACITY_API_A=http://127.0.0.1:4000 \
   CAPACITY_API_B=http://127.0.0.1:4001 \
-  PRODUCT_CAPACITY_API_A=http://api-a:4000/graphql \
-  PRODUCT_CAPACITY_API_B=http://api-b:4000/graphql \
+  PRODUCT_CAPACITY_API_A=http://api-a:4000/admin/graphql \
+  PRODUCT_CAPACITY_API_B=http://api-b:4000/admin/graphql \
   CAPACITY_DOCKER_NETWORK="${project}_gitstore-network" \
   CAPACITY_CONTROLLER_A=http://127.0.0.1:5001 \
   CAPACITY_CONTROLLER_B=http://127.0.0.1:5002 \
@@ -303,7 +299,15 @@ run_alpha() {
       "${product_evidence_dir}/product-integration.json" >/dev/null || return 1
     (( product_probe_status == 0 )) || return "${product_probe_status}"
   fi
-  validate_controllers_post_run
+  if ! validate_controllers_post_run; then
+    local metadata_file
+    metadata_file="${CAPACITY_EVIDENCE_DIR:-${repo_root}/.gitstore/capacity}/${capacity_target}/${capacity_profile}/alpha/${CAPACITY_RUN_ID}/metadata.json"
+    if [[ -r "${metadata_file}" ]]; then
+      jq '.passed = false' "${metadata_file}" >"${metadata_file}.tmp"
+      mv "${metadata_file}.tmp" "${metadata_file}"
+    fi
+    return 1
+  fi
   cleanup_replacement_watcher
   trap - EXIT INT TERM
 }

@@ -15,35 +15,34 @@ import (
 	"github.com/scylladb/gocqlx/v3/qb"
 )
 
-// serviceAccountRow mirrors the columns of service_accounts_by_namespace.
+// serviceAccountRow mirrors the columns of service_accounts_by_cluster_name.
 // ServiceAccount is not a git-backed catalog resource (unlike File/Product),
 // so it does not carry api_version/kind/labels/annotations/owner_references/
 // finalizers/repository_id/spec/body/status — see models.go.
 type serviceAccountRow struct {
-	Namespace         string     `db:"namespace"`
-	CreationTimestamp time.Time  `db:"creation_timestamp"`
-	UID               gocql.UUID `db:"uid"`
-	Name              string     `db:"name"`
-	Generation        int64      `db:"generation"`
-	ResourceVersion   string     `db:"resource_version"`
-	CreationActor     string     `db:"creation_actor"`
-	UpdateTimestamp   time.Time  `db:"update_timestamp"`
-	UpdateActor       string     `db:"update_actor"`
-	DeletionTimestamp *time.Time `db:"deletion_timestamp"`
-	Disabled          bool       `db:"disabled"`
-	PublicKeys        string     `db:"public_keys"` // JSON-encoded []datastore.ServiceAccountPublicKey
+	EnrollmentComplete bool       `db:"enrollment_complete"`
+	CreationTimestamp  time.Time  `db:"creation_timestamp"`
+	UID                gocql.UUID `db:"uid"`
+	Name               string     `db:"name"`
+	Generation         int64      `db:"generation"`
+	ResourceVersion    string     `db:"resource_version"`
+	CreationActor      string     `db:"creation_actor"`
+	UpdateTimestamp    time.Time  `db:"update_timestamp"`
+	UpdateActor        string     `db:"update_actor"`
+	DeletionTimestamp  *time.Time `db:"deletion_timestamp"`
+	Disabled           bool       `db:"disabled"`
+	PublicKeys         string     `db:"public_keys"` // JSON-encoded []datastore.ServiceAccountPublicKey
 }
 
 type serviceAccountIndexRow struct {
-	Namespace         string     `db:"namespace"`
 	Name              string     `db:"name"`
 	UID               gocql.UUID `db:"uid"`
 	CreationTimestamp time.Time  `db:"creation_timestamp"`
 }
 
 type serviceAccountListingRow struct {
+	Name              string     `db:"name"`
 	Bucket            string     `db:"bucket"`
-	Namespace         string     `db:"namespace"`
 	UID               gocql.UUID `db:"uid"`
 	CreationTimestamp time.Time  `db:"creation_timestamp"`
 }
@@ -54,7 +53,6 @@ func toServiceAccountRow(sa *datastore.ServiceAccount) (*serviceAccountRow, erro
 		return nil, fmt.Errorf("scylla: marshal service account public keys: %w", err)
 	}
 	return &serviceAccountRow{
-		Namespace:         sa.Namespace,
 		CreationTimestamp: sa.CreationTimestamp,
 		UID:               mustParseUUID(sa.UID),
 		Name:              sa.Name,
@@ -78,7 +76,6 @@ func fromServiceAccountRow(r *serviceAccountRow) (*datastore.ServiceAccount, err
 	}
 	return &datastore.ServiceAccount{
 		UID:               r.UID.String(),
-		Namespace:         r.Namespace,
 		Name:              r.Name,
 		Disabled:          r.Disabled,
 		Generation:        r.Generation,
@@ -93,11 +90,10 @@ func fromServiceAccountRow(r *serviceAccountRow) (*datastore.ServiceAccount, err
 }
 
 func (s *scyllaDatastore) CreateServiceAccount(ctx context.Context, sa *datastore.ServiceAccount) error {
-	if sa == nil || sa.UID == "" || sa.Namespace == "" || sa.Name == "" {
-		return fmt.Errorf("%w: service account uid, namespace, and name are required", datastore.ErrInvalidArgument)
+	if sa == nil || sa.UID == "" || sa.Name == "" {
+		return fmt.Errorf("%w: service account uid and global name are required", datastore.ErrInvalidArgument)
 	}
-	uid, err := gocql.ParseUUID(sa.UID)
-	if err != nil {
+	if _, err := gocql.ParseUUID(sa.UID); err != nil {
 		return fmt.Errorf("%w: invalid service account uid", datastore.ErrInvalidArgument)
 	}
 	if sa.CreationTimestamp.IsZero() {
@@ -107,29 +103,63 @@ func (s *scyllaDatastore) CreateServiceAccount(ctx context.Context, sa *datastor
 	if err != nil {
 		return err
 	}
-	applied, err := s.insertAuthoritative(ctx, s.serviceAccountByNamespaceTable, row)
+	// Name is authoritative. Incomplete enrollment is never usable by AuthN.
+	applied, err := s.insertAuthoritative(ctx, s.serviceAccountByNameTable, row)
 	if err != nil {
 		return err
 	}
 	if !applied {
 		return datastore.ErrAlreadyExists
 	}
-	if err := s.reserveName(ctx, "ServiceAccount", "service_accounts_by_name", row.Namespace, row.Name, uid, row.CreationTimestamp); err != nil {
-		_ = s.deleteServiceAccountAuthoritative(ctx, row, row.ResourceVersion)
+	const reserve = "INSERT INTO service_accounts_by_cluster_uid (uid,name,creation_timestamp) VALUES (?,?,?) IF NOT EXISTS"
+	applied, err = s.session.Query(reserve, nil).WithContext(ctx).Bind(row.UID, row.Name, row.CreationTimestamp).ExecCASRelease()
+	if err != nil {
 		return err
-	}
-	if err := s.reserveUID(ctx, "ServiceAccount", "service_accounts_by_uid", row.Namespace, uid, row.CreationTimestamp); err != nil {
-		_ = s.releaseName(ctx, "service_accounts_by_name", row.Namespace, row.Name, uid)
+	} // ambiguous reservation: bounded repair resolves it
+	if !applied {
 		_ = s.deleteServiceAccountAuthoritative(ctx, row, row.ResourceVersion)
-		return err
+		return datastore.ErrAlreadyExists
 	}
 	if err := s.insertServiceAccountListingProjection(ctx, row); err != nil {
-		_ = s.releaseUID(ctx, "service_accounts_by_uid", row.Namespace, uid, row.CreationTimestamp)
-		_ = s.releaseName(ctx, "service_accounts_by_name", row.Namespace, row.Name, uid)
-		_ = s.deleteServiceAccountAuthoritative(ctx, row, row.ResourceVersion)
 		return err
 	}
+	return s.completeServiceAccountEnrollment(ctx, row)
+}
+
+func (s *scyllaDatastore) completeServiceAccountEnrollment(ctx context.Context, row *serviceAccountRow) error {
+	const stmt = "UPDATE service_accounts_by_cluster_name SET enrollment_complete=true WHERE name=? IF uid=? AND resource_version=?"
+	applied, err := s.session.Query(stmt, nil).WithContext(ctx).Bind(row.Name, row.UID, row.ResourceVersion).ExecCASRelease()
+	if err != nil {
+		return err
+	}
+	if !applied {
+		return datastore.ErrConflict
+	}
 	return nil
+}
+
+func (s *scyllaDatastore) serviceAccountUIDReservation(ctx context.Context, uid gocql.UUID) (*serviceAccountIndexRow, error) {
+	stmt, names := s.serviceAccountByUIDTable.Get()
+	var idx serviceAccountIndexRow
+	if err := s.session.Query(stmt, names).WithContext(ctx).BindMap(qb.M{"uid": uid}).GetRelease(&idx); err != nil {
+		if errors.Is(err, gocql.ErrNotFound) {
+			return nil, datastore.ErrNotFound
+		}
+		return nil, err
+	}
+	return &idx, nil
+}
+
+func (s *scyllaDatastore) serviceAccountAuthority(ctx context.Context, name string) (*serviceAccountRow, error) {
+	stmt, names := s.serviceAccountByNameTable.Get()
+	var row serviceAccountRow
+	if err := s.session.Query(stmt, names).WithContext(ctx).BindMap(qb.M{"name": name}).GetRelease(&row); err != nil {
+		if errors.Is(err, gocql.ErrNotFound) {
+			return nil, datastore.ErrNotFound
+		}
+		return nil, err
+	}
+	return &row, nil
 }
 
 func (s *scyllaDatastore) GetServiceAccountByUID(ctx context.Context, uid string) (*datastore.ServiceAccount, error) {
@@ -137,27 +167,36 @@ func (s *scyllaDatastore) GetServiceAccountByUID(ctx context.Context, uid string
 	if err != nil {
 		return nil, datastore.ErrNotFound
 	}
-	stmt, names := s.serviceAccountByUIDTable.Get()
-	var idx serviceAccountIndexRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"uid": parsed}).GetRelease(&idx); err != nil {
-		if errors.Is(err, gocql.ErrNotFound) {
-			return nil, datastore.ErrNotFound
-		}
+	idx, err := s.serviceAccountUIDReservation(ctx, parsed)
+	if err != nil {
 		return nil, err
 	}
-	return s.getServiceAccountByKey(ctx, idx.Namespace, idx.CreationTimestamp, idx.UID)
+	row, err := s.serviceAccountAuthority(ctx, idx.Name)
+	if err != nil {
+		return nil, err
+	}
+	if !row.EnrollmentComplete || row.UID != parsed || !row.CreationTimestamp.Equal(idx.CreationTimestamp) {
+		return nil, datastore.ErrNotFound
+	}
+	return fromServiceAccountRow(row)
 }
 
-func (s *scyllaDatastore) GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*datastore.ServiceAccount, error) {
-	stmt, names := s.serviceAccountByNameTable.Get()
-	var idx serviceAccountIndexRow
-	if err := s.session.Query(stmt, names).BindMap(qb.M{"namespace": namespace, "name": name}).GetRelease(&idx); err != nil {
-		if errors.Is(err, gocql.ErrNotFound) {
-			return nil, datastore.ErrNotFound
-		}
+func (s *scyllaDatastore) GetServiceAccountBySubject(ctx context.Context, name string) (*datastore.ServiceAccount, error) {
+	row, err := s.serviceAccountAuthority(ctx, name)
+	if err != nil {
 		return nil, err
 	}
-	return s.getServiceAccountByKey(ctx, idx.Namespace, idx.CreationTimestamp, idx.UID)
+	if !row.EnrollmentComplete {
+		return nil, datastore.ErrNotFound
+	}
+	idx, err := s.serviceAccountUIDReservation(ctx, row.UID)
+	if err != nil {
+		return nil, err
+	}
+	if idx.Name != name || !row.CreationTimestamp.Equal(idx.CreationTimestamp) {
+		return nil, datastore.ErrNotFound
+	}
+	return fromServiceAccountRow(row)
 }
 
 const maxServiceAccountAssertionReplayTTL = int64(2_147_483_647)
@@ -196,23 +235,11 @@ func serviceAccountAssertionReplayTTL(now, expiresAt time.Time) (int, error) {
 	return int(seconds), nil
 }
 
-func (s *scyllaDatastore) getServiceAccountByKey(ctx context.Context, namespace string, created time.Time, uid gocql.UUID) (*datastore.ServiceAccount, error) {
-	stmt := "SELECT namespace,creation_timestamp,uid,name,generation,resource_version,creation_actor,update_timestamp,update_actor,deletion_timestamp,disabled,public_keys " +
-		"FROM service_accounts_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=?"
-	var row serviceAccountRow
-	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(namespace, created, uid).GetRelease(&row); err != nil {
-		if errors.Is(err, gocql.ErrNotFound) {
-			return nil, datastore.ErrNotFound
-		}
-		return nil, err
-	}
-	return fromServiceAccountRow(&row)
-}
-
 func (s *scyllaDatastore) ListServiceAccounts(ctx context.Context, page datastore.PageParams) (*datastore.PageResult[datastore.ServiceAccount], error) {
 	limit := page.Limit()
 	backward := page.Last > 0
-	rows := make([]serviceAccountListingRow, 0, limit+1)
+	items := make([]*datastore.ServiceAccount, 0, limit+1)
+	lookups, queries := 0, 0
 	for _, bucket := range serviceAccountBucketsForPage(page, time.Now().UTC()) {
 		bucketPage := page
 		if page.After != "" && !cursorInNamespaceBucket(page.After, bucket) {
@@ -221,32 +248,53 @@ func (s *scyllaDatastore) ListServiceAccounts(ctx context.Context, page datastor
 		if page.Before != "" && !cursorInNamespaceBucket(page.Before, bucket) {
 			bucketPage.Before = ""
 		}
-
-		pq := buildPaginatedSelect(s.serviceAccountByBucketTable, bucketPage, "bucket", bucket, serviceAccountClusterKeys, nil, nil)
-		var bucketRows []serviceAccountListingRow
-		if err := s.session.Query(pq.Stmt, nil).WithContext(ctx).Bind(pq.Args...).SelectRelease(&bucketRows); err != nil {
-			return nil, fmt.Errorf("scylla: list service accounts bucket %s: %w", bucket, err)
+		for {
+			queries++
+			if queries > 256 {
+				return nil, fmt.Errorf("ServiceAccount listing exceeds query budget; repair stale projections")
+			}
+			pq := buildPaginatedSelect(s.serviceAccountByBucketTable, bucketPage, "bucket", bucket, serviceAccountClusterKeys, nil, nil)
+			var rows []serviceAccountListingRow
+			if err := s.session.Query(pq.Stmt, nil).WithContext(ctx).Bind(pq.Args...).SelectRelease(&rows); err != nil {
+				return nil, err
+			}
+			for _, idx := range rows {
+				lookups++
+				if lookups > 4096 {
+					return nil, fmt.Errorf("ServiceAccount listing exceeds lookup budget; repair stale projections")
+				}
+				sa, err := s.GetServiceAccountByUID(ctx, idx.UID.String())
+				if err != nil {
+					if errors.Is(err, datastore.ErrNotFound) {
+						continue
+					}
+					return nil, err
+				}
+				if sa.Name != idx.Name || !sa.CreationTimestamp.Equal(idx.CreationTimestamp) {
+					continue
+				}
+				items = append(items, sa)
+				if len(items) == limit+1 {
+					break
+				}
+			}
+			if len(items) == limit+1 || len(rows) < limit+1 {
+				break
+			}
+			last := rows[len(rows)-1]
+			cursor := encodeKeysetCursor(last.CreationTimestamp, last.UID.String())
+			if backward {
+				bucketPage.Before = cursor
+			} else {
+				bucketPage.After = cursor
+			}
 		}
-		rows = append(rows, bucketRows...)
-		if len(rows) >= limit+1 {
-			rows = rows[:limit+1]
+		if len(items) == limit+1 {
 			break
 		}
 	}
 	if backward {
-		reverseRows(rows)
-	}
-
-	items := make([]*datastore.ServiceAccount, 0, len(rows))
-	for _, idx := range rows {
-		sa, err := s.getServiceAccountByKey(ctx, idx.Namespace, idx.CreationTimestamp, idx.UID)
-		if err != nil {
-			if errors.Is(err, datastore.ErrNotFound) {
-				continue
-			}
-			return nil, err
-		}
-		items = append(items, sa)
+		reverseRows(items)
 	}
 	return buildPageResult(items, limit, page), nil
 }
@@ -297,18 +345,20 @@ func (s *scyllaDatastore) DeleteServiceAccount(ctx context.Context, uid string) 
 	if err := s.deleteServiceAccountAuthoritative(ctx, row, sa.ResourceVersion); err != nil {
 		return err
 	}
-	parsed := mustParseUUID(sa.UID)
 	_ = s.deleteServiceAccountListingProjection(ctx, row)
-	_ = s.releaseName(ctx, "service_accounts_by_name", sa.Namespace, sa.Name, parsed)
-	_ = s.releaseUID(ctx, "service_accounts_by_uid", sa.Namespace, parsed, sa.CreationTimestamp)
+	// Release only our own routing reservation, never a replacement account.
+	_, err = s.session.Query("DELETE FROM service_accounts_by_cluster_uid WHERE uid=? IF name=? AND creation_timestamp=?", nil).WithContext(ctx).Bind(row.UID, row.Name, row.CreationTimestamp).ExecCASRelease()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
 func (s *scyllaDatastore) insertServiceAccountListingProjection(ctx context.Context, row *serviceAccountRow) error {
 	if err := s.session.Query(
-		"INSERT INTO service_accounts_by_bucket (bucket, creation_timestamp, uid, namespace) VALUES (?, ?, ?, ?)",
+		"INSERT INTO service_accounts_by_cluster_bucket (bucket, creation_timestamp, uid, name) VALUES (?, ?, ?, ?)",
 		nil,
-	).WithContext(ctx).Bind(namespaceBucket(row.CreationTimestamp), row.CreationTimestamp, row.UID, row.Namespace).ExecRelease(); err != nil {
+	).WithContext(ctx).Bind(namespaceBucket(row.CreationTimestamp), row.CreationTimestamp, row.UID, row.Name).ExecRelease(); err != nil {
 		return fmt.Errorf("scylla: insert service account listing projection: %w", err)
 	}
 	return nil
@@ -316,7 +366,7 @@ func (s *scyllaDatastore) insertServiceAccountListingProjection(ctx context.Cont
 
 func (s *scyllaDatastore) deleteServiceAccountListingProjection(ctx context.Context, row *serviceAccountRow) error {
 	if err := s.session.Query(
-		"DELETE FROM service_accounts_by_bucket WHERE bucket=? AND creation_timestamp=? AND uid=?",
+		"DELETE FROM service_accounts_by_cluster_bucket WHERE bucket=? AND creation_timestamp=? AND uid=?",
 		nil,
 	).WithContext(ctx).Bind(namespaceBucket(row.CreationTimestamp), row.CreationTimestamp, row.UID).ExecRelease(); err != nil {
 		return fmt.Errorf("scylla: delete service account listing projection: %w", err)
@@ -325,11 +375,11 @@ func (s *scyllaDatastore) deleteServiceAccountListingProjection(ctx context.Cont
 }
 
 func (s *scyllaDatastore) updateServiceAccountKeysAuthoritative(ctx context.Context, row *serviceAccountRow, expected string) error {
-	const stmt = "UPDATE service_accounts_by_namespace SET generation=?,resource_version=?,update_timestamp=?,update_actor=?,public_keys=? " +
-		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
+	const stmt = "UPDATE service_accounts_by_cluster_name SET generation=?,resource_version=?,update_timestamp=?,update_actor=?,public_keys=? " +
+		"WHERE name=? IF uid=? AND resource_version=?"
 	applied, err := s.session.Query(stmt, nil).WithContext(ctx).Bind(
 		row.Generation, row.ResourceVersion, row.UpdateTimestamp, row.UpdateActor, row.PublicKeys,
-		row.Namespace, row.CreationTimestamp, row.UID, expected,
+		row.Name, row.UID, expected,
 	).ExecCASRelease()
 	if err != nil {
 		return err
@@ -341,11 +391,11 @@ func (s *scyllaDatastore) updateServiceAccountKeysAuthoritative(ctx context.Cont
 }
 
 func (s *scyllaDatastore) updateServiceAccountDisabledAuthoritative(ctx context.Context, row *serviceAccountRow, expected string) error {
-	const stmt = "UPDATE service_accounts_by_namespace SET disabled=?,resource_version=?,update_timestamp=? " +
-		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
+	const stmt = "UPDATE service_accounts_by_cluster_name SET disabled=?,resource_version=?,update_timestamp=? " +
+		"WHERE name=? IF uid=? AND resource_version=?"
 	applied, err := s.session.Query(stmt, nil).WithContext(ctx).Bind(
 		row.Disabled, row.ResourceVersion, row.UpdateTimestamp,
-		row.Namespace, row.CreationTimestamp, row.UID, expected,
+		row.Name, row.UID, expected,
 	).ExecCASRelease()
 	if err != nil {
 		return err
@@ -358,7 +408,7 @@ func (s *scyllaDatastore) updateServiceAccountDisabledAuthoritative(ctx context.
 
 func (s *scyllaDatastore) deleteServiceAccountAuthoritative(ctx context.Context, row *serviceAccountRow, expected string) error {
 	return s.deleteAuthoritative(ctx,
-		"DELETE FROM service_accounts_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?",
-		row.Namespace, row.CreationTimestamp, row.UID, expected,
+		"DELETE FROM service_accounts_by_cluster_name WHERE name=? IF uid=? AND resource_version=?",
+		row.Name, row.UID, expected,
 	)
 }

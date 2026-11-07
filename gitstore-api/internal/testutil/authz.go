@@ -5,8 +5,10 @@ package testutil
 
 import (
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
@@ -17,18 +19,13 @@ import (
 	"go.uber.org/zap"
 )
 
-// denyAllPolicy defines exactly one role, "no-access", so it satisfies
-// rbaclocal's "at least one role" validation without ever matching a test
-// principal's actual roles. With default_deny: true, every action is denied
-// for every principal, mirroring the "always deny" behavior of the old
-// stubAuthZProvider — but through the real rbac-local decision path.
-const denyAllPolicy = `version: v1
-default_deny: true
-roles:
-  no-access:
-    deny:
-      - "*"
-role_bindings: {}
+// denyAllPolicy contains no grants, so ordinary principals are denied through
+// the real strict v1beta1 evaluator rather than a stub decision path.
+const denyAllPolicy = `apiVersion: rbac.authorization.gitstore.dev/v1beta1
+kind: RbacLocalConfiguration
+defaultDeny: true
+clusterRoles: {}
+clusterRoleBindings: []
 `
 
 // RecordingAuthZ wraps a real auth.AuthZProvider, delegating every decision
@@ -37,6 +34,15 @@ role_bindings: {}
 // inputs without needing a hand-rolled stub decision.
 type RecordingAuthZ struct {
 	auth.AuthZProvider
+	mu       sync.Mutex
+	Action   string
+	Resource auth.ResourceContext
+	Calls    []AuthorizationCall
+}
+
+// AuthorizationCall is one observed boundary decision, in invocation order.
+type AuthorizationCall struct {
+	Subject  string
 	Action   string
 	Resource auth.ResourceContext
 }
@@ -47,8 +53,22 @@ func NewRecordingAuthZ(provider auth.AuthZProvider) *RecordingAuthZ {
 }
 
 func (r *RecordingAuthZ) Authorize(ctx context.Context, p *auth.Principal, action string, res auth.ResourceContext) (auth.Decision, error) {
+	r.mu.Lock()
 	r.Action = action
 	r.Resource = res
+	snapshot := res
+	snapshot.Attrs = maps.Clone(res.Attrs)
+	for key, value := range snapshot.Attrs {
+		if nested, ok := value.(map[string]any); ok {
+			snapshot.Attrs[key] = maps.Clone(nested)
+		}
+	}
+	subject := ""
+	if p != nil {
+		subject = p.Subject
+	}
+	r.Calls = append(r.Calls, AuthorizationCall{Subject: subject, Action: action, Resource: snapshot})
+	r.mu.Unlock()
 	return r.AuthZProvider.Authorize(ctx, p, action, res)
 }
 

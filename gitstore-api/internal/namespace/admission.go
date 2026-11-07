@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
@@ -20,6 +21,8 @@ import (
 var (
 	ErrBootstrapNamespace     = errors.New("bootstrap namespace is system-managed")
 	ErrTierDemotion           = errors.New("namespace tier demotion is not allowed")
+	ErrTierImmutable          = errors.New("namespace tier is immutable")
+	ErrUserNamespaceIdentity  = errors.New("USER namespace requires immutable matching human owner and self-service creation")
 	ErrNamespaceTerminating   = errors.New("namespace is terminating")
 	ErrNamespaceAlreadyExists = errors.New("namespace already exists")
 	ErrNamespaceNotFound      = errors.New("namespace not found")
@@ -42,6 +45,8 @@ type PolicyCheck struct {
 	Operation        admission.Operation
 	Name             string
 	Tier             datastore.NamespaceTier
+	Actor            string
+	Annotations      map[string]string
 	CapturePreflight bool
 }
 
@@ -50,6 +55,34 @@ type Preflight struct {
 	Identity        string
 	ResourceVersion string
 	Existing        *datastore.Namespace
+}
+
+// ValidateIdentity enforces domain invariants independently of the AuthZ
+// provider. Call it again with the freshly loaded row on every CAS retry.
+// Actor is the authenticated subject, never a manifest-provided author.
+func ValidateIdentity(check PolicyCheck, existing *datastore.Namespace) *Decision {
+	if existing != nil && check.Tier != existing.Tier {
+		reason := ReasonTierImmutable
+		if TierRank(check.Tier) < TierRank(existing.Tier) {
+			reason = ReasonTierDemotion
+		}
+		return &Decision{Reason: reason, Field: "spec.tier", Message: ErrTierImmutable.Error()}
+	}
+	if check.Tier != datastore.NamespaceTierUser {
+		return nil
+	}
+	creationActor := check.Actor
+	if existing != nil {
+		creationActor = existing.CreationActor
+	}
+	desired := &datastore.Namespace{CreationActor: creationActor, Annotations: check.Annotations}
+	owner := desired.EffectiveOwnerSub()
+	if !auth.ValidExternalUsername(owner) || check.Name != owner ||
+		(existing == nil && check.Actor != owner) ||
+		(existing != nil && (existing.Name != check.Name || existing.EffectiveOwnerSub() != owner)) {
+		return &Decision{Reason: ReasonUserNamespaceIdentity, Field: "metadata.name", Message: ErrUserNamespaceIdentity.Error()}
+	}
+	return nil
 }
 
 type PolicyEvaluator interface {
@@ -71,7 +104,6 @@ func (e *datastorePolicyEvaluator) Evaluate(ctx context.Context, check PolicyChe
 	}
 	if IsBootstrap(check.Name) {
 		return &Decision{
-			Phase:   PhasePolicy,
 			Reason:  ReasonBootstrapNamespace,
 			Field:   "metadata.name",
 			Message: "bootstrap namespace is system-managed",
@@ -82,13 +114,12 @@ func (e *datastorePolicyEvaluator) Evaluate(ctx context.Context, check PolicyChe
 	if errors.Is(err, datastore.ErrNotFound) {
 		if check.Operation == admission.OperationUpdate {
 			return &Decision{
-				Phase:   PhasePolicy,
 				Reason:  ReasonNamespaceNotFound,
 				Field:   "metadata.name",
 				Message: "namespace not found",
 			}, preflight, nil
 		}
-		return nil, preflight, nil
+		return ValidateIdentity(check, nil), preflight, nil
 	}
 	if err != nil {
 		return nil, Preflight{}, fmt.Errorf("namespace policy lookup: %w", err)
@@ -98,7 +129,6 @@ func (e *datastorePolicyEvaluator) Evaluate(ctx context.Context, check PolicyChe
 	}
 	if check.Operation == admission.OperationCreate {
 		return &Decision{
-			Phase:   PhasePolicy,
 			Reason:  ReasonNamespaceAlreadyExists,
 			Field:   "metadata.name",
 			Message: "namespace already exists",
@@ -106,21 +136,12 @@ func (e *datastorePolicyEvaluator) Evaluate(ctx context.Context, check PolicyChe
 	}
 	if existing.DeletionTimestamp != nil {
 		return &Decision{
-			Phase:   PhasePolicy,
 			Reason:  ReasonNamespaceTerminating,
 			Field:   "metadata.name",
 			Message: "namespace is terminating",
 		}, preflight, nil
 	}
-	if TierRank(check.Tier) < TierRank(existing.Tier) {
-		return &Decision{
-			Phase:   PhasePolicy,
-			Reason:  ReasonTierDemotion,
-			Field:   "spec.tier",
-			Message: "namespace tier demotion is not allowed",
-		}, preflight, nil
-	}
-	return nil, preflight, nil
+	return ValidateIdentity(check, existing), preflight, nil
 }
 
 func IsBootstrap(name string) bool {
@@ -208,6 +229,10 @@ func ApplyManifestOrdered(
 	}
 	specJSON := mustMarshalSpec(resource.Spec)
 	body := string(options.Body)
+	ownerReferences, err := json.Marshal(resource.Metadata.OwnerReferences)
+	if err != nil {
+		return nil, false, fmt.Errorf("namespace admission: marshal owner references: %w", err)
+	}
 
 	preflight := options.Preflight
 	if !preflight.Captured {
@@ -254,8 +279,17 @@ func ApplyManifestOrdered(
 		if existing != nil && existing.DeletionTimestamp != nil {
 			return nil, false, ErrNamespaceTerminating
 		}
-		if existing != nil && !createRetry && TierRank(tier) < TierRank(existing.Tier) {
-			return nil, false, ErrTierDemotion
+		if existing != nil {
+			intent, err := admission.ReadDeletionIntent(existing.Status)
+			if err != nil {
+				return nil, false, err
+			}
+			if intent != nil {
+				return nil, false, ErrNamespaceTerminating
+			}
+		}
+		if decision := ValidateIdentity(PolicyCheck{Name: name, Tier: tier, Actor: actor, Annotations: resource.Metadata.Annotations}, existing); decision != nil {
+			return nil, false, decision
 		}
 
 		created := existing == nil
@@ -271,6 +305,7 @@ func ApplyManifestOrdered(
 				Tier:              tier,
 				Labels:            cloneStringMap(resource.Metadata.Labels),
 				Annotations:       cloneStringMap(resource.Metadata.Annotations),
+				OwnerReferences:   ownerReferences,
 				Spec:              specJSON,
 				Body:              body,
 				Revision:          revision,
@@ -285,17 +320,22 @@ func ApplyManifestOrdered(
 			datastore.NormalizeNamespaceContract(candidate)
 			candidate.Status = AdmissionStatus(candidate.Generation, revision, now)
 		} else {
-			authorChanged := candidate.APIVersion != resource.APIVersion ||
+			// Generation represents desired state only: the authored spec and
+			// Markdown body. Metadata and Git provenance still form observable
+			// resource updates, but do not invalidate controller work for the
+			// accepted desired state.
+			desiredStateChanged := candidate.APIVersion != resource.APIVersion ||
 				candidate.Kind != resource.Kind ||
-				!stringMapsEqual(candidate.Labels, resource.Metadata.Labels) ||
-				!stringMapsEqual(candidate.Annotations, resource.Metadata.Annotations) ||
 				!bytes.Equal(candidate.Spec, specJSON) ||
 				candidate.Body != body
-			systemChanged := candidate.Revision != revision ||
+			metadataChanged := !stringMapsEqual(candidate.Labels, resource.Metadata.Labels) ||
+				!stringMapsEqual(candidate.Annotations, resource.Metadata.Annotations) ||
+				!bytes.Equal(candidate.OwnerReferences, ownerReferences)
+			provenanceChanged := candidate.Revision != revision ||
 				candidate.SourcePath != options.SourcePath ||
 				candidate.GitCommitSHA != options.GitCommitSHA ||
 				candidate.GitRef != options.GitRef
-			if !authorChanged && !systemChanged {
+			if !desiredStateChanged && !metadataChanged && !provenanceChanged {
 				return candidate, false, nil
 			}
 			expectedResourceVersion = candidate.ResourceVersion
@@ -306,6 +346,7 @@ func ApplyManifestOrdered(
 			candidate.Kind = resource.Kind
 			candidate.Labels = cloneStringMap(resource.Metadata.Labels)
 			candidate.Annotations = cloneStringMap(resource.Metadata.Annotations)
+			candidate.OwnerReferences = ownerReferences
 			candidate.Title = resource.Spec.Title
 			candidate.Tier = tier
 			candidate.Spec = append([]byte(nil), specJSON...)
@@ -316,12 +357,12 @@ func ApplyManifestOrdered(
 			candidate.SourcePath = options.SourcePath
 			candidate.GitCommitSHA = options.GitCommitSHA
 			candidate.GitRef = options.GitRef
-			if authorChanged {
+			if desiredStateChanged {
 				datastore.AdvanceNamespaceSpecVersion(candidate)
 			} else {
 				datastore.AdvanceNamespaceSystemVersion(candidate)
 			}
-			candidate.Status = AdmissionStatus(candidate.Generation, revision, now)
+			candidate.Status = MergeAdmissionStatus(candidate.Status, candidate.Generation, revision, now)
 		}
 
 		if err := RecheckAuthoringRef(ctx, options.CheckAuthoringRef); err != nil {
@@ -477,6 +518,39 @@ func AdmissionStatus(generation int64, revision string, now time.Time) []byte {
 	data, err := json.Marshal(status)
 	if err != nil {
 		return []byte(`{"observedGeneration":0,"conditions":[]}`)
+	}
+	return data
+}
+
+// MergeAdmissionStatus updates only the fields owned by admission. Controller
+// observations and conditions are deliberately retained across an admitted
+// author update, including metadata- and provenance-only updates.
+func MergeAdmissionStatus(raw []byte, generation int64, revision string, now time.Time) []byte {
+	var status catalog.NamespaceStatus
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return AdmissionStatus(generation, revision, now)
+	}
+	status.LastAppliedRevision = revision
+	accepted := catalog.Condition{
+		Type:               catalog.ConditionAdmissionAccepted,
+		Status:             catalog.ConditionTrue,
+		ObservedGeneration: generation,
+		LastTransitionTime: now,
+		Reason:             "AdmittedByHookPipeline",
+		Message:            "Namespace manifest admitted successfully.",
+	}
+	// Do not preallocate from untrusted persisted data: a corrupt or hostile
+	// condition count could overflow len+1 before allocation.
+	var conditions []catalog.Condition
+	for _, condition := range status.Conditions {
+		if condition.Type != catalog.ConditionAdmissionAccepted {
+			conditions = append(conditions, condition)
+		}
+	}
+	status.Conditions = append([]catalog.Condition{accepted}, conditions...)
+	data, err := json.Marshal(status)
+	if err != nil {
+		return AdmissionStatus(generation, revision, now)
 	}
 	return data
 }

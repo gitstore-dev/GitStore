@@ -34,6 +34,19 @@ status and lifecycle paths rely on API-side optimistic concurrency, conflict
 requeues and idempotent operations; those guarantees must be verified for each
 new reconciler and its downstream operations.
 
+Category status-version conflicts retain pending work and retry after a bounded
+delay, without consuming the failure budget while waiting for a newer watch
+snapshot. The persisted obligation and retry deadline survive replacement on
+the same replica's checkpoint root. Authorization denials and other status-write
+errors still use the normal retry/quarantine policy; conflict recovery never
+bypasses the API's version check.
+
+Repository storage-verification reuse is bound to the resource UID, not just
+namespace/name. Each process rechecks a recreated Repository even inside the
+normal revalidation window. The cache remains bounded to 4,096 keys and is empty
+after process replacement; failed verification is never cached. API-side
+authorization, status CAS and in-flight operation fencing remain separate checks.
+
 Use separate filesystem checkpoint roots per concurrent replica, as
 `compose.capacity.yml` does. Atomic rename prevents partial files; it is not
 cross-process checkpoint coordination or a monotonic compare-and-swap.
@@ -76,7 +89,7 @@ Keep each binary paired with its matching configuration when replacing replicas.
 | Variable                                          | Default                         | Purpose                       |
 |---------------------------------------------------|---------------------------------|-------------------------------|
 | `GITSTORE_CONTROLLER__PORT`                       | `5001`                          | HTTP listen port              |
-| `GITSTORE_CONTROLLER__API_URI`                    | `http://localhost:4000/graphql` | API endpoint                  |
+| `GITSTORE_CONTROLLER__API_URI`                    | `http://localhost:4000/admin/graphql` | API endpoint                  |
 | `GITSTORE_CONTROLLER__RECONCILE__MAX_ATTEMPTS`    | `5`                             | Retry limit before quarantine |
 | `GITSTORE_CONTROLLER__RECONCILE__STALL_THRESHOLD` | `5m`                            | Worker stall threshold        |
 | `GITSTORE_LOG__LEVEL`                             | `info`                          | Log level                     |

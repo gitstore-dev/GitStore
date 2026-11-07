@@ -27,7 +27,7 @@
       "type": "object",
       "description": "Author-writable resource metadata. Do not set uid, resourceVersion, generation, creationTimestamp, revision, ownerReferences, or finalizers — those fields are system-managed and any of them present in an authored file causes the push to be rejected.",
       "additionalProperties": false,
-      "required": ["name"],
+      "required": ["name", "namespace"],
       "properties": {
         "name": {
           "type": "string",
@@ -37,7 +37,8 @@
         },
         "namespace": {
           "type": "string",
-          "description": "Optional. When omitted, the namespace is inferred from the owning repository at push time. When present, it is validated to match the inferred namespace."
+          "pattern": "\\S",
+          "description": "Required nonblank namespace of the owning repository. It must match the repository namespace."
         },
         "labels": {
           "type": "object",
@@ -103,14 +104,9 @@
       "type": "object",
       "description": "Where the file content is fetched from.",
       "additionalProperties": false,
-      "required": ["type", "uri"],
+      "required": ["uri"],
       "properties": {
-        "type": {
-          "type": "string",
-          "enum": ["git", "lfs", "s3", "gcs"],
-          "description": "Required. Source backend type."
-        },
-        "uri": { "type": "string", "minLength": 1, "description": "Required. Location of the content, interpreted according to type." },
+        "uri": { "type": "string", "minLength": 1, "description": "Required. Location of the content, interpreted according to spec.provider." },
         "checksum": { "$ref": "#/$defs/ChecksumDefinition" },
         "credentialsRef": { "$ref": "#/$defs/CredentialsRef" }
       }
@@ -147,10 +143,15 @@
       "type": "object",
       "description": "Author-controlled declarative specification for a File.",
       "additionalProperties": false,
-      "required": ["contentType", "source"],
+      "required": ["contentType", "provider", "source"],
       "properties": {
         "contentType": { "type": "string", "minLength": 1, "description": "Required. MIME type of the content, e.g. \"image/png\"." },
         "type": { "type": "string", "description": "Optional logical file type/category, distinct from contentType." },
+        "provider": {
+          "type": "string",
+          "enum": ["git", "lfs", "s3", "gcs"],
+          "description": "Required. Storage provider for the source content."
+        },
         "source": { "$ref": "#/$defs/FileSourceDefinition" },
         "processing": { "$ref": "#/$defs/FileProcessingDefinition" }
       }
@@ -166,8 +167,8 @@
       },
       "spec": {
         "contentType": "image/png",
+        "provider": "git",
         "source": {
-          "type": "git",
           "uri": "assets/hero-image.png",
           "checksum": {
             "algorithm": "sha256",

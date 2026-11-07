@@ -12,12 +12,7 @@ use super::{
 };
 use crate::git::tree_diff::get_tree_id;
 
-pub mod catalog_proto {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/gen/gitstore/catalog/v1/gitstore.catalog.v1.rs"
-    ));
-}
+pub use super::validation_handler::catalog_proto;
 
 use catalog_proto::catalog_service_client::CatalogServiceClient;
 use catalog_proto::{ResourceValidationTree, ValidateResourceDeletionsRequest};
@@ -29,6 +24,7 @@ const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 /// an atomic deletion or reparenting against the proposed state rather than
 /// stale admitted relationships.
 pub struct ResourceDeletionHandler {
+    service_token: String,
     client: CatalogServiceClient<tonic::transport::Channel>,
     timeout: Duration,
     repository_id: String,
@@ -41,10 +37,16 @@ impl ResourceDeletionHandler {
         repository_id: String,
     ) -> Self {
         Self {
+            service_token: String::new(),
             client,
             timeout,
             repository_id,
         }
+    }
+
+    pub fn with_service_token(mut self, secret: &str) -> Self {
+        self.service_token = secret.to_string();
+        self
     }
 
     pub async fn connect(
@@ -73,10 +75,17 @@ impl ResourceDeletionHandler {
         let tree_count = trees.len();
         let start = std::time::Instant::now();
         let mut client = self.client.clone();
-        let mut request = tonic::Request::new(ValidateResourceDeletionsRequest {
-            repository_id,
-            trees,
-        });
+        let mut request = crate::auth::interceptor::callback_request(
+            ValidateResourceDeletionsRequest {
+                repository_id,
+                authorization: Some(hook_ctx.callback_authorization(
+                    trees.iter().filter_map(|tree| tree.r#ref.clone()).collect(),
+                )),
+                trees,
+            },
+            &self.service_token,
+            "/gitstore.catalog.v1.CatalogService/ValidateResourceDeletions",
+        )?;
         request.set_timeout(self.timeout);
         let result =
             tokio::time::timeout(self.timeout, client.validate_resource_deletions(request)).await;
@@ -212,6 +221,7 @@ fn collect_resource_deletion_trees(
         trees.push(ResourceValidationTree {
             old_blobs: old_blobs.into_iter().map(to_proto_blob).collect(),
             proposed_blobs: proposed_blobs.into_iter().map(to_proto_blob).collect(),
+            r#ref: Some(update.into()),
         });
     }
     Ok(trees)
@@ -258,6 +268,8 @@ fn resource_removed_from_trees(
             (gix::object::tree::EntryKind::Tree, _) if tree_contains_resource(repo, old.oid) => {
                 return true
             }
+            (kind, Some((new_id, new_kind)))
+                if is_blob(kind) && is_blob(new_kind) && old.oid == new_id => {}
             (kind, Some((new_id, new_kind)))
                 if is_blob(kind) && is_blob(new_kind) && old.oid != new_id =>
             {
@@ -461,6 +473,59 @@ mod tests {
             .to_string()
     }
 
+    #[test]
+    fn adding_a_file_does_not_remove_an_unchanged_resource_sibling() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = make_bare_repo(directory.path());
+        let old = make_commit(
+            &path,
+            "---\nkind: CategoryTaxonomy\nmetadata:\n  name: preserved\n---\n",
+        );
+        let repo = gix::open(&path).unwrap();
+        let previous = repo.head_commit().unwrap();
+        let blob = repo
+            .write_blob(b"---\nkind: CategoryTaxonomy\nmetadata:\n  name: added\n---\n")
+            .unwrap()
+            .detach();
+        let tree = repo
+            .edit_tree(previous.tree_id().unwrap())
+            .unwrap()
+            .upsert("added.md", gix::object::tree::EntryKind::Blob, blob)
+            .unwrap()
+            .write()
+            .unwrap()
+            .detach();
+        let signature = gix::actor::SignatureRef {
+            name: "Test".into(),
+            email: "test@example.com".into(),
+            time: "0 +0000",
+        };
+        let new = repo
+            .commit_as(
+                signature,
+                signature,
+                "HEAD",
+                "add resource",
+                tree,
+                [previous.id().detach()],
+            )
+            .unwrap()
+            .detach();
+        let trees = collect_resource_deletion_trees(
+            &repo,
+            &[RefUpdate {
+                ref_name: "refs/heads/main".to_owned(),
+                old_oid: old,
+                new_oid: new.to_string(),
+            }],
+        )
+        .unwrap();
+        assert!(
+            trees.is_empty(),
+            "unchanged resources cannot turn an addition into a deletion validation"
+        );
+    }
+
     #[tokio::test]
     async fn creates_and_non_deletion_updates_skip_validation() {
         let directory = tempfile::TempDir::new().unwrap();
@@ -475,7 +540,8 @@ mod tests {
             "repo-1".to_string(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .with_service_token("fixture-key");
 
         let create = handler
             .validate_receive(
@@ -526,7 +592,8 @@ mod tests {
             "repo-1".to_string(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .with_service_token("fixture-key");
 
         let decision = handler
             .validate_receive(
@@ -564,7 +631,8 @@ mod tests {
             "repo-1".to_string(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .with_service_token("fixture-key");
 
         let decision = handler
             .validate_receive(

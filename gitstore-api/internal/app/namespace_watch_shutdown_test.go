@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
@@ -68,7 +70,7 @@ func TestFileCDCReadinessGatesSharedBookmarksAndShutdownReleasesLease(t *testing
 	store, err := memdb.New()
 	require.NoError(t, err)
 	journal := store.(datastore.ResourceWatchJournal)
-	metrics, err := watchjournal.NewMetrics(prometheus.NewRegistry())
+	metrics, err := watchjournal.NewMetrics(observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/watchjournal"))
 	require.NoError(t, err)
 	clock := apiruntime.SystemClock{}
 	runner := &fakeCatalogCDCRunner{kinds: []string{"CategoryTaxonomy", "File", "Product"}, gated: "File", started: make(chan struct{}), allowReady: make(chan struct{})}
@@ -76,7 +78,7 @@ func TestFileCDCReadinessGatesSharedBookmarksAndShutdownReleasesLease(t *testing
 		journal: journal, materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour, Clock: clock, Metrics: metrics}),
 		leaseManager: watchjournal.NewLeaseManager(journal, "leader", time.Minute, time.Second, clock),
 		metrics:      metrics, catalogRunner: runner,
-		cfg: config.NamespaceWatchConfig{BookmarkIntervalSeconds: 60, CDCRetentionSeconds: 60, CDCConfidenceWindowMillis: 1}, log: zap.NewNop(),
+		cfg: config.WatchJournalConfig{BookmarkInterval: 60 * time.Second, CDC: config.CDCWatchConfig{ConfidenceWindow: 1 * time.Millisecond}}, log: zap.NewNop(),
 	}
 	lease, acquired, err := runtime.leaseManager.Acquire(t.Context())
 	require.NoError(t, err)
@@ -113,14 +115,14 @@ func TestNamespaceWatchLeaderReleasesLeaseBeforeReturning(t *testing.T) {
 	lease, acquired, err := leader.Acquire(context.Background())
 	require.NoError(t, err)
 	require.True(t, acquired)
-	metrics, err := watchjournal.NewMetrics(prometheus.NewRegistry())
+	metrics, err := watchjournal.NewMetrics(observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/watchjournal"))
 	require.NoError(t, err)
 	runtime := &namespaceWatchRuntime{
 		journal:      journal,
 		materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour, Clock: clock, Metrics: metrics}),
 		leaseManager: leader,
 		metrics:      metrics,
-		cfg:          config.NamespaceWatchConfig{BookmarkIntervalSeconds: 60},
+		cfg:          config.WatchJournalConfig{BookmarkInterval: 60 * time.Second},
 		log:          zap.NewNop(),
 	}
 
@@ -174,14 +176,14 @@ func TestNamespaceWatchRuntimeStopsRetryingAfterOrderingDiscontinuity(t *testing
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	journal := store.(datastore.NamespaceWatchJournal)
-	metrics, err := watchjournal.NewMetrics(prometheus.NewRegistry())
+	metrics, err := watchjournal.NewMetrics(observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/watchjournal"))
 	require.NoError(t, err)
 	runner := &discontinuityNamespaceCDCRunner{}
 	runtime := &namespaceWatchRuntime{
 		journal: journal, materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour, Metrics: metrics}),
 		leaseManager: watchjournal.NewLeaseManager(journal, "leader", time.Minute, time.Second, apiruntime.SystemClock{}),
 		metrics:      metrics, runner: runner,
-		cfg: config.NamespaceWatchConfig{BookmarkIntervalSeconds: 60, CDCRetentionSeconds: 60, CDCConfidenceWindowMillis: 1},
+		cfg: config.WatchJournalConfig{BookmarkInterval: 60 * time.Second, CDC: config.CDCWatchConfig{ConfidenceWindow: 1 * time.Millisecond}},
 		log: zap.NewNop(),
 	}
 
@@ -203,14 +205,14 @@ func TestNamespaceWatchLeaderStartsEveryCatalogCDCWorker(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	journal := store.(datastore.NamespaceWatchJournal)
-	metrics, err := watchjournal.NewMetrics(prometheus.NewRegistry())
+	metrics, err := watchjournal.NewMetrics(observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/watchjournal"))
 	require.NoError(t, err)
 	clock := apiruntime.SystemClock{}
 	runner := &fakeCatalogCDCRunner{kinds: []string{"CategoryTaxonomy", "File", "Product"}}
 	runtime := &namespaceWatchRuntime{
 		journal: journal, materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour, Clock: clock, Metrics: metrics}),
 		leaseManager: watchjournal.NewLeaseManager(journal, "leader", time.Minute, time.Second, clock), metrics: metrics,
-		catalogRunner: runner, cfg: config.NamespaceWatchConfig{BookmarkIntervalSeconds: 60, CDCRetentionSeconds: 60, CDCConfidenceWindowMillis: 1}, log: zap.NewNop(),
+		catalogRunner: runner, cfg: config.WatchJournalConfig{BookmarkInterval: 60 * time.Second, CDC: config.CDCWatchConfig{ConfidenceWindow: 1 * time.Millisecond}}, log: zap.NewNop(),
 	}
 	lease, acquired, err := runtime.leaseManager.Acquire(t.Context())
 	require.NoError(t, err)
@@ -242,11 +244,11 @@ func TestNamespaceWatchReadinessRefreshesFollowerMetricsFromSharedBounds(t *test
 	_, err = journal.Append(context.Background(), lease, datastore.NamespaceWatchEvent{Type: datastore.NamespaceWatchBookmark, At: now}, time.Hour)
 	require.NoError(t, err)
 	registry := prometheus.NewRegistry()
-	metrics, err := watchjournal.NewMetrics(registry)
+	metrics, err := watchjournal.NewMetrics(observabilitytest.Meter(t, registry, "gitstore/watchjournal"))
 	require.NoError(t, err)
 	runtime := &namespaceWatchRuntime{
 		journal: journal, metrics: metrics,
-		cfg: config.NamespaceWatchConfig{MaxMaterializerLagSeconds: 60},
+		cfg: config.WatchJournalConfig{Materializer: config.MaterializerWatchConfig{MaxLag: 60 * time.Second}},
 	}
 
 	require.NoError(t, namespaceWatchReadiness(context.Background(), runtime, now.Add(time.Second)))

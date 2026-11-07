@@ -46,12 +46,9 @@ type idTokenClaims struct {
 	Issuer            string `json:"iss"`
 	Email             string `json:"email"`
 	PreferredUsername string `json:"preferred_username"`
-	// Identity claims only. Roles/Groups are deliberately NOT mapped onto
-	// Principal.Roles/Principal.Groups: authentication providers establish
-	// identity, and rbac-local seeds its effective role set from
-	// Principal.Roles — importing an external `roles` claim would let any
-	// configured issuer mint local admin without a role_bindings entry.
-	// (Both remain visible in raw token claims if an operator needs them.)
+	// Identity claims only. Arbitrary roles/groups claims are not trusted group
+	// membership. Authorization comes from typed policy bindings; Principal has
+	// no roles. Raw claims are retained only as non-authorizing identity metadata.
 	Scope     string   `json:"scope"`
 	Scp       []string `json:"scp"`
 	TokenID   string   `json:"jti"`
@@ -103,14 +100,10 @@ func New(ctx context.Context, cfg config.OIDCConfig, logger *zap.Logger) (*OIDCJ
 	if strings.TrimSpace(audience) == "" {
 		return nil, errors.New("oidcjwt: audience or client_id is required")
 	}
-	skew := 2 * time.Minute
-	if cfg.ClockSkew != "" {
-		parsed, err := time.ParseDuration(cfg.ClockSkew)
-		if err != nil {
-			return nil, fmt.Errorf("oidcjwt: invalid clock_skew %q: %w", cfg.ClockSkew, err)
-		}
-		skew = parsed
-	}
+	// config.Load defaults ClockSkew to 2m; a caller constructing OIDCConfig
+	// directly (e.g. tests) that leaves it zero means zero tolerance, not
+	// "use the default" — the zero value is meaningful here.
+	skew := cfg.ClockSkew
 	provider, canonicalIssuer, err := discover(ctx, cfg.IssuerURI)
 	if err != nil {
 		return nil, fmt.Errorf("oidcjwt: discovery against %q: %w", cfg.IssuerURI, err)
@@ -201,6 +194,9 @@ func (p *OIDCJWTProvider) Authenticate(ctx context.Context, req auth.AuthRequest
 		}
 	}
 
+	if !auth.ValidExternalUsername(subject) {
+		return nil, auth.Deny(p.Name(), "reserved or invalid mapped username"), nil
+	}
 	principal := &auth.Principal{
 		Subject:    subject,
 		Issuer:     claims.Issuer,

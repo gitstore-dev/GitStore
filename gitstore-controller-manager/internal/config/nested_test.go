@@ -19,26 +19,46 @@ func TestLoadAPIClientBudgetDefaultsOverridesAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Controller.APIClient.RequestsPerSecond != 40 || cfg.Controller.APIClient.Burst != 10 {
+	if cfg.Controller.APIClient.RateLimit.PerSecond != 40 || cfg.Controller.APIClient.RateLimit.Burst != 10 {
 		t.Fatalf("unexpected default API budget: %+v", cfg.Controller.APIClient)
 	}
-	t.Setenv("GITSTORE_CONTROLLER__API_CLIENT__REQUESTS_PER_SECOND", "20")
-	t.Setenv("GITSTORE_CONTROLLER__API_CLIENT__BURST", "5")
+	t.Setenv("GITSTORE_CONTROLLER__API_CLIENT__RATE_LIMIT__PER_SECOND", "20")
+	t.Setenv("GITSTORE_CONTROLLER__API_CLIENT__RATE_LIMIT__BURST", "5")
 	cfg, err = config.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Controller.APIClient.RequestsPerSecond != 20 || cfg.Controller.APIClient.Burst != 5 {
+	if cfg.Controller.APIClient.RateLimit.PerSecond != 20 || cfg.Controller.APIClient.RateLimit.Burst != 5 {
 		t.Fatal("API client environment overrides ignored")
 	}
-	for _, key := range []string{"REQUESTS_PER_SECOND", "BURST"} {
+	for _, key := range []string{"PER_SECOND", "BURST"} {
 		t.Run(key, func(t *testing.T) {
 			for _, value := range []string{"0", "-1", "MUST-NOT-LEAK"} {
-				t.Setenv("GITSTORE_CONTROLLER__API_CLIENT__"+key, value)
+				t.Setenv("GITSTORE_CONTROLLER__API_CLIENT__RATE_LIMIT__"+key, value)
 				_, err := config.Load()
 				if err == nil || strings.Contains(err.Error(), "MUST-NOT-LEAK") {
 					t.Fatalf("invalid API request budget did not fail safely: %v", err)
 				}
+			}
+		})
+	}
+}
+
+// TestLoadRejectsObsoleteAPIClientRateLimitKeys verifies the pre-grouping
+// flat api_client.requests_per_second/burst keys (now nested under
+// api_client.rate_limit) fail startup by name rather than silently
+// resolving to the rate_limit defaults.
+func TestLoadRejectsObsoleteAPIClientRateLimitKeys(t *testing.T) {
+	for _, key := range []string{"REQUESTS_PER_SECOND", "BURST"} {
+		t.Run(key, func(t *testing.T) {
+			setenv(t)
+			t.Setenv("GITSTORE_CONTROLLER__API_CLIENT__"+key, "MUST-NOT-LEAK")
+			_, err := config.Load()
+			if err == nil || strings.Contains(err.Error(), "MUST-NOT-LEAK") {
+				t.Fatalf("obsolete api_client rate limit path did not fail safely: %v", err)
+			}
+			if !strings.Contains(err.Error(), "RATE_LIMIT") {
+				t.Fatalf("error must name the rate_limit replacement: %v", err)
 			}
 		})
 	}

@@ -78,6 +78,8 @@ coverage/
 *.log
 logs/
 .gitstore/
+__pycache__/
+*.py[cod]
 
 .claude/settings.json
 test-repos/
@@ -86,6 +88,7 @@ demo-catalogue/
 catalog-work/
 catalogue-work/
 /gitstore-controller-manager/controller
+*/coverage.txt
 /out/
 .claude/
 
@@ -97,3 +100,15 @@ catalogue-work/
 
 # Codex hook config embeds an absolute path to the local graphify binary
 .codex/hooks.json
+
+# Infrastructure inputs, state, saved plans and local provider caches.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+/deploy/digitalocean/backend.hcl
+crash.log

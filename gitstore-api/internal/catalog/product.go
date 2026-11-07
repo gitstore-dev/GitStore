@@ -25,7 +25,7 @@ type ProductResource struct {
 type ObjectMeta struct {
 	// Author-writable
 	Name        string            `yaml:"name"        validate:"required"`
-	Namespace   string            `yaml:"namespace"`
+	Namespace   string            `yaml:"namespace,omitempty"`
 	Labels      map[string]string `yaml:"labels"`
 	Annotations map[string]string `yaml:"annotations"`
 	// System-managed (read-only; populated from datastore at read time)

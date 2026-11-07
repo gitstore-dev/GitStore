@@ -26,7 +26,6 @@ func TestReceivePackRequest_PushContextFirstChunkOnly(t *testing.T) {
 				Subject:    "admin",
 				Issuer:     "static-admin",
 				AuthMethod: "basic",
-				Roles:      []string{"admin"},
 			},
 		},
 		Policy: &gitv1.PushPolicy{
@@ -100,4 +99,12 @@ func TestPushContext_PolicyLimitsRoundTrip(t *testing.T) {
 	require.NotNil(t, decoded.Policy)
 	assert.Equal(t, int64(52428800), decoded.Policy.MaxPackSizeBytes)
 	assert.Equal(t, int64(10485760), decoded.Policy.MaxFileSizeBytes)
+}
+
+func TestAuthContextHasNoRoleAuthority(t *testing.T) {
+	descriptor := (&gitv1.AuthContext{}).ProtoReflect().Descriptor()
+	require.Nil(t, descriptor.Fields().ByName("roles"))
+	require.True(t, descriptor.ReservedNames().Has("roles"))
+	require.True(t, descriptor.ReservedRanges().Has(4))
+	require.NotNil(t, descriptor.Fields().ByName("service_account_uid"))
 }

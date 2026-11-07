@@ -112,7 +112,7 @@ func TestRepositoryReadContract_LegacyAndCreatedRepositoriesAcrossReadPaths(t *t
 
 func TestRepositoryReadContract_HasNoLegacyDuplicateFields(t *testing.T) {
 	h := newNamespaceContractHarness(t)
-	resp := h.gqlAnonymous(`
+	resp := h.gql(`
 		query {
 			__type(name: "Repository") {
 				fields(includeDeprecated: true) {
