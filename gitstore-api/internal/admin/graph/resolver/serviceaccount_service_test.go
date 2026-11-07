@@ -182,6 +182,8 @@ func TestCreateServiceAccountValidatesKeysAndDuplicates(t *testing.T) {
 	assert.NotEmpty(t, created.ServiceAccount.Metadata.UID)
 	assert.Empty(t, created.ServiceAccount.Metadata.Namespace)
 	assert.Equal(t, "manager", created.ServiceAccount.Metadata.Name)
+	assert.NotNil(t, created.ServiceAccount.Metadata.OwnerReferences)
+	assert.Empty(t, created.ServiceAccount.Metadata.OwnerReferences)
 
 	persisted, err := h.store.GetServiceAccountBySubject(ctx, "manager")
 	require.NoError(t, err)

@@ -45,6 +45,7 @@ const (
 	repositoryCapacitySentAtAnnotation    = "capacity.gitstore.dev/sent-at"
 	repositoryCapacityPaddingAnnotation   = "capacity.gitstore.dev/padding"
 	repositoryCapacityMinimumOverflowWait = 31 * time.Second
+	repositoryCapacityResponseLimit       = 1 << 20
 )
 
 type repositoryCapacityConfig struct {
@@ -100,6 +101,7 @@ type repositoryCapacityLoadResult struct {
 	latencies                                 []time.Duration
 	queueFull, missedSchedules                int64
 	slowMutations                             []repositoryCapacitySlowMutation
+	windowComplete                            bool
 }
 
 type repositoryCapacitySlowMutation struct {
@@ -286,7 +288,17 @@ func runRepositoryCapacityWorkload(t *testing.T, cfg repositoryCapacityConfig) {
 	}
 	require.Zero(t, load.failed, "Repository mutations failed under load")
 	require.Zero(t, load.backpressured, "bounded mutation queue shed load")
+	require.Zero(t, load.missedSchedules, "Repository load producer missed scheduled transitions")
 	require.Equal(t, load.produced, load.admitted, "all offered Repository transitions must be admitted")
+	firstSustained := cfg.transitionInterval
+	includeBursts := !cfg.endpointSplit
+	if cfg.endpointSplit {
+		firstSustained = 0
+	}
+	require.True(t, load.windowComplete, "Repository load did not cover its complete offered window")
+	require.Equal(t, repositoryCapacityExpectedOffers(cfg.duration, cfg.transitionInterval,
+		cfg.burstInterval, cfg.burstSize, firstSustained, includeBursts),
+		load.produced, "Repository load must cover the complete scheduled window")
 	if cfg.endpointSplit {
 		sort.Slice(load.latencies, func(i, j int) bool { return load.latencies[i] < load.latencies[j] })
 		require.NotEmpty(t, load.latencies)
@@ -356,13 +368,15 @@ func runRepositoryCapacityWorkload(t *testing.T, cfg repositoryCapacityConfig) {
 			ControllersBefore: secretControllersBefore[:], ControllersAfter: secretControllersAfter[:], RepositoryLifecyclePassed: true,
 		}))
 	}
-	t.Logf("Repository lifecycle capacity passed: mode=%s replay=%d replay_p95=%s subscribers=%d admitted=%d duration=%s", cfg.mode, cfg.replayEvents, replayP95, cfg.subscribers, load.admitted, time.Since(soakStarted))
+	t.Logf("Repository lifecycle capacity passed: mode=%s replay=%d replay_p95=%s subscribers=%d admitted=%d missed_schedules=%d queue_drops=%d duration=%s",
+		cfg.mode, cfg.replayEvents, replayP95, cfg.subscribers, load.admitted, load.missedSchedules, load.backpressured, time.Since(soakStarted))
 	if cfg.endpointSplit {
 		require.NoError(t, writeSecretCapacityPrivateJSON(filepath.Join(os.Getenv("CAPACITY_EVIDENCE_DIR"), "connected-result.json"), map[string]any{
 			"schemaVersion": 1, "component": "endpoint-split-connected/v1", "passed": true, "mode": cfg.mode, "runId": os.Getenv("CAPACITY_RUN_ID"),
 			"sourceStateSha256": os.Getenv("CAPACITY_SOURCE_STATE_SHA256"), "gitRevision": os.Getenv("CAPACITY_SOURCE_REVISION"), "configDigest": os.Getenv("CAPACITY_CONFIG_DIGEST"), "environmentDigest": os.Getenv("CAPACITY_ENVIRONMENT_DIGEST"),
 			"startedAt": soakStarted.UTC().Format(time.RFC3339), "completedAt": time.Now().UTC().Format(time.RFC3339), "subscribers": cfg.subscribers,
 			"durationSeconds": cfg.duration.Seconds(), "offered": load.produced, "admitted": load.admitted, "failed": load.failed, "dropped": load.backpressured,
+			"missedSchedules":     load.missedSchedules,
 			"adminAuthoringP95Ms": percentileDuration(load.latencies, .95).Milliseconds(), "apiRecoveryMs": recovery.duration.Milliseconds(),
 			"visibilityP95Ms": percentileDuration(latencies, .95).Milliseconds(), "visibilityP99Ms": percentileDuration(latencies, .99).Milliseconds(), "replayEvents": cfg.replayEvents, "replayP95Ms": replayP95.Milliseconds(),
 			"processesBefore": metricsStart, "processesAfter": metricsEnd, "apiInstancesBefore": []string{identityA, identityB},
@@ -755,12 +769,16 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 		}()
 	}
 	started := time.Now()
-	ticker := time.NewTicker(cfg.transitionInterval)
-	burst := time.NewTicker(cfg.burstInterval)
 	sequence := 0
-	enqueue := func() {
+	var missedSchedules atomic.Int64
+	recordOffer := func(missed bool) {
 		sequence++
 		produced.Add(1)
+		if missed {
+			missedSchedules.Add(1)
+			backpressured.Add(1)
+			return
+		}
 		select {
 		case jobs <- sequence:
 		default:
@@ -768,44 +786,37 @@ func runRepositoryCapacityLoad(t *testing.T, client *http.Client, cfg repository
 			queueFull.Add(1)
 		}
 	}
+	firstSustained := cfg.transitionInterval
+	includeBursts := true
 	if cfg.endpointSplit {
-		planned := int(cfg.duration / cfg.transitionInterval)
-		for offer := 0; offer < planned; offer++ {
-			scheduled := loadStarted.Add(time.Duration(offer) * cfg.transitionInterval)
-			if delay := time.Until(scheduled); delay > 0 {
-				time.Sleep(delay)
-			}
-			if time.Since(scheduled) >= cfg.transitionInterval {
-				sequence++
-				produced.Add(1)
-				backpressured.Add(1)
-				continue
-			}
-			enqueue()
+		firstSustained = 0
+		includeBursts = false
+	}
+	waitUntil := func(target time.Time) bool {
+		delay := time.Until(target)
+		if delay <= 0 {
+			return t.Context().Err() == nil
 		}
-		if delay := time.Until(loadStarted.Add(cfg.duration)); delay > 0 {
-			time.Sleep(delay)
-		}
-	} else {
-		for time.Since(started) < cfg.duration {
-			select {
-			case <-ticker.C:
-				enqueue()
-			case <-burst.C:
-				for i := 0; i < cfg.burstSize; i++ {
-					enqueue()
-				}
-			}
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-t.Context().Done():
+			return false
+		case <-timer.C:
+			return true
 		}
 	}
-	ticker.Stop()
-	burst.Stop()
+	schedule := runRepositoryCapacitySchedule(
+		started, cfg.duration, cfg.transitionInterval, cfg.burstInterval, cfg.burstSize,
+		firstSustained, includeBursts, time.Now, waitUntil, recordOffer,
+	)
 	close(jobs)
 	wg.Wait()
 	result.produced, result.admitted, result.failed, result.backpressured = produced.Load(), admitted.Load(), failed.Load(), backpressured.Load()
+	result.missedSchedules = schedule.missed
+	result.windowComplete = schedule.windowComplete
 	result.maxSequence = sequence
 	result.queueFull = queueFull.Load()
-	result.missedSchedules = result.backpressured - result.queueFull
 	return result
 }
 
@@ -827,6 +838,78 @@ func TestEndpointCapacityLoadAccountsForQueueSaturation(t *testing.T) {
 	require.Equal(t, load.backpressured, load.queueFull+load.missedSchedules)
 	require.Equal(t, load.produced, load.admitted+load.failed+load.backpressured)
 	require.LessOrEqual(t, len(load.slowMutations), 32)
+	require.True(t, load.windowComplete)
+}
+
+type repositoryCapacityScheduleResult struct {
+	scheduled, missed int64
+	windowComplete    bool
+}
+
+func repositoryCapacityExpectedOffers(
+	duration, interval, burstInterval time.Duration,
+	burstSize int,
+	firstSustained time.Duration,
+	includeBursts bool,
+) int64 {
+	if duration <= 0 {
+		return 0
+	}
+	var sustained int64
+	if firstSustained < duration {
+		sustained = 1 + int64((duration-1-firstSustained)/interval)
+	}
+	var bursts int64
+	if includeBursts {
+		bursts = int64((duration - 1) / burstInterval)
+	}
+	return sustained + bursts*int64(burstSize)
+}
+
+func runRepositoryCapacitySchedule(
+	start time.Time,
+	duration, interval, burstInterval time.Duration,
+	burstSize int,
+	firstSustained time.Duration,
+	includeBursts bool,
+	now func() time.Time,
+	waitUntil func(time.Time) bool,
+	offer func(missed bool),
+) repositoryCapacityScheduleResult {
+	var result repositoryCapacityScheduleResult
+	sustainedAt, burstAt := firstSustained, burstInterval
+	for sustainedAt < duration || (includeBursts && burstAt < duration) {
+		if sustainedAt < duration && (!includeBursts || burstAt >= duration || sustainedAt <= burstAt) {
+			scheduled := start.Add(sustainedAt)
+			if !waitUntil(scheduled) {
+				return result
+			}
+			missed := now().Sub(scheduled) >= interval
+			result.scheduled++
+			if missed {
+				result.missed++
+			}
+			offer(missed)
+			sustainedAt += interval
+			continue
+		}
+
+		scheduled := start.Add(burstAt)
+		if !waitUntil(scheduled) {
+			return result
+		}
+		missed := now().Sub(scheduled) >= interval
+		for i := 0; i < burstSize; i++ {
+			result.scheduled++
+			if missed {
+				result.missed++
+			}
+			offer(missed)
+		}
+		burstAt += burstInterval
+	}
+	result.windowComplete = waitUntil(start.Add(duration))
+	return result
 }
 
 func repositoryCapacityQueueDepth(workers, burstSize int) int {
@@ -838,6 +921,111 @@ func repositoryCapacityQueueDepth(workers, burstSize int) int {
 func TestRepositoryCapacityQueueDepthIncludesOneFullBurst(t *testing.T) {
 	t.Parallel()
 	require.Equal(t, 180, repositoryCapacityQueueDepth(20, 100))
+}
+
+func TestRepositoryCapacityScheduleCountsMissedOffersAndCoversWindow(t *testing.T) {
+	t.Parallel()
+	start := time.Unix(1, 0)
+	now := start
+	var offered, missed int
+	result := runRepositoryCapacitySchedule(
+		start, 50*time.Millisecond, 10*time.Millisecond, 20*time.Millisecond, 2,
+		10*time.Millisecond, true,
+		func() time.Time { return now },
+		func(target time.Time) bool {
+			if target.After(now) {
+				now = target
+			}
+			return true
+		},
+		func(wasMissed bool) {
+			if wasMissed {
+				missed++
+				return
+			}
+			offered++
+			if offered == 1 {
+				now = start.Add(31 * time.Millisecond)
+			}
+		},
+	)
+
+	require.EqualValues(t, 8, result.scheduled)
+	require.EqualValues(t, 3, result.missed)
+	require.Equal(t, 5, offered)
+	require.Equal(t, 3, missed)
+	require.True(t, result.windowComplete)
+	require.EqualValues(t, 8, repositoryCapacityExpectedOffers(
+		50*time.Millisecond, 10*time.Millisecond, 20*time.Millisecond, 2, 10*time.Millisecond, true))
+
+	start = time.Unix(2, 0)
+	now = start
+	var connectedOffers int
+	connected := runRepositoryCapacitySchedule(
+		start, 50*time.Millisecond, 10*time.Millisecond, 20*time.Millisecond, 2,
+		0, false,
+		func() time.Time { return now },
+		func(target time.Time) bool {
+			if target.After(now) {
+				now = target
+			}
+			return true
+		},
+		func(wasMissed bool) {
+			require.False(t, wasMissed)
+			connectedOffers++
+		},
+	)
+	require.EqualValues(t, 5, connected.scheduled)
+	require.Equal(t, 5, connectedOffers)
+	require.EqualValues(t, 5, repositoryCapacityExpectedOffers(
+		50*time.Millisecond, 10*time.Millisecond, 20*time.Millisecond, 2, 0, false))
+}
+
+func TestRepositoryCapacityScheduleReportsIncompleteWindow(t *testing.T) {
+	t.Parallel()
+	start := time.Unix(1, 0)
+	waitCalls := 0
+	result := runRepositoryCapacitySchedule(
+		start, time.Second, 500*time.Millisecond, time.Second, 1,
+		500*time.Millisecond, false,
+		func() time.Time { return start.Add(500 * time.Millisecond) },
+		func(time.Time) bool {
+			waitCalls++
+			return waitCalls == 1
+		},
+		func(bool) {},
+	)
+	require.EqualValues(t, 1, result.scheduled)
+	require.False(t, result.windowComplete)
+}
+
+func TestRepositoryCapacityMutationDoesNotRetryOrExposeResponseBody(t *testing.T) {
+	for _, response := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "rate limited", status: http.StatusTooManyRequests, body: "private response content"},
+		{name: "GraphQL error", status: http.StatusOK, body: `{"errors":[{"message":"private response content"}]}`},
+		{name: "oversized response", status: http.StatusOK, body: strings.Repeat("x", repositoryCapacityResponseLimit+1)},
+	} {
+		t.Run(response.name, func(t *testing.T) {
+			var requests atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(response.status)
+				_, _ = io.WriteString(w, response.body)
+			}))
+			defer server.Close()
+
+			err := repositoryCapacityMutation(context.Background(), server.Client(), server.URL,
+				"test-token", false, "capacity-test", "product", "", 1, "")
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), "private response content")
+			require.EqualValues(t, 1, requests.Load(), "failed writes must not be retried")
+		})
+	}
 }
 
 func repositoryCapacityMutation(ctx context.Context, client *http.Client, endpoint, token string, create bool, namespace, name, prefix string, sequence int, padding string) error {
@@ -862,37 +1050,38 @@ func repositoryCapacityMutation(ctx context.Context, client *http.Client, endpoi
 	if err != nil {
 		return err
 	}
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimSuffix(endpoint, "/")+"/admin/graphql", bytes.NewReader(payload))
-		if reqErr != nil {
-			return reqErr
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+token)
-		response, doErr := client.Do(req)
-		if doErr == nil {
-			contents, readErr := io.ReadAll(response.Body)
-			response.Body.Close()
-			if readErr == nil && response.StatusCode == http.StatusOK {
-				var result struct {
-					Errors []json.RawMessage `json:"errors"`
-				}
-				if json.Unmarshal(contents, &result) == nil && len(result.Errors) == 0 {
-					return nil
-				}
-				doErr = fmt.Errorf("GraphQL errors: %s", result.Errors)
-			} else if readErr != nil {
-				doErr = readErr
-			} else {
-				doErr = fmt.Errorf("HTTP %s: %s", response.Status, contents)
-			}
-		}
-		if time.Now().After(deadline) || ctx.Err() != nil {
-			return doErr
-		}
-		time.Sleep(100 * time.Millisecond)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimSuffix(endpoint, "/")+"/admin/graphql", bytes.NewReader(payload))
+	if err != nil {
+		return err
 	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	response, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	contents, err := io.ReadAll(io.LimitReader(response.Body, repositoryCapacityResponseLimit+1))
+	if err != nil {
+		return err
+	}
+	if len(contents) > repositoryCapacityResponseLimit {
+		return errors.New("capacity GraphQL response exceeded capture bound")
+	}
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %s", response.Status)
+	}
+	var result struct {
+		Errors []json.RawMessage `json:"errors"`
+	}
+	if err := json.Unmarshal(contents, &result); err != nil {
+		return errors.New("invalid capacity GraphQL response")
+	}
+	if len(result.Errors) != 0 {
+		return fmt.Errorf("GraphQL returned %d operation errors", len(result.Errors))
+	}
+	return nil
 }
 
 func repositoryCapacityBootstrapCursor(t *testing.T, endpoint string, cfg repositoryCapacityConfig) string {
@@ -1345,12 +1534,18 @@ func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, c
 	ctx := context.Background()
 	gitURL := strings.TrimRight(os.Getenv("GIT_URL"), "/")
 	require.NoError(t, validateSecretCapacityGitEndpoint(gitURL))
+	assertRepositoryCapacityOwnerReferenceDeletionParity(t, client, cfg, name)
 	var previousUID string
 	directory := filepath.Join(t.TempDir(), "authoring")
 	for _, mode := range []string{"mutation", "push"} {
 		require.NoError(t, repositoryCapacityMutation(ctx, client, cfg.apiA, cfg.token, true, cfg.namespace, name, "deletion", 0, ""))
 		response := gqlQueryWithURL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
-			repository(by: {namespacePath: {namespace: $namespace, name: $name}}) { id metadata { resourceVersion } }
+			repository(by: {namespacePath: {namespace: $namespace, name: $name}}) {
+				id metadata {
+					resourceVersion
+					ownerReferences { apiVersion kind name uid blockOwnerDeletion }
+				}
+			}
 		}`, map[string]any{"namespace": cfg.namespace, "name": name})
 		require.Empty(t, response.Errors)
 		var current struct {
@@ -1358,11 +1553,24 @@ func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, c
 				ID       string `json:"id"`
 				Metadata struct {
 					ResourceVersion string `json:"resourceVersion"`
+					OwnerReferences []struct {
+						APIVersion         string `json:"apiVersion"`
+						Kind               string `json:"kind"`
+						Name               string `json:"name"`
+						UID                string `json:"uid"`
+						BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+					} `json:"ownerReferences"`
 				} `json:"metadata"`
 			} `json:"repository"`
 		}
 		require.NoError(t, json.Unmarshal(response.Data, &current))
 		require.NotEmpty(t, current.Repository.ID)
+		require.Len(t, current.Repository.Metadata.OwnerReferences, 1, "Repository must report its Namespace owner")
+		namespaceOwner := current.Repository.Metadata.OwnerReferences[0]
+		require.Equal(t, "Namespace", namespaceOwner.Kind)
+		require.Equal(t, cfg.namespace, namespaceOwner.Name)
+		require.NotEmpty(t, namespaceOwner.UID)
+		require.True(t, namespaceOwner.BlockOwnerDeletion)
 		if previousUID != "" {
 			require.NotEqual(t, previousUID, current.Repository.ID)
 			stale := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($ns: String!, $name: String!, $uid: ID!, $rv: String!) {
@@ -1421,6 +1629,212 @@ func assertRepositoryCapacityDeletionParity(t *testing.T, client *http.Client, c
 		previousUID = current.Repository.ID
 	}
 	t.Log("repository deletion parity: mutation/push manifest removal, controller completion, name reuse and stale UID rejection verified")
+}
+
+func assertRepositoryCapacityOwnerReferenceDeletionParity(t *testing.T, client *http.Client, cfg repositoryCapacityConfig, runID string) {
+	t.Helper()
+
+	createCategory := func(name string, parent string) string {
+		t.Helper()
+		var parentRef any
+		if parent != "" {
+			parentRef = map[string]any{"name": parent}
+		}
+		created := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($namespace: String!, $name: String!, $parent: CatalogObjectReferenceInput) {
+			createCategory(input: {
+				metadata: {namespace: $namespace, name: $name}
+				spec: {title: $name, parentRef: $parent}
+			}) {
+				category { id metadata { ownerReferences { kind name uid blockOwnerDeletion } } }
+			}
+		}`, map[string]any{"namespace": cfg.namespace, "name": name, "parent": parentRef})
+		require.Empty(t, created.Errors, string(created.Data))
+		var data struct {
+			CreateCategory struct {
+				Category struct {
+					ID       string `json:"id"`
+					Metadata struct {
+						OwnerReferences []struct {
+							Kind               string `json:"kind"`
+							Name               string `json:"name"`
+							UID                string `json:"uid"`
+							BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+						} `json:"ownerReferences"`
+					} `json:"metadata"`
+				} `json:"category"`
+			} `json:"createCategory"`
+		}
+		require.NoError(t, json.Unmarshal(created.Data, &data))
+		require.NotEmpty(t, data.CreateCategory.Category.ID)
+		return data.CreateCategory.Category.ID
+	}
+	categoryExists := func(name string) bool {
+		t.Helper()
+		response := gqlQueryWithURL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
+			category(by: {namespacePath: {namespace: $namespace, name: $name}}) { id }
+		}`, map[string]any{"namespace": cfg.namespace, "name": name})
+		var data struct {
+			Category json.RawMessage `json:"category"`
+		}
+		if json.Unmarshal(response.Data, &data) != nil {
+			return true
+		}
+		return len(data.Category) != 0 && string(data.Category) != "null"
+	}
+	productOwnerReferences := func(name string) (bool, string, []struct {
+		Kind               string `json:"kind"`
+		Name               string `json:"name"`
+		UID                string `json:"uid"`
+		BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+	}) {
+		t.Helper()
+		response := gqlQueryWithURL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
+			product(by: {namespacePath: {namespace: $namespace, name: $name}}) {
+				id
+				metadata { ownerReferences { kind name uid blockOwnerDeletion } }
+			}
+		}`, map[string]any{"namespace": cfg.namespace, "name": name})
+		if len(response.Errors) != 0 {
+			return false, "", nil
+		}
+		var data struct {
+			Product *struct {
+				ID       string `json:"id"`
+				Metadata struct {
+					OwnerReferences []struct {
+						Kind               string `json:"kind"`
+						Name               string `json:"name"`
+						UID                string `json:"uid"`
+						BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+					} `json:"ownerReferences"`
+				} `json:"metadata"`
+			} `json:"product"`
+		}
+		if json.Unmarshal(response.Data, &data) != nil || data.Product == nil {
+			return false, "", nil
+		}
+		return true, data.Product.ID, data.Product.Metadata.OwnerReferences
+	}
+
+	blockingParent := "rcb-" + runID
+	blockingChild := blockingParent + "-child"
+	parentID := createCategory(blockingParent, "")
+	childID := createCategory(blockingChild, blockingParent)
+	child := gqlQueryWithURL(t, cfg.apiB, cfg.token, `query($namespace: String!, $name: String!) {
+		category(by: {namespacePath: {namespace: $namespace, name: $name}}) {
+			metadata { ownerReferences { kind name uid blockOwnerDeletion } }
+		}
+	}`, map[string]any{"namespace": cfg.namespace, "name": blockingChild})
+	require.Empty(t, child.Errors, string(child.Data))
+	var childData struct {
+		Category struct {
+			Metadata struct {
+				OwnerReferences []struct {
+					Kind               string `json:"kind"`
+					Name               string `json:"name"`
+					UID                string `json:"uid"`
+					BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+				} `json:"ownerReferences"`
+			} `json:"metadata"`
+		} `json:"category"`
+	}
+	require.NoError(t, json.Unmarshal(child.Data, &childData))
+	var blocksParent bool
+	for _, reference := range childData.Category.Metadata.OwnerReferences {
+		if reference.Kind == "CategoryTaxonomy" && reference.Name == blockingParent {
+			require.True(t, reference.BlockOwnerDeletion)
+			blocksParent = true
+		}
+	}
+	require.True(t, blocksParent, "child category must carry a blocking owner reference")
+	blocked := gqlQueryWithURL(t, cfg.apiB, cfg.token, `mutation($id: ID!) {
+		deleteCategory(input: {id: $id}) { outcome }
+	}`, map[string]any{"id": parentID})
+	require.NotEmpty(t, blocked.Errors, "a live blocking child must reject parent deletion")
+	require.Eventually(t, func() bool {
+		return categoryExists(blockingParent) && categoryExists(blockingChild)
+	}, 10*time.Second, 250*time.Millisecond, "blocked deletion must preserve owner and dependent")
+
+	for _, id := range []string{childID, parentID} {
+		deleted := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($id: ID!) {
+			deleteCategory(input: {id: $id}) { outcome }
+		}`, map[string]any{"id": id})
+		require.Empty(t, deleted.Errors, string(deleted.Data))
+		require.Eventually(t, func() bool {
+			name := blockingParent
+			if id == childID {
+				name = blockingChild
+			}
+			return !categoryExists(name)
+		}, 60*time.Second, 250*time.Millisecond, "category deletion must finalize")
+	}
+
+	orphanOwner := "rco-" + runID
+	orphanProduct := orphanOwner + "-product"
+	orphanID := createCategory(orphanOwner, "")
+	createdProduct := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($namespace: String!, $name: String!, $category: String!) {
+		createProduct(input: {
+			metadata: {namespace: $namespace, name: $name}
+			spec: {title: $name, categoryRef: {name: $category}}
+		}) {
+			product { metadata { ownerReferences { kind name uid blockOwnerDeletion } } }
+		}
+	}`, map[string]any{"namespace": cfg.namespace, "name": orphanProduct, "category": orphanOwner})
+	require.Empty(t, createdProduct.Errors, string(createdProduct.Data))
+	var initialProduct struct {
+		CreateProduct struct {
+			Product struct {
+				Metadata struct {
+					OwnerReferences []struct {
+						Kind               string `json:"kind"`
+						Name               string `json:"name"`
+						UID                string `json:"uid"`
+						BlockOwnerDeletion bool   `json:"blockOwnerDeletion"`
+					} `json:"ownerReferences"`
+				} `json:"metadata"`
+			} `json:"product"`
+		} `json:"createProduct"`
+	}
+	require.NoError(t, json.Unmarshal(createdProduct.Data, &initialProduct))
+	var orphanReferenceFound bool
+	var orphanCategoryUID string
+	for _, reference := range initialProduct.CreateProduct.Product.Metadata.OwnerReferences {
+		if reference.Kind == "CategoryTaxonomy" && reference.Name == orphanOwner {
+			require.False(t, reference.BlockOwnerDeletion)
+			orphanReferenceFound = true
+			orphanCategoryUID = reference.UID
+		}
+	}
+	require.True(t, orphanReferenceFound, "Product must expose its non-blocking category owner")
+	require.NotEmpty(t, orphanCategoryUID)
+
+	deletedOrphanOwner := gqlQueryWithURL(t, cfg.apiB, cfg.token, `mutation($id: ID!) {
+		deleteCategory(input: {id: $id}) { outcome }
+	}`, map[string]any{"id": orphanID})
+	require.Empty(t, deletedOrphanOwner.Errors, string(deletedOrphanOwner.Data))
+	var orphanProductID string
+	require.Eventually(t, func() bool {
+		exists, id, references := productOwnerReferences(orphanProduct)
+		if !exists {
+			return false
+		}
+		orphanProductID = id
+		for _, reference := range references {
+			if reference.Kind == "CategoryTaxonomy" && reference.UID == orphanCategoryUID {
+				return false
+			}
+		}
+		return !categoryExists(orphanOwner)
+	}, 60*time.Second, 250*time.Millisecond, "non-blocking owner removal must preserve Product and clear its stale owner reference")
+	require.NotEmpty(t, orphanProductID)
+	deletedProduct := gqlQueryWithURL(t, cfg.apiA, cfg.token, `mutation($id: ID!) {
+		deleteProduct(input: {id: $id}) { outcome }
+	}`, map[string]any{"id": orphanProductID})
+	require.Empty(t, deletedProduct.Errors)
+	require.Eventually(t, func() bool {
+		exists, _, _ := productOwnerReferences(orphanProduct)
+		return !exists
+	}, 60*time.Second, 250*time.Millisecond, "capacity orphan fixture must be cleaned up")
 }
 
 func repositoryCapacityDeletionObserved(response gqlResponse) bool {

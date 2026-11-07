@@ -404,6 +404,84 @@ func TestDeleteRepository_afterCatalogResourcesRemoved_succeeds(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestDeleteRepository_BlocksEveryRepositoryOwnedCatalogKind(t *testing.T) {
+	tests := []struct {
+		name   string
+		create func(context.Context, datastore.Datastore, *datastore.Repository) error
+	}{
+		{
+			name: "Product",
+			create: func(ctx context.Context, store datastore.Datastore, repo *datastore.Repository) error {
+				return store.CreateProduct(ctx, &datastore.Product{
+					UID: "01960000-0000-7000-8000-000000000101", Namespace: repo.Namespace,
+					RepositoryID: repo.UID, Name: "product", ResourceVersion: "1", CreationTimestamp: time.Now(),
+				})
+			},
+		},
+		{
+			name: "ProductVariant",
+			create: func(ctx context.Context, store datastore.Datastore, repo *datastore.Repository) error {
+				return store.CreateProductVariant(ctx, &datastore.ProductVariant{
+					UID: "01960000-0000-7000-8000-000000000102", Namespace: repo.Namespace,
+					RepositoryID: repo.UID, Name: "variant", SKU: "SKU-1", ProductRefName: "product",
+					ResourceVersion: "1", CreationTimestamp: time.Now(),
+				})
+			},
+		},
+		{
+			name: "CategoryTaxonomy",
+			create: func(ctx context.Context, store datastore.Datastore, repo *datastore.Repository) error {
+				return store.CreateCategoryTaxonomy(ctx, &datastore.CategoryTaxonomy{
+					UID: "01960000-0000-7000-8000-000000000103", Namespace: repo.Namespace,
+					RepositoryID: repo.UID, Name: "category", ResourceVersion: "1", CreationTimestamp: time.Now(),
+				})
+			},
+		},
+		{
+			name: "Collection",
+			create: func(ctx context.Context, store datastore.Datastore, repo *datastore.Repository) error {
+				return store.CreateCollection(ctx, &datastore.Collection{
+					UID: "01960000-0000-7000-8000-000000000104", Namespace: repo.Namespace,
+					RepositoryID: repo.UID, Name: "collection", ResourceVersion: "1", CreationTimestamp: time.Now(),
+				})
+			},
+		},
+		{
+			name: "File",
+			create: func(ctx context.Context, store datastore.Datastore, repo *datastore.Repository) error {
+				return store.CreateFile(ctx, &datastore.File{
+					UID: "01960000-0000-7000-8000-000000000105", Namespace: repo.Namespace,
+					RepositoryID: repo.UID, Name: "file", ResourceVersion: "1", CreationTimestamp: time.Now(),
+				})
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			writer := &mockGitWriter{}
+			svc := newTestSvc(t, writer)
+			ctx := t.Context()
+			namespace := "01960000-0000-7000-8000-000000000201"
+			require.NoError(t, svcStore(t, svc).CreateNamespace(ctx, &datastore.Namespace{
+				ID: namespace, Name: "repo-block-" + tt.name, Tier: datastore.NamespaceTierUser,
+				CreationActor: "test", UpdateActor: "test",
+			}))
+			repo, err := svc.CreateRepository(ctx, namespace, "catalog", "main", "default", "test-user")
+			require.NoError(t, err)
+			require.NoError(t, tt.create(ctx, svcStore(t, svc), repo))
+
+			err = svc.DeleteRepository(ctx, repo.UID, "test-user")
+			require.ErrorContains(t, err, "contains catalog resources and cannot be deleted")
+			_, err = svcStore(t, svc).GetRepository(ctx, repo.UID)
+			require.NoError(t, err, "blocked deletion must preserve the owner")
+			writer.mu.Lock()
+			defer writer.mu.Unlock()
+			assert.Empty(t, writer.deleteRepoCalls, "blocked deletion must not cascade into storage deletion")
+		})
+	}
+}
+
 // ── LookupNamespaceByRepoID ───────────────────────────────────────────────────
 
 func TestLookupNamespaceByRepoID_returnsMapping(t *testing.T) {

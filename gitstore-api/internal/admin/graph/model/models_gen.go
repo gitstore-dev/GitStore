@@ -775,6 +775,10 @@ type ObjectMetaInput struct {
 	Annotations map[string]any `json:"annotations,omitempty"`
 }
 
+// A system-managed relationship to another resource. When
+// blockOwnerDeletion is true, the referenced owner cannot be deleted while this
+// resource exists. When false, the owner may be deleted and this resource
+// survives as an orphan. Neither value cascades deletion.
 type OwnerReference struct {
 	APIVersion         string `json:"apiVersion"`
 	Kind               string `json:"kind"`
@@ -1323,9 +1327,9 @@ type ResolvedRepositoryDefinition struct {
 	StorageClass string `json:"storageClass"`
 }
 
-// The resource's current owner subject. Distinct from
-// OwnerReference, which is an unrelated Kubernetes-style dependent/cascade-
-// delete relationship, not a principal-ownership one.
+// The resource's current authorization owner subject. This is distinct from
+// ownerReferences, which describe system-managed relationships between
+// resources.
 type ResourceOwner struct {
 	Kind OwnerKind `json:"kind"`
 	Name string    `json:"name"`

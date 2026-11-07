@@ -229,3 +229,42 @@ func TestOwnerReferenceProjectionCapsProductPagesAndIgnoresLegacyRecords(t *test
 	assert.Len(t, page.Items, datastore.MaxOwnerDependentPageSize)
 	assert.NotEmpty(t, page.NextCursor)
 }
+
+func TestCollectionOwnerReferenceProjectionCreateUpdateAndDelete(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	owners := store.(datastore.OwnerReferenceStore)
+	ctx := context.Background()
+	scope := datastore.OwnerReferenceScope{Namespace: "acme", RepositoryID: "owner-repo"}
+	ownerUID := "00000000-0000-0000-0000-000000000300"
+	references, err := json.Marshal([]catalog.OwnerReference{{
+		APIVersion: "gitstore.dev/v1beta1", Kind: "Repository",
+		Name: "catalog", UID: ownerUID, BlockOwnerDeletion: true, RepositoryID: scope.RepositoryID,
+	}})
+	require.NoError(t, err)
+	collection := &datastore.Collection{
+		UID: "00000000-0000-0000-0000-000000000301", Namespace: scope.Namespace,
+		RepositoryID: "dependent-repo", Name: "sale", ResourceVersion: "1",
+		CreationTimestamp: time.Now(), OwnerReferences: references,
+	}
+	require.NoError(t, store.CreateCollection(ctx, collection))
+
+	blocked, err := owners.HasBlockingOwnerDependents(ctx, scope, ownerUID)
+	require.NoError(t, err)
+	assert.True(t, blocked, "Collection create must publish its owner-reference projection")
+
+	collection.ResourceVersion = "2"
+	collection.OwnerReferences = nil
+	require.NoError(t, store.UpdateCollection(ctx, collection, "1"))
+	blocked, err = owners.HasBlockingOwnerDependents(ctx, scope, ownerUID)
+	require.NoError(t, err)
+	assert.False(t, blocked, "Collection update must remove obsolete owner projections")
+
+	collection.ResourceVersion = "3"
+	collection.OwnerReferences = references
+	require.NoError(t, store.UpdateCollection(ctx, collection, "2"))
+	require.NoError(t, store.DeleteCollection(ctx, collection.UID))
+	blocked, err = owners.HasBlockingOwnerDependents(ctx, scope, ownerUID)
+	require.NoError(t, err)
+	assert.False(t, blocked, "Collection delete must remove owner projections")
+}

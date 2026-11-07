@@ -814,7 +814,7 @@ func (s *Server) ValidateResourceDeletions(
 						zap.String("owner_uid", owner.UID),
 						zap.String("cursor", cursor),
 						zap.Error(listErr))
-					return nil, grpcstatus.Error(codes.Unavailable, "category deletion validation unavailable")
+					return nil, ownerReferenceValidationUnavailable("category", listErr)
 				}
 				for _, dependent := range page.Items {
 					if !proposedCategoryReleasesParent(proposedEntries, dependent, operation.identity.Name) {
@@ -847,7 +847,7 @@ func (s *Server) ValidateResourceDeletions(
 			for {
 				page, listErr := owners.ListBlockingOwnerDependents(ctx, datastore.OwnerReferenceScope{Namespace: owner.Namespace, RepositoryID: owner.RepositoryID}, owner.UID, cursor, datastore.MaxOwnerDependentPageSize)
 				if listErr != nil {
-					return nil, grpcstatus.Error(codes.Unavailable, "Product deletion validation unavailable")
+					return nil, ownerReferenceValidationUnavailable("Product", listErr)
 				}
 				for _, dependent := range page.Items {
 					if !proposedProductVariantReleasesParent(proposedEntries, dependent, operation.identity.Name) {
@@ -863,6 +863,14 @@ func (s *Server) ValidateResourceDeletions(
 	}
 
 	return &catalogv1.ValidateResourceDeletionsResponse{Accepted: true}, nil
+}
+
+func ownerReferenceValidationUnavailable(resource string, err error) error {
+	message := fmt.Sprintf("%s deletion validation unavailable", resource)
+	if errors.Is(err, datastore.ErrProjectionNotReady) {
+		message += ": dependency projection is not ready"
+	}
+	return grpcstatus.Error(codes.Unavailable, message)
 }
 
 func proposedCategoryReleasesParent(entries []*parsedEntry, dependent datastore.OwnerDependent, deletedParent string) bool {
@@ -2108,6 +2116,53 @@ func (s *Server) resolvedCategoryOwnerReferences(ctx context.Context, namespace 
 	return references
 }
 
+func (s *Server) withRepositoryOwnerReference(ctx context.Context, repositoryID string, raw json.RawMessage) (json.RawMessage, error) {
+	repository, err := s.store.GetRepository(ctx, repositoryID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve repository owner reference %q: %w", repositoryID, err)
+	}
+	if repository.UID == "" || repository.Name == "" {
+		return nil, fmt.Errorf("resolve repository owner reference %q: repository identity is incomplete", repositoryID)
+	}
+
+	var references []catalog.OwnerReference
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &references); err != nil {
+			return nil, fmt.Errorf("decode existing owner references: %w", err)
+		}
+	}
+
+	// Repository ownership follows the resource's admitted Git provenance.
+	// Replace stale or duplicate Repository edges in place while preserving
+	// unrelated system-managed references and their order.
+	merged := make([]catalog.OwnerReference, 0, len(references))
+	repositoryReference := catalog.OwnerReference{
+		APIVersion: "gitstore.dev/v1beta1", Kind: "Repository",
+		Name: repository.Name, UID: repository.UID, BlockOwnerDeletion: true,
+		RepositoryID: repository.UID,
+	}
+	repositoryReferenceAdded := false
+	for _, reference := range references {
+		if reference.Kind == "Repository" {
+			if !repositoryReferenceAdded {
+				merged = append(merged, repositoryReference)
+				repositoryReferenceAdded = true
+			}
+			continue
+		}
+		merged = append(merged, reference)
+	}
+	if !repositoryReferenceAdded {
+		merged = append(merged, repositoryReference)
+	}
+
+	result, err := json.Marshal(merged)
+	if err != nil {
+		return nil, fmt.Errorf("marshal repository owner reference: %w", err)
+	}
+	return result, nil
+}
+
 // ResolvedCategoryOwnerReferences resolves reference (by name, scoped to
 // namespace) against store and returns the CategoryTaxonomy-kind
 // OwnerReferences JSON payload it implies. It returns an empty array (never
@@ -2454,6 +2509,11 @@ func (s *Server) admitFile(
 	if namespace == "" {
 		namespace = admCtx.Namespace
 	}
+	ownerReferences, err := s.withRepositoryOwnerReference(ctx, admCtx.RepositoryID, nil)
+	if err != nil {
+		s.log.Error("admit_resources: resolve File repository owner failed", zap.Error(err))
+		return
+	}
 	existing, _ := rawExisting.(*datastore.File)
 	if existing == nil || op == admission.OperationCreate {
 		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
@@ -2464,7 +2524,8 @@ func (s *Server) admitFile(
 			UID: uid, Namespace: namespace, Name: resource.Metadata.Name,
 			APIVersion: resource.APIVersion, Kind: resource.Kind,
 			Labels: cloneStringMap(resource.Metadata.Labels), Annotations: cloneStringMap(resource.Metadata.Annotations),
-			Generation: 1, ResourceVersion: "1", CreationTimestamp: admCtx.Now,
+			OwnerReferences: ownerReferences,
+			Generation:      1, ResourceVersion: "1", CreationTimestamp: admCtx.Now,
 			CreationActor: admCtx.ActorSubject, UpdateActor: admCtx.ActorSubject, UpdateTimestamp: admCtx.Now,
 			Revision: admCtx.Revision, RepositoryID: admCtx.RepositoryID, SourcePath: sourcePath,
 			GitCommitSHA: admCtx.CommitSHA, GitRef: admCtx.RefName, Spec: specJSON, Body: string(body),
@@ -2504,7 +2565,8 @@ func (s *Server) admitFile(
 			!reflect.DeepEqual(existing.Annotations, cloneStringMap(resource.Metadata.Annotations))
 		changedProvenance := existing.RepositoryID != admCtx.RepositoryID || existing.SourcePath != sourcePath ||
 			existing.GitCommitSHA != admCtx.CommitSHA || existing.GitRef != admCtx.RefName
-		if !changedSpecBody && !changedMetadata && !changedProvenance {
+		changedOwnerReferences := !bytes.Equal(existing.OwnerReferences, ownerReferences)
+		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedOwnerReferences {
 			return
 		}
 		if existingSpecContentType(existing.Spec) != resource.Spec.ContentType {
@@ -2520,6 +2582,7 @@ func (s *Server) admitFile(
 		existing.Labels, existing.Annotations = cloneStringMap(resource.Metadata.Labels), cloneStringMap(resource.Metadata.Annotations)
 		existing.Generation, existing.ResourceVersion = gen, nextResourceVersion(expectedResourceVersion)
 		existing.Revision, existing.RepositoryID, existing.SourcePath = admCtx.Revision, admCtx.RepositoryID, sourcePath
+		existing.OwnerReferences = ownerReferences
 		existing.UpdateActor, existing.UpdateTimestamp = admCtx.ActorSubject, admCtx.Now
 		existing.GitCommitSHA, existing.GitRef, existing.Spec, existing.Body = admCtx.CommitSHA, admCtx.RefName, specJSON, string(body)
 		existing.Status = fileAdmissionStatus(gen, admCtx.Revision, admCtx.Now)
@@ -2608,7 +2671,11 @@ func (s *Server) admitProduct(
 		}
 		op = admission.OperationCreate
 	}
-	ownerReferences := s.resolvedCategoryOwnerReferences(ctx, namespace, resource.Spec.CategoryRef, false)
+	ownerReferences, err := s.withRepositoryOwnerReference(ctx, admCtx.RepositoryID,
+		s.resolvedCategoryOwnerReferences(ctx, namespace, resource.Spec.CategoryRef, false))
+	if err != nil {
+		return failed(fmt.Errorf("resolve Product owner references: %w", err))
+	}
 
 	if d, denied := s.chain.Admit(ctx, admission.AdmissionRequest{
 		Object:    resource,
@@ -2795,6 +2862,10 @@ func (s *Server) admitCollection(
 	if namespace == "" {
 		namespace = admCtx.Namespace
 	}
+	ownerReferences, err := s.withRepositoryOwnerReference(ctx, admCtx.RepositoryID, nil)
+	if err != nil {
+		return err
+	}
 
 	existing, _ := rawExisting.(*datastore.Collection)
 	var oldObject any
@@ -2848,6 +2919,7 @@ func (s *Server) admitCollection(
 			Kind:              resource.Kind,
 			Labels:            resource.Metadata.Labels,
 			Annotations:       resource.Metadata.Annotations,
+			OwnerReferences:   ownerReferences,
 			Generation:        1,
 			ResourceVersion:   "1",
 			CreationTimestamp: admCtx.Now,
@@ -2875,7 +2947,8 @@ func (s *Server) admitCollection(
 			!reflect.DeepEqual(existing.Annotations, resource.Metadata.Annotations)
 		changedProvenance := existing.RepositoryID != admCtx.RepositoryID ||
 			existing.SourcePath != sourcePath
-		if !changedSpecBody && !changedMetadata && !changedProvenance {
+		changedOwnerReferences := !bytes.Equal(existing.OwnerReferences, ownerReferences)
+		if !changedSpecBody && !changedMetadata && !changedProvenance && !changedOwnerReferences {
 			return nil
 		}
 		gen := existing.Generation
@@ -2886,6 +2959,7 @@ func (s *Server) admitCollection(
 		existing.Kind = resource.Kind
 		existing.Labels = resource.Metadata.Labels
 		existing.Annotations = resource.Metadata.Annotations
+		existing.OwnerReferences = ownerReferences
 		existing.Generation = gen
 		expectedResourceVersion := existing.ResourceVersion
 		existing.ResourceVersion = nextResourceVersion(expectedResourceVersion)
@@ -2950,13 +3024,17 @@ func (s *Server) admitProductVariant(
 		}
 		op = admission.OperationCreate
 	}
-	ownerReferences, parentTerminating := s.resolvedProductVariantOwnerReferences(ctx, namespace, resource.Spec.ProductRef)
+	domainOwnerReferences, parentTerminating := s.resolvedProductVariantOwnerReferences(ctx, namespace, resource.Spec.ProductRef)
 	if parentTerminating {
 		s.log.Warn("admit_resources: product_variant targets terminating product",
 			zap.String("name", resource.Metadata.Name),
 			zap.String("namespace", namespace),
 			zap.String("product_ref", resource.Spec.ProductRef.Name))
 		return nil
+	}
+	ownerReferences, err := s.withRepositoryOwnerReference(ctx, admCtx.RepositoryID, domainOwnerReferences)
+	if err != nil {
+		return fmt.Errorf("resolve ProductVariant owner references: %w", err)
 	}
 
 	// Run admission chain; map resulting conditions back to variantAdmitResult.
@@ -3258,7 +3336,11 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 		}
 		// If parent not found: tentative root path stays as `name`.
 	}
-	ownerReferences := s.resolvedCategoryOwnerReferences(ctx, namespace, resource.Spec.ParentRef, true)
+	ownerReferences, err := s.withRepositoryOwnerReference(ctx, admCtx.RepositoryID,
+		s.resolvedCategoryOwnerReferences(ctx, namespace, resource.Spec.ParentRef, true))
+	if err != nil {
+		return failed(fmt.Errorf("resolve CategoryTaxonomy owner references: %w", err))
+	}
 
 	// Record the computed path immediately so that any sibling category later in
 	// this push's topological order sees the correct full path for this node,

@@ -271,9 +271,9 @@ enum OwnerKind {
 }
 
 """
-The resource's current owner subject. Distinct from
-OwnerReference, which is an unrelated Kubernetes-style dependent/cascade-
-delete relationship, not a principal-ownership one.
+The resource's current authorization owner subject. This is distinct from
+ownerReferences, which describe system-managed relationships between
+resources.
 """
 type ResourceOwner {
   kind: OwnerKind!

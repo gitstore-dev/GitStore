@@ -372,6 +372,12 @@ replacement with cursor-resumed recovery. Configure it with the
 `REPOSITORY_API_*`, `REPOSITORY_CONTROLLER_*`, `REPOSITORY_TOKEN[_FILE]`, and
 `REPOSITORY_CAPACITY_*` variables shown by `make help`. Diagnostic mode permits
 smaller experiments but never produces passing gate evidence.
+Sustained and burst arrivals follow absolute schedule times across the full
+offered window. Late arrivals are counted as missed schedules rather than
+replayed as catch-up work; missed schedules or an incomplete window fail the
+workload and are recorded separately from queue drops. Each mutation is sent
+once, so retries cannot disguise failed offered work; response capture is
+bounded and failure evidence omits response bodies.
 
 The managed alpha topology contains two APIs, one singleton Git service, two
 active-active controllers, and three Scylla nodes. The shared Git volume is not

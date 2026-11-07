@@ -1376,6 +1376,15 @@ func (s *scyllaDatastore) createCollection(ctx context.Context, c *datastore.Col
 				return s.deleteCollectionAuthoritative(ctx, row, row.ResourceVersion)
 			},
 		},
+		mutationAction{
+			Step: catalogueStep("create", "Collection", c.UID, ownerReferenceDependentsTable, c.UID, "write-owner-references"),
+			Apply: func(ctx context.Context) error {
+				return s.syncOwnerReferenceDependents(ctx, c.Namespace, c.RepositoryID, "Collection", c.UID, c.Name, c.ResourceVersion, nil, c.OwnerReferences)
+			},
+			Compensate: func(ctx context.Context) error {
+				return s.syncOwnerReferenceDependents(ctx, c.Namespace, c.RepositoryID, "Collection", c.UID, c.Name, c.ResourceVersion, c.OwnerReferences, nil)
+			},
+		},
 	)
 	if err != nil {
 		return fmt.Errorf("scylla: create collection: %w", err)
@@ -1531,6 +1540,18 @@ func (s *scyllaDatastore) updateCollection(ctx context.Context, c *datastore.Col
 				return s.reserveUID(ctx, "Collection", "collections_by_uid", row.Namespace, existingUID, row.CreationTimestamp)
 			},
 		},
+		mutationAction{
+			Step: catalogueStep("update", "Collection", c.UID, ownerReferenceDependentsTable, c.UID, "converge-owner-references"),
+			Apply: func(ctx context.Context) error {
+				if existing.RepositoryID != c.RepositoryID {
+					if err := s.syncOwnerReferenceDependents(ctx, c.Namespace, existing.RepositoryID, "Collection", c.UID, c.Name, existing.ResourceVersion, existing.OwnerReferences, nil); err != nil {
+						return err
+					}
+					return s.syncOwnerReferenceDependents(ctx, c.Namespace, c.RepositoryID, "Collection", c.UID, c.Name, c.ResourceVersion, nil, c.OwnerReferences)
+				}
+				return s.syncOwnerReferenceDependents(ctx, c.Namespace, c.RepositoryID, "Collection", c.UID, c.Name, c.ResourceVersion, existing.OwnerReferences, c.OwnerReferences)
+			},
+		},
 	)
 	if err != nil {
 		return fmt.Errorf("scylla: update collections_by_namespace: %w", err)
@@ -1571,6 +1592,15 @@ func (s *scyllaDatastore) deleteCollectionFenced(ctx context.Context, c *datasto
 		},
 	}
 	projections := []mutationAction{
+		{
+			Step: catalogueStep("delete", "Collection", uid, ownerReferenceDependentsTable, uid, "delete-owner-references"),
+			Apply: func(ctx context.Context) error {
+				return s.syncOwnerReferenceDependents(ctx, c.Namespace, c.RepositoryID, "Collection", c.UID, c.Name, c.ResourceVersion, c.OwnerReferences, nil)
+			},
+			Compensate: func(ctx context.Context) error {
+				return s.syncOwnerReferenceDependents(ctx, c.Namespace, c.RepositoryID, "Collection", c.UID, c.Name, c.ResourceVersion, nil, c.OwnerReferences)
+			},
+		},
 		{
 			Step: catalogueStep("delete", "Collection", uid, "collections_by_name", c.Namespace+"/"+c.Name, "delete-name"),
 			Apply: func(ctx context.Context) error {

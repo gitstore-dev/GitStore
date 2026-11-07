@@ -93,11 +93,140 @@ func newNamespace(tier datastore.NamespaceTier) *datastore.Namespace {
 	}
 }
 
+func runOwnerReferenceLifecycleContract(t *testing.T, ds datastore.Datastore) {
+	ctx := t.Context()
+	owners, ok := ds.(datastore.OwnerReferenceStore)
+	require.True(t, ok, "datastore must maintain owner-reference projections")
+
+	namespaceName := "owner-refs-" + newID()[:8]
+	namespaceUID := newID()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	encoded := func(refs ...catalog.OwnerReference) json.RawMessage {
+		raw, err := json.Marshal(refs)
+		require.NoError(t, err)
+		return raw
+	}
+	require.NoError(t, ds.CreateNamespace(ctx, &datastore.Namespace{
+		UID: namespaceUID, Name: namespaceName, CreationTimestamp: now,
+	}))
+	namespaceOwner := catalog.OwnerReference{
+		APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace",
+		Name: namespaceName, UID: namespaceUID, BlockOwnerDeletion: true,
+	}
+	repositoryUID := newID()
+	require.NoError(t, ds.CreateRepositoryInActiveNamespace(ctx, &datastore.Repository{
+		UID: repositoryUID, ID: repositoryUID, RepositoryID: repositoryUID,
+		Namespace: namespaceName, NamespaceID: namespaceName, Name: "catalog",
+		CreationTimestamp: now, OwnerReferences: encoded(namespaceOwner),
+	}))
+	repository, err := ds.GetRepository(ctx, repositoryUID)
+	require.NoError(t, err)
+	var repositoryOwners []catalog.OwnerReference
+	require.NoError(t, json.Unmarshal(repository.OwnerReferences, &repositoryOwners))
+	require.Contains(t, repositoryOwners, namespaceOwner)
+
+	repositoryOwner := catalog.OwnerReference{
+		APIVersion: "gitstore.dev/v1beta1", Kind: "Repository",
+		Name: "catalog", UID: repositoryUID, BlockOwnerDeletion: true, RepositoryID: repositoryUID,
+	}
+	parentUID, productUID := newID(), newID()
+	parentOwner := catalog.OwnerReference{
+		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "CategoryTaxonomy",
+		Name: "parent", UID: parentUID, BlockOwnerDeletion: true, RepositoryID: repositoryUID,
+	}
+	productOwner := catalog.OwnerReference{
+		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "Product",
+		Name: "parent-product", UID: productUID, BlockOwnerDeletion: true, RepositoryID: repositoryUID,
+	}
+	categoryProductOwner := parentOwner
+	categoryProductOwner.BlockOwnerDeletion = false
+
+	product := &datastore.Product{
+		UID: newID(), Namespace: namespaceName, RepositoryID: repositoryUID,
+		Name: "parent-product", ResourceVersion: "1", CreationTimestamp: now,
+		OwnerReferences: encoded(repositoryOwner, categoryProductOwner),
+	}
+	require.NoError(t, ds.CreateProduct(ctx, product))
+	variant := &datastore.ProductVariant{
+		UID: newID(), Namespace: namespaceName, RepositoryID: repositoryUID,
+		Name: "variant-" + newID()[:8], SKU: "sku-" + newID()[:8],
+		ProductRefName: product.Name, ResourceVersion: "1", CreationTimestamp: now,
+		OwnerReferences: encoded(repositoryOwner, productOwner),
+	}
+	require.NoError(t, ds.CreateProductVariant(ctx, variant))
+	child := &datastore.CategoryTaxonomy{
+		UID: newID(), Namespace: namespaceName, RepositoryID: repositoryUID,
+		Name: "child-" + newID()[:8], ResourceVersion: "1", CreationTimestamp: now,
+		OwnerReferences: encoded(repositoryOwner, parentOwner),
+	}
+	require.NoError(t, ds.CreateCategoryTaxonomy(ctx, child))
+	collection := &datastore.Collection{
+		UID: newID(), Namespace: namespaceName, RepositoryID: repositoryUID,
+		Name: "collection-" + newID()[:8], ResourceVersion: "1", CreationTimestamp: now,
+		OwnerReferences: encoded(repositoryOwner),
+	}
+	require.NoError(t, ds.CreateCollection(ctx, collection))
+	file := &datastore.File{
+		UID: newID(), Namespace: namespaceName, RepositoryID: repositoryUID,
+		Name: "file-" + newID()[:8], ResourceVersion: "1", CreationTimestamp: now,
+		OwnerReferences: encoded(repositoryOwner),
+	}
+	require.NoError(t, ds.CreateFile(ctx, file))
+
+	scope := datastore.OwnerReferenceScope{Namespace: namespaceName, RepositoryID: repositoryUID}
+	for _, ownerUID := range []string{repositoryUID, productUID, parentUID} {
+		blocked, err := owners.HasBlockingOwnerDependents(ctx, scope, ownerUID)
+		require.NoError(t, err)
+		assert.True(t, blocked, "owner %s must have its blocking dependents projected", ownerUID)
+	}
+
+	var repositoryDependents []datastore.OwnerDependent
+	cursor := ""
+	for {
+		page, err := owners.ListBlockingOwnerDependents(ctx, scope, repositoryUID, cursor, 2)
+		require.NoError(t, err)
+		repositoryDependents = append(repositoryDependents, page.Items...)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	assert.Len(t, repositoryDependents, 5, "Repository ownership must cover every catalog kind and use bounded pages")
+
+	nonBlocking, err := owners.ListNonBlockingProductOwnerDependents(ctx, scope, parentUID, "", 1)
+	require.NoError(t, err)
+	require.Len(t, nonBlocking.Items, 1)
+	assert.Equal(t, product.UID, nonBlocking.Items[0].DependentUID)
+
+	product.OwnerReferences = encoded(categoryProductOwner)
+	product.ResourceVersion = "2"
+	require.NoError(t, ds.UpdateProduct(ctx, product, "1"))
+	repositoryDependents, cursor = nil, ""
+	for {
+		page, err := owners.ListBlockingOwnerDependents(ctx, scope, repositoryUID, cursor, 2)
+		require.NoError(t, err)
+		repositoryDependents = append(repositoryDependents, page.Items...)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	assert.Len(t, repositoryDependents, 4, "removing one owner edge must not remove other dependents' edges")
+	nonBlocking, err = owners.ListNonBlockingProductOwnerDependents(ctx, scope, parentUID, "", 1)
+	require.NoError(t, err)
+	require.Len(t, nonBlocking.Items, 1)
+	assert.Equal(t, product.UID, nonBlocking.Items[0].DependentUID, "updating one edge must preserve the unrelated non-blocking owner")
+}
+
 // RunContractSuite runs the full contract suite against any Datastore implementation.
 // Callers should pass a freshly initialised, empty store.
 func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	t.Helper()
 	ctx := context.Background()
+
+	t.Run("OwnerReferenceLifecycle", func(t *testing.T) {
+		runOwnerReferenceLifecycleContract(t, ds)
+	})
 
 	t.Run("Product/OwnerCAS", func(t *testing.T) {
 		original := &datastore.Product{UID: newID(), Namespace: "cas-ns", Name: "cas-" + newID()[:8], ResourceVersion: "1", CreationTimestamp: time.Now(), Annotations: map[string]string{"gitstore.dev/owner": "alice"}, Body: "original"}
@@ -133,6 +262,7 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 				results <- ds.UpdateProduct(ctx, &contender, "2")
 			}()
 		}
+
 		close(start)
 		winners := 0
 		for range 8 {

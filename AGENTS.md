@@ -73,6 +73,7 @@ applicable instruction file rather than growing this root file.
 <!-- SPECKIT START -->
 For feature-specific technologies, structure and implementation context, read
 the applicable plan; the current planning reference is
-`specs/070-admin-storefront-split/plan.md`. Planning history and technology
-baselines belong in `specs/AGENTS.md`, not this repository-wide entry point.
+`specs/054-repository-ownerreferences-backfill/plan.md`. Planning history and
+technology baselines belong in `specs/AGENTS.md`, not this repository-wide
+entry point.
 <!-- SPECKIT END -->
