@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
@@ -137,25 +138,38 @@ func (s *scyllaDatastore) ListBlockingOwnerDependents(ctx context.Context, scope
 	if limit > datastore.MaxOwnerDependentPageSize {
 		limit = datastore.MaxOwnerDependentPageSize
 	}
-	stmt := `SELECT dependent_uid, dependent_kind, name, resource_version FROM owner_reference_dependents WHERE namespace=? AND repository_id=? AND owner_uid=? AND block_owner_deletion=?`
-	args := []any{scope.Namespace, scope.RepositoryID, ownerUID, true}
-	if after != "" {
-		stmt += " AND dependent_uid > ?"
-		args = append(args, after)
-	}
-	stmt += " LIMIT ?"
-	args = append(args, limit+1)
 	var rows []ownerReferenceDependentRow
-	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&rows); err != nil {
-		return datastore.OwnerDependentPage{}, fmt.Errorf("scylla: list blocking owner dependents: %w", err)
+	for _, kind := range []string{"CategoryTaxonomy", "Collection", "File", "Product", "ProductVariant"} {
+		stmt := `SELECT dependent_uid, dependent_kind, name, resource_version
+			FROM owner_reference_dependents
+			WHERE namespace=? AND repository_id=? AND owner_uid=? AND block_owner_deletion=?
+			AND dependent_kind=?`
+		args := []any{scope.Namespace, scope.RepositoryID, ownerUID, true, kind}
+		if after != "" {
+			stmt += " AND dependent_uid > ?"
+			args = append(args, after)
+		}
+		stmt += " LIMIT ?"
+		args = append(args, limit+1)
+		var kindRows []ownerReferenceDependentRow
+		if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(args...).SelectRelease(&kindRows); err != nil {
+			return datastore.OwnerDependentPage{}, fmt.Errorf("scylla: list blocking owner dependents: %w", err)
+		}
+		rows = append(rows, kindRows...)
 	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].DependentUID == rows[j].DependentUID {
+			return rows[i].DependentKind < rows[j].DependentKind
+		}
+		return rows[i].DependentUID < rows[j].DependentUID
+	})
 	page := datastore.OwnerDependentPage{Items: make([]datastore.OwnerDependent, 0, len(rows))}
+	if len(rows) > limit {
+		page.NextCursor = rows[limit-1].DependentUID
+		rows = rows[:limit]
+	}
 	for _, row := range rows {
 		page.Items = append(page.Items, datastore.OwnerDependent{DependentUID: row.DependentUID, DependentKind: row.DependentKind, Name: row.Name, ResourceVersion: row.ResourceVersion})
-	}
-	if len(page.Items) > limit {
-		page.Items = page.Items[:limit]
-		page.NextCursor = page.Items[len(page.Items)-1].DependentUID
 	}
 	return page, nil
 }
