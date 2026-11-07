@@ -21,55 +21,6 @@ AI agents are becoming capable enough to modify commercial content, but business
 
 GitStore applies those primitives to commerce catalogues, then exposes the admitted catalogue state through headless APIs. The timing is right because headless commerce, GitOps, and AI-assisted operations are converging.
 
-## Architecture
-
-```mermaid
-graph TD
-    GitClient["Git client\n(CLI / agent)"]
-    Storefront["Storefront"]
-    OtherClients["Other GraphQL clients"]
-    Controller["gitstore-controller-manager"]
-
-    API["gitstore-api\nGraphQL: 4000\nGit Smart HTTP: 9000 (host)\nCatalogService gRPC: 6000"]
-    GitService["gitstore-git-service\ngRPC Git storage/transport: 50051"]
-    Datastore["Datastore\nmemdb / ScyllaDB"]
-    Repos["Bare Git repositories\nlocal filesystem"]
-
-    GitClient -->|"git clone / fetch / push\nSmart HTTP"| API
-    Storefront -->|"GraphQL"| API
-    OtherClients -->|"GraphQL"| API
-    Controller -->|"GraphQL reconcile/status traffic"| API
-
-    API -->|"GitService gRPC"| GitService
-    GitService -->|"CatalogService gRPC\nvalidate/admit resources"| API
-    API --> Datastore
-    GitService --> Repos
-```
-
-## Components
-
-- **`gitstore-api`**: Go service that exposes GraphQL, API-fronted Git Smart HTTP, and the CatalogService gRPC hook/admission endpoint.
-- **`gitstore-git-service`**: Rust service that owns bare Git repository storage and the gRPC Git transport primitives used by the API.
-- **`gitstore-controller-manager`**: Go controller runtime that reconciles through the API and exposes health, metrics, and poison-item endpoints.
-
-The API, controller manager, and Git service are the three core services.
-Use `make compose OBSERVABILITY=otel` for collector-routed metrics, logs and
-traces with local Prometheus, Loki and Tempo. See
-[telemetry configuration](docs/configuration.md#collector-routed-telemetry).
-API/controller features must verify concurrent-replica behavior; this is not a
-blanket claim of production HA. **Git service is stateful and singleton-only**
-until repository sharding, placement-aware routing and writer safety are
-implemented. Git replacement must retain storage without overlapping writers.
-Production features must preserve pluggable multi-user
-authentication and authorization, catalogue operation at millions-of-products
-scale, and sustained Git push throughput.
-
-See the module READMEs for boundaries and commands:
-
-- [gitstore-api/README.md](gitstore-api/README.md)
-- [gitstore-git-service/README.md](gitstore-git-service/README.md)
-- [gitstore-controller-manager/README.md](gitstore-controller-manager/README.md)
-
 ## Why This Works Well for Developers and AI Agents
 
 - **Markdown-native catalogue authoring**: Catalogue resources are easy to create and edit as text files.
@@ -77,55 +28,20 @@ See the module READMEs for boundaries and commands:
 - **Automation-friendly**: AI agents can generate and update catalogue content through file operations and standard Git pushes.
 - **Operational safety**: Blocking pre-receive validation returns clear structural errors, while post-receive admission projects only valid catalog resources into GraphQL and skips stale or conflicting writes.
 
-## Quick Start
+## Try GitStore
 
-Run the core stack from the repository root:
-
-```bash
-make compose DETACH=1
-make ps
-```
-
-Use `make compose` without `DETACH=1` to keep the compose stack in the foreground. After the API is healthy, create a starter namespace and repository:
-
-```bash
-make bootstrap TARGET=all ADMIN_PASSWORD=<admin-password>
-```
-
-The bootstrap command prints a clone URL similar to:
-
-```text
-http://localhost:9000/gitstore-test/catalog.git
-```
-
-See the [user guide](docs/user-guide.md) for the complete Docker workflow, catalogue push examples, GraphQL queries, and troubleshooting.
+Follow the [GitStore Quickstart](https://github.com/gitstore-dev/quickstart)
+for a guided, hands-on evaluation.
 
 ## Documentation
 
-For DigitalOcean infrastructure without Kubernetes, see the
-[OpenTofu provisioning runbook](docs/runbooks/digitalocean-provisioning.md).
-It provisions hosts, networking and storage; application deployment and
-production acceptance remain separate operations.
-
-- **User Guide**: [docs/user-guide.md](docs/user-guide.md)
-- **Developer Guide**: [docs/developer-guide.md](docs/developer-guide.md)
-- **Architecture**: [docs/architecture/](docs/architecture/README.md)
-- **Resource Envelope Storage Groups**: [docs/storage-groups/](docs/storage-groups/README.md)
-- **Operations and Recovery**: [docs/runbooks/](docs/runbooks/README.md)
-- **API Reference**: [docs/api-reference.md](docs/api-reference.md)
-- **Configuration**: [docs/configuration.md](docs/configuration.md)
-- **Storefront**: [docs/storefront.md](docs/storefront.md)
-- **GraphQL Contracts**: [shared/schemas/](shared/schemas/)
+For more detail, see the [user guide](docs/user-guide.md),
+[architecture overview](docs/architecture/README.md), and
+[API reference](docs/api-reference.md).
 
 ## Contributing
 
-See the [developer guide](docs/developer-guide.md#development-setup) for local development, code generation, tests, and PR readiness checks.
-
-Before creating a PR, run:
-
-```bash
-make pr-ready
-```
+See the [developer guide](docs/developer-guide.md) for contributing.
 
 ## License
 

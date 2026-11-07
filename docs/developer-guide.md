@@ -209,6 +209,41 @@ controller private key as the API issuer key.
 enrollment; the manual sequence above is for separately started native services.
 Compose keeps its credentials in dedicated volumes, separate from native files.
 
+### Private profiling
+
+The API and controller expose opt-in `pprof` listeners for local diagnostics.
+They are disabled by default; do not enable them in production. Set
+`api.profiling.uri` or `controller.profiling.uri` to a plain HTTP URI with an
+explicit loopback IP and nonzero port, using a separate port for each process.
+Hostnames, wildcard addresses, credentials, paths, query strings, and fragments
+are rejected.
+
+An enabled listener requires a separate token of 32–256 printable, non-space
+ASCII bytes. Provide it through `GITSTORE_API__PROFILING__TOKEN` or
+`GITSTORE_CONTROLLER__PROFILING__TOKEN`; configure the corresponding URI with
+`GITSTORE_API__PROFILING__URI` or
+`GITSTORE_CONTROLLER__PROFILING__URI`. Requests require exactly one
+`Authorization: Bearer <token>` header. The listener is not encrypted, so keep
+it on loopback and capture from inside the service's network namespace.
+
+Available GET routes include CPU profiles at
+`/debug/pprof/profile?seconds=1..60`, traces at
+`/debug/pprof/trace?seconds=1..5`, and binary heap, allocs, block, mutex, and
+goroutine profiles under `/debug/pprof/`. For example, with the API URI and
+token set in the environment:
+
+```sh
+umask 077
+printf 'Authorization: Bearer %s\n' "$GITSTORE_API__PROFILING__TOKEN" |
+  curl --fail --max-time 65 --header @- \
+    --output cpu.pprof \
+    "$GITSTORE_API__PROFILING__URI/debug/pprof/profile?seconds=30"
+```
+
+Profiles may contain runtime data. Keep them private, do not upload them to
+telemetry backends, and delete them after diagnosis. Disable profiling and
+restart the process when finished.
+
 ## Datastore Backends
 
 `gitstore-api` owns the application datastore abstraction.

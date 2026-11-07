@@ -266,6 +266,8 @@ notification provider, and the message reaches the local mail catcher.
   Kratos, selectable through configuration alongside the existing `none` and
   `static-users` UserDir providers, implementing the existing UserDir
   contract (lookup by subject, list groups, search, upsert, deactivate).
+  Selecting `static-users` as UserDir MUST NOT require `static-users` to also
+  be present in the AuthN chain.
 - **FR-002**: The UserDir provider MUST be independent of the AuthN and AuthZ
   providers: every AuthN provider (`static-users`, `oidc-jwt`,
   `serviceaccount-assertion`, `serviceaccount-jwt`, `anonymous`) combined with
@@ -291,10 +293,13 @@ notification provider, and the message reaches the local mail catcher.
   created.
 - **FR-007**: The resolved profile type MUST be available to authorization
   as an attribute and as the synthesized group `system:staff`,
-  `system:customers` or `system:serviceaccounts`. GitStore MUST admit
-  customers only on customer endpoints and staff/ServiceAccounts only on
-  operator endpoints; until the Admin/Storefront endpoint split exists,
-  customers are denied every management operation.
+  `system:customers` or `system:serviceaccounts`. At the existing
+  Admin/Storefront endpoint boundary, GitStore MUST admit staff and
+  ServiceAccount profiles on Admin/operator operations and customer profiles
+  only on Storefront/customer operations; customers MUST be denied all
+  management operations. This feature does not change endpoint availability:
+  until the Storefront prerequisites in ADR-0012 are met, Storefront requests
+  continue to receive its `STOREFRONT_UNAVAILABLE` response.
 - **FR-008**: ServiceAccount-schema identities MUST have no credentials and
   have every login, recovery and verification flow disabled.
 - **FR-009**: GitStore's ServiceAccount record is authoritative for keys, UID
@@ -351,9 +356,11 @@ notification provider, and the message reaches the local mail catcher.
 - **FR-019**: The reference stack MUST ship example groups (`merchandiser`,
   `catalog-viewer`) bound to spec 064's `edit`/`view` roles in the bootstrap
   namespace.
-- **FR-020**: `static-users` remains the local default UserDir; documentation
-  MUST describe mixed combinations (e.g. `static-users` AuthN + Kratos
-  UserDir) and `make compose IDENTITY=oidc`.
+- **FR-020**: `none` remains the default UserDir provider. `static-users` MUST
+  remain available as a local UserDir provider when explicitly selected,
+  independently of the configured AuthN chain. Documentation MUST describe
+  mixed combinations (e.g. `static-users` AuthN + Kratos UserDir) and
+  `make compose IDENTITY=oidc`.
 
 **Mail delivery and notification readiness**
 
@@ -444,9 +451,11 @@ notification provider, and the message reaches the local mail catcher.
 - Kratos is the first production UserDir provider; other providers implement
   the same contract later. Hydra and `gitstore-oidc-bridge` remain one
   possible AuthN path, not a requirement of this provider.
-- Customer commerce profiles (#28), the storefront sign-in UI, a production
-  notification provider and the Admin/Storefront endpoint split are out of
-  scope.
+- Customer commerce profiles (#28), the storefront sign-in UI and a production
+  notification provider are out of scope. ADR-0012 already provides the
+  Admin/Storefront endpoint split; this feature applies profile-based
+  admission to those endpoints without changing their availability or
+  behavior otherwise.
 - A person who is both staff and customer holds two identities.
 - Email uniqueness is per profile type.
 - 5-minute freshness for groups and deactivation is acceptable for alpha.
