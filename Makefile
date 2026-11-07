@@ -24,12 +24,12 @@ lint:
 	pnpm --dir $(ADMIN) lint
 test:
 ifeq ($(TARGET),e2e)
-	pnpm --dir $(ADMIN) test:e2e
+	pnpm --dir $(ADMIN) test:e2e $(E2E_ARGS)
 else ifeq ($(TARGET),unit)
 	pnpm --dir $(ADMIN) test
 else
 	pnpm --dir $(ADMIN) test
-	pnpm --dir $(ADMIN) test:e2e
+	pnpm --dir $(ADMIN) test:e2e $(E2E_ARGS)
 endif
 check:
 	pnpm --dir $(ADMIN) typecheck
