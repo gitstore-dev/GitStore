@@ -323,54 +323,6 @@
 .emptyActivity small {
   font-size: 11px;
 }
-.firstUse {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 28px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  border-radius: 4px;
-  padding: 36px;
-  margin-bottom: 40px;
-}
-.firstUseArt {
-  width: 130px;
-  height: 140px;
-  border: 1px solid var(--line);
-  background: var(--hover);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 12px;
-  color: var(--ink);
-}
-.firstUseArt svg {
-  color: var(--link);
-}
-.firstUseArt span {
-  font: 8px var(--mono);
-  letter-spacing: 0.08em;
-}
-.firstUse h2 {
-  font: 500 36px/1.05 var(--display);
-  letter-spacing: -0.6px;
-  margin: 14px 0 16px;
-}
-.firstUse p {
-  max-width: 420px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.8;
-  margin: 0;
-}
-.firstUseActions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 20px;
-  align-items: center;
-  margin-top: 24px;
-}
 .primaryLink {
   display: inline-flex;
   align-items: center;
@@ -549,12 +501,6 @@
 .confirmActions button {
   font-size: 11px;
 }
-@container (min-width: 650px) {
-  .firstUse {
-    grid-template-columns: 140px minmax(0, 1fr);
-    align-items: center;
-  }
-}
 @container (min-width: 760px) {
   .bottomGrid {
     grid-template-columns: 1.15fr 1fr;
@@ -563,9 +509,6 @@
 @media (max-width: 760px) {
   .setupSection {
     padding: 20px;
-  }
-  .firstUse {
-    padding: 26px 22px;
   }
   .healthTable th,
   .healthTable td {

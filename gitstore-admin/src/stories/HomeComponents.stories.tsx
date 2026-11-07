@@ -3,11 +3,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite'
 import { Boxes, CircleCheck, RefreshCw, TriangleAlert } from 'lucide-react'
 import { PreferencesProvider } from '../state/preferences'
 import type { Theme } from '../state/preferences'
-import {
-  HomePage,
-  HomePageHeader,
-  DemoNotice,
-} from '../features/home/shared/HomePage'
+import { HomePage, HomePageHeader } from '../features/home/shared/HomePage'
 import { ResourceCard, SummaryCard } from '../features/home/shared/HomeCards'
 import styles from '../features/home/shared/home.module.css'
 function HomeComponents({ theme = 'light' }: { theme?: Theme }) {
@@ -21,7 +17,6 @@ function HomeComponents({ theme = 'light' }: { theme?: Theme }) {
           description="Your store at a glance."
           onReset={() => setMessage('Demo reset requested.')}
         />
-        <DemoNotice page="Overview" />
         <section className={styles.metrics} aria-label="Summary card examples">
           <SummaryCard
             label="Total items"

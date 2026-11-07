@@ -1,3 +1,4 @@
+import { openDemoReset } from './home-interactions'
 import { test, expect } from '@playwright/test'
 import type { Page } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
@@ -19,7 +20,7 @@ async function editDraft(page: Page) {
     .getByRole('button', { name: 'Edit demo draft', exact: true })
     .click()
   await expect(
-    page.getByRole('textbox', { name: 'Product name', exact: true }),
+    page.getByRole('textbox', { name: 'Title', exact: true }),
   ).toBeFocused()
 }
 async function confirm(page: Page, name: string) {
@@ -58,7 +59,7 @@ test('My work counts, search, tab keyboard navigation and sorting use local fixt
     .click()
   await expect(page.getByRole('tabpanel').getByRole('article')).toHaveCount(2)
   await page.getByRole('button', { name: /Sort work/ }).click()
-  await page.getByRole('option', { name: 'Product name', exact: true }).click()
+  await page.getByRole('option', { name: 'Title', exact: true }).click()
   await expect(
     page.getByRole('tabpanel').getByRole('heading', { level: 2 }).first(),
   ).toHaveText(draftName)
@@ -76,9 +77,9 @@ test('draft editing validates, cancels, saves, previews and submits with confirm
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto(path)
   await editDraft(page)
-  const name = page.getByRole('textbox', { name: 'Product name', exact: true })
+  const name = page.getByRole('textbox', { name: 'Title', exact: true })
   await name.fill(' ')
-  await expect(page.getByText('Enter a product name.')).toBeVisible()
+  await expect(page.getByText('Enter a title.')).toBeVisible()
   await expect(
     page.getByRole('button', { name: 'Save demo draft' }),
   ).toBeDisabled()
@@ -108,7 +109,7 @@ test('draft editing validates, cancels, saves, previews and submits with confirm
       .last(),
   ).toBeFocused()
   await expect(
-    page.getByRole('region', { name: 'Product name change' }),
+    page.getByRole('region', { name: 'Title change' }),
   ).toContainText('BeforeKanso Stone BasinAfterKanso Stone Basin — Large')
   await page.getByRole('button', { name: 'Submit demo draft' }).click()
   const dialog = page.getByRole('dialog', { name: 'Submit demo draft?' })
@@ -138,13 +139,12 @@ test('dirty edits survive canceled tab, selection, close and reset actions', asy
   await page.goto(path)
   await editDraft(page)
   await page
-    .getByRole('textbox', { name: 'Product name', exact: true })
+    .getByRole('textbox', { name: 'Title', exact: true })
     .fill('Unsaved basin')
   for (const trigger of [
     tab(page, 'Submitted'),
     page.getByRole('button', { name: 'View details for Raw Silk Tunic' }),
     page.getByRole('button', { name: 'Close inspector' }),
-    page.getByRole('button', { name: 'Reset demo' }),
   ]) {
     await trigger.click()
     await page
@@ -152,10 +152,18 @@ test('dirty edits survive canceled tab, selection, close and reset actions', asy
       .getByRole('button', { name: 'Cancel', exact: true })
       .click()
     await expect(
-      page.getByRole('textbox', { name: 'Product name', exact: true }),
+      page.getByRole('textbox', { name: 'Title', exact: true }),
     ).toHaveValue('Unsaved basin')
     await expect(tab(page, 'Drafts')).toHaveAttribute('aria-selected', 'true')
   }
+  await openDemoReset(page)
+  await page
+    .getByRole('dialog', { name: 'Reset Home demo for Atelier Kyoto?' })
+    .getByRole('button', { name: 'Cancel', exact: true })
+    .click()
+  await expect(
+    page.getByRole('textbox', { name: 'Title', exact: true }),
+  ).toHaveValue('Unsaved basin')
   await page.getByRole('button', { name: 'Close inspector' }).click()
   await page
     .getByRole('dialog', { name: 'Discard unsaved edits?' })
@@ -169,7 +177,7 @@ test('dirty edits survive canceled tab, selection, close and reset actions', asy
   ).toBeFocused()
   await openDraft(page)
   await expect(
-    page.getByRole('textbox', { name: 'Product name', exact: true }),
+    page.getByRole('textbox', { name: 'Title', exact: true }),
   ).toHaveCount(0)
 })
 test('discard, approve and request changes update the proper lists and retain review outcomes', async ({
@@ -229,12 +237,15 @@ test('discard, approve and request changes update the proper lists and retain re
   await expect(
     page.getByRole('button', { name: 'Approve demo changes' }),
   ).toHaveCount(0)
-  await page.getByRole('button', { name: 'Reset demo' }).click()
-  await confirm(page, 'Reset My work demo?')
+  await openDemoReset(page)
+  await page
+    .getByRole('dialog', { name: 'Reset Home demo for Atelier Kyoto?' })
+    .getByRole('button', { name: 'Confirm demo reset' })
+    .click()
   await expect(tab(page, 'Drafts')).toHaveAccessibleName(/^Drafts 2\b/)
   await expect(tab(page, 'Completed')).toHaveAccessibleName(/^Completed 1\b/)
 })
-test('My work resets across routes, namespaces, reload and history without leaking into Overview', async ({
+test('My work persists across routes, namespaces and history; reload restores the demo', async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' })
@@ -254,17 +265,15 @@ test('My work resets across routes, namespaces, reload and history without leaki
     page.getByRole('button', { name: 'Edit demo draft', exact: true }),
   ).toHaveCount(0)
   await page.goBack()
-  await expect(tab(page, 'Drafts')).toHaveAccessibleName(/^Drafts 2\b/)
+  await expect(tab(page, 'Drafts')).toHaveAccessibleName(/^Drafts 1\b/)
   await page.getByRole('button', { name: /Workspace context/ }).click()
   await page.getByRole('option', { name: /Studio Berlin/ }).click()
   await expect(page).toHaveURL(/studio-berlin\/home\/my-work$/)
-  await expect(
-    page.getByRole('heading', { name: 'Your work starts here' }),
-  ).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'No work yet' })).toBeVisible()
   await expect(tab(page, 'Drafts')).toHaveAccessibleName(/^Drafts 0\b/)
   await page.getByRole('button', { name: /Workspace context/ }).click()
   await page.getByRole('option', { name: /Atelier Kyoto/ }).click()
-  await expect(tab(page, 'Drafts')).toHaveAccessibleName(/^Drafts 2\b/)
+  await expect(tab(page, 'Drafts')).toHaveAccessibleName(/^Drafts 1\b/)
   await page.reload()
   await expect(
     page.getByRole('heading', { name: 'My work', exact: true }),
@@ -277,13 +286,13 @@ test('Focus and responsive layouts preserve the local editor, remain accessible 
   await page.goto(path)
   await editDraft(page)
   await page
-    .getByRole('textbox', { name: 'Product name', exact: true })
+    .getByRole('textbox', { name: 'Title', exact: true })
     .fill('Focus basin')
   await page.getByRole('button', { name: 'Focus mode', exact: true }).click()
   await page.getByRole('button', { name: 'Exit Focus Mode' }).click()
   await page.getByRole('button', { name: 'Inspector', exact: true }).click()
   await expect(
-    page.getByRole('textbox', { name: 'Product name', exact: true }),
+    page.getByRole('textbox', { name: 'Title', exact: true }),
   ).toHaveValue('Focus basin')
   await page.screenshot({
     path: testInfo.outputPath('my-work-editing-inspector.png'),
@@ -295,7 +304,7 @@ test('Focus and responsive layouts preserve the local editor, remain accessible 
       page.getByRole('dialog', { name: 'Page context', exact: true }),
     ).toBeVisible()
     await expect(
-      page.getByRole('textbox', { name: 'Product name', exact: true }),
+      page.getByRole('textbox', { name: 'Title', exact: true }),
     ).toHaveValue('Focus basin')
     expect(await page.locator('#work-inspector-heading').count()).toBe(1)
     expect(
@@ -310,7 +319,7 @@ test('Focus and responsive layouts preserve the local editor, remain accessible 
     .getByRole('button', { name: 'Cancel', exact: true })
     .click()
   await expect(
-    page.getByRole('textbox', { name: 'Product name', exact: true }),
+    page.getByRole('textbox', { name: 'Title', exact: true }),
   ).toHaveValue('Focus basin')
   await page.getByRole('button', { name: 'Save demo draft' }).click()
   await page.screenshot({

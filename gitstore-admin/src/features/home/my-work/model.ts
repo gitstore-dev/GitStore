@@ -1,3 +1,5 @@
+import type { ItemSnapshot, RecoverableKind } from '../demo/snapshots'
+import { snapshotChanges, snapshotTitle } from '../demo/snapshots'
 export const workTabs = [
   'drafts',
   'submitted',
@@ -11,7 +13,7 @@ export const tabLabels: Record<WorkTab, string> = {
   assigned: 'Assigned to me',
   completed: 'Completed',
 }
-export type WorkSort = 'updated' | 'name'
+export type WorkSort = 'updated' | 'title'
 export type WorkScenario =
   | 'populated'
   | 'empty'
@@ -20,20 +22,48 @@ export type WorkScenario =
   | 'unavailable'
   | 'read-only'
 export interface ProductText {
-  name: string
-  description: string
+  spec: { title: string; description: string }
 }
-export interface WorkItem {
+interface WorkCommon {
+  resourceId: string
   id: string
   status: WorkTab
-  base: ProductText
-  proposed: ProductText
   author: string
   reviewer: string
   path: string
   updatedAt: string
-  outcome?: 'approved' | 'changes-requested'
   reviewNote?: string
+}
+export type WorkItem = WorkCommon &
+  (
+    | {
+        entryType: 'product-text'
+        base: ProductText
+        proposed: ProductText
+        resourceKind: 'Product'
+        outcome?: 'approved' | 'changes-requested'
+      }
+    | {
+        entryType: 'recovery'
+        resourceKind: RecoverableKind
+        status: 'completed'
+        outcome: 'restored'
+        recovery: {
+          before: ItemSnapshot
+          after: ItemSnapshot
+          sourceEventId: string
+        }
+      }
+  )
+export type ProductWorkItem = Extract<WorkItem, { entryType: 'product-text' }>
+export const workTitle = (item: WorkItem) =>
+  item.entryType === 'recovery'
+    ? snapshotTitle(item.recovery.after)
+    : item.proposed.spec.title
+export function workChangeCount(item: WorkItem) {
+  return item.entryType === 'recovery'
+    ? snapshotChanges(item.recovery.before, item.recovery.after, {}).length
+    : changedFields(item).length
 }
 export interface WorkState {
   items: readonly WorkItem[]
@@ -48,14 +78,17 @@ export function initialWork(items: readonly WorkItem[]): WorkState {
   return { items, revision: 0 }
 }
 export function validText(text: ProductText) {
-  return text.name.trim().length > 0
+  return text.spec.title.trim().length > 0
 }
 export function sameText(a: ProductText, b: ProductText) {
-  return a.name === b.name && a.description === b.description
+  return (
+    a.spec.title === b.spec.title && a.spec.description === b.spec.description
+  )
 }
 export function changedFields(item: WorkItem) {
-  return (['name', 'description'] as const).filter(
-    (field) => item.base[field] !== item.proposed[field],
+  if (item.entryType === 'recovery') return []
+  return (['title', 'description'] as const).filter(
+    (field) => item.base.spec[field] !== item.proposed.spec[field],
   )
 }
 export function workCounts(items: readonly WorkItem[]) {
@@ -77,12 +110,12 @@ export function workList(
     .filter(
       (item) =>
         item.status === tab &&
-        item.proposed.name.toLocaleLowerCase('en').includes(search),
+        workTitle(item).toLocaleLowerCase('en').includes(search),
     )
     .toSorted(
       (a, b) =>
-        (sort === 'name'
-          ? a.proposed.name.localeCompare(b.proposed.name, 'en')
+        (sort === 'title'
+          ? workTitle(a).localeCompare(workTitle(b), 'en')
           : b.updatedAt.localeCompare(a.updatedAt)) ||
         a.id.localeCompare(b.id, 'en'),
     )
@@ -91,6 +124,7 @@ export function workReducer(state: WorkState, action: WorkAction): WorkState {
   if (action.type === 'reset') return initialWork(action.items)
   const item = state.items.find((entry) => entry.id === action.id)
   if (!item) return state
+  if (item.entryType === 'recovery') return state
   const draft = item.status === 'drafts'
   if (action.type === 'save' && (!draft || !validText(action.text)))
     return state
@@ -111,7 +145,11 @@ export function workReducer(state: WorkState, action: WorkAction): WorkState {
     ...item,
     updatedAt,
     ...(action.type === 'save'
-      ? { proposed: { ...action.text, name: action.text.name.trim() } }
+      ? {
+          proposed: {
+            spec: { ...action.text.spec, title: action.text.spec.title.trim() },
+          },
+        }
       : {}),
     ...(action.type === 'submit' ? { status: 'submitted' as const } : {}),
     ...(action.type === 'approve'
@@ -134,6 +172,7 @@ export function workReducer(state: WorkState, action: WorkAction): WorkState {
   }
 }
 export function workStatus(item: WorkItem) {
+  if (item.entryType === 'recovery') return 'Restored in demo'
   return item.status === 'completed'
     ? item.outcome === 'approved'
       ? 'Approved'
@@ -145,6 +184,7 @@ export function workStatus(item: WorkItem) {
         : tabLabels[item.status]
 }
 export function workReadiness(item: WorkItem) {
+  if (item.entryType === 'recovery') return 'ready'
   return item.status === 'drafts'
     ? 'stale'
     : item.status === 'completed'

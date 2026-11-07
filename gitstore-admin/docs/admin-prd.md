@@ -10,7 +10,7 @@
 
 **Brand reference:** [`gitstore-assets/branding/concept-v2`](../public/branding/)
 
-> Admin-only branch note: this PRD preserves the broader product plan. Backend source links point to the original GitStore checkout revision; backend services are intentionally absent here. The shell, navigation, layouts, and Home / Overview and My work pages with independent local demo fixtures are implemented. The other 77 destinations remain placeholders; mock behavior does not establish backend capabilities.
+> Admin-only branch note: this PRD preserves the broader product plan. Backend source links point to the original GitStore checkout revision; backend services are intentionally absent here. The shell, navigation, layouts, and Home / Overview, My work, and Recent activity pages with shared per-store local demo sessions are implemented. The other 76 destinations remain placeholders; mock behavior does not establish backend capabilities.
 
 ## 1. Product direction
 
@@ -202,6 +202,40 @@ data. Setup covers identity, namespace, repository, first catalog resource, and
 later channel/provider activation. Distinguish no data, no access, disconnected,
 and not yet configured.
 
+#### Recent activity and shared Home demo sessions
+
+Visual reference: [P03 Home — Recent activity, GitStore Admin II](https://stitch.withgoogle.com/projects/12282348560453912861?node-id=f78ec057372d4f48b906da5ac5de68d9).
+The implementation uses the timeline/inspector composition without its invented
+mesh, signing, deployment, broker, export, or live-polling claims.
+
+- Atelier Kyoto starts with 24 immutable dated events; Studio Berlin starts empty.
+  Show 10 matching entries initially and add 10 per Load more. Filter title/file
+  name, actor, type, category, and UTC date; group newest-first by recorded date.
+- Inspect historical Before/After fields and distinguish historical outcomes from
+  current readiness/publication. Keep source type and `.md` path in Technical details.
+- Recover complete authored fixture snapshots for Product, CategoryTaxonomy,
+  Collection, and File metadata. Product has no SKU. File-backed catalog types,
+  including ProductVariant, use **Title (`spec.title`)** rather than Name. File
+  display names are separate. Product snapshots include title, description,
+  category/media references; Category snapshots include title, description, parent;
+  Collection snapshots include title, description, ordered products; File snapshots
+  include display name, alt text, and caption. These are local UI models, not API contracts.
+- Recovery compares the current snapshot with the selected event's After version,
+  validates references/category cycles, and requires confirmation. It atomically
+  updates the demo catalog, appends history, and adds a read-only Completed recovery
+  entry to My work. Preserve existing draft bases, proposals, and unsaved buffers.
+  Do not change identity, paths, readiness, publication state, or media bytes.
+- Overview, My work, and Recent activity share one in-memory session per store,
+  retained across all routes and store switches until reload or a confirmed reset.
+  Reset restores all Home state for only the selected store. Draft buffers persist;
+  stale draft bases are disclosed rather than silently overwritten. Explicit saves,
+  submissions, discards, reviews, and resolution actions enter the shared history.
+  These actions do not imply publication or supported backend capabilities.
+- Keep controls page-local, use fixed fixture/revision-based timestamps, retain a
+  selected historical entry after recovery, and explicitly offer View recovery event
+  when filters hide a new entry. Errors, restrictions, and stale-feed views are
+  Storybook presentation specimens. No authentication, API calls, persistence, or export.
+
 #### My work: implemented local demo
 
 Visual reference: [P02 Home — My work, GitStore Admin II](https://stitch.withgoogle.com/projects/12282348560453912861?node-id=4bc79cb5c65045cba3bbe9a3c29b4e9e).
@@ -210,25 +244,24 @@ Its Git commands, mesh claims, staging workflows, offline storage, and invented
 production controls are not requirements for this increment.
 
 - Four counted views: **Drafts**, **Submitted**, **Assigned to me**, **Completed**.
-  Search product names within the selected view and sort by last updated or name.
+  Search item titles within the selected view and sort by last updated or title.
   Counts always describe the complete view, independent of search.
 - Atelier Kyoto: two drafts, two submitted changes, two assigned reviews, one
   completed review. Studio Berlin: empty workspace with a link to Overview.
-  Product identities match Overview examples; their mutable state is independent.
+  Product identities match Overview examples and share the current authored demo catalog. Draft bases and proposals remain independent snapshots.
 - Inspector: author/reviewer, fixed update time, field-by-field Before/After values,
   outcome/review note, and `.md` source path under Technical details.
-- Draft editing is limited to product name and description. Names must contain
+- Draft editing is limited to product Title (`spec.title`) and description. Titles must contain
   non-whitespace text; descriptions may be empty. Save updates only the local
   draft; cancel restores saved text. No pricing, inventory, variants, or creation.
 - Confirm before discarding unsaved edits for selection, inspector close, tab
-  changes, or reset. Page exit intentionally resets the disclosed demo. Submit
+  changes, or reset. Page exits preserve saved demo work and draft buffers. Submit
   only saved, changed drafts; confirmed submission moves them to Submitted.
   Confirmed discard removes the draft.
 - Assigned reviews can be approved or returned with a required review note after
   confirmation. Both move to Completed with the actual review outcome. Approval
   does not mean publication or readiness. Submitted/completed items are read-only.
-- Clearly disclose Demo data and provide Reset demo. State resets on page exit,
-  namespace switch, reload, or reset. Announce outcomes and restore keyboard
+- Clearly disclose Demo data and provide Reset demo. Saved work and draft buffers survive page exits and namespace switches; reload or a confirmed reset restores fixtures. Announce outcomes and restore keyboard
   focus. No persistence, authentication, network traffic, or backend writes.
 - Reuse the Home card choreography and demand-driven decorative lighting, with
   CSS fallback and reduced-motion support. Workflow colors are decoration, not
@@ -607,3 +640,32 @@ trust model; and the persistence policy for personal/shared views.
 
 Do not resolve these gaps by making the UI appear operational. The intended
 experience is ambitious; each enabled action must still represent a real contract.
+
+
+### Home empty states and compact screens
+
+Home uses one shared empty-state anatomy: neutral Split / Return illustration,
+heading, concise explanation, and optional relevant action. An empty catalog says
+“Your catalog starts here”; an empty personal workspace says “No work yet”; empty
+history says “No activity yet”. These differ from empty tabs and filtered results.
+Hide search/sort/filters when the whole store has no corresponding data. Retain
+work tabs for navigation. Overview omits zero-only summary cards, and zero counts
+elsewhere receive no status halos. Existing setup/catalog links still lead to
+placeholders; no creation flows are introduced.
+
+At mobile widths, omit the repeated store/Home trail and subtitle, use a compact
+heading, and keep demo identification visible. The Demo data disclosure contains
+reset behavior, snapshot information where relevant, and Reset demo. Its reset
+action closes the disclosure before opening the existing confirmation. Overview
+uses compact two-column summaries; My work uses horizontally scrollable counted
+tabs. Recent activity shows search plus one Filters button and compact timeline
+entries. The filter sheet stages changes until Show events, restores focus on
+close, and discards pending edits on Cancel/Escape. Applied filters have removable
+chips; no-results states retain controls and Clear filters. At 375 × 667, the first
+activity entry or the first-use guidance is visible above bottom navigation.
+
+Storybook interactions use the navigation visible at the actual canvas width,
+including rail menus and mobile drawers. Global command navigation can leave a
+modal inspector without discarding its draft. Native disclosure state specimens
+render explicitly expanded and assert visible content; real browser tests verify
+Enter/Space toggling. Narrow manager-canvas checks complement static build checks.

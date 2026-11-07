@@ -58,6 +58,13 @@ export function AppShell({ children }: { children?: ReactNode }) {
       ? routeNamespace
       : preferences.namespace
   const active = destinationAtPath(pathname)
+  const pageTitle =
+    routeNamespace && !isDemoNamespace(routeNamespace)
+      ? 'Unknown demo workspace'
+      : (active?.label ?? 'Not found')
+  useEffect(() => {
+    document.title = `${pageTitle} · GitStore`
+  }, [pageTitle])
   const tablet = useMediaQuery('(max-width: 1100px)')
   const [mode, setMode] = useState<LayoutMode>(
     () => router.options.context.initialLayout ?? 'standard',

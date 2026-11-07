@@ -1,3 +1,5 @@
+import { openDemoReset } from './home-interactions'
+import { storybookURL } from './storybook-url'
 import { expect, test } from '@playwright/test'
 const home = '/w/atelier-kyoto/home/overview'
 
@@ -81,11 +83,15 @@ test('rapid filter/sort/reset and Focus interruption leave no stale animations o
     await page.getByRole('radio', { name: label }).press('Space')
   }
   await page.getByRole('button', { name: /Sort by/ }).click()
-  await page.getByRole('option', { name: 'Name A–Z' }).click()
+  await page.getByRole('option', { name: 'Title A–Z' }).click()
   await expect(
     page.getByRole('button', { name: /^View details for / }).first(),
   ).toHaveAccessibleName('View details for Autumn Objects')
-  await page.getByRole('button', { name: 'Reset demo' }).click()
+  await openDemoReset(page)
+  await page
+    .getByRole('dialog', { name: 'Reset Home demo for Atelier Kyoto?' })
+    .getByRole('button', { name: 'Confirm demo reset' })
+    .click()
   await page.getByRole('button', { name: 'Focus mode', exact: true }).click()
   await expect(
     page.getByRole('button', { name: 'Exit Focus Mode' }),
@@ -131,7 +137,7 @@ test('CSS-only Storybook lighting and filtering keep the same controls and state
   page,
 }) => {
   await page.goto(
-    'http://127.0.0.1:6006/iframe.html?id=pages-home-overview--css-state-lighting&viewMode=story',
+    `${storybookURL}/iframe.html?id=pages-home-overview--css-state-lighting&viewMode=story`,
   )
   await expect(page.locator('[data-lighting="css"]')).toBeVisible()
   await expect(page.locator('[data-resource-lighting]')).toHaveCount(0)

@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useReducer, useState } from 'react'
+import { resourceLabel } from './model'
+import { useCallback, useMemo, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { Button, Radio, RadioGroup } from 'react-aria-components'
 import {
@@ -8,7 +9,6 @@ import {
   CircleCheck,
   CircleDot,
   Compass,
-  GitBranch,
   Layers,
   RefreshCw,
   TriangleAlert,
@@ -19,25 +19,21 @@ import type { NamespaceId } from '../../../data/demo'
 import { destinationById } from '../../../navigation/registry'
 import { usePageInspector } from '../../../shell/PageInspector'
 import { overviewFixture } from './fixtures'
-import {
-  overviewReducer,
-  initialOverview,
-  overviewSummary,
-  queueCounts,
-  workQueue,
-  healthMatrix,
-} from './model'
+import { overviewSummary, queueCounts, workQueue, healthMatrix } from './model'
 import type { OverviewScenario, QueueFilter, SortOrder } from './model'
 import { ChoiceSelect } from '../../../components/ChoiceSelect'
+import { useHomeDemo } from '../demo/HomeDemoProvider'
+import { recentOverviewActivity } from '../demo/model'
 import { ResourceInspector } from './ResourceInspector'
 import { StatusBadge } from './StatusBadge'
 import { kindLabels, readinessLabels } from './presentation'
 import { useGridMotion } from '../shared/motion/useGridMotion'
 import { useResourceLighting } from '../shared/motion/useResourceLighting'
 import styles from './overview.module.css'
-import { HomePage, HomePageHeader, DemoNotice } from '../shared/HomePage'
+import { HomePage, HomePageHeader } from '../shared/HomePage'
 import { ResourceCard, SummaryCard } from '../shared/HomeCards'
 import homeStyles from '../shared/home.module.css'
+import { EmptyState } from '../shared/EmptyState'
 
 const filters: readonly { id: QueueFilter; label: string }[] = [
   { id: 'all', label: 'All' },
@@ -59,10 +55,15 @@ export function OverviewPage({
     () => overviewFixture(namespace, scenario),
     [namespace, scenario],
   )
-  const [state, dispatch] = useReducer(
-    overviewReducer,
-    fixture,
-    initialOverview,
+  const {
+    session,
+    resources,
+    dispatch,
+    reset: requestReset,
+  } = useHomeDemo(namespace)
+  const state = useMemo(
+    () => ({ resources, activity: recentOverviewActivity(session) }),
+    [resources, session],
   )
   const [filter, setFilter] = useState<QueueFilter>(
     scenario === 'filtered-empty' ? 'failed' : 'all',
@@ -84,7 +85,7 @@ export function OverviewPage({
         'Demo change applied. The item is ready; totals and activity have been updated. Your store has not been changed.',
       )
     },
-    [captureGrid],
+    [captureGrid, dispatch],
   )
   const resource = state.resources.find((item) => item.id === selectedId)
   const details = useMemo(
@@ -112,13 +113,7 @@ export function OverviewPage({
   const completed = fixture.setup.filter((step) => step.complete).length
   const presentation = recovered ? 'populated' : scenario
   function reset() {
-    captureGrid()
-    dispatch({ type: 'reset', fixture })
-    setFilter('all')
-    setSort('severity')
-    setSelectedId(null)
-    inspector.close()
-    setAnnouncement('Demo reset. The original snapshot has been restored.')
+    requestReset()
   }
   const cards = [
     {
@@ -166,7 +161,6 @@ export function OverviewPage({
         description="Your store at a glance."
         onReset={reset}
       />
-      <DemoNotice page="Overview" />
       {presentation === 'loading' ? (
         <section className={styles.statePanel} aria-label="Loading overview">
           <h2>Loading your store overview.</h2>
@@ -212,46 +206,32 @@ export function OverviewPage({
               </span>
             </div>
           )}
-          <section aria-label="Store summary" className={homeStyles.metrics}>
-            {cards.map(({ label, value, detail, Icon, state: readiness }) => (
-              <SummaryCard
-                key={label}
-                label={label}
-                value={value}
-                detail={detail}
-                Icon={Icon}
-                state={readiness}
-                ratio={summary.total ? value / summary.total : 0}
-              />
-            ))}
-          </section>
+          {state.resources.length > 0 && (
+            <section aria-label="Store summary" className={homeStyles.metrics}>
+              {cards.map(({ label, value, detail, Icon, state: readiness }) => (
+                <SummaryCard
+                  key={label}
+                  label={label}
+                  value={value}
+                  detail={detail}
+                  Icon={Icon}
+                  state={readiness}
+                  ratio={summary.total ? value / summary.total : 0}
+                />
+              ))}
+            </section>
+          )}
           {state.resources.length === 0 ? (
-            <section
-              className={styles.firstUse}
-              aria-labelledby="first-resource"
-            >
-              <div className={styles.firstUseArt} aria-hidden="true">
-                <GitBranch size={70} strokeWidth={1} />
-                <span>01 / BEGIN</span>
-              </div>
-              <div>
-                <h2 id="first-resource">
-                  Your catalog starts here
-                  <span aria-hidden="true" className={homeStyles.titleDot}>
-                    .
-                  </span>
-                </h2>
-                <p>
-                  {name} is a new demo workspace. Add your store details and
-                  create your first product to get started.
-                </p>
-                <div className={styles.firstUseActions}>
+            <EmptyState
+              title="Your catalog starts here"
+              actions={
+                <>
                   <Link
                     className={styles.primaryLink}
                     to="/w/$namespace/home/setup-guide"
                     params={{ namespace }}
                   >
-                    Open setup guide
+                    Open setup guide{' '}
                     <ArrowUpRight size={15} aria-hidden="true" />
                   </Link>
                   <Link
@@ -259,12 +239,21 @@ export function OverviewPage({
                     to="/w/$namespace/catalog/products"
                     params={{ namespace }}
                   >
-                    Explore products
+                    Explore products{' '}
                     <ArrowUpRight size={14} aria-hidden="true" />
                   </Link>
-                </div>
-              </div>
-            </section>
+                  <Link
+                    className={styles.textLink}
+                    to="/w/$namespace/settings/store-details"
+                    params={{ namespace }}
+                  >
+                    Store details <ArrowUpRight size={14} aria-hidden="true" />
+                  </Link>
+                </>
+              }
+            >
+              Set up your store and add your first product.
+            </EmptyState>
           ) : (
             <section
               className={styles.queueSection}
@@ -286,7 +275,7 @@ export function OverviewPage({
                   }}
                   options={[
                     { id: 'severity', label: 'Priority first' },
-                    { id: 'name', label: 'Name A–Z' },
+                    { id: 'title', label: 'Title A–Z' },
                   ]}
                 />
               </div>
@@ -333,7 +322,7 @@ export function OverviewPage({
                       <ResourceCard
                         key={item.id}
                         id={item.id}
-                        title={item.name}
+                        title={resourceLabel(item)}
                         kind={kindLabels[item.kind].singular}
                         badge={<StatusBadge state={item.readiness} />}
                         description={item.diagnostic}
@@ -426,117 +415,121 @@ export function OverviewPage({
               </div>
             </section>
           )}
-          <div className={styles.bottomGrid}>
-            <section
-              className={styles.activitySection}
-              aria-labelledby="recent-resource-activity"
-            >
-              <div className={styles.sectionHeading}>
-                <div>
-                  <h2 id="recent-resource-activity">Recent activity</h2>
+          {state.resources.length > 0 && (
+            <div className={styles.bottomGrid}>
+              <section
+                className={styles.activitySection}
+                aria-labelledby="recent-resource-activity"
+              >
+                <div className={styles.sectionHeading}>
+                  <div>
+                    <h2 id="recent-resource-activity">Recent activity</h2>
+                  </div>
+                  <Link
+                    className={styles.iconLink}
+                    aria-label="Open recent activity"
+                    to="/w/$namespace/home/recent-activity"
+                    params={{ namespace }}
+                  >
+                    <ArrowUpRight size={18} aria-hidden="true" />
+                  </Link>
                 </div>
-                <Link
-                  className={styles.iconLink}
-                  aria-label="Open recent activity"
-                  to="/w/$namespace/home/recent-activity"
-                  params={{ namespace }}
-                >
-                  <ArrowUpRight size={18} aria-hidden="true" />
-                </Link>
-              </div>
-              {state.activity.length ? (
-                <ol className={styles.activity}>
-                  {state.activity.slice(0, 5).map((item) => (
-                    <li key={item.id}>
-                      <span className={styles.activityDot} />
-                      <div>
-                        <Button
-                          className={styles.activityButton}
-                          onPress={(event) =>
-                            inspect(
-                              item.resourceId,
-                              event.target as HTMLElement,
-                            )
+                {state.activity.length ? (
+                  <ol className={styles.activity}>
+                    {state.activity.slice(0, 5).map((item) => (
+                      <li key={item.id}>
+                        <span className={styles.activityDot} />
+                        <div>
+                          <Button
+                            className={styles.activityButton}
+                            onPress={(event) =>
+                              inspect(
+                                item.resourceId,
+                                event.target as HTMLElement,
+                              )
+                            }
+                          >
+                            {item.title}
+                          </Button>
+                          <small>
+                            {item.local ? 'LOCAL DEMO CHANGE' : item.time}
+                          </small>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <div className={styles.emptyActivity}>
+                    <ArrowDownWideNarrow size={22} aria-hidden="true" />
+                    <p>No activity yet.</p>
+                    <small>
+                      Changes to your products, collections, and media will
+                      appear here.
+                    </small>
+                  </div>
+                )}
+              </section>
+              <section
+                className={styles.setupSection}
+                aria-labelledby="setup-progress"
+              >
+                <div className={styles.sectionHeading}>
+                  <div>
+                    <h2 id="setup-progress">Store setup</h2>
+                  </div>
+                  <Compass size={23} aria-hidden="true" />
+                </div>
+                <div className={styles.progressLabel}>
+                  <span>
+                    {completed} of {fixture.setup.length} demo steps complete
+                  </span>
+                  <strong>
+                    {Math.round((completed / fixture.setup.length) * 100)}%
+                  </strong>
+                </div>
+                <progress
+                  aria-label="Demo setup progress"
+                  value={completed}
+                  max={fixture.setup.length}
+                  className={styles.progress}
+                />
+                <ul className={styles.steps}>
+                  {fixture.setup.map((step) => {
+                    const destination = destinationById(step.destinationId)
+                    return (
+                      <li key={step.destinationId}>
+                        <span
+                          className={
+                            step.complete
+                              ? styles.stepComplete
+                              : styles.stepPending
                           }
+                          aria-label={
+                            step.complete ? 'Complete' : 'Not complete'
+                          }
+                          role="img"
                         >
-                          {item.title}
-                        </Button>
-                        <small>
-                          {item.local ? 'LOCAL DEMO CHANGE' : item.time}
-                        </small>
-                      </div>
-                    </li>
-                  ))}
-                </ol>
-              ) : (
-                <div className={styles.emptyActivity}>
-                  <ArrowDownWideNarrow size={22} aria-hidden="true" />
-                  <p>No activity yet.</p>
-                  <small>
-                    Changes to your products, collections, and media will appear
-                    here.
-                  </small>
-                </div>
-              )}
-            </section>
-            <section
-              className={styles.setupSection}
-              aria-labelledby="setup-progress"
-            >
-              <div className={styles.sectionHeading}>
-                <div>
-                  <h2 id="setup-progress">Store setup</h2>
-                </div>
-                <Compass size={23} aria-hidden="true" />
-              </div>
-              <div className={styles.progressLabel}>
-                <span>
-                  {completed} of {fixture.setup.length} demo steps complete
-                </span>
-                <strong>
-                  {Math.round((completed / fixture.setup.length) * 100)}%
-                </strong>
-              </div>
-              <progress
-                aria-label="Demo setup progress"
-                value={completed}
-                max={fixture.setup.length}
-                className={styles.progress}
-              />
-              <ul className={styles.steps}>
-                {fixture.setup.map((step) => {
-                  const destination = destinationById(step.destinationId)
-                  return (
-                    <li key={step.destinationId}>
-                      <span
-                        className={
-                          step.complete
-                            ? styles.stepComplete
-                            : styles.stepPending
-                        }
-                        aria-label={step.complete ? 'Complete' : 'Not complete'}
-                        role="img"
-                      >
-                        {step.complete ? (
-                          <CircleCheck size={15} aria-hidden="true" />
-                        ) : (
-                          <CircleDot size={15} aria-hidden="true" />
-                        )}
-                      </span>
-                      <Link to={destination.to} params={{ namespace }}>
-                        {step.label}
-                        <ArrowUpRight size={13} aria-hidden="true" />
-                      </Link>
-                    </li>
-                  )
-                })}
-              </ul>
-              <p className={styles.disclaimer}>
-                Example setup progress. These links open the existing
-                destination placeholders.
-              </p>
-            </section>
-          </div>
+                          {step.complete ? (
+                            <CircleCheck size={15} aria-hidden="true" />
+                          ) : (
+                            <CircleDot size={15} aria-hidden="true" />
+                          )}
+                        </span>
+                        <Link to={destination.to} params={{ namespace }}>
+                          {step.label}
+                          <ArrowUpRight size={13} aria-hidden="true" />
+                        </Link>
+                      </li>
+                    )
+                  })}
+                </ul>
+                <p className={styles.disclaimer}>
+                  Example setup progress. These links open the existing
+                  destination placeholders.
+                </p>
+              </section>
+            </div>
+          )}
         </>
       )}
     </HomePage>

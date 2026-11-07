@@ -1,8 +1,9 @@
+import { storybookURL } from './storybook-url'
 import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import { destinations, destinationHref } from '../src/navigation/registry'
 const home = '/w/atelier-kyoto/home/overview'
-test('all 79 destinations are reachable with two mock Home pages and 77 placeholders', async ({
+test('all 79 destinations are reachable with three mock Home pages and 76 placeholders', async ({
   page,
 }) => {
   test.setTimeout(120000)
@@ -12,6 +13,7 @@ test('all 79 destinations are reachable with two mock Home pages and 77 placehol
   })
   for (const destination of destinations) {
     await page.goto(destinationHref(destination, 'atelier-kyoto'))
+    await expect(page).toHaveTitle(`${destination.label} · GitStore`)
     await expect(
       page.getByRole('heading', {
         name: destination.label,
@@ -25,9 +27,13 @@ test('all 79 destinations are reachable with two mock Home pages and 77 placehol
         await expect(
           page.getByRole('region', { name: 'Store summary' }),
         ).toBeVisible()
-      else
+      else if (destination.id === 'home.my-work')
         await expect(
           page.getByRole('tablist', { name: 'My work views' }),
+        ).toBeVisible()
+      else
+        await expect(
+          page.getByRole('searchbox', { name: 'Search activity' }),
         ).toBeVisible()
     } else {
       await expect(
@@ -56,10 +62,12 @@ test('navigation search, keyboard dismissal, history and reload work', async ({
     page.getByRole('heading', { name: 'Variants', level: 1 }),
   ).toBeVisible()
   await page.goBack()
+  await expect(page).toHaveTitle('Overview · GitStore')
   await expect(
     page.getByRole('heading', { name: 'Overview', level: 1 }),
   ).toBeVisible()
   await page.goForward()
+  await expect(page).toHaveTitle('Variants · GitStore')
   await expect(
     page.getByRole('heading', { name: 'Variants', level: 1 }),
   ).toBeVisible()
@@ -225,13 +233,13 @@ test('Storybook renders the component library and inspector layout', async ({
   page,
 }) => {
   await page.goto(
-    'http://127.0.0.1:6006/iframe.html?id=foundation-controls--light&viewMode=story',
+    `${storybookURL}/iframe.html?id=foundation-controls--light&viewMode=story`,
   )
   await expect(
     page.getByRole('heading', { name: 'GitStore / shared controls' }),
   ).toBeVisible()
   await page.goto(
-    'http://127.0.0.1:6006/iframe.html?id=foundation-layouts--with-inspector&viewMode=story',
+    `${storybookURL}/iframe.html?id=foundation-layouts--with-inspector&viewMode=story`,
   )
   await expect(
     page.getByRole('heading', { name: 'Products', level: 1 }),

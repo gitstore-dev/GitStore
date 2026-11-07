@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { RouterProvider } from '@tanstack/react-router'
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, userEvent, within } from 'storybook/test'
+import { openProfile } from './helpers/shellInteractions'
 import { createAppRouter } from '../app/router'
 import type { LayoutMode } from '../shell/WorkspaceLayout'
 import type { Theme, MotionPreference } from '../state/preferences'
@@ -120,11 +121,10 @@ export const PlatformSelectorOpen: Story = {
 }
 export const ProfileMenuOpen: Story = {
   play: async ({ canvasElement }) => {
-    await userEvent.click(
-      within(canvasElement).getByRole('button', { name: /Elena Rostova/ }),
-    )
+    await openProfile(canvasElement)
   },
 }
+
 async function waitForOverlayEntry(element: HTMLElement) {
   const animations = new Set<Animation>()
   for (
@@ -163,19 +163,5 @@ export const MobileDrawerOpen: Story = {
 export const MobileProfileMenuOpen: Story = {
   args: { path: '/w/studio-berlin/settings/store-details' },
   globals: { viewport: { value: 'mobile1', isRotated: false } },
-  play: async ({ canvasElement }) => {
-    const drawer = await openMobileNavigation(canvasElement)
-    const profile = within(drawer).getByRole('button', {
-      name: /Elena Rostova/,
-    })
-    profile.focus()
-    await userEvent.keyboard('{Enter}')
-    const menu = await within(canvasElement.ownerDocument.body).findByRole(
-      'menu',
-    )
-    await waitForOverlayEntry(menu)
-    await expect(
-      within(menu).getByRole('menuitem', { name: 'Profile & preferences' }),
-    ).toBeVisible()
-  },
+  play: ProfileMenuOpen.play,
 }

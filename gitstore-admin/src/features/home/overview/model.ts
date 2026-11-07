@@ -19,7 +19,7 @@ export const readinessStates = [
 ] as const
 export type Readiness = (typeof readinessStates)[number]
 export type QueueFilter = 'all' | Exclude<Readiness, 'ready'>
-export type SortOrder = 'severity' | 'name'
+export type SortOrder = 'severity' | 'title'
 export type OverviewScenario =
   | 'populated'
   | 'first-use'
@@ -30,18 +30,27 @@ export type OverviewScenario =
   | 'stale'
   | 'restricted'
 export interface ResourceReference {
-  name: string
+  label: string
   detail: string
   resourceId?: string
 }
-export interface DemoResource {
+interface ResourceMetadata {
   id: string
-  kind: ResourceKind
-  name: string
   readiness: Readiness
   diagnostic: string
   path: string
   references: readonly ResourceReference[]
+}
+export type DemoResource = ResourceMetadata &
+  (
+    | {
+        kind: 'Product' | 'ProductVariant' | 'CategoryTaxonomy' | 'Collection'
+        spec: { title: string }
+      }
+    | { kind: 'File' | 'Namespace' | 'Repository'; name: string }
+  )
+export function resourceLabel(resource: DemoResource) {
+  return 'spec' in resource ? resource.spec.title : resource.name
 }
 export interface DemoActivity {
   id: string
@@ -61,14 +70,6 @@ export interface OverviewFixture {
   activity: readonly DemoActivity[]
   setup: readonly SetupStep[]
 }
-export interface OverviewState {
-  resources: readonly DemoResource[]
-  activity: readonly DemoActivity[]
-  revision: number
-}
-export type OverviewAction =
-  { type: 'resolve'; id: string } | { type: 'reset'; fixture: OverviewFixture }
-
 export const resourceDestinations: Record<ResourceKind, string> = {
   Product: 'catalog.products',
   ProductVariant: 'catalog.variants',
@@ -84,43 +85,6 @@ export function demoAction(resource: DemoResource) {
     : resource.readiness === 'reconciling'
       ? 'Complete demo processing'
       : 'Apply demo fix'
-}
-export function initialOverview(fixture: OverviewFixture): OverviewState {
-  return {
-    resources: fixture.resources,
-    activity: fixture.activity,
-    revision: 0,
-  }
-}
-export function overviewReducer(
-  state: OverviewState,
-  action: OverviewAction,
-): OverviewState {
-  if (action.type === 'reset') return initialOverview(action.fixture)
-  const resource = state.resources.find((item) => item.id === action.id)
-  if (!resource || resource.readiness === 'ready') return state
-  return {
-    resources: state.resources.map((item) =>
-      item.id === action.id
-        ? {
-            ...item,
-            readiness: 'ready',
-            diagnostic: 'Demo change applied. Your store has not been changed.',
-          }
-        : item,
-    ),
-    activity: [
-      {
-        id: `local-${state.revision + 1}`,
-        resourceId: resource.id,
-        title: `Demo change applied to ${resource.name}`,
-        time: 'This demo session',
-        local: true,
-      },
-      ...state.activity,
-    ],
-    revision: state.revision + 1,
-  }
 }
 export function overviewSummary(resources: readonly DemoResource[]) {
   return {
@@ -159,11 +123,11 @@ export function workQueue(
         (filter === 'all' || resource.readiness === filter),
     )
     .toSorted((a, b) =>
-      sort === 'name'
-        ? a.name.localeCompare(b.name, 'en')
+      sort === 'title'
+        ? resourceLabel(a).localeCompare(resourceLabel(b), 'en')
         : readinessStates.indexOf(a.readiness) -
             readinessStates.indexOf(b.readiness) ||
-          a.name.localeCompare(b.name, 'en'),
+          resourceLabel(a).localeCompare(resourceLabel(b), 'en'),
     )
 }
 export function healthMatrix(resources: readonly DemoResource[]) {

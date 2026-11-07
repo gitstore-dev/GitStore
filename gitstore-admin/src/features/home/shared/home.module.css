@@ -62,14 +62,6 @@
   font-size: 13px;
   color: var(--muted);
 }
-.headingActions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.headingActions > button {
-  font-size: 11px;
-}
 .demoLabel {
   display: inline-flex;
   align-items: center;
@@ -83,14 +75,6 @@
 }
 .demoLabel svg {
   color: var(--link);
-}
-.demoNotice {
-  padding: 13px 0;
-  border-block: 1px solid var(--line);
-  margin: 0 0 28px;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--muted);
 }
 .metrics {
   display: grid;
@@ -279,9 +263,6 @@
   .pageHeading {
     align-items: flex-start;
   }
-  .headingActions {
-    gap: 6px;
-  }
   .resourceCard {
     padding: 18px 16px 14px;
   }
@@ -314,4 +295,205 @@
   background: color-mix(in srgb, var(--state-color) 8%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--state-color) 22%, var(--line));
   white-space: nowrap;
+}
+
+.demoPopover {
+  width: min(340px, calc(100vw - 24px));
+  padding: 20px;
+  z-index: var(--layer-popover);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 12px 40px #00000020;
+}
+.demoDialog {
+  outline: none;
+}
+.demoDialog h2 {
+  font: 500 24px var(--display);
+  margin: 0 0 12px;
+}
+.demoDialog p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.emptyState {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  min-width: 0;
+  padding: 36px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+}
+.emptyArt {
+  flex: 0 0 72px;
+}
+.emptyContent {
+  min-width: 0;
+}
+.emptyContent h2 {
+  font: 500 30px/1.2 var(--display);
+  margin: 0 0 12px;
+}
+.emptyContent p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+  max-width: 62ch;
+}
+.emptyActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 20px;
+  margin-top: 22px;
+}
+.emptyActions a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 3px;
+}
+.metrics[data-empty] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.metrics[data-empty] .metric {
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.metrics[data-empty] .metricLabel svg,
+.metrics[data-empty] .metricDetail,
+.metrics[data-empty] .metricFoot {
+  display: none;
+}
+.metrics[data-empty] .metricValue {
+  margin: 0;
+  font: 12px var(--mono);
+  letter-spacing: 0;
+}
+@media (max-width: 760px) {
+  .page {
+    padding: 18px 16px 22px;
+  }
+  .pageHeading {
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .pageHeading > div:first-child {
+    min-width: 0;
+  }
+  .pageHeading .kicker,
+  .pageHeading p {
+    display: none;
+  }
+  .pageHeading h1 {
+    font-size: 32px;
+    line-height: 1.1;
+    letter-spacing: -0.6px;
+    margin: 0;
+  }
+  .demoLabel {
+    font-size: 9px;
+    padding: 8px;
+    flex-shrink: 0;
+    min-height: 44px;
+  }
+  .metrics {
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+  .metric {
+    padding: 12px 12px 0;
+  }
+  .metricValue {
+    font-size: 30px;
+    margin: 8px 0;
+  }
+  .metricDetail {
+    display: none;
+  }
+  .metricFoot {
+    margin-inline: -12px;
+  }
+  .emptyState {
+    padding: 24px 20px;
+    gap: 16px;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .emptyArt {
+    width: 56px;
+    height: 56px;
+    flex-basis: 56px;
+  }
+  .emptyContent h2 {
+    font-size: 28px;
+  }
+  .metrics[role='tablist'] {
+    display: flex;
+    overflow-x: auto;
+    padding: 4px;
+    margin-inline: -4px;
+    gap: 8px;
+  }
+  .metrics[role='tablist'] .metric {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    gap: 8px;
+    padding: 10px;
+  }
+  .metrics[role='tablist'] .metricLabel svg,
+  .metrics[role='tablist'] .metricFoot {
+    display: none;
+  }
+  .metrics[role='tablist'] .metricValue {
+    font: 12px var(--mono);
+    margin: 0;
+    letter-spacing: 0;
+  }
+}
+@media (max-width: 760px) {
+  [data-activity-timeline] .resourceCard {
+    padding: 12px;
+  }
+  [data-activity-timeline] .cardTop .badge {
+    display: none;
+  }
+  [data-activity-timeline] .resourceCard h3 {
+    font-size: 21px;
+    margin: 7px 0 6px;
+  }
+  [data-activity-timeline] .cardDescription {
+    font-size: 11px;
+    margin-bottom: 9px;
+  }
+  [data-activity-timeline] .cardBottom {
+    padding-top: 7px;
+    gap: 4px;
+  }
+  [data-activity-timeline] .inspectButton {
+    min-height: 44px;
+  }
+}
+
+.emptyActions a:not([class]) {
+  color: var(--link);
+}
+@media (max-width: 760px) {
+  .metrics[role='tablist'] {
+    flex-wrap: nowrap;
+  }
 }

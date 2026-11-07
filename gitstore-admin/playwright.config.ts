@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test'
+const storybookPort = process.env.STORYBOOK_PORT ?? '6006'
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
@@ -15,9 +16,9 @@ export default defineConfig({
       reuseExistingServer: !process.env.CI,
     },
     {
-      command: 'pnpm storybook:preview',
+      command: `pnpm exec vite preview --host 127.0.0.1 --port ${storybookPort} --strictPort --outDir storybook-static`,
       gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
-      url: 'http://127.0.0.1:6006',
+      url: `http://127.0.0.1:${storybookPort}`,
       reuseExistingServer: !process.env.CI,
     },
   ],

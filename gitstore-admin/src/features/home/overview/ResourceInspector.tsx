@@ -1,3 +1,4 @@
+import { resourceLabel } from './model'
 import { useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { Heading } from 'react-aria-components'
@@ -38,14 +39,17 @@ export function ResourceInspector({
         label="Choose another item"
         value={resource.id}
         onChange={onSelect}
-        options={resources.map((item) => ({ id: item.id, label: item.name }))}
+        options={resources.map((item) => ({
+          id: item.id,
+          label: resourceLabel(item),
+        }))}
       />
       <div className={styles.detailIdentity}>
         <span className={homeStyles.kicker}>
           {kindLabels[resource.kind].singular}
         </span>
         <h2 ref={heading} tabIndex={-1}>
-          {resource.name}
+          {resourceLabel(resource)}
         </h2>
         <StatusBadge state={resource.readiness} />
       </div>
@@ -72,17 +76,17 @@ export function ResourceInspector({
         {resource.references.length ? (
           <ul>
             {resource.references.map((reference) => (
-              <li key={reference.name}>
+              <li key={reference.label}>
                 {reference.resourceId ? (
                   <ActionButton
                     variant="ghost"
                     onPress={() => onSelect(reference.resourceId!)}
                   >
-                    {reference.name}
+                    {reference.label}
                     <ArrowUpRight size={13} aria-hidden="true" />
                   </ActionButton>
                 ) : (
-                  <strong>{reference.name}</strong>
+                  <strong>{reference.label}</strong>
                 )}
                 <small>{reference.detail}</small>
               </li>
@@ -126,7 +130,7 @@ export function ResourceInspector({
         <span className={homeStyles.kicker}>LOCAL DEMO ACTION</span>
         <Heading slot="title">{action}?</Heading>
         <p>
-          Mark <strong>{resource.name}</strong> as ready in this demo.
+          Mark <strong>{resourceLabel(resource)}</strong> as ready in this demo.
         </p>
         <div className={styles.confirmNote}>
           This removes the item from Updates and issues and updates the demo

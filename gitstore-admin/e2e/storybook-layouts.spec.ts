@@ -1,12 +1,11 @@
+import { storybookURL } from './storybook-url'
 import { expect, test } from '@playwright/test'
 
 for (const story of ['mobile-drawer-open', 'mobile-profile-menu-open']) {
   test(`Storybook ${story} opens its mobile overlays through the play function`, async ({
     page,
   }, testInfo) => {
-    await page.goto(
-      `http://127.0.0.1:6006/?path=/story/foundation-layouts--${story}`,
-    )
+    await page.goto(`${storybookURL}/?path=/story/foundation-layouts--${story}`)
     const canvas = page.frameLocator('#storybook-preview-iframe')
     // Use the actual manager viewport and story play function; no test clicks
     // should compensate for a broken interaction in the story itself.

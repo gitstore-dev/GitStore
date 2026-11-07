@@ -6,10 +6,13 @@ import {
   TextField,
 } from 'react-aria-components'
 import { ActionButton } from '../../../components/controls'
-import { changedFields, sameText, validText } from './model'
+import { changedFields, sameText, validText, workTitle } from './model'
 import type { ProductText, WorkItem } from './model'
 import styles from './my-work.module.css'
 import { TechnicalDetails } from '../../../components/TechnicalDetails'
+import { ChangePreview } from '../demo/ChangePreview'
+import { snapshotChanges } from '../demo/snapshots'
+import type { ItemSnapshot } from '../demo/snapshots'
 import { WorkBadge } from './WorkBadge'
 export function WorkInspector({
   item,
@@ -20,8 +23,12 @@ export function WorkInspector({
   onSave,
   onCancel,
   onAction,
+  catalog,
+  staleBase,
 }: {
   item: WorkItem
+  catalog: Readonly<Record<string, ItemSnapshot>>
+  staleBase: boolean
   buffer: ProductText | null
   readOnly: boolean
   onEdit: () => void
@@ -33,12 +40,17 @@ export function WorkInspector({
   ) => void
 }) {
   const fields = changedFields(item)
-  const dirty = !!buffer && !sameText(buffer, item.proposed)
+  const dirty =
+    item.entryType === 'product-text' &&
+    !!buffer &&
+    !sameText(buffer, item.proposed)
   return (
     <div className={styles.details}>
-      <span className={styles.eyebrow}>PRODUCT CHANGE</span>
+      <span className={styles.eyebrow}>
+        {item.entryType === 'recovery' ? 'DEMO RECOVERY' : 'PRODUCT CHANGE'}
+      </span>
       <h2 id="work-inspector-heading" tabIndex={-1}>
-        {item.proposed.name}
+        {workTitle(item)}
       </h2>
       <WorkBadge item={item} />
       <dl className={styles.metadata}>
@@ -59,31 +71,48 @@ export function WorkInspector({
           <p>{item.reviewNote}</p>
         </section>
       )}
-      <section aria-label="Change preview" className={styles.preview}>
-        <h3>
-          {fields.length
-            ? `${fields.length} ${fields.length === 1 ? 'field' : 'fields'} changed`
-            : 'No changes to submit'}
-        </h3>
-        {fields.map((field) => (
-          <section
-            key={field}
-            aria-label={
-              field === 'name' ? 'Product name change' : 'Description change'
-            }
-          >
-            <h4>{field === 'name' ? 'Product name' : 'Description'}</h4>
-            <div className={styles.before}>
-              <strong>Before</strong>
-              <p>{item.base[field] || 'Empty'}</p>
-            </div>
-            <div className={styles.after}>
-              <strong>After</strong>
-              <p>{item.proposed[field] || 'Empty'}</p>
-            </div>
-          </section>
-        ))}
-      </section>
+      {staleBase && (
+        <p className={styles.note}>
+          This draft was based on an earlier version of this product. Your draft
+          text is preserved; review it against the current item before
+          submitting.
+        </p>
+      )}
+      {item.entryType === 'recovery' ? (
+        <ChangePreview
+          changes={snapshotChanges(
+            item.recovery.before,
+            item.recovery.after,
+            catalog,
+          )}
+        />
+      ) : (
+        <section aria-label="Change preview" className={styles.preview}>
+          <h3>
+            {fields.length
+              ? `${fields.length} ${fields.length === 1 ? 'field' : 'fields'} changed`
+              : 'No changes to submit'}
+          </h3>
+          {fields.map((field) => (
+            <section
+              key={field}
+              aria-label={
+                field === 'title' ? 'Title change' : 'Description change'
+              }
+            >
+              <h4>{field === 'title' ? 'Title' : 'Description'}</h4>
+              <div className={styles.before}>
+                <strong>Before</strong>
+                <p>{item.base.spec[field] || 'Empty'}</p>
+              </div>
+              <div className={styles.after}>
+                <strong>After</strong>
+                <p>{item.proposed.spec[field] || 'Empty'}</p>
+              </div>
+            </section>
+          ))}
+        </section>
+      )}
       {buffer && (
         <form
           aria-label="Edit demo draft"
@@ -95,19 +124,21 @@ export function WorkInspector({
         >
           <h3>Edit product text</h3>
           <TextField
-            value={buffer.name}
-            onChange={(name) => onText({ ...buffer, name })}
+            value={buffer.spec.title}
+            onChange={(title) => onText({ spec: { ...buffer.spec, title } })}
             isRequired
             isInvalid={!validText(buffer)}
             className={styles.field}
           >
-            <Label>Product name</Label>
+            <Label>Title</Label>
             <Input autoFocus />
-            <FieldError>Enter a product name.</FieldError>
+            <FieldError>Enter a title.</FieldError>
           </TextField>
           <TextField
-            value={buffer.description}
-            onChange={(description) => onText({ ...buffer, description })}
+            value={buffer.spec.description}
+            onChange={(description) =>
+              onText({ spec: { ...buffer.spec, description } })
+            }
             className={styles.field}
           >
             <Label>Description</Label>
@@ -157,13 +188,23 @@ export function WorkInspector({
           unavailable.
         </p>
       )}
-      {item.status === 'completed' && (
+      {item.entryType === 'recovery' ? (
         <p className={styles.note}>
-          This review is complete. Its outcome does not publish the product or
-          change its store status.
+          This full authored snapshot was restored in the shared demo session.
+          No review was performed, and nothing was published or marked ready.
         </p>
+      ) : (
+        item.status === 'completed' && (
+          <p className={styles.note}>
+            This review is complete. Its outcome does not publish the product or
+            change its store status.
+          </p>
+        )
       )}
-      <TechnicalDetails resourceType="Product" sourcePath={item.path} />
+      <TechnicalDetails
+        resourceType={item.resourceKind}
+        sourcePath={item.path}
+      />
       <p className={styles.muted}>
         Demo only. Your store and saved files are not changed.
       </p>

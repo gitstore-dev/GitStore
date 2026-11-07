@@ -1,3 +1,5 @@
+import { openDemoReset } from './home-interactions'
+import { storybookURL } from './storybook-url'
 import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 const home = '/w/atelier-kyoto/home/overview'
@@ -43,7 +45,7 @@ test('Overview derives counts, filters and sorts resource work without backend r
   ).toBeVisible()
   await page.getByRole('button', { name: 'Clear filters' }).click()
   await page.getByRole('button', { name: /Sort by/ }).click()
-  await page.getByRole('option', { name: 'Name A–Z' }).click()
+  await page.getByRole('option', { name: 'Title A–Z' }).click()
   await expect(
     page.getByRole('button', { name: /^View details for / }).first(),
   ).toHaveAccessibleName('View details for Autumn Objects')
@@ -99,21 +101,27 @@ test('resource inspection, cancellation, demo resolution, activity, ready inspec
     .click()
   await page
     .getByRole('button', {
-      name: 'Demo change applied to Kanso Stone Basin',
+      name: 'Demo processing completed: Kanso Stone Basin',
     })
     .click()
   await expect(
     panel.getByRole('heading', { name: 'Kanso Stone Basin' }),
   ).toBeVisible()
-  await page.getByRole('button', { name: 'Reset demo' }).click()
-  await expect(page.getByRole('status')).toContainText('Demo reset')
+  await openDemoReset(page)
+  await page
+    .getByRole('dialog', { name: 'Reset Home demo for Atelier Kyoto?' })
+    .getByRole('button', { name: 'Confirm demo reset' })
+    .click()
+  await expect(
+    page.getByRole('status').filter({ hasText: 'Home demo reset' }),
+  ).toBeVisible()
   await expect(card(page, 'Needs attention')).toContainText('4')
   await expect(
     page.getByRole('button', { name: 'View details for Kanso Stone Basin' }),
   ).toBeVisible()
 })
 
-test('namespace switching, leaving Overview, and reload restore demo fixtures', async ({
+test('namespace switching and navigation preserve demo changes; reload restores fixtures', async ({
   page,
 }, testInfo) => {
   await page.goto(home)
@@ -166,7 +174,7 @@ test('namespace switching, leaving Overview, and reload restore demo fixtures', 
     .getByRole('link', { name: 'My work', exact: true })
     .click()
   await page.goBack()
-  await expect(card(page, 'Needs attention')).toContainText('4')
+  await expect(card(page, 'Needs attention')).toContainText('3')
 })
 
 for (const width of [1440, 900, 390]) {
@@ -259,7 +267,7 @@ test('Storybook covers all-clear, filtered-empty, loading, unavailable, stale an
   ]
   for (const state of states) {
     await page.goto(
-      `http://127.0.0.1:6006/iframe.html?id=pages-home-overview--${state.id}&viewMode=story`,
+      `${storybookURL}/iframe.html?id=pages-home-overview--${state.id}&viewMode=story`,
     )
     await expect(page.getByText(state.text, { exact: true })).toBeVisible()
     if (state.id === 'filtered-empty') {

@@ -210,7 +210,11 @@ export const destinations: readonly NavigationDestination[] = groups
   .map((destination, index) => ({
     ...destination,
     ordinal: index + 1,
-    implementation: ['home.overview', 'home.my-work'].includes(destination.id)
+    implementation: [
+      'home.overview',
+      'home.my-work',
+      'home.recent-activity',
+    ].includes(destination.id)
       ? 'mock'
       : 'placeholder',
     description:

@@ -1,6 +1,6 @@
 import type { NamespaceId } from '../../../data/demo'
 import { demoUser } from '../../../data/demo'
-import type { WorkItem, WorkScenario, WorkTab } from './model'
+import type { ProductWorkItem, WorkScenario, WorkTab } from './model'
 const examples: readonly [string, string, WorkTab, string][] = [
   ['basin-draft', 'Kanso Stone Basin', 'drafts', 'kanso-stone-basin'],
   ['tunic-draft', 'Raw Silk Tunic', 'drafts', 'raw-silk-tunic'],
@@ -10,22 +10,36 @@ const examples: readonly [string, string, WorkTab, string][] = [
   ['cup-review', 'Ceramic Everyday Cup', 'assigned', 'ceramic-cup'],
   ['tunic-completed', 'Raw Silk Tunic', 'completed', 'raw-silk-tunic'],
 ]
-/** Independent personal-work examples, not a shared copy of Overview state. */
+/** Personal-work seeds keep their original bases; their session is shared across Home. */
 export function workFixture(
   namespace: NamespaceId,
   scenario?: WorkScenario,
-): readonly WorkItem[] {
+): readonly ProductWorkItem[] {
   if (namespace === 'studio-berlin' || scenario === 'empty') return []
   return examples.map(([id, name, status, slug], index) => ({
     id,
+    resourceId: (
+      {
+        'kanso-stone-basin': 'stone-basin',
+        'raw-silk-tunic': 'silk-tunic',
+        'ceramic-cup': 'ceramic-cup',
+        'tea-ritual': 'tea-ritual',
+      } as Record<string, string>
+    )[slug]!,
+    entryType: 'product-text' as const,
+    resourceKind: 'Product' as const,
     status,
     base: {
-      name,
-      description: `Discover ${name.toLowerCase()}, thoughtfully made for everyday use.`,
+      spec: {
+        title: name,
+        description: `Discover ${name.toLowerCase()}, thoughtfully made for everyday use.`,
+      },
     },
     proposed: {
-      name,
-      description: `${name}, carefully selected for our collection. Find materials, care guidance, and thoughtful details in store.`,
+      spec: {
+        title: name,
+        description: `${name}, carefully selected for our collection. Find materials, care guidance, and thoughtful details in store.`,
+      },
     },
     author: status === 'assigned' ? 'Kenji Sato' : demoUser.name,
     reviewer: status === 'assigned' ? demoUser.name : 'Kenji Sato',

@@ -1,9 +1,9 @@
+import { createSession, sessionReducer, resetSession } from '../demo/model'
+import { resourceLabel } from './model'
 import { describe, expect, it } from 'vitest'
 import { overviewFixture } from './fixtures'
 import {
   healthMatrix,
-  initialOverview,
-  overviewReducer,
   overviewSummary,
   queueCounts,
   resourceKinds,
@@ -45,7 +45,7 @@ describe('Overview demo fixtures and selectors', () => {
     for (const row of matrix)
       expect(row.total).toBe(row.ready + row.attention + row.reconciling)
   })
-  it('filters non-ready resources and sorts by severity then name, or by name', () => {
+  it('filters non-ready resources and sorts by severity then title, or by title', () => {
     expect(
       workQueue(fixture.resources, 'all', 'severity').map(
         (resource) => resource.readiness,
@@ -59,14 +59,14 @@ describe('Overview demo fixtures and selectors', () => {
       'reconciling',
     ])
     expect(workQueue(fixture.resources, 'blocked', 'severity')).toHaveLength(2)
-    const names = workQueue(fixture.resources, 'all', 'name').map(
-      (resource) => resource.name,
+    const names = workQueue(fixture.resources, 'all', 'title').map((resource) =>
+      resourceLabel(resource),
     )
     expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b, 'en')))
   })
   it('resolves locally without mutating fixtures, records activity, and resets exactly', () => {
-    const initial = initialOverview(fixture)
-    const changed = overviewReducer(initial, {
+    const initial = createSession('atelier-kyoto')
+    const changed = sessionReducer(initial, {
       type: 'resolve',
       id: 'stone-basin',
     })
@@ -81,8 +81,8 @@ describe('Overview demo fixtures and selectors', () => {
         (resource) => resource.id === 'stone-basin',
       ),
     ).toBe(false)
-    expect(changed.activity[0]).toMatchObject({
-      resourceId: 'stone-basin',
+    expect(changed.events[0]).toMatchObject({
+      itemId: 'stone-basin',
       local: true,
     })
     expect(
@@ -90,14 +90,12 @@ describe('Overview demo fixtures and selectors', () => {
         .readiness,
     ).toBe('blocked')
     expect(
-      overviewReducer(changed, { type: 'resolve', id: 'stone-basin' }),
+      sessionReducer(changed, { type: 'resolve', id: 'stone-basin' }),
     ).toBe(changed)
-    expect(overviewReducer(changed, { type: 'resolve', id: 'unknown' })).toBe(
+    expect(sessionReducer(changed, { type: 'resolve', id: 'unknown' })).toBe(
       changed,
     )
-    expect(overviewReducer(changed, { type: 'reset', fixture })).toEqual(
-      initial,
-    )
+    expect(resetSession(changed)).toEqual({ ...initial, epoch: 1 })
   })
   it('provides an all-clear state and a distinct filtered-empty state', () => {
     const clear = overviewFixture('atelier-kyoto', 'all-clear')

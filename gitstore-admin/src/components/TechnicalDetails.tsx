@@ -5,12 +5,18 @@ import styles from './technical-details.module.css'
 export function TechnicalDetails({
   resourceType,
   sourcePath,
+  defaultExpanded = false,
 }: {
   resourceType: string
   sourcePath: string
+  defaultExpanded?: boolean
 }) {
   return (
-    <details className={styles.details} data-technical-details="">
+    <details
+      open={defaultExpanded || undefined}
+      className={styles.details}
+      data-technical-details=""
+    >
       <summary>Technical details</summary>
       <dl>
         <dt>Resource type</dt>

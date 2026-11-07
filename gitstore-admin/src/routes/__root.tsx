@@ -1,5 +1,6 @@
 import { createRootRouteWithContext, Outlet } from '@tanstack/react-router'
 import { PreferencesProvider } from '../state/preferences'
+import { HomeDemoProvider } from '../features/home/demo/HomeDemoProvider'
 import { AppShell } from '../shell/AppShell'
 import { NotFoundPage } from '../pages/PlaceholderPage'
 import type { AppRouterContext } from '../app/router-context'
@@ -12,10 +13,13 @@ export const Route = createRootRouteWithContext<AppRouterContext>()({
   ),
 })
 function Root() {
-  const { preferences } = Route.useRouteContext()
+  const context = Route.useRouteContext()
+  const { preferences } = context
   return (
     <PreferencesProvider {...preferences}>
-      <Outlet />
+      <HomeDemoProvider seed={context}>
+        <Outlet />
+      </HomeDemoProvider>
     </PreferencesProvider>
   )
 }

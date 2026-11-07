@@ -111,7 +111,7 @@ for (const home of pages) {
     await sort.click()
     await page
       .getByRole('option', {
-        name: home.id === 'overview' ? 'Name A–Z' : 'Product name',
+        name: home.id === 'overview' ? 'Title A–Z' : 'Title',
         exact: true,
       })
       .click()

@@ -70,7 +70,7 @@ test('My work mobile editor confirms unsaved dismissal across engines', async ({
   await page
     .getByRole('button', { name: 'Edit demo draft', exact: true })
     .click()
-  const name = page.getByRole('textbox', { name: 'Product name', exact: true })
+  const name = page.getByRole('textbox', { name: 'Title', exact: true })
   await name.fill('Mobile basin')
   await page.keyboard.press('Escape')
   const confirmation = page.getByRole('dialog', {

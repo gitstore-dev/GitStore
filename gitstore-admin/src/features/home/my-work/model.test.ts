@@ -1,3 +1,4 @@
+import type { WorkItem, ProductWorkItem } from './model'
 import { describe, expect, it } from 'vitest'
 import { workFixture } from './fixtures'
 import {
@@ -10,6 +11,11 @@ import {
   workReducer,
   workStatus,
 } from './model'
+function product(item: WorkItem | undefined): ProductWorkItem {
+  if (!item || item.entryType !== 'product-text')
+    throw new Error('Expected product work')
+  return item
+}
 const fixture = workFixture('atelier-kyoto')
 describe('personal demo work', () => {
   it('has deterministic unique product changes with consistent ownership, paths and counts', () => {
@@ -34,42 +40,41 @@ describe('personal demo work', () => {
   })
   it('filters within a tab and sorts deterministically without changing counts or fixtures', () => {
     expect(
-      workList(fixture, 'drafts', ' SILK ', 'name').map((item) => item.id),
+      workList(fixture, 'drafts', ' SILK ', 'title').map((item) => item.id),
     ).toEqual(['tunic-draft'])
     expect(workList(fixture, 'drafts', '', 'updated')[0]!.id).toBe(
       'basin-draft',
     )
     expect(
-      workList(fixture, 'submitted', '', 'name').map((item) => item.id),
+      workList(fixture, 'submitted', '', 'title').map((item) => item.id),
     ).toEqual(['cup-submitted', 'kit-submitted'])
     expect(workList(fixture, 'assigned', 'not found', 'updated')).toEqual([])
     expect(workCounts(fixture).drafts).toBe(2)
   })
-  it('validates names while allowing empty descriptions and preserves the original comparison', () => {
+  it('validates titles while allowing empty descriptions and preserves the original comparison', () => {
     const state = initialWork(fixture)
-    expect(validText({ name: '  ', description: '' })).toBe(false)
-    expect(validText({ name: 'Cup', description: '' })).toBe(true)
+    expect(validText({ spec: { title: '  ', description: '' } })).toBe(false)
+    expect(validText({ spec: { title: 'Cup', description: '' } })).toBe(true)
     expect(
       workReducer(state, {
         type: 'save',
         id: 'basin-draft',
-        text: { name: ' ', description: '' },
+        text: { spec: { title: ' ', description: '' } },
       }),
     ).toBe(state)
     const next = workReducer(state, {
       type: 'save',
       id: 'basin-draft',
-      text: { name: '  Stone Basin  ', description: '' },
+      text: { spec: { title: '  Stone Basin  ', description: '' } },
     })
-    expect(next.items[0]!.proposed).toEqual({
-      name: 'Stone Basin',
-      description: '',
+    expect(product(next.items[0]).proposed).toEqual({
+      spec: { title: 'Stone Basin', description: '' },
     })
-    expect(next.items[0]!.base).toEqual(fixture[0]!.base)
-    expect(changedFields(next.items[0]!)).toEqual(['name', 'description'])
+    expect(product(next.items[0]).base).toEqual(fixture[0]!.base)
+    expect(changedFields(next.items[0]!)).toEqual(['title', 'description'])
     expect(sameText(fixture[0]!.base, fixture[0]!.base)).toBe(true)
     expect(sameText(fixture[0]!.base, fixture[0]!.proposed)).toBe(false)
-    expect(fixture[0]!.proposed.name).toBe('Kanso Stone Basin')
+    expect(fixture[0]!.proposed.spec.title).toBe('Kanso Stone Basin')
   })
   it('submits only a saved changed draft and removes it from Drafts', () => {
     const original = initialWork(fixture)
@@ -88,7 +93,7 @@ describe('personal demo work', () => {
       assigned: 2,
       completed: 1,
     })
-    expect(next.items[0]!.proposed).toEqual(fixture[0]!.proposed)
+    expect(product(next.items[0]).proposed).toEqual(fixture[0]!.proposed)
     expect(workReducer(next, { type: 'submit', id: 'basin-draft' })).toBe(next)
   })
   it('discards only drafts and keeps unrelated items intact', () => {
@@ -134,7 +139,7 @@ describe('personal demo work', () => {
       workReducer(state, {
         type: 'save',
         id: 'cup-submitted',
-        text: { name: 'Changed', description: '' },
+        text: { spec: { title: 'Changed', description: '' } },
       }),
     ).toBe(state)
     expect(workReducer(state, { type: 'approve', id: 'tunic-completed' })).toBe(

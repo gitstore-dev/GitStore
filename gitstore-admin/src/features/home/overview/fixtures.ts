@@ -5,14 +5,14 @@ const resources: readonly DemoResource[] = [
   {
     id: 'stone-basin',
     kind: 'Product',
-    name: 'Kanso Stone Basin',
+    spec: { title: 'Kanso Stone Basin' },
     readiness: 'blocked',
     diagnostic:
       'Add the missing shipping weight so this product can pass its checks.',
     path: 'catalog/products/kanso-stone-basin.md',
     references: [
       {
-        name: 'Homeware',
+        label: 'Homeware',
         detail: 'Assigned category',
         resourceId: 'homeware',
       },
@@ -21,7 +21,7 @@ const resources: readonly DemoResource[] = [
   {
     id: 'silk-tunic',
     kind: 'Product',
-    name: 'Raw Silk Tunic',
+    spec: { title: 'Raw Silk Tunic' },
     readiness: 'ready',
     diagnostic: 'No issues in this demo snapshot.',
     path: 'catalog/products/raw-silk-tunic.md',
@@ -30,13 +30,13 @@ const resources: readonly DemoResource[] = [
   {
     id: 'ceramic-cup',
     kind: 'Product',
-    name: 'Ceramic Everyday Cup',
+    spec: { title: 'Ceramic Everyday Cup' },
     readiness: 'ready',
     diagnostic: 'No issues in this demo snapshot.',
     path: 'catalog/products/ceramic-cup.md',
     references: [
       {
-        name: 'Homeware',
+        label: 'Homeware',
         detail: 'Assigned category',
         resourceId: 'homeware',
       },
@@ -45,7 +45,7 @@ const resources: readonly DemoResource[] = [
   {
     id: 'tea-ritual',
     kind: 'Product',
-    name: 'Ceremonial Tea Ritual Kit',
+    spec: { title: 'Ceremonial Tea Ritual Kit' },
     readiness: 'stale',
     diagnostic:
       'The latest changes to this product are not reflected in this demo yet.',
@@ -55,19 +55,19 @@ const resources: readonly DemoResource[] = [
   {
     id: 'tunic-natural-m',
     kind: 'ProductVariant',
-    name: 'Raw Silk Tunic — Natural / M',
+    spec: { title: 'Raw Silk Tunic — Natural / M' },
     readiness: 'failed',
     diagnostic:
       'This barcode is also used by the Black / M variant. Give each variant a unique barcode.',
     path: 'catalog/variants/tunic-natural-m.md',
     references: [
       {
-        name: 'Raw Silk Tunic — Black / M',
+        label: 'Raw Silk Tunic — Black / M',
         detail: 'Uses the same barcode in this demo',
         resourceId: 'tunic-black-m',
       },
       {
-        name: 'Raw Silk Tunic',
+        label: 'Raw Silk Tunic',
         detail: 'Product',
         resourceId: 'silk-tunic',
       },
@@ -76,13 +76,13 @@ const resources: readonly DemoResource[] = [
   {
     id: 'tunic-black-m',
     kind: 'ProductVariant',
-    name: 'Raw Silk Tunic — Black / M',
+    spec: { title: 'Raw Silk Tunic — Black / M' },
     readiness: 'ready',
     diagnostic: 'No issues in this demo snapshot.',
     path: 'catalog/variants/tunic-black-m.md',
     references: [
       {
-        name: 'Raw Silk Tunic',
+        label: 'Raw Silk Tunic',
         detail: 'Product',
         resourceId: 'silk-tunic',
       },
@@ -91,13 +91,13 @@ const resources: readonly DemoResource[] = [
   {
     id: 'tea-kit-natural',
     kind: 'ProductVariant',
-    name: 'Tea Ritual Kit — Natural',
+    spec: { title: 'Tea Ritual Kit — Natural' },
     readiness: 'ready',
     diagnostic: 'No issues in this demo snapshot.',
     path: 'catalog/variants/tea-kit-natural.md',
     references: [
       {
-        name: 'Ceremonial Tea Ritual Kit',
+        label: 'Ceremonial Tea Ritual Kit',
         detail: 'Product',
         resourceId: 'tea-ritual',
       },
@@ -106,7 +106,7 @@ const resources: readonly DemoResource[] = [
   {
     id: 'homeware',
     kind: 'CategoryTaxonomy',
-    name: 'Homeware',
+    spec: { title: 'Homeware' },
     readiness: 'ready',
     diagnostic: 'No issues in this demo snapshot.',
     path: 'catalog/taxonomies/homeware.md',
@@ -115,14 +115,14 @@ const resources: readonly DemoResource[] = [
   {
     id: 'autumn-objects',
     kind: 'Collection',
-    name: 'Autumn Objects',
+    spec: { title: 'Autumn Objects' },
     readiness: 'reconciling',
     diagnostic:
       'Products matching this collection are being checked in this demo.',
     path: 'catalog/collections/autumn-objects.md',
     references: [
       {
-        name: 'Homeware',
+        label: 'Homeware',
         detail: 'Category used to select products',
         resourceId: 'homeware',
       },
@@ -131,7 +131,7 @@ const resources: readonly DemoResource[] = [
   {
     id: 'everyday',
     kind: 'Collection',
-    name: 'Everyday Essentials',
+    spec: { title: 'Everyday Essentials' },
     readiness: 'ready',
     diagnostic: 'No issues in this demo snapshot.',
     path: 'catalog/collections/everyday.md',
@@ -156,7 +156,7 @@ const resources: readonly DemoResource[] = [
     path: 'media/basin-detail.md',
     references: [
       {
-        name: 'Kanso Stone Basin',
+        label: 'Kanso Stone Basin',
         detail: 'Used by this product',
         resourceId: 'stone-basin',
       },

@@ -1,0 +1,52 @@
+.actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  margin-top: 24px;
+}
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.changes {
+  margin-block: 20px;
+  min-width: 0;
+}
+.changes h3 {
+  font-size: 13px;
+}
+.changes h4 {
+  font-size: 12px;
+  margin: 18px 0 8px;
+}
+.before,
+.after {
+  padding: 10px;
+  border-left: 2px solid var(--line);
+  background: var(--hover);
+  margin-block: 8px;
+}
+.before {
+  border-color: #bd6757;
+}
+.after {
+  border-color: #6ca48a;
+}
+.before strong,
+.after strong {
+  font: 9px var(--mono);
+  text-transform: uppercase;
+}
+.before p,
+.after p {
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 6px 0 0;
+}

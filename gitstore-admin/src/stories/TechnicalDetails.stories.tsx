@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
-import { userEvent, within } from 'storybook/test'
+import { expect, within } from 'storybook/test'
 import { TechnicalDetails } from '../components/TechnicalDetails'
 import { PreferencesProvider } from '../state/preferences'
 import type { Theme } from '../state/preferences'
@@ -7,10 +7,12 @@ function TechnicalDetailsPreview({
   resourceType = 'Product',
   sourcePath = 'catalog/products/kanso-stone-basin.md',
   theme = 'light',
+  defaultExpanded = false,
 }: {
   resourceType?: string
   sourcePath?: string
   theme?: Theme
+  defaultExpanded?: boolean
 }) {
   return (
     <PreferencesProvider initialTheme={theme}>
@@ -23,7 +25,11 @@ function TechnicalDetailsPreview({
           minHeight: 260,
         }}
       >
-        <TechnicalDetails resourceType={resourceType} sourcePath={sourcePath} />
+        <TechnicalDetails
+          resourceType={resourceType}
+          sourcePath={sourcePath}
+          defaultExpanded={defaultExpanded}
+        />
       </div>
     </PreferencesProvider>
   )
@@ -41,21 +47,31 @@ export default meta
 type Story = StoryObj<typeof meta>
 export const Collapsed: Story = {}
 export const Expanded: Story = {
+  args: { defaultExpanded: true },
   play: async ({ canvasElement }) => {
-    const summary = within(canvasElement).getByText('Technical details', {
-      exact: true,
-    })
-    summary.focus()
-    await userEvent.keyboard('{Enter}')
+    const disclosure = canvasElement.querySelector('details')!
+    await expect(disclosure).toHaveAttribute('open')
+    await expect(
+      within(canvasElement).getByText('Resource type', { exact: true }),
+    ).toBeVisible()
+    await expect(canvasElement.querySelector('code')!).toBeVisible()
   },
 }
-export const Dark: Story = { args: { theme: 'dark' }, play: Expanded.play }
+export const Dark: Story = {
+  args: { theme: 'dark', defaultExpanded: true },
+  play: Expanded.play,
+}
 export const MediaFile: Story = {
-  args: { resourceType: 'File', sourcePath: 'media/basin-detail.md' },
+  args: {
+    defaultExpanded: true,
+    resourceType: 'File',
+    sourcePath: 'media/basin-detail.md',
+  },
   play: Expanded.play,
 }
 export const LongPath: Story = {
   args: {
+    defaultExpanded: true,
     sourcePath: `catalog/products/${'handcrafted-'.repeat(12)}stone-basin.md`,
   },
   play: Expanded.play,

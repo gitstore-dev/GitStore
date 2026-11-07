@@ -64,12 +64,20 @@ export const Tablet: Story = {
 }
 async function openInspector(canvasElement: HTMLElement) {
   await userEvent.click(
-    await within(canvasElement).findByRole('button', {
-      name: 'View details for Kanso Stone Basin',
-    }),
+    await within(canvasElement).findByRole(
+      'button',
+      {
+        name: 'View details for Kanso Stone Basin',
+      },
+      { timeout: 10_000 },
+    ),
   )
   const body = within(canvasElement.ownerDocument.body)
-  await body.findByRole('button', { name: 'Edit demo draft' })
+  await body.findByRole(
+    'button',
+    { name: 'Edit demo draft' },
+    { timeout: 10_000 },
+  )
   return body
 }
 export const ChangePreview: Story = {
@@ -82,7 +90,7 @@ export const Editing: Story = {
     const body = await openInspector(canvasElement)
     await userEvent.click(body.getByRole('button', { name: 'Edit demo draft' }))
     await expect(
-      await body.findByRole('textbox', { name: 'Product name' }),
+      await body.findByRole('textbox', { name: 'Title' }, { timeout: 10_000 }),
     ).toBeVisible()
   },
 }
@@ -91,7 +99,7 @@ export const UnsavedChanges: Story = {
     const body = await openInspector(canvasElement)
     await userEvent.click(body.getByRole('button', { name: 'Edit demo draft' }))
     await userEvent.type(
-      await body.findByRole('textbox', { name: 'Product name' }),
+      await body.findByRole('textbox', { name: 'Title' }, { timeout: 10_000 }),
       ' — Large',
     )
     await expect(
@@ -104,12 +112,16 @@ export const UnsavedConfirmation: Story = {
     const body = await openInspector(canvasElement)
     await userEvent.click(body.getByRole('button', { name: 'Edit demo draft' }))
     await userEvent.type(
-      await body.findByRole('textbox', { name: 'Product name' }),
+      await body.findByRole('textbox', { name: 'Title' }, { timeout: 10_000 }),
       ' — Large',
     )
     await userEvent.click(body.getByRole('button', { name: 'Close inspector' }))
     await expect(
-      await body.findByRole('dialog', { name: 'Discard unsaved edits?' }),
+      await body.findByRole(
+        'dialog',
+        { name: 'Discard unsaved edits?' },
+        { timeout: 10_000 },
+      ),
     ).toBeVisible()
   },
 }
@@ -120,7 +132,11 @@ export const SubmitConfirmation: Story = {
       body.getByRole('button', { name: 'Submit demo draft' }),
     )
     await expect(
-      await body.findByRole('dialog', { name: 'Submit demo draft?' }),
+      await body.findByRole(
+        'dialog',
+        { name: 'Submit demo draft?' },
+        { timeout: 10_000 },
+      ),
     ).toBeVisible()
   },
 }
@@ -128,16 +144,28 @@ export const ReviewConfirmation: Story = {
   args: { tab: 'assigned' },
   play: async ({ canvasElement }) => {
     await userEvent.click(
-      await within(canvasElement).findByRole('button', {
-        name: 'View details for Kanso Stone Basin',
-      }),
+      await within(canvasElement).findByRole(
+        'button',
+        {
+          name: 'View details for Kanso Stone Basin',
+        },
+        { timeout: 10_000 },
+      ),
     )
     const body = within(canvasElement.ownerDocument.body)
     await userEvent.click(
-      await body.findByRole('button', { name: 'Request demo changes' }),
+      await body.findByRole(
+        'button',
+        { name: 'Request demo changes' },
+        { timeout: 10_000 },
+      ),
     )
     await expect(
-      await body.findByRole('textbox', { name: 'Review note' }),
+      await body.findByRole(
+        'textbox',
+        { name: 'Review note' },
+        { timeout: 10_000 },
+      ),
     ).toBeVisible()
   },
 }

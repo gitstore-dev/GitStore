@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useReducer,
-  useRef,
-  useState,
-} from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
   Button,
@@ -22,7 +15,6 @@ import {
 } from 'react-aria-components'
 import {
   ArrowUpRight,
-  Check,
   Clock,
   FilePenLine,
   Send,
@@ -37,17 +29,16 @@ import { usePageInspector } from '../../../shell/PageInspector'
 import { ChoiceSelect } from '../../../components/ChoiceSelect'
 import { useGridMotion } from '../shared/motion/useGridMotion'
 import { useResourceLighting } from '../shared/motion/useResourceLighting'
-import { workFixture } from './fixtures'
+import { useHomeDemo } from '../demo/HomeDemoProvider'
 import {
-  changedFields,
-  initialWork,
+  workChangeCount,
+  workTitle,
   sameText,
   tabLabels,
   validText,
   workCounts,
   workList,
   workReadiness,
-  workReducer,
   workTabs,
 } from './model'
 import type {
@@ -59,19 +50,20 @@ import type {
 } from './model'
 import { formatWorkTime, WorkInspector } from './WorkInspector'
 import styles from './my-work.module.css'
+import { kindLabels } from '../overview/presentation'
 import { WorkBadge } from './WorkBadge'
-import { HomePage, HomePageHeader, DemoNotice } from '../shared/HomePage'
+import { EmptyState } from '../shared/EmptyState'
+import { HomePage, HomePageHeader } from '../shared/HomePage'
 import { ResourceCard, SummaryCardContent } from '../shared/HomeCards'
 import homeStyles from '../shared/home.module.css'
 import { ConfirmationDialog } from '../../../components/ConfirmationDialog'
 type Confirmation =
-  'submit' | 'discard' | 'approve' | 'request-changes' | 'reset' | 'unsaved'
+  'submit' | 'discard' | 'approve' | 'request-changes' | 'unsaved'
 const titles: Record<Confirmation, string> = {
   submit: 'Submit demo draft?',
   discard: 'Discard demo draft?',
   approve: 'Approve demo changes?',
   'request-changes': 'Request demo changes?',
-  reset: 'Reset My work demo?',
   unsaved: 'Discard unsaved edits?',
 }
 export function MyWorkPage({
@@ -83,25 +75,52 @@ export function MyWorkPage({
   scenario?: WorkScenario
   initialTab?: WorkTab
 }) {
-  const fixture = useMemo(
-    () => workFixture(namespace, scenario),
-    [namespace, scenario],
+  const {
+    session,
+    dispatch: homeDispatch,
+    reset: requestReset,
+  } = useHomeDemo(namespace)
+  const state = session.work
+  const dispatch = useCallback(
+    (action: Exclude<WorkAction, { type: 'reset' }>) =>
+      homeDispatch({ type: 'work', action }),
+    [homeDispatch],
   )
-  const [state, dispatch] = useReducer(workReducer, fixture, initialWork)
   const [tab, setTab] = useState<WorkTab>(initialTab)
   const [query, setQuery] = useState(
     scenario === 'filtered-empty' ? 'No matching product' : '',
   )
   const [sort, setSort] = useState<WorkSort>('updated')
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [buffer, setBuffer] = useState<ProductText | null>(null)
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null)
   const [note, setNote] = useState('')
   const [announcement, setAnnouncement] = useState('')
   const [recovered, setRecovered] = useState(false)
   const pending = useRef<(() => void) | null>(null)
   const selected = state.items.find((item) => item.id === selectedId)
-  const dirty = !!selected && !!buffer && !sameText(selected.proposed, buffer)
+  const buffer = selectedId ? (session.buffers[selectedId] ?? null) : null
+  const setBuffer = useCallback(
+    (text: ProductText | null) => {
+      if (selectedId) homeDispatch({ type: 'buffer', id: selectedId, text })
+    },
+    [homeDispatch, selectedId],
+  )
+  const current = selected ? session.catalog[selected.resourceId] : undefined
+  const staleBase =
+    !!selected &&
+    selected.entryType === 'product-text' &&
+    current?.kind === 'Product' &&
+    !sameText(selected.base, {
+      spec: {
+        title: current.spec.title,
+        description: current.spec.description,
+      },
+    })
+  const dirty =
+    !!selected &&
+    selected.entryType === 'product-text' &&
+    !!buffer &&
+    !sameText(selected.proposed, buffer)
   const readOnly = scenario === 'read-only'
   const counts = workCounts(state.items)
   const items = workList(state.items, tab, query, sort)
@@ -129,14 +148,14 @@ export function MyWorkPage({
     setConfirmation(action)
   }, [])
   const act = useCallback(
-    (action: WorkAction, message: string) => {
+    (action: Exclude<WorkAction, { type: 'reset' }>, message: string) => {
       capture()
       dispatch(action)
       setBuffer(null)
       setAnnouncement(message)
       focusHeading()
     },
-    [capture, focusHeading],
+    [capture, focusHeading, dispatch, setBuffer],
   )
   const save = useCallback(() => {
     if (selected && buffer && validText(buffer) && !readOnly)
@@ -151,11 +170,12 @@ export function MyWorkPage({
         setBuffer(null)
         focusHeading()
       }),
-    [request, focusHeading],
+    [request, focusHeading, setBuffer],
   )
   const edit = useCallback(() => {
-    if (selected) setBuffer({ ...selected.proposed })
-  }, [selected])
+    if (selected?.entryType === 'product-text')
+      setBuffer(structuredClone(selected.proposed))
+  }, [selected, setBuffer])
   const content = useMemo(
     () =>
       selected ? (
@@ -163,6 +183,8 @@ export function MyWorkPage({
           item={selected}
           buffer={buffer}
           readOnly={readOnly}
+          catalog={session.catalog}
+          staleBase={staleBase}
           onEdit={edit}
           onText={setBuffer}
           onSave={save}
@@ -170,7 +192,18 @@ export function MyWorkPage({
           onAction={ask}
         />
       ) : null,
-    [selected, buffer, readOnly, edit, save, cancelEdit, ask],
+    [
+      selected,
+      buffer,
+      readOnly,
+      edit,
+      save,
+      cancelEdit,
+      ask,
+      session.catalog,
+      staleBase,
+      setBuffer,
+    ],
   )
   const inspector = usePageInspector(content)
   const { owner, registerCloseGuard } = inspector
@@ -182,10 +215,15 @@ export function MyWorkPage({
       }),
     )
     return () => registerCloseGuard(owner, null)
-  }, [owner, registerCloseGuard, request])
+  }, [owner, registerCloseGuard, request, setBuffer])
   function select(id: string, trigger: HTMLElement) {
+    if (id === selectedId) {
+      inspector.open(trigger)
+      focusHeading()
+      return
+    }
     request(() => {
-      setBuffer(null)
+      if (selectedId !== id) setBuffer(null)
       setSelectedId(id)
       inspector.open(trigger)
       focusHeading()
@@ -206,18 +244,6 @@ export function MyWorkPage({
       const proceed = pending.current
       pending.current = null
       proceed?.()
-      return
-    }
-    if (action === 'reset') {
-      capture()
-      dispatch({ type: 'reset', items: fixture })
-      setBuffer(null)
-      setSelectedId(null)
-      setTab('drafts')
-      setQuery('')
-      setSort('updated')
-      setAnnouncement('My work demo reset. Original examples restored.')
-      focusHeading()
       return
     }
     if (!selected || !action || readOnly) return
@@ -244,10 +270,9 @@ export function MyWorkPage({
         namespace={namespaceName}
         title="My work"
         headingId="my-work-heading"
-        description={`Drafts and reviews for ${demoUser.name}.`}
-        onReset={() => request(() => ask('reset'))}
+        description={`Drafts, reviews, and recovery for ${demoUser.name}.`}
+        onReset={requestReset}
       />
-      <DemoNotice page="My work" />
       <p role="status" aria-live="polite" className={styles.srOnly}>
         {announcement}
       </p>
@@ -287,20 +312,26 @@ export function MyWorkPage({
             keyboardActivation="manual"
             className={styles.tabs}
           >
-            <TabList aria-label="My work views" className={homeStyles.metrics}>
+            <TabList
+              aria-label="My work views"
+              className={homeStyles.metrics}
+              data-empty={state.items.length === 0 || undefined}
+            >
               {workTabs.map((key) => (
                 <Tab
                   key={key}
                   id={key}
                   className={homeStyles.metric}
-                  data-halo-card=""
+                  data-halo-card={counts[key] ? '' : undefined}
                   data-readiness={
-                    {
-                      drafts: 'stale',
-                      submitted: 'reconciling',
-                      assigned: 'blocked',
-                      completed: 'ready',
-                    }[key]
+                    counts[key]
+                      ? {
+                          drafts: 'stale',
+                          submitted: 'reconciling',
+                          assigned: 'blocked',
+                          completed: 'ready',
+                        }[key]
+                      : undefined
                   }
                 >
                   <SummaryCardContent
@@ -329,33 +360,35 @@ export function MyWorkPage({
                 </Tab>
               ))}
             </TabList>
-            <div className={styles.toolbar}>
-              <SearchField
-                aria-label="Search my work"
-                value={query}
-                onChange={(value) => {
-                  capture()
-                  setQuery(value)
-                }}
-                className={styles.search}
-              >
-                <Search size={16} aria-hidden="true" />
-                <Input placeholder="Search by product name" />
-                <Button aria-label="Clear search">×</Button>
-              </SearchField>
-              <ChoiceSelect
-                label="Sort work"
-                value={sort}
-                onChange={(value) => {
-                  capture()
-                  setSort(value as WorkSort)
-                }}
-                options={[
-                  { id: 'updated', label: 'Last updated' },
-                  { id: 'name', label: 'Product name' },
-                ]}
-              />
-            </div>
+            {state.items.length > 0 && (
+              <div className={styles.toolbar}>
+                <SearchField
+                  aria-label="Search my work"
+                  value={query}
+                  onChange={(value) => {
+                    capture()
+                    setQuery(value)
+                  }}
+                  className={styles.search}
+                >
+                  <Search size={16} aria-hidden="true" />
+                  <Input placeholder="Search by item title" />
+                  <Button aria-label="Clear search">×</Button>
+                </SearchField>
+                <ChoiceSelect
+                  label="Sort work"
+                  value={sort}
+                  onChange={(value) => {
+                    capture()
+                    setSort(value as WorkSort)
+                  }}
+                  options={[
+                    { id: 'updated', label: 'Last updated' },
+                    { id: 'title', label: 'Title' },
+                  ]}
+                />
+              </div>
+            )}
             <TabPanel id={tab} className={styles.panel}>
               <div ref={stage} className={homeStyles.resourceStage}>
                 {items.length ? (
@@ -364,17 +397,18 @@ export function MyWorkPage({
                       <ResourceCard
                         key={item.id}
                         id={item.id}
-                        title={item.proposed.name}
-                        kind="Product"
+                        title={workTitle(item)}
+                        kind={kindLabels[item.resourceKind].singular}
                         headingLevel={2}
                         state={workReadiness(item)}
                         badge={<WorkBadge item={item} />}
                         description={
                           <>
-                            {changedFields(item).length}{' '}
-                            {changedFields(item).length === 1
-                              ? 'field'
-                              : 'fields'}{' '}
+                            {session.buffers[item.id] && (
+                              <span>Unsaved edits · </span>
+                            )}
+                            {workChangeCount(item)}{' '}
+                            {workChangeCount(item) === 1 ? 'field' : 'fields'}{' '}
                             changed ·{' '}
                             {item.status === 'assigned'
                               ? `From ${item.author}`
@@ -400,14 +434,21 @@ export function MyWorkPage({
                     ))}
                   </div>
                 ) : (
-                  <section className={styles.empty}>
-                    {query.trim() ? (
-                      <>
-                        <h2>No matching results</h2>
-                        <p>
-                          No products in {tabLabels[tab].toLowerCase()} match “
-                          {query}”.
-                        </p>
+                  <EmptyState
+                    title={
+                      query.trim()
+                        ? 'No matching results'
+                        : !state.items.length
+                          ? 'No work yet'
+                          : {
+                              drafts: 'No drafts',
+                              submitted: 'No submitted changes',
+                              assigned: 'No reviews assigned to you',
+                              completed: 'No completed work',
+                            }[tab]
+                    }
+                    actions={
+                      query.trim() ? (
                         <ActionButton
                           onPress={() => {
                             capture()
@@ -416,25 +457,7 @@ export function MyWorkPage({
                         >
                           Clear search
                         </ActionButton>
-                      </>
-                    ) : (
-                      <>
-                        <Check size={28} aria-hidden="true" />
-                        <h2>
-                          {namespace === 'studio-berlin'
-                            ? 'Your work starts here'
-                            : {
-                                drafts: 'No drafts',
-                                submitted: 'No submitted changes',
-                                assigned: 'No reviews assigned to you',
-                                completed: 'No completed reviews',
-                              }[tab]}
-                        </h2>
-                        <p>
-                          {namespace === 'studio-berlin'
-                            ? 'Your drafts and assigned reviews will appear here as you build your store.'
-                            : 'There is nothing in this view. Try another tab or reset the demo.'}
-                        </p>
+                      ) : !state.items.length ? (
                         <Link
                           to="/w/$namespace/home/overview"
                           params={{ namespace }}
@@ -442,9 +465,15 @@ export function MyWorkPage({
                           Open Overview{' '}
                           <ArrowUpRight size={13} aria-hidden="true" />
                         </Link>
-                      </>
-                    )}
-                  </section>
+                      ) : undefined
+                    }
+                  >
+                    {query.trim()
+                      ? `No items in ${tabLabels[tab].toLowerCase()} match “${query}”.`
+                      : !state.items.length
+                        ? 'Your drafts and assigned reviews will appear here.'
+                        : 'There is nothing in this view. Choose another tab to see your other work.'}
+                  </EmptyState>
                 )}
               </div>
             </TabPanel>
@@ -467,13 +496,11 @@ export function MyWorkPage({
         <p>
           {confirmation === 'unsaved'
             ? 'Your unsaved product text will be discarded. The last saved demo draft will remain.'
-            : confirmation === 'reset'
-              ? 'Restore the original work examples, counts, and draft text for this store.'
-              : confirmation === 'discard'
-                ? `Remove the saved demo draft for ${selected?.proposed.name}.`
-                : confirmation === 'submit'
-                  ? `Move the saved draft for ${selected?.proposed.name} to Submitted.`
-                  : `Complete your demo review for ${selected?.proposed.name}. This does not publish the product.`}
+            : confirmation === 'discard'
+              ? `Remove the saved demo draft for ${selected ? workTitle(selected) : ''}.`
+              : confirmation === 'submit'
+                ? `Move the saved draft for ${selected ? workTitle(selected) : ''} to Submitted.`
+                : `Complete your demo review for ${selected ? workTitle(selected) : ''}. This does not publish the product.`}
         </p>
         {confirmation === 'request-changes' && (
           <TextField
@@ -487,8 +514,8 @@ export function MyWorkPage({
           </TextField>
         )}
         <p className={styles.muted}>
-          This changes only this page’s demo. Your store and saved files are not
-          changed.
+          This changes the shared demo session in this tab. Your store and saved
+          files are not changed.
         </p>
         <div className={styles.dialogActions}>
           <ActionButton

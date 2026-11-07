@@ -2,7 +2,7 @@
 
 ## Boundaries
 
-The shell, shared controls, layouts, navigation, Home / Overview, and Home / My work are implemented. Overview simulates resource resolution; My work provides limited product text editing and personal draft/review demo actions. The other 77 destinations remain placeholders. Local typed fixtures describe two demo workspaces and one demo identity. No network transport, authentication, live operational metrics, Apollo cache, GraphQL endpoint or API mock server is present. Demo menus do not enforce authorization.
+The shell, shared controls, layouts, navigation, and Home / Overview, My work, and Recent activity are implemented. They use deterministic fixtures and shared per-store in-memory sessions; the other 76 destinations remain placeholders. No network transport, authentication, live operational metrics, Apollo cache, GraphQL endpoint, or API mock server is present. Presentation specimens do not enforce authorization.
 
 The PRD covers future commerce capabilities. Source references in the copied PRD describe the backend's historical planning baseline, which is intentionally absent on this branch. Stitch project GitStore Admin II is visual reference, not production source code.
 
@@ -12,9 +12,11 @@ The PRD covers future commerce capabilities. Source references in the copied PRD
 - `src/routes`: thin TanStack file routes. Generated route-tree output is ignored and recreated by the router CLI/Vite plugin.
 - `src/components`: React Aria-backed interactions, navigation items, theme picker, workspace selector, profile menu and command palette.
 - `src/shell`: header/sidebar and standard, inspector and Focus Mode composition.
-- `src/features/home/overview`: page-local fixtures, selectors, reducer, controls, resource inspector, and presentation states. No transport or API contract is implied.
-- `src/features/home/my-work`: independent page-local work fixtures, selectors, reducer, product text editor, change preview, confirmations, and presentation states.
-- `src/features/home/shared`: common Home page frame, context trail/header, demo controls/notice, summary content, and resource cards. Overview and My work share their responsive spacing and card anatomy.
+- `src/features/home/overview`: seed fixtures, selectors, controls, resource inspector, and presentation states. No transport or API contract is implied.
+- `src/features/home/demo`: shared session, snapshots, recovery validation, event history, and change previews.
+- `src/features/home/recent-activity`: timeline, filters, local pagination, and event/recovery inspector.
+- `src/features/home/my-work`: personal-work seed fixtures, selectors/reducer, product text editor, change preview, confirmations, and presentation states.
+- `src/features/home/shared`: common Home page frame, context trail/header, demo disclosure, summary content, and resource cards. Overview and My work share their responsive spacing and card anatomy.
 - `src/features/home/shared/motion`: shared card choreography and decorative GPU lighting.
 - `src/pages`: shared placeholder and not-found UI. Future business screens belong in feature directories.
 - `src/state`: browser preferences only; never future API data or credentials.
@@ -34,72 +36,66 @@ The workspace landing sidebar exposes five areas: Home, Commerce, Content, Opera
 
 Settings is a separate context entered through the anchored footer link; its sidebar contains only settings destinations and no duplicate Settings entry. Control plane is a platform workspace chosen from the namespace/platform selector. Choosing a namespace from platform scope opens that workspace's Home; switching namespaces within a workspace preserves the current page. The command palette continues to search all 79 destinations. These are navigation contexts, not permission checks or personalized filtering.
 
-## Overview demo lifecycle
+## Shared Home demo lifecycle
 
-Atelier Kyoto starts with 14 resources across seven canonical kinds; Studio Berlin starts with an empty catalog and setup guidance. Counts and the health matrix derive from resource records. Confirmed demo actions update local readiness and activity; cancellation does not. Ready items remain accessible through the inspector selector and activity. State resets on route unmount, namespace change, reload, or Reset demo. Storybook scenarios are injected through router context, never URL parameters. Restricted and unavailable specimens are presentations, not permission enforcement or network behavior.
+`HomeDemoProvider` sits under the root preferences provider. It owns a session per
+namespace: authored snapshots, readiness metadata, saved work, unsaved draft buffers,
+immutable events, deterministic counters, and a reset epoch. All application routes
+and store switches preserve these sessions. Reload restores both stores. Reset demo
+requires confirmation, restores only the active store, clears its buffers and all
+three Home views, and remounts its shell to dismiss stale inspectors and selections.
+Preferences remain separate and may persist normally; demo data never uses storage.
 
-Feature content registers with the shell-owned page inspector by route owner. Stable registration/open/close functions preserve the shell layout; owner checks and cleanup prevent resource details leaking across routes. The navigation registry marks only `home.overview` as `mock` and all other destinations as `placeholder`.
+File-backed Product, ProductVariant, CategoryTaxonomy, and Collection display titles
+come from `spec.title`. Use Title in editing, search, sort, and field comparisons;
+Products have no SKU. File names and namespace/user display names remain distinct.
+Canonical kinds and readiness values stay separate from merchant presentation labels.
 
-### Merchant vocabulary
+Overview derives current labels/references from authored snapshots and summary counts
+from readiness metadata. Confirmed resolution changes readiness and records processing
+activity without changing authored data. Its recent activity uses the shared event feed.
+My work draft saves, submissions, discards, and reviews record explicit work events;
+typing and cancellation do not. Submission/approval do not apply draft text to the catalog.
+Draft buffers survive navigation and store switching and are restored when reopening a
+draft. Explicitly abandoning edits uses the existing confirmation guard. Recovery never
+rewrites a draft base/proposal; a stale-base notice explains differences from the current
+item. Completed recovery is a discriminated read-only work type for all four kinds.
 
-Overview's `presentation.ts` maps canonical kinds and readiness values to merchant
-labels. These are display labels only: selectors, sorting, filters, shader colors,
-routes, and fixtures retain canonical keys. Primary sections read Updates and
-issues, Store status, and Store setup. Counts include store content and configuration,
-not only products. Canonical types and `.md` source paths remain available in the
-inspector's native Technical details disclosure; they do not appear on work cards.
-Keep future business-page copy aligned with the PRD's merchant language policy.
+Recent activity is a date-grouped local timeline: 24 baseline events, 10 initially
+visible, 10 more per Load more. Search titles/file names and filter actor, canonical
+kind, category, and UTC date. Counts describe the full filtered history; filters reset
+pagination. Entries are immutable and preserve historical titles/outcomes. New actions
+use timestamps after the fixed 2 Nov 2026 12:00 UTC anchor and stable per-store IDs.
+There are no background timers, polling, downloads, or complete-audit-log claims.
 
-## My work demo lifecycle
+Recovery targets an authored event's After snapshot, compares it against the current
+snapshot, and requires confirmation. The reducer rechecks no-op/missing versions,
+reference kinds/existence, and category cycles, then atomically replaces authored data,
+appends a demo recovery event, and records Completed work. Identity, paths, readiness,
+publication state, and media bytes are outside recovery. Product/Category/Collection
+snapshots use `spec.title`; File snapshots contain display-name/alt-text/caption metadata.
+These are UI-only fixture schemas, not supported API write contracts. Other event kinds
+are inspectable but cannot initiate recovery. View recovery event explicitly clears
+filters; confirming recovery otherwise preserves the user's query and selection.
 
-`/w/$namespace/home/my-work` has independent page-local state. Atelier Kyoto starts
-with 2 drafts, 2 submissions, 2 assigned reviews, and 1 completed review; Studio
-Berlin is empty. Tabs/search/sort/editor state are not stored in URLs or browser
-storage. Leaving the route, switching namespaces, reloading, or Reset demo restores
-the fixtures. Timestamps and local revisions are deterministic; there is no timer.
+The shell's owner-scoped inspector close guard confirms abandoning unsaved edits.
+Focus can hide/reopen an editor without discarding its buffer. Responsive layouts
+mount one inspector. Page-owned filters and selection reset on route exit; session
+data does not. Each Storybook router gets an isolated provider with optional fixture
+seeds through router context, preserving existing presentation scenarios.
 
-The reducer validates draft-only saves/submissions/discards and assigned-only
-reviews. Product names must be nonblank; descriptions may be empty. Base values
-remain fixed for Before/After comparisons. Unsaved editor text is separate from
-saved draft state; submission stays disabled until it is saved or cancelled.
-Review notes are mandatory for requesting changes. Completed outcomes never
-publish products and do not synchronize into Overview.
+## Shared Home presentation and overlay layers
 
-The shell's owner-scoped `registerCloseGuard` lets My work confirm closing an
-inspector with unsaved edits. Other pages retain unguarded closing. The same guard
-covers the close button, view-control toggle, and tablet/mobile dismissal. Focus
-Mode can hide and restore the editor without abandoning its state. Responsive
-layouts mount only one inspector, avoiding duplicate field IDs and focus targets.
-Selection/tab/reset changes use the page's matching confirmation boundary. Route
-exit follows the explicit reset notice rather than blocking navigation.
+Home uses shared frame/header/context, demo disclosure, summary-card content,
+resource-card anatomy, status pills, change previews, and Technical details disclosures.
+The technical disclosure consistently shows Resource type and Source file with the
+file icon and wrapping `.md` path. Work status, event outcome, and readiness remain
+separate concepts even when they share decorative colors. Header titles also update
+browser tabs to `<current page> · GitStore` from navigation metadata.
 
-My work stories include all tabs, empty/no-results, read-only/loading/unavailable,
-change preview, editing/unsaved, confirmations, themes, tablet/mobile, and reduced
-motion. Read-only and unavailable are presentation specimens, not authorization
-or network behavior. Shell navigation metadata marks exactly two mock pages and
-77 placeholders. No API contracts or external transport are introduced.
-
-### Shared Home presentation and overlay layers
-
-Both implemented Home pages use `HomePage`, `HomePageHeader`/`PageContext`,
-`DemoControls`, and `DemoNotice`. The frame preserves Overview's width and
-responsive padding; page-specific styles must not override these. The notice has
-no redundant “Demo workspace” prefix. `SummaryCardContent` is used in Overview's
-articles and My work's keyboard-operated tabs; counts, descriptions, state edges,
-hover/focus lighting and ratio bars use the same geometry. `ResourceCard` owns the
-kind label, title, body spacing, divider, and View details control. Work timestamps
-are optional footer metadata. Work status and readiness labels remain distinct. Both inspectors use the shared
-`TechnicalDetails` native disclosure with Resource type, Source file, the file
-icon, and a wrapping `.md` path. Labels, typography, spacing, and keyboard focus
-styles belong to that component rather than individual page styles.
-
-`ConfirmationDialog` is shared across both pages. Root CSS layer tokens order
-inspectors/drawers (1000), modal confirmations (1200), and popovers (1300). Dialog
-content must be above an active inspector, not merely present in the accessibility
-tree. Browser regressions check actual pointer hit testing, keyboard containment,
-focus restoration and confirmation at tablet and mobile sizes. The shared select
-trigger has a stable 160px width and fixed height; selected labels truncate rather
-than shifting the control or toolbar.
+Root layer tokens order drawers (1000), confirmations (1200), and popovers (1300).
+Tests check pointer hit testing as well as keyboard focus on mobile/tablet. Select
+triggers use a fixed 160px width and fixed height; labels truncate without toolbar shifts.
 
 ## Styling and motion
 
@@ -140,3 +136,36 @@ Deploy the built app's `dist` directory with a fallback to `index.html` for appl
 ## Selective reintegration
 
 Do not merge the Admin-only deletion diff wholesale. Import `gitstore-admin/` and adapt selected frontend commands/CI to the target branch. Retain that branch's backend root instructions, Makefile commands, workflows and services. Review the imported directory in a clean target worktree and run both frontend and target-branch acceptance suites before integration.
+
+If a Storybook development server is already running on port 6006, use
+`STORYBOOK_PORT=6007 make pr-ready` to validate a separate static build without
+interrupting it. The default port remains 6006.
+
+
+### Home empty states and compact screens
+
+Home uses one shared empty-state anatomy: neutral Split / Return illustration,
+heading, concise explanation, and optional relevant action. An empty catalog says
+“Your catalog starts here”; an empty personal workspace says “No work yet”; empty
+history says “No activity yet”. These differ from empty tabs and filtered results.
+Hide search/sort/filters when the whole store has no corresponding data. Retain
+work tabs for navigation. Overview omits zero-only summary cards, and zero counts
+elsewhere receive no status halos. Existing setup/catalog links still lead to
+placeholders; no creation flows are introduced.
+
+At mobile widths, omit the repeated store/Home trail and subtitle, use a compact
+heading, and keep demo identification visible. The Demo data disclosure contains
+reset behavior, snapshot information where relevant, and Reset demo. Its reset
+action closes the disclosure before opening the existing confirmation. Overview
+uses compact two-column summaries; My work uses horizontally scrollable counted
+tabs. Recent activity shows search plus one Filters button and compact timeline
+entries. The filter sheet stages changes until Show events, restores focus on
+close, and discards pending edits on Cancel/Escape. Applied filters have removable
+chips; no-results states retain controls and Clear filters. At 375 × 667, the first
+activity entry or the first-use guidance is visible above bottom navigation.
+
+Storybook interactions use the navigation visible at the actual canvas width,
+including rail menus and mobile drawers. Global command navigation can leave a
+modal inspector without discarding its draft. Native disclosure state specimens
+render explicitly expanded and assert visible content; real browser tests verify
+Enter/Space toggling. Narrow manager-canvas checks complement static build checks.

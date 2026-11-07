@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import type { ReactNode, Ref } from 'react'
 import { CircleDot, RotateCcw } from 'lucide-react'
+import { DialogTrigger, Popover, Dialog, Heading } from 'react-aria-components'
 import { ActionButton } from '../../../components/controls'
 import styles from './home.module.css'
 
@@ -43,18 +45,20 @@ export function HomePageHeader({
   description,
   headingId,
   onReset,
+  demoDetails,
 }: {
   namespace: string
   title: string
   description: string
   headingId?: string
   onReset: () => void
+  demoDetails?: ReactNode
 }) {
   return (
     <header className={styles.pageHeading}>
       <div>
         <PageContext namespace={namespace} />
-        <h1 id={headingId} tabIndex={headingId ? -1 : undefined}>
+        <h1 id={headingId} tabIndex={-1}>
           {title}
           <span aria-hidden="true" className={styles.titleDot}>
             .
@@ -62,29 +66,48 @@ export function HomePageHeader({
         </h1>
         <p>{description}</p>
       </div>
-      <DemoControls onReset={onReset} />
+      <DemoControls onReset={onReset} details={demoDetails} />
     </header>
   )
 }
-export function DemoControls({ onReset }: { onReset: () => void }) {
+export function DemoControls({
+  onReset,
+  details,
+}: {
+  onReset: () => void
+  details?: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
   return (
-    <div className={styles.headingActions}>
-      <span className={styles.demoLabel}>
+    <DialogTrigger isOpen={open} onOpenChange={setOpen}>
+      <ActionButton variant="ghost" className={styles.demoLabel}>
         <CircleDot size={12} aria-hidden="true" />
         Demo data
-      </span>
-      <ActionButton variant="ghost" onPress={onReset}>
-        <RotateCcw size={14} aria-hidden="true" />
-        Reset demo
       </ActionButton>
-    </div>
-  )
-}
-export function DemoNotice({ page }: { page: string }) {
-  return (
-    <p className={styles.demoNotice}>
-      Changes stay in this demo and reset when you leave {page}, switch stores,
-      or reload.
-    </p>
+      <Popover
+        placement="bottom end"
+        containerPadding={12}
+        className={styles.demoPopover}
+      >
+        <Dialog className={styles.demoDialog}>
+          <Heading slot="title">About this demo</Heading>
+          <p>
+            Demo changes and unsaved drafts stay in this tab across pages and
+            stores. Reloading resets both stores; Reset demo restores the
+            selected store’s original Home examples.
+          </p>
+          {details && <p>{details}</p>}
+          <ActionButton
+            onPress={() => {
+              setOpen(false)
+              onReset()
+            }}
+          >
+            <RotateCcw size={14} aria-hidden="true" />
+            Reset demo
+          </ActionButton>
+        </Dialog>
+      </Popover>
+    </DialogTrigger>
   )
 }

@@ -38,7 +38,11 @@ export function SummaryCard({
   ...props
 }: SummaryContentProps & { state?: string }) {
   return (
-    <article className={styles.metric} data-halo-card="" data-readiness={state}>
+    <article
+      className={styles.metric}
+      data-halo-card={props.value ? '' : undefined}
+      data-readiness={props.value ? state : undefined}
+    >
       <SummaryCardContent {...props} />
     </article>
   )
