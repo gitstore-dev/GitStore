@@ -14,7 +14,7 @@ matching ADR-0003's documented convention, e.g. `repositories/catalog.md` inside
 
 ## Manifest shape
 
-Unchanged from `docs/repository/repository-spec.md`'s hydrated representation and ADR-0003's example — `apiVersion`, `kind: Repository`, `metadata.{name,namespace}`, `spec.{defaultBranch,visibility,storageClass,settings.pushPolicy}`. Authors omit `metadata.uid`/`resourceVersion`/`generation`/`creationTimestamp`/`revision`/`ownerReferences`/`finalizers` and `status` entirely. Submitted `status` or `metadata.ownerReferences` content is an admission failure (FR-009, FR-029). Admission resolves the owning Namespace and persists exactly one system-owned, blocking Namespace owner reference; it is not deferred to an owner-reference backfill.
+Unchanged from `docs/repository/repository-spec.md`'s hydrated representation and ADR-0003's example — `apiVersion`, `kind: Repository`, `metadata.{name,namespace}`, `spec.{defaultBranch,visibility,storageClass,settings.pushPolicy}`. Authors omit `metadata.uid`/`resourceVersion`/`generation`/`creationTimestamp`/`revision`/`ownerReferences`/`finalizers` and `status` entirely. Submitted `status` or `metadata.ownerReferences` content is an admission failure (FR-009, FR-029). Admission resolves the owning Namespace and persists exactly one system-owned, blocking Namespace owner reference. A legitimate update repairs that Repository's metadata; untouched legacy Repositories are not fleet-wide backfilled by this contract.
 
 ```markdown
 ---

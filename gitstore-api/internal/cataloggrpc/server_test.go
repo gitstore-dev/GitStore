@@ -2807,6 +2807,42 @@ func TestAdmitResources_ProjectsRepositoryOwnerForCatalogResources(t *testing.T)
 	})
 }
 
+func TestAdmitResources_UpdateRepairsMissingRepositoryOwnerReference(t *testing.T) {
+	store := newTestDatastore(t)
+	zero, firstCommit, secondCommit := strings.Repeat("0", 40), strings.Repeat("a", 40), strings.Repeat("b", 40)
+	firstBody := makeProduct("widget")
+	secondBody := []byte(strings.Replace(string(firstBody), "title: widget", "title: updated", 1))
+	current := firstCommit
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		zero:         {},
+		firstCommit:  {"products/widget.md": firstBody},
+		secondCommit: {"products/widget.md": secondBody},
+	})
+	srv := newCatalogServer(t, store, git)
+	admitDelta(t, srv, zero, firstCommit)
+
+	product, err := store.GetProductByName(t.Context(), "gitstore", "widget")
+	require.NoError(t, err)
+	expectedResourceVersion := product.ResourceVersion
+	product.OwnerReferences = nil
+	datastore.AdvanceProductSystemVersion(product)
+	require.NoError(t, store.UpdateProduct(t.Context(), product, expectedResourceVersion))
+
+	current = secondCommit
+	admitDelta(t, srv, firstCommit, secondCommit)
+
+	repaired, err := store.GetProductByName(t.Context(), "gitstore", "widget")
+	require.NoError(t, err)
+	var references []catalog.OwnerReference
+	require.NoError(t, json.Unmarshal(repaired.OwnerReferences, &references))
+	require.Len(t, references, 1)
+	assert.Equal(t, catalog.OwnerReference{
+		APIVersion: "gitstore.dev/v1beta1", Kind: "Repository",
+		Name: "catalog", UID: testRepoID, BlockOwnerDeletion: true,
+		RepositoryID: testRepoID,
+	}, references[0])
+}
+
 func TestAdmitResources_ProductVariantUpdateRejectsTerminatingProductTarget(t *testing.T) {
 	store := newTestDatastore(t)
 	zero := strings.Repeat("0", 40)

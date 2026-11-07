@@ -163,9 +163,6 @@ type memdbDatastore struct {
 	namespaceWatchRetention time.Duration
 	sessionRevocationMu     sync.RWMutex
 	sessionRevocations      map[string]time.Time
-	ownerBackfillMu         sync.Mutex
-	ownerBackfillLease      datastore.OwnerReferenceBackfillLease
-	ownerBackfillProgress   *datastore.OwnerReferenceBackfillProgress
 	// categoryProducts is a projection, not an alternate product store. Keys
 	// are namespace/category UID and values are product UIDs. Keeping it
 	// alongside memdb makes the development backend exercise the same bounded

@@ -42,9 +42,6 @@ var (
 	// ErrProjectionNotReady prevents serving an incomplete rebuilt projection
 	// during a rolling deployment.
 	ErrProjectionNotReady = errors.New("datastore: projection not ready")
-	// ErrStaleBackfillLease rejects progress writes from an expired or fenced
-	// owner-reference backfill operator.
-	ErrStaleBackfillLease = errors.New("datastore: stale owner-reference backfill lease")
 )
 
 // DefaultPageSize is used when First/Last is zero.
@@ -204,76 +201,6 @@ type OwnerReferenceStore interface {
 	HasBlockingOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID string) (bool, error)
 	ListBlockingOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID, after string, limit int) (OwnerDependentPage, error)
 	ListNonBlockingProductOwnerDependents(ctx context.Context, scope OwnerReferenceScope, ownerUID, after string, limit int) (OwnerDependentPage, error)
-}
-
-// OwnerReferenceBackfillLease fences progress updates across operator
-// replacements. A token increases whenever an expired or released lease is
-// acquired by a different operator.
-type OwnerReferenceBackfillLease struct {
-	Holder       string
-	FencingToken int64
-	ExpiresAt    time.Time
-}
-
-// OwnerReferenceBackfillKindProgress is the durable checkpoint for one
-// resource kind.
-type OwnerReferenceBackfillKindProgress struct {
-	Cursor     string
-	Scanned    int64
-	Repaired   int64
-	Unresolved int64
-	Complete   bool
-}
-
-// OwnerReferenceBackfillProgress persists bounded per-kind scan state and the
-// verified completion marker.
-type OwnerReferenceBackfillProgress struct {
-	Kinds     map[string]OwnerReferenceBackfillKindProgress
-	Completed bool
-	UpdatedAt time.Time
-}
-
-// OwnerReferenceBackfillKinds returns the complete set of resource kinds that
-// must be scanned before the backfill can be marked complete.
-func OwnerReferenceBackfillKinds() []string {
-	return []string{"Namespace", "Repository", "Product", "ProductVariant", "CategoryTaxonomy", "Collection", "File", "ServiceAccount"}
-}
-
-// ValidateOwnerReferenceBackfillProgress rejects malformed counters and any
-// completion claim that has missing or unresolved resource kinds.
-func ValidateOwnerReferenceBackfillProgress(progress OwnerReferenceBackfillProgress) error {
-	required := make(map[string]struct{}, len(OwnerReferenceBackfillKinds()))
-	for _, kind := range OwnerReferenceBackfillKinds() {
-		required[kind] = struct{}{}
-	}
-	for kind, state := range progress.Kinds {
-		if _, ok := required[kind]; !ok {
-			return fmt.Errorf("%w: unknown owner-reference backfill kind %q", ErrInvalidArgument, kind)
-		}
-		if state.Scanned < 0 || state.Repaired < 0 || state.Unresolved < 0 || state.Repaired > state.Scanned {
-			return fmt.Errorf("%w: invalid owner-reference backfill counters for %q", ErrInvalidArgument, kind)
-		}
-	}
-	if !progress.Completed {
-		return nil
-	}
-	for kind := range required {
-		state, ok := progress.Kinds[kind]
-		if !ok || !state.Complete || state.Unresolved != 0 {
-			return fmt.Errorf("%w: owner-reference backfill kind %q is incomplete or unresolved", ErrInvalidArgument, kind)
-		}
-	}
-	return nil
-}
-
-// OwnerReferenceBackfillStore is an optional datastore capability for the
-// operator's durable, resumable ownership migration.
-type OwnerReferenceBackfillStore interface {
-	AcquireOwnerReferenceBackfillLease(ctx context.Context, holder string, now time.Time, ttl time.Duration) (OwnerReferenceBackfillLease, bool, error)
-	RenewOwnerReferenceBackfillLease(ctx context.Context, lease OwnerReferenceBackfillLease, now time.Time, ttl time.Duration) (OwnerReferenceBackfillLease, bool, error)
-	ReleaseOwnerReferenceBackfillLease(ctx context.Context, lease OwnerReferenceBackfillLease) error
-	LoadOwnerReferenceBackfillProgress(ctx context.Context) (OwnerReferenceBackfillProgress, error)
-	SaveOwnerReferenceBackfillProgress(ctx context.Context, lease OwnerReferenceBackfillLease, progress OwnerReferenceBackfillProgress) error
 }
 
 // CategoryTaxonomyDeletionStore provides the durable foreground-deletion

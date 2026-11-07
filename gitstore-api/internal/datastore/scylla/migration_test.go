@@ -81,7 +81,6 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 		"service_account_assertion_replays",
 		"service_accounts_by_cluster_bucket",
 		"category_ancestor_index",
-		"owner_reference_backfill_by_job",
 	} {
 		var tblName string
 		err = session.Query(

@@ -15,15 +15,12 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
 
 func TestOwnerReferenceProjection_ScyllaLimitOneAndKeysetRecovery(t *testing.T) {
 	store := newTestStore(t)
-	markOwnerReferenceBackfillCompleteForTest(t, store)
 	owners := store.(datastore.OwnerReferenceStore)
 	ctx := context.Background()
 	namespace, repositoryID := "owner-refs-"+newID()[:8], newID()
@@ -193,116 +190,8 @@ func TestRepositoryDeletionRacesWithDependentCreateAndReparent(t *testing.T) {
 	})
 }
 
-func TestOwnerReferenceBackfillProgress_SurvivesOperatorReplacement(t *testing.T) {
-	cfg := testScyllaConfig(t)
-	cfg.Keyspace = "gitstore_owner_backfill_" + newID()[:8]
-	provisionKeyspace(scyllaAddr, cfg.Keyspace)
-	t.Cleanup(func() { dropKeyspace(scyllaAddr, cfg.Keyspace) })
-
-	first, err := scylla.New(cfg, zap.NewNop())
-	require.NoError(t, err)
-	second, err := scylla.New(cfg, zap.NewNop())
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, first.Close())
-		require.NoError(t, second.Close())
-	}()
-	ctx := t.Context()
-	start := time.Now().UTC().Truncate(time.Millisecond)
-	firstStore := first.(datastore.OwnerReferenceBackfillStore)
-	secondStore := second.(datastore.OwnerReferenceBackfillStore)
-	firstLease, acquired, err := firstStore.AcquireOwnerReferenceBackfillLease(ctx, "operator-a", start, 20*time.Millisecond)
-	require.NoError(t, err)
-	require.True(t, acquired)
-
-	progress := datastore.OwnerReferenceBackfillProgress{
-		Kinds: map[string]datastore.OwnerReferenceBackfillKindProgress{
-			"Product": {Cursor: "stable-page-1", Scanned: 10, Repaired: 5},
-		},
-		UpdatedAt: start,
-	}
-	require.NoError(t, firstStore.SaveOwnerReferenceBackfillProgress(ctx, firstLease, progress))
-
-	secondLease, acquired, err := secondStore.AcquireOwnerReferenceBackfillLease(ctx, "operator-b", start.Add(time.Second), time.Minute)
-	require.NoError(t, err)
-	require.True(t, acquired)
-	require.Greater(t, secondLease.FencingToken, firstLease.FencingToken)
-	require.ErrorIs(t, firstStore.SaveOwnerReferenceBackfillProgress(ctx, firstLease, progress), datastore.ErrStaleBackfillLease)
-
-	resumed, err := secondStore.LoadOwnerReferenceBackfillProgress(ctx)
-	require.NoError(t, err)
-	require.Equal(t, "stable-page-1", resumed.Kinds["Product"].Cursor)
-	for _, kind := range datastore.OwnerReferenceBackfillKinds() {
-		if _, ok := resumed.Kinds[kind]; !ok {
-			resumed.Kinds[kind] = datastore.OwnerReferenceBackfillKindProgress{Complete: true}
-		}
-	}
-	resumed.Kinds["Product"] = datastore.OwnerReferenceBackfillKindProgress{
-		Cursor: "complete", Scanned: 10, Repaired: 5, Complete: true,
-	}
-	resumed.Completed = true
-	resumed.UpdatedAt = start.Add(2 * time.Second)
-	require.NoError(t, secondStore.SaveOwnerReferenceBackfillProgress(ctx, secondLease, resumed))
-
-	require.NoError(t, first.Close())
-	require.NoError(t, second.Close())
-	restarted, err := scylla.New(cfg, zap.NewNop())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-	persisted, err := restarted.(datastore.OwnerReferenceBackfillStore).LoadOwnerReferenceBackfillProgress(ctx)
-	require.NoError(t, err)
-	require.True(t, persisted.Completed)
-	require.Equal(t, "complete", persisted.Kinds["Product"].Cursor)
-}
-
-func TestOwnerReferenceIndexFailsClosedUntilBackfillIsVerified(t *testing.T) {
-	cfg := testScyllaConfig(t)
-	cfg.Keyspace = "gitstore_owner_gate_" + newID()[:8]
-	provisionKeyspace(scyllaAddr, cfg.Keyspace)
-	t.Cleanup(func() { dropKeyspace(scyllaAddr, cfg.Keyspace) })
-	store, err := scylla.New(cfg, zap.NewNop())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	owners := store.(datastore.OwnerReferenceStore)
-	backfill := store.(datastore.OwnerReferenceBackfillStore)
-	ctx := t.Context()
-	scope := datastore.OwnerReferenceScope{Namespace: "gate-test", RepositoryID: newID()}
-
-	_, err = owners.HasBlockingOwnerDependents(ctx, scope, newID())
-	require.ErrorIs(t, err, datastore.ErrProjectionNotReady, "missing progress must not look like an empty index")
-
-	lease, acquired, err := backfill.AcquireOwnerReferenceBackfillLease(ctx, "gate-test", time.Now(), time.Minute)
-	require.NoError(t, err)
-	require.True(t, acquired)
-	require.NoError(t, backfill.SaveOwnerReferenceBackfillProgress(ctx, lease,
-		datastore.OwnerReferenceBackfillProgress{Kinds: map[string]datastore.OwnerReferenceBackfillKindProgress{}}))
-	_, err = owners.ListBlockingOwnerDependents(ctx, scope, newID(), "", 1)
-	require.ErrorIs(t, err, datastore.ErrProjectionNotReady, "incomplete progress must not permit indexed deletion")
-
-	rawStore := newRawSessionForKeyspace(t, cfg.Keyspace)
-	require.NoError(t, rawStore.Query(
-		"UPDATE owner_reference_backfill_by_job SET progress_json=? WHERE job_id=?",
-	).WithContext(ctx).Bind("{invalid", "owner-references").Exec())
-	_, err = owners.ListNonBlockingProductOwnerDependents(ctx, scope, newID(), "", 1)
-	require.ErrorIs(t, err, datastore.ErrProjectionNotReady, "unreadable progress must fail closed")
-
-	complete := datastore.OwnerReferenceBackfillProgress{
-		Kinds:     make(map[string]datastore.OwnerReferenceBackfillKindProgress),
-		Completed: true, UpdatedAt: time.Now().UTC(),
-	}
-	for _, kind := range datastore.OwnerReferenceBackfillKinds() {
-		complete.Kinds[kind] = datastore.OwnerReferenceBackfillKindProgress{Complete: true}
-	}
-	require.NoError(t, backfill.SaveOwnerReferenceBackfillProgress(ctx, lease, complete))
-	blocked, err := owners.HasBlockingOwnerDependents(ctx, scope, newID())
-	require.NoError(t, err)
-	require.False(t, blocked)
-	require.NoError(t, backfill.ReleaseOwnerReferenceBackfillLease(ctx, lease))
-}
-
 func TestCollectionOwnerReferenceProjectionCreateUpdateAndDelete(t *testing.T) {
 	store := newTestStore(t)
-	markOwnerReferenceBackfillCompleteForTest(t, store)
 	owners := store.(datastore.OwnerReferenceStore)
 	ctx := t.Context()
 	namespace, repositoryID := "collection-owner-refs-"+newID()[:8], newID()
@@ -347,7 +236,6 @@ func TestCollectionOwnerReferenceProjectionCreateUpdateAndDelete(t *testing.T) {
 
 func TestCategoryTaxonomyCompletion_ScyllaFencesSameNameReplacement(t *testing.T) {
 	store := newTestStore(t)
-	markOwnerReferenceBackfillCompleteForTest(t, store)
 	ctx := t.Context()
 	lifecycle := store.(datastore.CategoryTaxonomyDeletionStore)
 	namespace, repositoryID := "category-completion-"+newID()[:8], newID()

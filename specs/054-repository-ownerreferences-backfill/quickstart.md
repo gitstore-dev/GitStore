@@ -1,20 +1,22 @@
 # Owner-Reference Lifecycle Verification
 
-This guide is the implementation acceptance path for
-[Spec 054](./spec.md). Run all deployed checks only against explicitly
-test-owned environments. Do not target an operator deployment.
+This guide is the acceptance path for [Spec 054](./spec.md). Run deployed
+checks only against explicitly test-owned environments. Do not target an
+operator deployment.
 
-## 1. Run backend-neutral datastore contracts
+## 1. Run datastore and API tests
 
 ```sh
 make test TARGET=datastore DATASTORE=memdb
+cd gitstore-api && go test ./internal/cataloggrpc ./internal/admin/graph/resolver ./internal/datastore/...
 ```
 
-Verify owner-reference writes, replacement/removal, bounded blocking queries,
-backfill cursor/resume, duplicate retries, and fail-closed completion behavior
-for every resource kind in the ownership matrix.
+Verify every ownership edge, create/update repair of missing or stale
+references, reverse-projection updates, bounded blocking queries, and
+foreground/background outcomes. A touched resource should be repaired by its
+ordinary update; do not run a fleet-wide scan as part of this acceptance path.
 
-## 2. Run Scylla datastore contracts
+## 2. Run Scylla projection tests
 
 Against an isolated test-owned Scylla keyspace:
 
@@ -22,79 +24,26 @@ Against an isolated test-owned Scylla keyspace:
 SCYLLA_TEST_ADDR=127.0.0.1:9042 make test TARGET=datastore DATASTORE=scylla
 ```
 
-Verify the additive migration, durable progress/lease behavior, resource
-version compare-and-set, reverse projection parity, and restart/resume. Do not
-edit or reseed an unrelated keyspace.
+Verify owner-reference projection parity, resource-version compare-and-set,
+and deletion races. Do not edit or reseed an unrelated keyspace.
 
-## 3. Verify API and controller outcomes
+## 3. Verify deletion outcomes
 
-Run the focused API admission/resolver and controller tests, then the
-repository-level test suite:
+For each applicable owner kind and supported deletion entry point, verify:
 
-```sh
-make test
-```
-
-For each ownership edge, verify:
-
-- persisted owner reference fields and reverse dependent row;
-- `true` dependent blocks deletion through every supported request path;
-- `false` dependent survives owner deletion and loses only its stale
-  system-managed reference;
+- a live `true` dependent blocks owner removal;
+- a `false` dependent survives as an orphan with only stale system-managed
+  metadata cleared;
 - no dependent is cascaded;
 - same-push deletion/reparent races and repeated requests converge;
-- ServiceAccount returns an empty non-null owner-reference list and remains
-  cluster-scoped.
+- ServiceAccount remains cluster-scoped and exposes an empty non-null
+  owner-reference list.
 
-## 4. Exercise backfill rollout
+## 4. Validate deployed capacity and recovery
 
-On a test-owned deployment, upgrade all API writers to the dual-write version
-while retaining existing deletion safeguards. Confirm old API writers are
-drained before running the operator command against the explicitly selected
-test-owned Scylla deployment:
-
-```sh
-gitctl owner-reference-backfill run \
-  --hosts <test-owned-scylla-hosts> \
-  --keyspace <test-owned-keyspace> \
-  --confirm \
-  --page-size 100 \
-  --max-pages 100
-
-gitctl owner-reference-backfill status \
-  --hosts <test-owned-scylla-hosts> \
-  --keyspace <test-owned-keyspace>
-```
-
-`run` is mutating and requires `--confirm`, explicit `--hosts` and `--keyspace`,
-and bounded page/page-count limits. The default lease holder uses the host and
-process ID; `--holder` may be supplied for an operator identity. If Scylla
-authentication is enabled, pass `--username` and provide the password through
-`GITSTORE_API__DATASTORE__SCYLLA__PASSWORD`. The command does not print
-credentials.
-
-The JSON status reports whether progress is initialized, global completion,
-and per-kind cursor, scanned, repaired, unresolved, and complete fields.
-Interrupt a run after a checkpoint and rerun the same command to resume. A
-completed scan with unresolved relationships exits unsuccessfully and keeps
-the completion marker unset; repair or explicitly reconcile the reported
-relationships before retrying. Do not treat a partial status as success.
-
-Verify per-kind progress, no skipped rows, projection parity, and a durable
-`completed` status with zero unresolved relationships. Only after all old
-writers are drained and this completion marker is durable may index-backed
-deletion checks pass. Before that, the API fails closed rather than treating an
-incomplete projection as an empty dependent set.
-
-## 5. Validate deployed capacity and recovery
-
-Use the supported Repository lifecycle acceptance, which exercises the retained
-five-million-Product dataset, Git admission, two API replicas, and two
-controller replicas. Extend its correctness oracle to check owner-reference
-and deletion outcomes: a Repository exposes its blocking Namespace owner;
-deleting a CategoryTaxonomy with a blocking child is rejected without removing
-either resource; deleting a CategoryTaxonomy with a Product's non-blocking
-reference preserves the Product and clears only that stale reference.
+Use the supported Repository lifecycle acceptance, which exercises the
+retained five-million-Product dataset, Git admission, two API replicas, and
+two controller replicas:
 
 ```sh
 make capacity TARGET=repository PROFILE=lifecycle MODE=production
@@ -111,20 +60,24 @@ make chaos CHAOS_PROFILE=controller-restart
 The test-owned controller-restart run on 2026-11-06 completed the injected
 restart successfully. The replacement process became ready 21.4 seconds after
 startup, within the profile's 60-second recovery objective. The Product work
-queue was still about 4.67 million with active workers at the observation point;
-this measures controller recovery, not completion of the retained dataset's
-reconciliation backlog.
+queue was still about 4.67 million with active workers at the observation
+point; this measured controller recovery, not completion of the retained
+dataset's reconciliation backlog.
 
-The retained-data owner-reference backfill remains incomplete: Namespace
-scanned 41 rows, repaired 2, and has 0 unresolved relationships; Repository
-scanned 639 rows, repaired 21, and has 0 unresolved relationships but is not
-complete. Product scanning has not started. A keyspace-wide projection audit
-was OOM-killed before producing output, so its repair dry-run was not reached
-and no projection repair was applied. Rerun the audit from a controlled
-operator host with enough memory for the retained dataset before attempting
-repair or claiming T024/T026 complete.
+## 5. Retained-data notes
 
-Use the actual owned-deployment configuration and receipts required by the
-capacity and chaos guides. A diagnostic or local test pass is not production
-certification. Git remains one active process with retained storage and
-non-overlapping replacement.
+The earlier, explicitly authorized exploratory backfill stopped before
+Product scanning. It repaired owner-reference metadata for 2 Namespace and
+21 Repository records; those updates remain. No Product scan, projection
+repair, or resource deletion was performed. These partial updates are not
+evidence of complete historical coverage.
+
+The temporary backfill migration was applied only to the test-owned keyspace
+`gitstore451_admitted_20261021b`. Its dedicated table and matching
+`gocqlx_migrate` record are removed as part of this scope rollback. The
+retained resource tables and five-million-Product data are not changed.
+
+T024 production capacity validation and T026 replica/upgrade/AuthN/AuthZ
+validation remain incomplete. A diagnostic or local test pass is not
+production certification. Git remains one active process with retained
+storage and non-overlapping replacement.

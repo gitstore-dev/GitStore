@@ -868,7 +868,7 @@ func (s *Server) ValidateResourceDeletions(
 func ownerReferenceValidationUnavailable(resource string, err error) error {
 	message := fmt.Sprintf("%s deletion validation unavailable", resource)
 	if errors.Is(err, datastore.ErrProjectionNotReady) {
-		message += ": owner-reference backfill is incomplete"
+		message += ": dependency projection is not ready"
 	}
 	return grpcstatus.Error(codes.Unavailable, message)
 }
@@ -2135,7 +2135,7 @@ func (s *Server) withRepositoryOwnerReference(ctx context.Context, repositoryID 
 	// Repository ownership follows the resource's admitted Git provenance.
 	// Replace stale or duplicate Repository edges in place while preserving
 	// unrelated system-managed references and their order.
-	merged := make([]catalog.OwnerReference, 0, len(references)+1)
+	merged := make([]catalog.OwnerReference, 0, len(references))
 	repositoryReference := catalog.OwnerReference{
 		APIVersion: "gitstore.dev/v1beta1", Kind: "Repository",
 		Name: repository.Name, UID: repository.UID, BlockOwnerDeletion: true,

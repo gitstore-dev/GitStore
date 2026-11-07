@@ -25,7 +25,7 @@
 ## Feature Readiness
 
 - [x] Functional requirements have observable acceptance outcomes
-- [x] User scenarios cover owner metadata, both deletion modes, ServiceAccount, and legacy data
+- [x] User scenarios cover owner metadata, both deletion modes, ServiceAccount, and update-time repair
 - [x] Success criteria measure correctness, completeness, and recovery
 - [x] No internal implementation identifiers or code paths are prescribed
 
@@ -33,5 +33,5 @@
 
 - Replaced the stale five-kind/admission-only scope with the current eight-kind contract, including `ServiceAccount` and `File`.
 - Defined blocking foreground propagation versus non-blocking background orphaning; neither mode cascades deletion. Clarified that asynchronous finalizer completion is a separate lifecycle concern.
-- Required a resumable backfill before indexed deletion enforcement so legacy dependents cannot be missed.
+- Deferred fleet-wide backfill and completion-gated deletion; ordinary updates repair the resource being touched, without claiming complete coverage of untouched legacy data.
 - Historical specs 041, 052, and 055 were not rewritten; the refreshed spec explicitly identifies the ownership contract that supersedes their stale lists or conflicting propagation behavior.

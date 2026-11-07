@@ -218,83 +218,6 @@ func runOwnerReferenceLifecycleContract(t *testing.T, ds datastore.Datastore) {
 	assert.Equal(t, product.UID, nonBlocking.Items[0].DependentUID, "updating one edge must preserve the unrelated non-blocking owner")
 }
 
-func runOwnerReferenceBackfillContract(t *testing.T, ds datastore.Datastore) {
-	t.Helper()
-	progressStore, ok := ds.(datastore.OwnerReferenceBackfillStore)
-	require.True(t, ok, "datastore must persist owner-reference backfill progress")
-
-	ctx := t.Context()
-	start := time.Now().UTC()
-	firstLease, acquired, err := progressStore.AcquireOwnerReferenceBackfillLease(ctx, "operator-a", start, time.Minute)
-	require.NoError(t, err)
-	require.True(t, acquired)
-	renewedLease, renewed, err := progressStore.RenewOwnerReferenceBackfillLease(ctx, firstLease, start.Add(5*time.Second), time.Minute)
-	require.NoError(t, err)
-	require.True(t, renewed)
-	require.Equal(t, firstLease.FencingToken, renewedLease.FencingToken)
-
-	_, acquired, err = progressStore.AcquireOwnerReferenceBackfillLease(ctx, "operator-b", start.Add(time.Second), time.Minute)
-	require.NoError(t, err)
-	require.False(t, acquired, "an unexpired lease must exclude another operator")
-
-	progress := datastore.OwnerReferenceBackfillProgress{
-		Kinds: map[string]datastore.OwnerReferenceBackfillKindProgress{
-			"Product": {Cursor: "cursor-1", Scanned: 10, Repaired: 4, Unresolved: 1},
-		},
-		UpdatedAt: start.Add(2 * time.Second),
-	}
-	require.NoError(t, progressStore.SaveOwnerReferenceBackfillProgress(ctx, renewedLease, progress))
-
-	replacementLease, acquired, err := progressStore.AcquireOwnerReferenceBackfillLease(ctx, "operator-b", start.Add(2*time.Minute), time.Minute)
-	require.NoError(t, err)
-	require.True(t, acquired, "an expired lease must be replaceable")
-	require.Greater(t, replacementLease.FencingToken, firstLease.FencingToken)
-	require.ErrorIs(t,
-		progressStore.SaveOwnerReferenceBackfillProgress(ctx, renewedLease, progress),
-		datastore.ErrStaleBackfillLease,
-		"an expired operator must not overwrite progress after replacement",
-	)
-	_, renewed, err = progressStore.RenewOwnerReferenceBackfillLease(ctx, renewedLease, start.Add(2*time.Minute), time.Minute)
-	require.NoError(t, err)
-	require.False(t, renewed, "a fenced operator cannot renew its lease")
-
-	resumed, err := progressStore.LoadOwnerReferenceBackfillProgress(ctx)
-	require.NoError(t, err)
-	require.Equal(t, progress.Kinds["Product"], resumed.Kinds["Product"])
-
-	incomplete := datastore.OwnerReferenceBackfillProgress{
-		Completed: true,
-		Kinds: map[string]datastore.OwnerReferenceBackfillKindProgress{
-			"Product": {Complete: true, Unresolved: 1},
-		},
-		UpdatedAt: start.Add(3 * time.Minute),
-	}
-	require.ErrorIs(t,
-		progressStore.SaveOwnerReferenceBackfillProgress(ctx, replacementLease, incomplete),
-		datastore.ErrInvalidArgument,
-		"completion cannot be persisted with missing kinds or unresolved relationships",
-	)
-
-	for _, kind := range datastore.OwnerReferenceBackfillKinds() {
-		if _, ok := resumed.Kinds[kind]; !ok {
-			resumed.Kinds[kind] = datastore.OwnerReferenceBackfillKindProgress{Complete: true}
-		}
-	}
-	resumed.Kinds["Product"] = datastore.OwnerReferenceBackfillKindProgress{
-		Cursor: "cursor-2", Scanned: 20, Repaired: 9, Unresolved: 0, Complete: true,
-	}
-	resumed.Completed = true
-	resumed.UpdatedAt = start.Add(3 * time.Minute)
-	require.NoError(t, progressStore.SaveOwnerReferenceBackfillProgress(ctx, replacementLease, resumed))
-	require.NoError(t, progressStore.ReleaseOwnerReferenceBackfillLease(ctx, replacementLease))
-
-	loaded, err := progressStore.LoadOwnerReferenceBackfillProgress(ctx)
-	require.NoError(t, err)
-	require.True(t, loaded.Completed)
-	require.Equal(t, "cursor-2", loaded.Kinds["Product"].Cursor)
-	require.EqualValues(t, 20, loaded.Kinds["Product"].Scanned)
-}
-
 // RunContractSuite runs the full contract suite against any Datastore implementation.
 // Callers should pass a freshly initialised, empty store.
 func RunContractSuite(t *testing.T, ds datastore.Datastore) {
@@ -303,10 +226,6 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 
 	t.Run("OwnerReferenceLifecycle", func(t *testing.T) {
 		runOwnerReferenceLifecycleContract(t, ds)
-	})
-
-	t.Run("OwnerReferenceBackfillProgress", func(t *testing.T) {
-		runOwnerReferenceBackfillContract(t, ds)
 	})
 
 	t.Run("Product/OwnerCAS", func(t *testing.T) {

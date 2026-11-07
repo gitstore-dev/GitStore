@@ -4,21 +4,15 @@
 
 ## Resource metadata
 
-The shared GraphQL `ObjectMeta.ownerReferences` field exposes an array of
-`OwnerReference` values with `apiVersion`, `kind`, `name`, `uid`, and required
-`blockOwnerDeletion`. The existing shape is retained. The value is
-system-managed and cannot be supplied or altered through Git-authored metadata
-or GraphQL mutation input.
+`ObjectMeta.ownerReferences` is a system-managed array of `OwnerReference`
+values with `apiVersion`, `kind`, `name`, `uid`, and required
+`blockOwnerDeletion`. Git-authored metadata and GraphQL mutation input cannot
+supply or alter these values.
 
-All current resource kinds are covered: Namespace, Repository, Product,
-ProductVariant, CategoryTaxonomy, Collection, File, and ServiceAccount.
-Namespace and ServiceAccount are roots in the ownership matrix and expose an
-empty array when they have no owner. ServiceAccount's principal `metadata.owner`
-is not a resource owner reference.
-
-The shared schema documentation for `OwnerReference` must describe the
-blocking/orphaning contract below; it must not imply that references trigger
-cascading deletion.
+The contract covers Namespace, Repository, Product, ProductVariant,
+CategoryTaxonomy, Collection, File, and ServiceAccount. Namespace and
+ServiceAccount are roots and expose an empty array when they have no owner.
+ServiceAccount's principal `metadata.owner` is not a resource owner reference.
 
 ## Ownership matrix
 
@@ -39,11 +33,23 @@ coexist and are independently maintained. Repository-scoped reverse projection
 keys are internal storage metadata and are not part of the public
 OwnerReference value.
 
+## Create and update
+
+- Successful admission derives and writes the managed references from the
+  current resource and resolved owners.
+- A legitimate update repairs missing, stale, or duplicate managed references
+  on the resource being updated. It preserves unrelated managed references.
+- The normal datastore write refreshes the existing reverse dependent
+  projection.
+- This contract does not require a separate fleet-wide backfill. Resources
+  not created or updated may retain incomplete historical metadata; this
+  feature makes no full-coverage claim for them.
+
 ## Delete outcomes
 
 | Dependent relationship to requested owner | Required outcome |
 |---|---|
-| One or more live `true` references | Reject deletion or retain the owner in its existing terminating/finalizer flow. Do not remove the owner while a blocker exists. |
+| One or more live `true` references | Reject deletion or retain the owner in its existing terminating/finalizer flow. Do not remove the owner while a blocker is present in the maintained projection. |
 | Only live `false` references | Permit owner removal when its own deletion preconditions are met. Preserve each dependent, clear its stale owner reference, and report unresolved desired references through existing status where applicable. |
 | No dependents | Preserve the resource kind's existing deletion flow. |
 
@@ -51,14 +57,13 @@ No delete request cascades to a dependent. Foreground/background refer to
 dependent propagation only: blocking versus orphaning. They do not determine
 whether the owner's own removal is synchronous or asynchronous.
 
-Specific compatibility rules:
+Compatibility rules:
 
 - Namespace deletion retains its existing check that no Repository remains.
-- Repository deletion retains its existing content precondition and must cover
+- Repository deletion retains its existing content precondition and covers
   Product, ProductVariant, CategoryTaxonomy, Collection, and File.
 - Product and CategoryTaxonomy retain their blocking-dependent checks and
-  timestamp/finalizer/CAS completion; asynchronous finalization is not
-  background propagation.
+  timestamp/finalizer/CAS completion.
 - CategoryTaxonomy deletion may orphan Products with non-blocking category
   references. The Product remains stored; `spec.categoryRef` is not rewritten,
   the owner reference is cleared, and resolution status is updated.
@@ -67,31 +72,14 @@ Specific compatibility rules:
 
 ## Admission and concurrency
 
-- Every successful create, update, reparent, delete, and backfill operation
-  leaves one reference per current relationship and removes obsolete
-  system-managed references without modifying unrelated relationships.
+- Create, update, reparent, and delete operations are idempotent with respect
+  to the maintained owner references and reverse projection.
 - A new or reparented dependent cannot commit a blocking reference to an owner
   whose deletion has crossed its final removal boundary.
-- A blocker check must be against the current owner UID and appropriate scope.
-  Same-name recreation is a distinct owner lifetime.
-- Projection read/write failures and incomplete backfill state are explicit
-  errors. A failed or unsupported reverse lookup must never be treated as
-  “no dependents.”
+- A blocker check uses the current owner UID and appropriate scope. Same-name
+  recreation is a distinct owner lifetime.
+- Projection read/write failures are explicit errors and are never treated as
+  an empty result.
 - Concurrent API replicas use existing optimistic concurrency and shared
-  datastore projections. Controller retries and backfill retries are
-  idempotent and safe across process replacement.
-
-## Backfill and rollout
-
-1. Deploy API writers that maintain the complete ownership matrix while
-   retaining existing deletion guards.
-2. Drain old API writers so every subsequent writer preserves the new
-   metadata.
-3. Run the bounded, resumable `gitctl` backfill against an explicitly selected
-   deployment. It repairs resource metadata and lets normal writes refresh the
-   reverse projection.
-4. Verify all kinds and projections, then persist the completion marker.
-   Indexed enforcement cannot be enabled before this step.
-5. On interruption, resume from the durable cursor. Do not delete progress,
-   migrated metadata, or projection rows during rollback. If verification
-   fails, retain existing deletion guards and surface the failure.
+  datastore projections. Controller retries are idempotent and safe across
+  process replacement.
