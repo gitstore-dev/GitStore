@@ -27,7 +27,8 @@ Recipient must be a single mailbox, subject must not contain CR/LF and only
 email messages are accepted. Do not forward browser credentials.
 
 The body limit is the smaller of the Admin endpoint limit and
-`api.notification.max_body_bytes` (default 64 KiB; hard maximum 1 MiB).
+`api.notification.max_body_size` (default `"64KiB"`; hard maximum `"1MiB"`).
+Only IEC size strings are accepted; bare numbers and decimal units are rejected.
 `max_concurrent` defaults to 16 (maximum 128), including parsing and delivery.
 `timeout` defaults to 2s (maximum 10s); the development transport additionally
 caps SMTP connection/handshake/acceptance at 2s and honors earlier cancellation.

@@ -63,7 +63,8 @@ type NotificationConfig struct {
 	APIKey        string                        `mapstructure:"api_key"`
 	Timeout       time.Duration                 `mapstructure:"timeout"`
 	MaxConcurrent int                           `mapstructure:"max_concurrent"`
-	MaxBodyBytes  int64                         `mapstructure:"max_body_bytes"`
+	MaxBodySize   string                        `mapstructure:"max_body_size"`
+	MaxBodyBytes  int64                         `mapstructure:"-"`
 	Development   DevelopmentNotificationConfig `mapstructure:"development"`
 }
 
@@ -433,6 +434,7 @@ type legacyKey struct {
 // final merged state so a renamed/removed key never silently resolves to a
 // default. Ordered most-specific-first so the most helpful match wins.
 var legacyKeys = []legacyKey{
+	{"api.notification.max_body_bytes", "api.notification.max_body_size (IEC size string)"},
 	{"api.auth.kratos.max_response_bytes", "api.auth.kratos.max_response_size (IEC size string)"},
 	{"api.port", "api.admin_port and api.storefront_port"},
 	{"observability.otlp.endpoint", "observability.otlp.uri"},
@@ -560,7 +562,7 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("api.notification.api_key", "")
 	v.SetDefault("api.notification.timeout", "2s")
 	v.SetDefault("api.notification.max_concurrent", 16)
-	v.SetDefault("api.notification.max_body_bytes", 65536)
+	v.SetDefault("api.notification.max_body_size", "64KiB")
 	v.SetDefault("api.notification.development.smtp_uri", "")
 	v.SetDefault("api.notification.development.sender", "noreply@gitstore.local")
 	v.SetDefault("api.auth.kratos.mappings", []SubjectMapping{})
@@ -661,6 +663,13 @@ func load(paths []string) (*Config, error) {
 	}
 	if cfg.Api.Auth.Kratos.MaxResponseBytes < 1 || cfg.Api.Auth.Kratos.MaxResponseBytes > 4<<20 {
 		return nil, errors.New("api.auth.kratos.max_response_size must be positive and at most 4MiB")
+	}
+	cfg.Api.Notification.MaxBodyBytes, err = ParseIECBytes(cfg.Api.Notification.MaxBodySize)
+	if err != nil {
+		return nil, fmt.Errorf("invalid api.notification.max_body_size: %w", err)
+	}
+	if cfg.Api.Notification.MaxBodyBytes < 1 || cfg.Api.Notification.MaxBodyBytes > 1<<20 {
+		return nil, errors.New("api.notification.max_body_size must be positive and at most 1MiB")
 	}
 
 	if err := validateConfig(&cfg); err != nil {

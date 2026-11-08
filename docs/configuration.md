@@ -407,7 +407,7 @@ Storefront. Restrict ingress to trusted internal senders; requests require
 |---|---|---|---|
 | `api.notification.provider` | `GITSTORE_API__NOTIFICATION__PROVIDER` | `none` | `none` or `development`; no production backend is shipped |
 | `api.notification.api_key` | `GITSTORE_API__NOTIFICATION__API_KEY` | empty | Required sensitive 32+ character credential when enabled |
-| `api.notification.max_body_bytes` | `GITSTORE_API__NOTIFICATION__MAX_BODY_BYTES` | `65536` | At most 1 MiB; the smaller Admin body limit still applies |
+| `api.notification.max_body_size` | `GITSTORE_API__NOTIFICATION__MAX_BODY_SIZE` | `64KiB` | Positive IEC size string, at most `1MiB`; bare numbers and decimal units are rejected. The smaller Admin body limit still applies |
 | `api.notification.max_concurrent` | `GITSTORE_API__NOTIFICATION__MAX_CONCURRENT` | `16` | At most 128 in-flight parsing/delivery operations; saturation returns 503 |
 | `api.notification.timeout` | `GITSTORE_API__NOTIFICATION__TIMEOUT` | `2s` | Delivery deadline, at most 10s; SMTP additionally caps work at 2s |
 | `api.notification.development.smtp_uri` | `GITSTORE_API__NOTIFICATION__DEVELOPMENT__SMTP_URI` | empty | Private mail-catcher `smtp://` or `smtps://` endpoint |
