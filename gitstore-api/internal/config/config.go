@@ -218,7 +218,8 @@ type KratosUserDirConfig struct {
 	AdminToken       string           `mapstructure:"admin_token"`
 	Timeout          time.Duration    `mapstructure:"timeout"`
 	MaxConcurrent    int              `mapstructure:"max_concurrent"`
-	MaxResponseBytes int64            `mapstructure:"max_response_bytes"`
+	MaxResponseSize  string           `mapstructure:"max_response_size"`
+	MaxResponseBytes int64            `mapstructure:"-"`
 	CacheEntries     int              `mapstructure:"cache_entries"`
 	CacheTTL         time.Duration    `mapstructure:"cache_ttl"`
 	Mappings         []SubjectMapping `mapstructure:"mappings"`
@@ -432,6 +433,7 @@ type legacyKey struct {
 // final merged state so a renamed/removed key never silently resolves to a
 // default. Ordered most-specific-first so the most helpful match wins.
 var legacyKeys = []legacyKey{
+	{"api.auth.kratos.max_response_bytes", "api.auth.kratos.max_response_size (IEC size string)"},
 	{"api.port", "api.admin_port and api.storefront_port"},
 	{"observability.otlp.endpoint", "observability.otlp.uri"},
 	{"git_service.metrics", "observability.otlp.uri (metrics use OTLP; remove the HTTP metrics listener)"},
@@ -551,7 +553,7 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("api.auth.kratos.admin_token", "")
 	v.SetDefault("api.auth.kratos.timeout", "2s")
 	v.SetDefault("api.auth.kratos.max_concurrent", 16)
-	v.SetDefault("api.auth.kratos.max_response_bytes", 1<<20)
+	v.SetDefault("api.auth.kratos.max_response_size", "1MiB")
 	v.SetDefault("api.auth.kratos.cache_entries", 4096)
 	v.SetDefault("api.auth.kratos.cache_ttl", "5m")
 	v.SetDefault("api.notification.provider", "none")
@@ -651,6 +653,14 @@ func load(paths []string) (*Config, error) {
 	)
 	if err := v.Unmarshal(&cfg, viper.DecodeHook(decodeHook)); err != nil {
 		return nil, err
+	}
+
+	cfg.Api.Auth.Kratos.MaxResponseBytes, err = ParseIECBytes(cfg.Api.Auth.Kratos.MaxResponseSize)
+	if err != nil {
+		return nil, fmt.Errorf("invalid api.auth.kratos.max_response_size: %w", err)
+	}
+	if cfg.Api.Auth.Kratos.MaxResponseBytes < 1 || cfg.Api.Auth.Kratos.MaxResponseBytes > 4<<20 {
+		return nil, errors.New("api.auth.kratos.max_response_size must be positive and at most 4MiB")
 	}
 
 	if err := validateConfig(&cfg); err != nil {

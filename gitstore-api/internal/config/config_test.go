@@ -56,6 +56,7 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_API__AUTH__KRATOS__TIMEOUT",
 		"GITSTORE_API__AUTH__KRATOS__MAX_CONCURRENT",
 		"GITSTORE_API__AUTH__KRATOS__MAX_RESPONSE_BYTES",
+		"GITSTORE_API__AUTH__KRATOS__MAX_RESPONSE_SIZE",
 		"GITSTORE_API__AUTH__KRATOS__CACHE_ENTRIES",
 		"GITSTORE_API__AUTH__KRATOS__CACHE_TTL",
 		"GITSTORE_API__AUTH__KRATOS__MAPPINGS",
@@ -253,7 +254,7 @@ func TestKratosUserDirRejectsUnsafeOrUnboundedConfiguration(t *testing.T) {
 		{"long cache lease", "CACHE_TTL", "6m"},
 		{"no cache bound", "CACHE_ENTRIES", "0"},
 		{"no concurrency bound", "MAX_CONCURRENT", "0"},
-		{"oversized response bound", "MAX_RESPONSE_BYTES", "4194305"},
+		{"oversized response bound", "MAX_RESPONSE_SIZE", "4194305B"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			defer clearEnv(t)()
@@ -268,6 +269,57 @@ func TestKratosUserDirRejectsUnsafeOrUnboundedConfiguration(t *testing.T) {
 			require.NotContains(t, err.Error(), "secret@")
 		})
 	}
+}
+
+func TestKratosResponseSizeRequiresBoundedIECUnits(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		raw   string
+		bytes int64
+	}{
+		{"bytes", `"1048576B"`, 1 << 20},
+		{"binary kilobytes", `"512KiB"`, 512 << 10},
+		{"maximum", `"4MiB"`, 4 << 20},
+		{"raw integer", `1048576`, 0},
+		{"bare string", `"1048576"`, 0},
+		{"decimal units", `"1MB"`, 0},
+		{"zero", `"0B"`, 0},
+		{"over maximum", `"4194305B"`, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer clearEnv(t)()
+			setRequiredAuth(t)
+			path := filepath.Join(t.TempDir(), "config.toml")
+			require.NoError(t, os.WriteFile(path, []byte(
+				"[api.auth.kratos]\nmax_response_size = "+test.raw+"\n",
+			), 0600))
+			cfg, err := LoadFrom(path)
+			if test.bytes == 0 {
+				require.ErrorContains(t, err, "api.auth.kratos.max_response_size")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.bytes, cfg.Api.Auth.Kratos.MaxResponseBytes)
+		})
+	}
+	t.Run("renamed TOML key", func(t *testing.T) {
+		defer clearEnv(t)()
+		setRequiredAuth(t)
+		path := filepath.Join(t.TempDir(), "config.toml")
+		require.NoError(t, os.WriteFile(path, []byte(
+			"[api.auth.kratos]\nmax_response_bytes = 1048576\n",
+		), 0600))
+		_, err := LoadFrom(path)
+		require.ErrorContains(t, err, "api.auth.kratos.max_response_size")
+	})
+	t.Run("environment override", func(t *testing.T) {
+		defer clearEnv(t)()
+		setRequiredAuth(t)
+		t.Setenv("GITSTORE_API__AUTH__KRATOS__MAX_RESPONSE_SIZE", "2MiB")
+		cfg, err := LoadFrom(kratosMappingConfig(t))
+		require.NoError(t, err)
+		require.Equal(t, int64(2<<20), cfg.Api.Auth.Kratos.MaxResponseBytes)
+	})
 }
 
 func TestKratosConfigurationLogsRedactDirectoryToken(t *testing.T) {
@@ -1398,6 +1450,7 @@ func TestLoad_RejectsLegacyConfigKeysViaEnv(t *testing.T) {
 		wantReplacement string
 	}{
 		{"rate_limit_per_second_renamed", "GITSTORE_API__RATE_LIMIT_PER_SECOND", "10", "api.rate_limit.per_second"},
+		{"kratos_response_size_renamed", "GITSTORE_API__AUTH__KRATOS__MAX_RESPONSE_BYTES", "1048576", "api.auth.kratos.max_response_size"},
 		{"git_grpc_uri_renamed", "GITSTORE_GIT__GRPC__URI", "dns:///x:1", "api.git_service.uri"},
 		{"auth_jwt_duration_renamed", "GITSTORE_AUTH__JWT__DURATION", "1h", "api.auth.jwt.ttl"},
 		{"datastore_backend_renamed", "GITSTORE_DATASTORE__BACKEND", "scylla", "api.datastore.backend"},

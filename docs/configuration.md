@@ -249,6 +249,7 @@ that verifies bearer JWTs via OIDC Discovery + JWKS. It is enabled only when
 | `api.auth.kratos.admin_uri` | `GITSTORE_API__AUTH__KRATOS__ADMIN_URI` | string | (empty) | When `kratos` is selected | No | Private Kratos Admin endpoint |
 | `api.auth.kratos.webhook_uri` | `GITSTORE_API__AUTH__KRATOS__WEBHOOK_URI` | string | (empty) | When callbacks are configured | No | Optional private HTTP listener; for example `http://127.0.0.1:8085` |
 | `api.auth.kratos.admin_token` | `GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN` | string | (empty) | Only for an authenticating Admin gateway | **Yes** | Bearer credential; stock self-hosted Kratos does not validate it |
+| `api.auth.kratos.max_response_size` | `GITSTORE_API__AUTH__KRATOS__MAX_RESPONSE_SIZE` | IEC size string | `1MiB` | No | No | Positive directory response and webhook body limit, at most `4MiB`; bare numbers and decimal units are rejected |
 
 #### Production identity guidance
 
