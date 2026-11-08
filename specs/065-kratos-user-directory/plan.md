@@ -1,6 +1,6 @@
 # Implementation Plan: Production User Directory Provider (Kratos)
 
-**Branch**: `065-kratos-user-directory` | **Updated**: 2026-11-07
+**Branch**: `065-kratos-user-directory` | **Updated**: 2026-11-08
 **Spec**: [spec.md](spec.md)
 
 ## Summary
@@ -353,8 +353,8 @@ and runner ownership/restoration guards now pass isolated dispatcher
 regressions, including confirmation, ownership, paused/non-identity rejection,
 failed-injector restoration and replacement-ID refusal. Those mocked runner
 checks are not evidence of physical Pumba injection or authentication recovery
-during sustained load. T076's identity correctness/call/cache/event readiness
-extension and T079-T080's declared-scale/fault runs remain open.
+during sustained load. T076/T079 now pass the separate native capacity
+acceptance below; T080's sustained fault acceptance remains open.
 
 The existing API readiness profile is a non-mutating smoke and is exempt from
 the retained Product dataset preflight; a missing five-million-Product baseline
@@ -364,7 +364,8 @@ Preserve the existing topology, dataset, memory and sustained-duration gates
 where applicable. Alpha/production source attribution also requires a clean
 checkout. Commit/push and declared-scale runs are now explicitly authorized;
 the tested source must be committed before those acceptance receipts are
-produced. Functional fixtures cannot substitute for T076-T080.
+produced. Functional fixtures cannot substitute for the separate capacity and
+sustained fault acceptance.
 
 Generation, the full default suite, lint, aggregate configuration/catalog
 checks, owned native directory race tests, integration Go vet, whitespace and
@@ -373,6 +374,64 @@ HCL/Terraform extraction dependency remains unavailable. No fixture-owned
 containers, volumes, networks or images remain. The spec stays open and ADR
 0020 stays Proposed because its issuer-client/assertion/token-hook core is not
 implemented.
+
+### Native declared-envelope capacity acceptance: 2026-11-08
+
+T076/T079 pass against clean committed source
+`43e2dc5d743eaf3bcf5d4c69ebe0c9cef7058b0f`, using the existing
+`make capacity TARGET=api PROFILE=readiness MODE=alpha` interface separately
+for both datasets. The owned fixture verifies actual native PostgreSQL human
+counts and authoritative Scylla ServiceAccount counts, rather than treating
+seed requests or import HTTP success as dataset proof.
+
+| Dataset | Staff | Customers | ServiceAccounts | Principal requests, API 0 / API 1 | Mean directory calls/s, API 0 / API 1 |
+|---|---:|---:|---:|---|---|
+| Alpha | 1,000 | 100,000 | 100 | 900,001 / 900,000 | 0.440 / 0.417 |
+| Declared production-sized | 1,000 | 1,000,000 | 1,000 | 900,000 / 900,000 | 0.442 / 0.436 |
+
+Each workload offers 500 principal requests/s per API for a complete thirty
+minutes, with zero dropped iterations and zero decision/membership check
+failures. The additional authorized operator membership probes bring total
+HTTP requests to 2,700,001 and 2,700,000 respectively. Every request has matching
+grant/denial and group receipts. Both API consumers apply 87 live source events
+per dataset; the companion verifies denial by source authority with unexpired
+credentials, later delivery preserving exact administered groups, unchanged
+singleton Git process and preserved shared PostgreSQL storage.
+
+SDK histogram deltas place successful complete warm profile lookup p99 at or
+below 0.1 ms for both replicas/datasets. Cold lookup p99 bucket upper bounds are
+10/25 ms for alpha and 10/10 ms for the production-sized dataset. These are
+histogram bucket bounds for directory lookup, not end-to-end request timings.
+Observed cache occupancy samples remain within the 16-entry bucket against
+the configured 256-entry ceiling; buffer observations remain within the
+configured 64-entry bound. The call rates above are whole-run means, not
+one-second peak-rate measurements.
+
+Docker Desktop reports aarch64, eight logical CPUs and 16,787,881,984 bytes of
+memory. Runtime preflight checks two actual release API processes, immutable
+image references, exact revision/instance identity and bounded owned
+dependencies. PostgreSQL has 1 GiB/two CPUs, Scylla 2 GiB/one CPU, each Kratos
+replica 512 MiB/one CPU and singleton Git 384 MiB/one CPU. Sustained datastore
+resource verification passes with no OOM kill or unexpected restart.
+
+The six-case repeated working set covers allowed/denied Staff, denied
+Customers at both ends of the seeded dataset and a real source-issued
+ServiceAccount. This proves the declared directory population with a bounded
+representative hot working set, not uniform access to every seeded identity.
+Both runs select `MODE=alpha`; the second proves the larger identity envelope,
+not unrelated production readiness or a five-million-Product baseline.
+
+The first full-duration attempt exposed the native fixture's default
+50-request/s IP admission ceiling and a K6 exported-summary shape mismatch.
+The corrected fixture explicitly bounds IP/principal admission for principal
+traffic plus operator probes and preallocates sufficient VUs; normal defaults
+are unchanged. The verifier supports both actual export and callback metric
+shapes without relaxing correctness, throughput or latency gates.
+
+These are healthy sustained workloads with live changes, not confirmed chaos,
+API replacement or mixed-version/provider-switch acceptance. T012/T051/T078/
+T080/T081/T083 remain open. CI and CI Integration pass on the tested source.
+The spec remains open and ADR 0020 remains Proposed.
 
 ```text
 gitstore-api/

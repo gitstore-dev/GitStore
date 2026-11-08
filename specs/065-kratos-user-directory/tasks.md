@@ -138,9 +138,10 @@ Fresh-journal startup and missing live discard logging exposed by that
 deployment are fixed and covered by focused race-enabled regressions. All
 owned directory fixtures pass together with driver race detection. Full
 `make generate TARGET=all`, `make test`, `make lint` and `make check TARGET=all`
-pass. Mixed-version/provider-switch, ambiguous-write and declared identity-scale
-readiness/chaos gates remain open; these functional fixtures do not substitute
-for them.
+pass. Mixed-version/provider-switch, ambiguous-write, sustained chaos and
+complete native Hydra quickstart gates remain open. Separate declared
+identity-scale readiness acceptance now passes as recorded in plan.md; the
+functional fixtures are not its substitute.
 
 ## Phase 2: Foundational contracts and configuration
 
@@ -300,10 +301,10 @@ for them.
 **Purpose**: Verify the combined feature, document real operational limits and preserve existing readiness/rollout contracts.
 
 - [X] T075 [P] Update `docs/configuration.md`, `docs/authorization.md` and `docs/developer-guide.md` with provider-independent configuration, reference OIDC/Kratos shared-store setup and operator warnings: discourage `static-users` AuthN/UserDir and `none` UserDir in production, including mixing static users with Kratos/oidc-jwt; explicitly document retry-and-discard, indefinitely stale/missing/orphaned mirrors, incomplete unified actor lists and GitStore ServiceAccount authority without pretending these combinations are configuration-invalid.
-- [ ] T076 Extend existing readiness fixtures/preflight/domain verification in `tests/capacity/preflight/api-readiness.sh`, `tests/capacity/profiles/api-readiness.js` and `tests/capacity/README.md` for seeded identity counts, two APIs, actual principal/group/action receipts, directory call/cache limits and sustained event handling; reuse `scripts/run-capacity.sh` selectors and preserve all existing topology/dataset/resource gates.
+- [X] T076 Extend existing readiness fixtures/preflight/domain verification in `tests/capacity/preflight/api-readiness.sh`, `tests/capacity/profiles/api-readiness.js` and `tests/capacity/README.md` for seeded identity counts, two APIs, actual principal/group/action receipts, directory call/cache limits and sustained event handling; reuse `scripts/run-capacity.sh` selectors and preserve all existing topology/dataset/resource gates.
 - [X] T077 Add a bounded explicitly owned identity-service restart/pause experiment under `tests/chaos/profiles/identity-restart.json` and update `tests/chaos/README.md`, reusing `scripts/run-chaos.sh`; require explicit ownership/target/confirmation, restoration receipts and verifier-decided existing-profile authentication recovery within 30 seconds, with best-effort drops rather than an orphan-repair guarantee.
 - [ ] T078 Execute mixed-version/concurrent-replica replacement and provider-switch acceptance in `tests/integration/user_directory_rolling_upgrade_test.go`, covering enrichment, public/management boundaries, actor reads, admin writes, live consumer cancellation and stale workload authority; keep exactly one unaffected Git service and do not claim controller or Git HA beyond exercised paths.
-- [ ] T079 Run `make capacity TARGET=api PROFILE=readiness MODE=alpha` with T076's owned 1,000-staff/100,000-customer/100-ServiceAccount fixture and correctness receipts, then separately prove the declared 1,000,000-customer/1,000-ServiceAccount envelope; record attributable latency/call-rate/buffer/resource evidence in `specs/065-kratos-user-directory/plan.md`, not an operator run diary.
+- [X] T079 Run `make capacity TARGET=api PROFILE=readiness MODE=alpha` with T076's owned 1,000-staff/100,000-customer/100-ServiceAccount fixture and correctness receipts, then separately prove the declared 1,000,000-customer/1,000-ServiceAccount envelope; record attributable latency/call-rate/buffer/resource evidence in `specs/065-kratos-user-directory/plan.md`, not an operator run diary.
 - [ ] T080 Run T077's confirmed identity faults and existing API replacement faults through `make chaos` while T079's bounded workload is active; record actual two-replica isolation, 30-second existing-profile authentication recovery, finite delivery drops and source authority in `specs/065-kratos-user-directory/plan.md`, explicitly marking any unexecuted acceptance path.
 - [ ] T081 Execute the complete `specs/065-kratos-user-directory/quickstart.md` flow, including dual login, invitations/all lifecycle states, forward Relay pages/unified backward diagnostics, ownership/counters, workload authority/retry/discard and authenticated HTTP mail; update `quickstart.md` with supported behavior only and keep captured credentials/messages/private receipts outside versioned files.
 - [X] T082 Run `make generate TARGET=all`, `make test`, `make lint`, `make check TARGET=all` and `git diff --check` for the changed schemas/API/configuration/tests, including `shared/schemas/admin/user.graphqls` and `gitstore-api/internal/auth/provider/kratos/provider.go`, plus `make pr-ready` before any PR creation; verify generated Admin/Storefront/catalog drift checks, no internal references in consumer docstrings and `graphify update .` after code changes.
