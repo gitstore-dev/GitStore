@@ -47,8 +47,15 @@ func TestStaticUsersBasicAuthAndUserDir(t *testing.T) {
 	profile, err := p.GetBySubject(context.Background(), "alice")
 	require.NoError(t, err)
 	assert.Equal(t, "Alice", profile.DisplayName)
+	assert.Equal(t, "alice", profile.Username)
+	assert.Equal(t, auth.ActorActive, profile.Lifecycle)
+	assert.Empty(t, profile.Kind)
+	groups, err := p.ListGroups(context.Background(), "alice")
+	require.NoError(t, err)
+	assert.Empty(t, groups)
 	_, err = p.GetBySubject(context.Background(), "nobody")
 	assert.ErrorIs(t, err, ErrUserNotFound)
+	assert.ErrorIs(t, err, auth.ErrProfileNotFound)
 }
 
 func TestStaticUsersRejectsReservedIdentities(t *testing.T) {

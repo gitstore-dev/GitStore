@@ -131,15 +131,40 @@ func TestCommittedAuthorizationCatalogParity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(bytes.TrimSpace(data), bytes.TrimSpace(seed)) {
-		t.Fatal("reviewed catalog snapshot drift")
-	}
 	var catalog authorizationCatalog
 	if err := json.Unmarshal(data, &catalog); err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog.Actions) != 82 {
+	var baseline authorizationCatalog
+	if err := json.Unmarshal(seed, &baseline); err != nil {
+		t.Fatal(err)
+	}
+	additions := map[string]bool{
+		"user.create": true, "user.read": true, "user.list": true,
+		"user.update": true, "user.delete": true, "user.group.update": true,
+	}
+	if len(catalog.Actions) != len(baseline.Actions)+len(additions) {
 		t.Fatalf("unexpected catalog size %d", len(catalog.Actions))
+	}
+	historical := catalog
+	historical.Actions = nil
+	for _, entry := range catalog.Actions {
+		if additions[entry.Action] {
+			delete(additions, entry.Action)
+		} else {
+			historical.Actions = append(historical.Actions, entry)
+		}
+	}
+	preserved, err := json.Marshal(historical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewed, err := json.Marshal(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(additions) != 0 || !bytes.Equal(preserved, reviewed) {
+		t.Fatal("reviewed catalog snapshot drift")
 	}
 	for _, e := range catalog.Actions {
 		got, ok := auth.LookupAction(e.Action)

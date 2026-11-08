@@ -26,6 +26,24 @@ if ! docker inspect "${target}" >/dev/null 2>&1; then
   exit 2
 fi
 
+requires_ownership="$(jq -r '.requiresOwnership // false' "${profile_file}")"
+owner="${CHAOS_OWNER:-}"
+ownership_label="${CHAOS_OWNERSHIP_LABEL:-com.docker.compose.project}"
+target_id=""
+if [[ "${requires_ownership}" == true ]]; then
+  pattern="$(jq -er '.targetPattern' "${profile_file}")"
+  [[ "${target}" =~ ${pattern} ]] || { echo "profile requires an explicit identity-service target" >&2; exit 2; }
+  [[ -n "${owner}" && "${ownership_label}" =~ ^[a-zA-Z0-9_.-]+$ ]] || {
+    echo "identity faults require CHAOS_OWNER and a valid CHAOS_OWNERSHIP_LABEL" >&2
+    exit 2
+  }
+  ownership="$(docker inspect "${target}")"
+  jq -e --arg label "${ownership_label}" --arg owner "${owner}" \
+    'length == 1 and .[0].Config.Labels[$label] == $owner and .[0].State.Running and (.[0].State.Paused | not)' \
+    <<<"${ownership}" >/dev/null || { echo "identity target ownership or running state does not match" >&2; exit 2; }
+  target_id="$(jq -er '.[0].Id' <<<"${ownership}")"
+fi
+
 action="$(jq -er '.action' "${profile_file}")"
 duration="$(jq -r '.duration // empty' "${profile_file}")"
 pumba_image="${PUMBA_IMAGE:-ghcr.io/alexei-led/pumba:1.1.7}"
@@ -96,10 +114,33 @@ set +e
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "${pumba_image}" --log-level info "${command_args[@]}" 2>&1 | tee "${evidence_dir}/pumba.log"
 status=${PIPESTATUS[0]}
 set -e
+injection_status="${status}"
 
-record_target_state "${evidence_dir}/target-after.json" 2>/dev/null || true
+restored=false
+if [[ "${requires_ownership}" == true ]]; then
+  if current="$(docker inspect "${target}" 2>/dev/null)" &&
+    jq -e --arg label "${ownership_label}" --arg owner "${owner}" --arg id "${target_id}" \
+      'length == 1 and .[0].Id == $id and .[0].Config.Labels[$label] == $owner' <<<"${current}" >/dev/null; then
+    if [[ "$(jq -r '.[0].State.Running' <<<"${current}")" != true ]]; then
+      docker start "${target_id}" >/dev/null || status=1
+    fi
+    if record_target_state "${evidence_dir}/target-after.json" &&
+      jq -e --arg id "${target_id}" \
+        'length == 1 and .[0].Id == $id and .[0].State.Running and (.[0].State.Paused | not)' \
+        "${evidence_dir}/target-after.json" >/dev/null; then
+      restored=true
+    fi
+  fi
+  if [[ "${restored}" != true && "${status}" == 0 ]]; then status=1; fi
+else
+  record_target_state "${evidence_dir}/target-after.json" 2>/dev/null || true
+fi
 jq --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson exit_code "${status}" \
-  '. + {completedAt:$completed_at, exitCode:$exit_code, injected:($exit_code == 0)}' \
+  --argjson injection_exit_code "${injection_status}" \
+  --argjson restoration_required "${requires_ownership}" --argjson restored "${restored}" \
+  '. + {completedAt:$completed_at, exitCode:$exit_code, injectorExitCode:$injection_exit_code,
+    injected:($injection_exit_code == 0),
+    restorationRequired:$restoration_required, restored:$restored}' \
   "${evidence_dir}/metadata.json" >"${evidence_dir}/metadata.json.tmp"
 mv "${evidence_dir}/metadata.json.tmp" "${evidence_dir}/metadata.json"
 

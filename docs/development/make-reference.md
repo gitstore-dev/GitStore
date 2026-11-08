@@ -63,6 +63,14 @@ reference identity stack, and pass it to lifecycle commands for that stack too.
 `SERVICE=scylla` groups all Scylla variants; `SERVICE=oidc` groups the OIDC stack
 when used with `IDENTITY=oidc`. `SERVICE` scopes `logs` and `stop`, not `down`.
 
+Deployment copies, including `gitstore-dev/quickstart`, must keep the reference
+identity image pins, three schema mounts, hook configuration, private callback
+and mail wiring, policy vocabulary and named listener ports synchronized.
+UserDir selection remains independent of the AuthN chain. Preserve identity
+storage and review [identity rollout and rollback](../configuration.md#identity-rollout-and-rollback)
+before replacing APIs or removing callback configuration; copying an overlay
+does not migrate existing identities or make older schemas compatible.
+
 For separately started native services, start Git/API, then:
 
 ```bash

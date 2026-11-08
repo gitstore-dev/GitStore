@@ -98,6 +98,29 @@ CHAOS_TARGET=<gitstore-container> CHAOS_CONFIRM=1` for bounded container fault
 injection. See [Production readiness testing](development/production-readiness-testing.md)
 for profile authoring, correctness-verifier, evidence, and safety requirements.
 
+## Reference identity integration
+
+AuthN, UserDir and AuthZ are independent selections. The optional
+`compose.oidc.yml` stack pins Kratos, Hydra and the self-service UI; use
+`oidc-jwt` for human AuthN, Kratos for UserDir and the configured AuthZ policy
+for permissions. Keep native Admin endpoints private and supply runtime
+credentials outside committed configuration. Kratos replicas must share the
+same PostgreSQL identity store; do not provision an identity database per API.
+Reference schema and hook configuration lives under `config/oidc/kratos/`.
+
+The local static login below is a development fixture. Avoid `static-users`
+AuthN/UserDir and `none` UserDir in production, including static/OIDC/Kratos
+mixes, even though they are accepted configuration combinations.
+ServiceAccount credentials and enablement remain GitStore-owned.
+
+Each API's workload mirror consumer starts at the current internal journal
+boundary with bounded retries and buffering. Loss, overflow or restart can
+leave missing, stale or orphaned directory mirrors and incomplete unified actor
+lists indefinitely; no automatic replay or repair is shipped. Native
+ServiceAccount reads remain source-backed. See
+[identity configuration](configuration.md#authorization-and-user-directory)
+and [workload delivery limits](configuration.md#workload-directory-mirrors).
+
 ## Local Development
 
 Start the Docker stack:

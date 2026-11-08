@@ -31,6 +31,55 @@ The core stack exposes:
 | Git Smart HTTP | http://localhost:9000 |
 | Controller manager health | http://localhost:5001/health |
 
+## Manage Identities
+
+With a capable UserDir configured and the required administration grants, use
+the Admin API to look up Staff, Customers and ServiceAccounts. Human types share
+the `User` interface; workloads remain `Actor` objects, not human users:
+
+```graphql
+query {
+  actor(by: {username: "alice"}) {
+    id
+    ... on User {
+      fullName
+      metadata { name generation resourceVersion }
+      groups
+      lifecycle { state }
+    }
+  }
+}
+```
+
+Choose exactly one lookup selector: `id`, human `username` or
+`serviceAccountName`. A human and a workload with the same name are distinct
+identities. Unified `actors` uses forward `first`/`after` Relay pages and rejects
+`last`/`before`; the source-backed `serviceAccounts` connection supports both
+directions and works without UserDir. Unified lists may omit workload mirrors
+after missed delivery.
+
+`createStaff` sends a setup invitation, and `resendStaffInvitation` resends it
+while setup/verification remains unfinished. No password or setup link is
+returned. `suspendUser`, `deactivateUser`, `reactivateUser` and `deleteUser`
+administer human accounts. Verification and password setup govern activation;
+reactivation does not restore revoked sessions. Lifecycle states are `INVITED`,
+`PENDING_VERIFICATION`, `ACTIVE`, `INACTIVE` and `SUSPENDED`.
+
+Use `assignUserGroup` and `removeUserGroup` with bare ordinary group names for
+Staff and ServiceAccount memberships; these mutations return `Actor` payloads.
+Customer memberships are configured globally: assigning a configured group is
+a no-op, while individual removal or assignment outside the configuration is
+rejected. Workload groups never change source keys, UID or enablement.
+
+`updateUser` permits authorized full-name, email and consent changes, not
+username/type/group/lifecycle changes. The previous verified deliverable address
+remains in use until the replacement is verified. Administrative deliverability
+updates use `setUserEmailDeliverability`. Staff revisions are best-effort;
+Customer counters are `-1`/`"-1"`, not concurrency tokens. Changes can partially
+succeed across directory, session and mail operations, and other API replicas
+retain bounded freshness. See [identity administration](api-reference.md#identity-administration)
+for permissions, payloads and error behavior.
+
 ## Bootstrap A Repository
 
 Create the default namespace and repository:
@@ -426,6 +475,36 @@ mutation RefreshToken {
 Create a namespace and repository manually when you need custom provisioning. See [API Reference](api-reference.md#mutation-operations) for the exact inputs.
 
 Catalogue writes are Git-driven today. Product, category, collection, and variant CRUD over GraphQL will be documented after the Git-backed design is finalized.
+
+## Administer human identities
+
+Use the Admin endpoint with cluster-scoped `user.*` grants. For example:
+
+```graphql
+mutation InviteStaff {
+  createStaff(input: {
+    metadata: {name: "carol"}
+    fullName: "Carol"
+    primaryEmail: "carol@example.test"
+    groups: ["merchandiser"]
+  }) {
+    staff { id metadata { name uid generation resourceVersion } lifecycle { state } }
+  }
+}
+```
+
+Deliver setup links through the configured private mail provider, not GraphQL.
+Use the returned ID for invitation resend, group and human lifecycle operations.
+Setup/verification must complete before activation; reactivation cannot bypass
+those prerequisites. A delivery or session-revocation failure may leave the
+preceding identity write applied.
+
+Look up humans with `actor(by: {username: "carol"})`; use
+`serviceAccountName` for a workload, even when it shares a human's name.
+Use `actors(first: 50)` for forward directory pages and `serviceAccounts`
+for authoritative workload listing independent of directory availability.
+See [identity administration](api-reference.md#identity-administration) for
+inputs, permissions, cursor behavior and limitations.
 
 ## Troubleshooting
 

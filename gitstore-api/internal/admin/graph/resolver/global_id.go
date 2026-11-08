@@ -22,6 +22,9 @@ const (
 	nodeKindRepository     = "Repository"
 	nodeKindProductVariant = "ProductVariant"
 	nodeKindFile           = "File"
+	nodeKindStaff          = "Staff"
+	nodeKindCustomer       = "Customer"
+	nodeKindServiceAccount = "ServiceAccount"
 
 	globalIDScheme = "gid"
 	globalIDHost   = "GitStore"
@@ -35,6 +38,9 @@ var supportedNodeKinds = map[string]struct{}{
 	nodeKindRepository:     {},
 	nodeKindProductVariant: {},
 	nodeKindFile:           {},
+	nodeKindStaff:          {},
+	nodeKindCustomer:       {},
+	nodeKindServiceAccount: {},
 }
 
 // EncodeNodeID returns an opaque Relay-style global ID for a GraphQL Node.

@@ -33,6 +33,18 @@ type authorizedFileNodesContextKey struct{}
 type authorizedFileReadContextKey struct{}
 type authorizedRepositoryReadContextKey struct{}
 type authorizedMissingNodesContextKey struct{}
+type authorizedActorNodesContextKey struct{}
+
+type authorizedActorNode struct {
+	profile *auth.UserProfile
+	account *datastore.ServiceAccount
+}
+
+func AuthorizedActorNode(ctx context.Context, kind, uid string) (*auth.UserProfile, *datastore.ServiceAccount, bool) {
+	nodes, _ := ctx.Value(authorizedActorNodesContextKey{}).(map[nodeIdentity]authorizedActorNode)
+	node, ok := nodes[nodeIdentity{kind, uid}]
+	return node.profile, node.account, ok
+}
 
 type nodeIdentity struct{ kind, uid string }
 type authorizedMissingNodes struct {
@@ -228,6 +240,18 @@ func (a *Authenticate) GraphQLAuthenticator(ctx context.Context, next graphql.Op
 		principal = auth.Anonymous()
 	}
 
+	principal, err = auth.EnrichPrincipal(authCtx, a.registry.UserDir(), principal)
+	if err != nil {
+		code, message := "DIRECTORY_UNAVAILABLE", "directory temporarily unavailable"
+		if errors.Is(err, auth.ErrProfileInactive) {
+			code, message = "FORBIDDEN", "directory profile is not active"
+		} else if errors.Is(err, auth.ErrInvalidToken) {
+			return unauthenticatedGraphQLResponse()
+		}
+		return graphql.OneShot(&graphql.Response{Errors: gqlerror.List{&gqlerror.Error{
+			Message: message, Extensions: map[string]any{"code": code},
+		}}})
+	}
 	return next(auth.ContextWithPrincipal(authCtx, principal))
 }
 
@@ -352,7 +376,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			}
 		}
 	}
-	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isAdditionalCatalogField(fc) && !isNamespaceQueryField(fc) && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isCategoryProductsField(fc) && !isFileQueryField(fc) && !isCategoryQueryField(fc) {
+	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isActorReadField(fc) && !isAdditionalCatalogField(fc) && !isNamespaceQueryField(fc) && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isCategoryProductsField(fc) && !isFileQueryField(fc) && !isCategoryQueryField(fc) {
 		return next(ctx)
 	}
 	if fc.Object == "Mutation" {
@@ -434,6 +458,10 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		return nil, err
 	}
 	if err := a.authorizeAdditionalCatalogField(ctx, fc, principal, authz); err != nil {
+		return nil, err
+	}
+	ctx, err = a.authorizeActorNodeField(ctx, fc, principal, authz)
+	if err != nil {
 		return nil, err
 	}
 
@@ -910,6 +938,179 @@ func (a *Authorize) authorizeCategoryProductsField(ctx context.Context, fc *grap
 		}
 	}
 	return authorizeProductAction(ctx, authz, principal, "product.list", "", namespace, owner)
+}
+
+func (a *Authorize) authorizeActorNodeField(ctx context.Context, fc *graphql.FieldContext, principal *auth.Principal, authz auth.AuthZProvider) (context.Context, error) {
+	mutationAction := actorMutationAction(fc.Field.Name)
+	if fc.Object != "Query" && (fc.Object != "Mutation" || mutationAction == "") {
+		return ctx, nil
+	}
+	if fc.Object == "Mutation" && fc.Field.Name == "createStaff" {
+		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
+		return ctx, authorizeCategoryAction(ctx, authz, principal, mutationAction, auth.ResourceContext{Kind: "user", Name: name})
+	}
+	if fc.Field.Name == "actors" || fc.Field.Name == "serviceAccounts" {
+		if fc.Field.Name == "actors" {
+			if err := authorizeCategoryAction(ctx, authz, principal, auth.ActionUserList, auth.ResourceContext{Kind: "user"}); err != nil {
+				return ctx, err
+			}
+		}
+		return ctx, authorizeCategoryAction(ctx, authz, principal, auth.ActionServiceAccountList, auth.ResourceContext{Kind: "serviceAccount"})
+	}
+	if mutationAction == "" && fc.Field.Name != "node" && fc.Field.Name != "nodes" && fc.Field.Name != "actor" {
+		return ctx, nil
+	}
+	ids, _ := directStringsArg(fc.Args, "ids")
+	if fc.Field.Name == "node" {
+		id, _ := directStringArg(fc.Args, "id")
+		ids = []string{id}
+	}
+	var lookups []nodeIdentity
+	if fc.Object == "Mutation" {
+		id, _ := nestedStringPath(fc.Args, "input", "id")
+		kind, uid, err := decodeGlobalID(id)
+		group := mutationAction == auth.ActionUserGroupUpdate
+		if err != nil || (kind != "Staff" && kind != "Customer" && !(group && kind == "ServiceAccount")) {
+			return ctx, admission.NewError(admission.CodeBadUserInput, "INVALID_ACTOR_SELECTOR", "this operation requires a supported actor ID").ToGQLError()
+		}
+		lookups = append(lookups, nodeIdentity{kind, uid})
+	}
+	if fc.Field.Name == "actor" {
+		if id, ok := nestedStringPath(fc.Args, "by", "id"); ok {
+			kind, uid, err := decodeGlobalID(id)
+			if err != nil || (kind != "Staff" && kind != "Customer" && kind != "ServiceAccount") {
+				return ctx, admission.NewError(admission.CodeBadUserInput, "INVALID_GLOBAL_ID", "invalid actor ID").ToGQLError()
+			}
+			lookups = append(lookups, nodeIdentity{kind, uid})
+		} else if username, ok := nestedStringPath(fc.Args, "by", "username"); ok {
+			if !auth.ValidExternalUsername(username) {
+				return ctx, admission.NewError(admission.CodeBadUserInput, "INVALID_ACTOR_SELECTOR", "invalid actor username").ToGQLError()
+			}
+			lookups = append(lookups, nodeIdentity{"username", username})
+		} else if name, ok := nestedStringPath(fc.Args, "by", "serviceAccountName"); ok && name != "" {
+			lookups = append(lookups, nodeIdentity{"serviceAccountName", name})
+		} else {
+			return ctx, admission.NewError(admission.CodeBadUserInput, "INVALID_ACTOR_SELECTOR", "exactly one actor identifier is required").ToGQLError()
+		}
+	}
+	for _, id := range ids {
+		kind, uid, err := decodeGlobalID(id)
+		if err == nil && (kind == "Staff" || kind == "Customer" || kind == "ServiceAccount") {
+			lookups = append(lookups, nodeIdentity{kind, uid})
+		}
+	}
+	nodes := make(map[nodeIdentity]authorizedActorNode)
+	for _, key := range lookups {
+		kind, uid := key.kind, key.uid
+		if _, ok := nodes[key]; ok {
+			continue
+		}
+		action := auth.ActionUserRead
+		resource := auth.ResourceContext{Kind: "user"}
+		var node authorizedActorNode
+		var lookupErr error
+		if kind == "ServiceAccount" || kind == "serviceAccountName" {
+			action, resource.Kind = auth.ActionServiceAccountRead, "serviceAccount"
+			if kind == "serviceAccountName" {
+				store, ok := a.store.(interface {
+					GetServiceAccountBySubject(context.Context, string) (*datastore.ServiceAccount, error)
+				})
+				if ok {
+					node.account, lookupErr = store.GetServiceAccountBySubject(ctx, uid)
+				} else {
+					lookupErr = auth.ErrDirectoryUnavailable
+				}
+			} else {
+				store, ok := a.store.(interface {
+					GetServiceAccountByUID(context.Context, string) (*datastore.ServiceAccount, error)
+				})
+				if ok {
+					node.account, lookupErr = store.GetServiceAccountByUID(ctx, uid)
+				} else {
+					lookupErr = auth.ErrDirectoryUnavailable
+				}
+			}
+			if node.account != nil {
+				resource.Name, resource.OwnerSub = node.account.Name, node.account.CreationActor
+			}
+		} else if a.registry == nil || a.registry.UserDir() == nil {
+			lookupErr = auth.ErrProfileNotFound
+		} else {
+			if kind == "username" {
+				var profiles []*auth.UserProfile
+				profiles, lookupErr = a.registry.UserDir().SearchUsers(ctx, uid, 1)
+				if lookupErr == nil && len(profiles) > 1 {
+					lookupErr = auth.ErrDirectoryConflict
+				}
+				if lookupErr == nil && len(profiles) == 1 {
+					node.profile = profiles[0]
+				}
+				if node.profile != nil && node.profile.Username != uid {
+					node.profile, lookupErr = nil, auth.ErrProfileNotFound
+				}
+			} else {
+				node.profile, lookupErr = a.registry.UserDir().GetBySubject(ctx, uid)
+			}
+			expected := auth.ProfileStaff
+			if kind == "Customer" {
+				expected = auth.ProfileCustomer
+			}
+			if node.profile != nil && ((kind != "username" && (node.profile.Subject != uid || node.profile.Kind != expected)) ||
+				(kind == "username" && node.profile.Kind != auth.ProfileStaff && node.profile.Kind != auth.ProfileCustomer)) {
+				node.profile, lookupErr = nil, auth.ErrProfileNotFound
+			}
+			if node.profile != nil {
+				resource.Name = node.profile.Username
+				if node.profile.Metadata != nil {
+					resource.OwnerSub = node.profile.Metadata.OwnerSub
+				}
+			}
+		}
+		if fc.Object == "Mutation" {
+			action, resource.Kind = mutationAction, "user"
+		}
+		if err := authorizeCategoryAction(ctx, authz, principal, action, resource); err != nil {
+			var structured *gqlerror.Error
+			if errors.As(err, &structured) && structured.Extensions["code"] == "FORBIDDEN" {
+				return ctx, &gqlerror.Error{Message: "actor access denied", Extensions: map[string]any{"code": "FORBIDDEN"}}
+			}
+			return ctx, err
+		}
+		if errors.Is(lookupErr, auth.ErrProfileNotFound) || errors.Is(lookupErr, datastore.ErrNotFound) ||
+			(lookupErr == nil && node.profile == nil && node.account == nil) {
+			missingKind := kind
+			if kind == "username" || kind == "serviceAccountName" {
+				missingKind = "Actor"
+			}
+			preserveMissingNode(ctx, missingKind, uid, datastore.ErrNotFound)
+			nodes[key] = authorizedActorNode{}
+			continue
+		}
+		if lookupErr != nil {
+			return ctx, &gqlerror.Error{Message: "actor directory unavailable", Extensions: map[string]any{"code": "SERVICE_UNAVAILABLE"}}
+		}
+		nodes[key] = node
+	}
+	return context.WithValue(ctx, authorizedActorNodesContextKey{}, nodes), nil
+}
+
+func actorMutationAction(field string) string {
+	switch field {
+	case "createStaff":
+		return auth.ActionUserCreate
+	case "updateUser", "deactivateUser", "reactivateUser", "suspendUser", "resendStaffInvitation", "setUserEmailDeliverability":
+		return auth.ActionUserUpdate
+	case "deleteUser":
+		return auth.ActionUserDelete
+	case "assignUserGroup", "removeUserGroup":
+		return auth.ActionUserGroupUpdate
+	default:
+		return ""
+	}
+}
+
+func isActorReadField(fc *graphql.FieldContext) bool {
+	return fc != nil && fc.Object == "Query" && (fc.Field.Name == "actor" || fc.Field.Name == "actors" || fc.Field.Name == "serviceAccounts")
 }
 
 func isAdditionalCatalogField(fc *graphql.FieldContext) bool {
@@ -1485,7 +1686,7 @@ func graphqlFieldRequiresAuthorization(fc *graphql.FieldContext) bool {
 	}
 	switch fc.Object {
 	case "Query":
-		return isNamespaceQueryField(fc) || isProductQueryField(fc) || isFileQueryField(fc) || isCategoryQueryField(fc) || isRepositoryQueryField(fc)
+		return isActorReadField(fc) || isNamespaceQueryField(fc) || isProductQueryField(fc) || isFileQueryField(fc) || isCategoryQueryField(fc) || isRepositoryQueryField(fc)
 	case "Mutation":
 		switch fc.Field.Name {
 		case "createProduct", "updateProduct", "deleteProduct", "completeProductDeletion", "createRepository", "deleteRepository", "deleteNamespace", "completeNamespaceDeletion", "provisionNamespaceSystemRepository", "completeRepositoryDeletion", "provisionRepositoryStorage", "updateCategoryStatus", "updateProductStatus", "updateNamespaceStatus", "createCategory", "updateCategory", "deleteCategory", "completeCategoryDeletion", "updateResourceStatus", "issueServiceAccountToken", "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount":

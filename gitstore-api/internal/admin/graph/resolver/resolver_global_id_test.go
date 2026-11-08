@@ -71,6 +71,9 @@ func TestReadNotFoundUsesSharedEnvelopeOverTransport(t *testing.T) {
 			nodeKindNamespace: "namespace", nodeKindRepository: "repository", nodeKindProductVariant: "productVariant",
 			nodeKindFile: "file",
 		}[kind]
+		if field == "" {
+			continue
+		}
 		lookups = append(lookups, lookup{
 			field + "/id", fmt.Sprintf(`{ detail: %s(by:{id:%q}) { id } }`, field, id), kind,
 		})
@@ -129,6 +132,7 @@ func requireReadNotFoundEnvelope(t *testing.T, err error, kind string) {
 		nodeKindProduct: "PRODUCT_NOT_FOUND", nodeKindNamespace: "NAMESPACE_NOT_FOUND",
 		nodeKindCategory: "CATEGORY_NOT_FOUND", nodeKindRepository: "REPOSITORY_NOT_FOUND",
 		nodeKindCollection: "COLLECTION_NOT_FOUND", nodeKindProductVariant: "PRODUCT_VARIANT_NOT_FOUND", nodeKindFile: "FILE_NOT_FOUND",
+		nodeKindStaff: "STAFF_NOT_FOUND", nodeKindCustomer: "CUSTOMER_NOT_FOUND", nodeKindServiceAccount: "SERVICEACCOUNT_NOT_FOUND",
 	}
 	require.Equal(t, []map[string]any{{
 		"reason": reasons[kind], "message": graphErr.Message, "level": string(admission.LevelFailure),
@@ -797,6 +801,20 @@ func (s globalIDPointFailureStore) GetRepository(context.Context, string) (*data
 	return nil, s.err
 }
 
+func (s globalIDPointFailureStore) GetServiceAccountByUID(context.Context, string) (*datastore.ServiceAccount, error) {
+	return nil, s.err
+}
+
+type globalIDFailureDirectory struct {
+	auth.UserDirProvider
+	err error
+}
+
+func (globalIDFailureDirectory) Name() string { return "test-directory" }
+func (d globalIDFailureDirectory) GetBySubject(context.Context, string) (*auth.UserProfile, error) {
+	return nil, d.err
+}
+
 func TestNodeReadsDistinguishAbsenceFromInfrastructureFailure(t *testing.T) {
 	for kind := range supportedNodeKinds {
 		for _, failure := range []error{
@@ -810,6 +828,7 @@ func TestNodeReadsDistinguishAbsenceFromInfrastructureFailure(t *testing.T) {
 				store, root := newGlobalIDTestResolver(t)
 				failed := globalIDPointFailureStore{Datastore: store, err: failure}
 				root.store, root.service.store = failed, failed
+				root.registry = auth.NewProviderRegistry(nil, nil, globalIDFailureDirectory{err: failure})
 				query := &queryResolver{Resolver: root}
 				id := mustEncodeNodeID(kind, globalIDTestProductUID)
 				node, err := query.Node(t.Context(), id)

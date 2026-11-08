@@ -26,6 +26,7 @@ type Change struct {
 	Name             string
 	Before           json.RawMessage
 	After            json.RawMessage
+	DeletionPayload  json.RawMessage
 	At               time.Time
 }
 
@@ -89,6 +90,7 @@ func ClassifyResource(change Change, labels func(json.RawMessage) map[string]str
 		event.PreviousSelectorLabels = labels(change.Before)
 	case len(change.Before) > 0 && len(change.After) == 0:
 		event.Type = datastore.ResourceWatchDeleted
+		event.Payload = append([]byte(nil), change.DeletionPayload...)
 		event.SelectorLabels = labels(change.Before)
 	default:
 		return datastore.ResourceWatchEvent{}, false

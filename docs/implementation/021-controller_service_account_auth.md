@@ -353,7 +353,7 @@ type ServiceAccount implements Actor {
   kind: String!
   metadata: ObjectMeta!
   keyIDs: [String!]!
-  status: ActorStatus!
+  lifecycle: ActorLifecycle!
 }
 
 type TokenRequest {

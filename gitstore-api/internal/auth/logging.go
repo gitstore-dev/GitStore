@@ -27,6 +27,23 @@ type DecisionLogger struct {
 
 var authorizationDecisionDuration = observability.MustInstrument(otel.Meter("gitstore/auth").Float64Histogram("gitstore_authz_decision_duration_seconds", metric.WithDescription("Provider decision latency and counts by registered action and outcome."), metric.WithUnit("s"), metric.WithExplicitBucketBoundaries(.000001, .000005, .00001, .00005, .0001, .0005, .001, .005, .01, .05, .1, .5, 1)))
 
+func DirectoryErrorClass(err error) string {
+	switch {
+	case err == nil:
+		return "success"
+	case errors.Is(err, ErrProfileNotFound):
+		return "not_found"
+	case errors.Is(err, ErrDirectoryConflict):
+		return "conflict"
+	case errors.Is(err, ErrDirectoryUnavailable):
+		return "unavailable"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	default:
+		return "invalid"
+	}
+}
+
 func ObserveProviderRegistryReload(accepted bool) {
 	authorizationRegistryReloads := observability.MustInstrument(otel.Meter("gitstore/auth").Float64Counter("gitstore_authz_registry_reloads_total", metric.WithDescription("Complete provider registry reload attempts by finite outcome.")))
 	outcome := "rejected"

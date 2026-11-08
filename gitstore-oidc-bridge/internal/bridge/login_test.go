@@ -5,12 +5,18 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -157,6 +163,101 @@ func TestLoginValidSessionAcceptsWithIdentityID(t *testing.T) {
 	}
 	if hydra.rejectLoginCalled {
 		t.Error("RejectLoginRequest must not be called on the happy path")
+	}
+}
+
+func TestOwnedNativeDualIdentifierLoginPreservesOIDCSubject(t *testing.T) {
+	if os.Getenv("GITSTORE_TEST_OWNED_RECEIVER") != "1" {
+		t.Skip("requires the explicitly owned Kratos integration fixture")
+	}
+	base, err := url.Parse(os.Getenv("GITSTORE_TEST_KRATOS_ADMIN_URI"))
+	if err != nil {
+		t.Fatal("invalid owned identity endpoint")
+	}
+	admin := base.String()
+	base.Host = net.JoinHostPort(base.Hostname(), "4433")
+	username, email := "registered", "registered@example.test"
+	expected := os.Getenv("GITSTORE_TEST_LOGIN_IDENTITY_ID")
+	password := os.Getenv("GITSTORE_TEST_LOGIN_PASSWORD")
+	if expected == "" || password == "" {
+		t.Fatal("owned identity material is required")
+	}
+	for _, identifier := range []string{username, email} {
+		jar, err := cookiejar.New(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := &http.Client{Jar: jar, Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		request := func(method, path string, payload any) *http.Response {
+			t.Helper()
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal("encode owned login request")
+			}
+			req, err := http.NewRequestWithContext(t.Context(), method, base.String()+path, strings.NewReader(string(body)))
+			if err != nil {
+				t.Fatal("create owned login request")
+			}
+			req.Header.Set("Accept", "application/json")
+			if payload != nil {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			response, err := client.Do(req)
+			if err != nil {
+				t.Fatal("owned login request failed")
+			}
+			return response
+		}
+		response := request(http.MethodGet, "/self-service/login/browser", nil)
+		if response.StatusCode != http.StatusOK {
+			response.Body.Close()
+			t.Fatalf("browser flow status=%d", response.StatusCode)
+		}
+		var flow struct {
+			ID string `json:"id"`
+			UI struct {
+				Nodes []struct {
+					Attributes struct {
+						Name  string `json:"name"`
+						Value any    `json:"value"`
+					} `json:"attributes"`
+				} `json:"nodes"`
+			} `json:"ui"`
+		}
+		err = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&flow)
+		response.Body.Close()
+		if err != nil || flow.ID == "" {
+			t.Fatal("invalid owned browser flow")
+		}
+		csrf := ""
+		for _, node := range flow.UI.Nodes {
+			if node.Attributes.Name == "csrf_token" {
+				csrf, _ = node.Attributes.Value.(string)
+			}
+		}
+		if csrf == "" {
+			t.Fatal("browser login requires native CSRF")
+		}
+		response = request(http.MethodPost, "/self-service/login?flow="+url.QueryEscape(flow.ID), map[string]any{
+			"method": "password", "identifier": identifier, "password": password, "csrf_token": csrf,
+		})
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("native browser login status=%d", response.StatusCode)
+		}
+		hydra := &fakeHydra{loginReq: &hydraclient.LoginRequest{Challenge: "owned"}, acceptLoginTo: "http://hydra.example.test/accepted"}
+		handler := NewLoginHandler(hydra, kratosclient.New(base.String(), admin), base.String(), zap.NewNop())
+		router := gin.New()
+		router.GET("/login", handler.Handle)
+		req := httptest.NewRequest(http.MethodGet, "/login?login_challenge=owned", nil)
+		for _, cookie := range jar.Cookies(base) {
+			req.AddCookie(cookie)
+		}
+		result := httptest.NewRecorder()
+		router.ServeHTTP(result, req)
+		if result.Code != http.StatusFound || !hydra.acceptLoginCalled || hydra.acceptedLoginSubject != expected {
+			t.Fatal("both native password identifiers must yield the same immutable OIDC subject")
+		}
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 // clearEnv unsets every GITSTORE_ env var touched by this file (new-schema
@@ -42,6 +43,23 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_API__AUTH__AUTHN__CHAIN",
 		"GITSTORE_API__AUTH__AUTHZ__PROVIDER",
 		"GITSTORE_API__AUTH__USERDIR__PROVIDER",
+		"GITSTORE_API__NOTIFICATION__PROVIDER",
+		"GITSTORE_API__NOTIFICATION__API_KEY",
+		"GITSTORE_API__NOTIFICATION__TIMEOUT",
+		"GITSTORE_API__NOTIFICATION__MAX_CONCURRENT",
+		"GITSTORE_API__NOTIFICATION__MAX_BODY_BYTES",
+		"GITSTORE_API__NOTIFICATION__DEVELOPMENT__SMTP_URI",
+		"GITSTORE_API__NOTIFICATION__DEVELOPMENT__SENDER",
+		"GITSTORE_API__AUTH__KRATOS__ADMIN_URI",
+		"GITSTORE_API__AUTH__KRATOS__WEBHOOK_URI",
+		"GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN",
+		"GITSTORE_API__AUTH__KRATOS__TIMEOUT",
+		"GITSTORE_API__AUTH__KRATOS__MAX_CONCURRENT",
+		"GITSTORE_API__AUTH__KRATOS__MAX_RESPONSE_BYTES",
+		"GITSTORE_API__AUTH__KRATOS__CACHE_ENTRIES",
+		"GITSTORE_API__AUTH__KRATOS__CACHE_TTL",
+		"GITSTORE_API__AUTH__KRATOS__MAPPINGS",
+		"GITSTORE_API__AUTH__KRATOS__CUSTOMER_GROUPS",
 		"GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE",
 		"GITSTORE_API__AUTH__SERVICEACCOUNT__ISSUER",
 		"GITSTORE_API__AUTH__SERVICEACCOUNT__AUDIENCE",
@@ -121,12 +139,170 @@ func TestProfilingConfigurationRequiresLoopbackAndToken(t *testing.T) {
 	require.NotContains(t, err.Error(), cfg.Api.Profiling.Token)
 }
 
+func TestNotificationConfigurationRequiresBoundedProviderAndRedactsKey(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_API__NOTIFICATION__PROVIDER", "development")
+	t.Setenv("GITSTORE_API__NOTIFICATION__DEVELOPMENT__SMTP_URI", "smtp://mailslurper:1025/")
+	t.Setenv("GITSTORE_API__NOTIFICATION__DEVELOPMENT__SENDER", "noreply@example.test")
+	_, err := Load()
+	require.ErrorContains(t, err, "api.notification.api_key")
+	const key = "notification-test-key-at-least-32-characters"
+	t.Setenv("GITSTORE_API__NOTIFICATION__API_KEY", key)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 2*time.Second, cfg.Api.Notification.Timeout)
+	encoder := zapcore.NewMapObjectEncoder()
+	require.NoError(t, cfg.MarshalLogObject(encoder))
+	require.Equal(t, "<redacted>", encoder.Fields["api.notification.api_key"])
+	t.Setenv("GITSTORE_API__NOTIFICATION__MAX_CONCURRENT", "129")
+	_, err = Load()
+	require.ErrorContains(t, err, "api.notification")
+	require.NotContains(t, err.Error(), key)
+	t.Setenv("GITSTORE_API__NOTIFICATION__MAX_CONCURRENT", "16")
+	t.Setenv("GITSTORE_API__NOTIFICATION__PROVIDER", "production")
+	_, err = Load()
+	require.ErrorContains(t, err, "api.notification.provider")
+}
+
 // setRequiredAuth sets the required auth env vars including the gRPC HMAC secret.
 func setRequiredAuth(t *testing.T) {
 	t.Helper()
 	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE", "config/users.yaml")
 	os.Setenv("GITSTORE_API__AUTH__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
 	os.Setenv("GITSTORE_GRPC_AUTH__HMAC_SECRET", "ci-test-grpc-hmac-secret")
+}
+
+func TestKratosUserDirConfiguration(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_API__AUTH__USERDIR__PROVIDER", "kratos")
+	t.Setenv("GITSTORE_API__AUTH__KRATOS__ADMIN_URI", "http://kratos:4434")
+	t.Setenv("GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN", "private-directory-token")
+	t.Setenv("GITSTORE_API__AUTH__KRATOS__WEBHOOK_URI", "http://127.0.0.1:8085")
+	cfg, err := LoadFrom(kratosMappingConfig(t))
+	require.NoError(t, err)
+	require.Equal(t, "http://kratos:4434", cfg.Api.Auth.Kratos.AdminURI)
+	require.Equal(t, "private-directory-token", cfg.Api.Auth.Kratos.AdminToken)
+	require.Equal(t, "http://127.0.0.1:8085", cfg.Api.Auth.Kratos.WebhookURI)
+	require.Equal(t, 2*time.Second, cfg.Api.Auth.Kratos.Timeout)
+	require.Equal(t, 5*time.Minute, cfg.Api.Auth.Kratos.CacheTTL)
+	require.Positive(t, cfg.Api.Auth.Kratos.CacheEntries)
+	require.Positive(t, cfg.Api.Auth.Kratos.MaxConcurrent)
+	require.Equal(t, "kratos", cfg.Api.Auth.UserDir.Provider)
+	require.Contains(t, cfg.Api.Auth.AuthN.Chain, "static-users")
+	t.Setenv("GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN", "")
+	_, err = LoadFrom(kratosMappingConfig(t))
+	require.NoError(t, err, "a private self-hosted endpoint does not require an invented Admin gateway")
+}
+
+func kratosMappingConfig(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+[[api.auth.kratos.mappings]]
+provider = "static-users"
+issuer = "gitstore/static-users"
+mode = "username"
+`), 0600))
+	return path
+}
+
+func TestKratosProviderSettingsLoadFromAuthTable(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+[api.auth.userdir]
+provider = "kratos"
+[api.auth.kratos]
+admin_uri = "http://kratos:4434"
+webhook_uri = "http://0.0.0.0:8085"
+timeout = "1s"
+[[api.auth.kratos.mappings]]
+provider = "static-users"
+issuer = "gitstore/static-users"
+mode = "username"
+`), 0600))
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	require.Equal(t, "kratos", cfg.Api.Auth.UserDir.Provider)
+	require.Equal(t, "http://kratos:4434", cfg.Api.Auth.Kratos.AdminURI)
+	require.Equal(t, time.Second, cfg.Api.Auth.Kratos.Timeout)
+	require.Equal(t, "http://0.0.0.0:8085", cfg.Api.Auth.Kratos.WebhookURI)
+	require.Equal(t, "username", cfg.Api.Auth.Kratos.Mappings[0].Mode)
+}
+
+func TestKratosUserDirRejectsUnsafeOrUnboundedConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{"missing endpoint", "ADMIN_URI", ""},
+		{"endpoint credentials", "ADMIN_URI", "http://secret@kratos:4434"},
+		{"endpoint query", "ADMIN_URI", "http://kratos:4434?token=secret"},
+		{"unsupported scheme", "ADMIN_URI", "file:///tmp/kratos"},
+		{"invalid token header", "ADMIN_TOKEN", "secret\r\nInjected: value"},
+		{"public webhook listener", "WEBHOOK_URI", "http://8.8.8.8:8085"},
+		{"webhook listener credentials", "WEBHOOK_URI", "http://secret@127.0.0.1:8085"},
+		{"webhook listener path", "WEBHOOK_URI", "http://127.0.0.1:8085/public"},
+		{"webhook listener without port", "WEBHOOK_URI", "http://127.0.0.1"},
+		{"long timeout", "TIMEOUT", "3s"},
+		{"no timeout", "TIMEOUT", "0s"},
+		{"long cache lease", "CACHE_TTL", "6m"},
+		{"no cache bound", "CACHE_ENTRIES", "0"},
+		{"no concurrency bound", "MAX_CONCURRENT", "0"},
+		{"oversized response bound", "MAX_RESPONSE_BYTES", "4194305"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer clearEnv(t)()
+			setRequiredAuth(t)
+			t.Setenv("GITSTORE_API__AUTH__USERDIR__PROVIDER", "kratos")
+			t.Setenv("GITSTORE_API__AUTH__KRATOS__ADMIN_URI", "http://kratos:4434")
+			t.Setenv("GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN", "private-directory-token")
+			t.Setenv("GITSTORE_API__AUTH__KRATOS__"+test.key, test.value)
+			_, err := LoadFrom(kratosMappingConfig(t))
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), "private-directory-token")
+			require.NotContains(t, err.Error(), "secret@")
+		})
+	}
+}
+
+func TestKratosConfigurationLogsRedactDirectoryToken(t *testing.T) {
+	cfg := &Config{}
+	cfg.Api.Auth.UserDir.Provider = "kratos"
+	cfg.Api.Auth.Kratos.AdminToken = "private-directory-token"
+	encoder := zapcore.NewMapObjectEncoder()
+	require.NoError(t, cfg.MarshalLogObject(encoder))
+	require.NotContains(t, encoder.Fields, "private-directory-token")
+	require.Contains(t, encoder.Fields, "api.auth.kratos.admin_token")
+	require.NotEqual(t, "private-directory-token", encoder.Fields["api.auth.kratos.admin_token"])
+}
+
+func TestKratosSubjectMappingsRequireProviderAndIssuerQualification(t *testing.T) {
+	valid := SubjectMapping{Provider: "oidc-jwt", Issuer: "https://issuer.example", Mode: "uid"}
+	for _, test := range []struct {
+		name     string
+		mappings []SubjectMapping
+	}{
+		{"missing mappings", nil},
+		{"missing provider", []SubjectMapping{{Issuer: valid.Issuer, Mode: "uid"}}},
+		{"missing issuer", []SubjectMapping{{Provider: valid.Provider, Mode: "uid"}}},
+		{"unsupported mapping", []SubjectMapping{{Provider: valid.Provider, Issuer: valid.Issuer, Mode: "email"}}},
+		{"duplicate qualification", []SubjectMapping{valid, valid}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := KratosUserDirConfig{
+				AdminURI: "http://kratos:4434", AdminToken: "private-directory-token",
+				Timeout: 2 * time.Second, CacheTTL: 5 * time.Minute,
+				CacheEntries: 128, MaxConcurrent: 16, MaxResponseBytes: 1 << 20,
+				Mappings: test.mappings,
+			}
+			require.Error(t, cfg.Validate())
+		})
+	}
 }
 
 // T005: layered loading tests
@@ -139,6 +315,7 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
+	assert.Equal(t, "none", cfg.Api.Auth.UserDir.Provider)
 
 	assert.Equal(t, 4000, cfg.Api.AdminPort)
 	assert.Equal(t, 9000, cfg.Api.GitPort)

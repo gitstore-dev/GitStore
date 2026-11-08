@@ -271,6 +271,9 @@ func (p *RBACLocalProvider) Authorize(_ context.Context, principal *auth.Princip
 	namespace, _ := resource.Attrs["namespace"].(string)
 	owner := ownerMatches(resource.OwnerSub, principal)
 	member := ownerMatches(target, principal)
+	username := auth.ValidExternalUsername(principal.Username) &&
+		(principal.ProfileKind == auth.ProfileStaff || principal.ProfileKind == auth.ProfileCustomer) &&
+		principal.Username == resource.Name
 	var visited [(maxPolicyRules*2 + 63) / 64]uint64 // cluster/namespaced provenance
 	reason := "no matching binding"
 	for word, matches := range candidates {
@@ -305,7 +308,7 @@ func (p *RBACLocalProvider) Authorize(_ context.Context, principal *auth.Princip
 				}
 				matched := true
 				for _, condition := range rule.conditions {
-					if !conditionMatches(condition, resource, owner, member) {
+					if !conditionMatches(condition, resource, owner, member, username) {
 						matched = false
 						reason = "condition missing or false"
 						break
@@ -368,12 +371,15 @@ func targetOwner(value any) (string, bool) {
 		return "", false
 	}
 }
-func conditionMatches(c compiledCondition, r auth.ResourceContext, owner, member bool) bool {
+func conditionMatches(c compiledCondition, r auth.ResourceContext, owner, member, username bool) bool {
 	if c.Token == "owner" {
 		return owner
 	}
 	if c.Token == "targetOwnerMember" {
 		return member
+	}
+	if c.Token == "subjectUsername" {
+		return username
 	}
 	value, ok := r.Attrs[c.Attr].(string)
 	if !ok || len(value) > 256 {
@@ -457,7 +463,7 @@ func (p *RBACLocalProvider) hasEffectivePermission(principal *auth.Principal) bo
 								attrs[attribute] = value
 								satisfies := true
 								for _, c := range rule.conditions {
-									if c.Attr == attribute && !conditionMatches(c, auth.ResourceContext{Attrs: attrs}, true, true) {
+									if c.Attr == attribute && !conditionMatches(c, auth.ResourceContext{Attrs: attrs}, true, true, true) {
 										satisfies = false
 										break
 									}

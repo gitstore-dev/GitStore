@@ -246,6 +246,9 @@ that verifies bearer JWTs via OIDC Discovery + JWKS. It is enabled only when
 | `api.auth.authz.provider` | `GITSTORE_API__AUTH__AUTHZ__PROVIDER` | string | `rbac-local` | No | No | Active AuthZ provider |
 | `api.auth.rbac_local.policy_file` | `GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE` | string | `policy.yaml` | No | No | YAML RBAC policy path, used when `authz.provider = "rbac-local"` |
 | `api.auth.userdir.provider` | `GITSTORE_API__AUTH__USERDIR__PROVIDER` | string | `none` | No | No | Active user-directory provider |
+| `api.auth.kratos.admin_uri` | `GITSTORE_API__AUTH__KRATOS__ADMIN_URI` | string | (empty) | When `kratos` is selected | No | Private Kratos Admin endpoint |
+| `api.auth.kratos.webhook_uri` | `GITSTORE_API__AUTH__KRATOS__WEBHOOK_URI` | string | (empty) | When callbacks are configured | No | Optional private HTTP listener; for example `http://127.0.0.1:8085` |
+| `api.auth.kratos.admin_token` | `GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN` | string | (empty) | Only for an authenticating Admin gateway | **Yes** | Bearer credential; stock self-hosted Kratos does not validate it |
 
 #### Production identity guidance
 
@@ -261,14 +264,191 @@ configuration can leave credentials and profile state under different
 authorities. Service-account authentication providers are separate and may
 still be configured as needed.
 
-For production human login with the reference OIDC stack, use `oidc-jwt` for
-AuthN and the Kratos-backed UserDir provider when it is available, so login
-and directory profiles use the same identity store. The API currently supports
-only `none` and `static-users` as UserDir providers; Kratos UserDir is not yet
-available.
+For human login with the reference OIDC stack, use `oidc-jwt` for AuthN so
+login and directory profiles use the same identity store. The API accepts
+`none`, `static-users` and `kratos` as UserDir providers. Kratos currently
+provides bounded profile lookup, provider mutations and internal callbacks.
+Authenticated Admin/Git HTTP and GraphQL requests resolve trusted directory
+profiles before authorization. Missing profiles remain unlinked; directory
+failures fail closed without treating valid credentials as invalid. Inactive
+human profiles are denied. WebSocket initialization applies the same checks
+and caps profile leases below five minutes, never extending the cached
+profile's freshness or a shorter token lifetime.
+
+Selecting `static-users` for directory lookup does not require static AuthN
+or a JWT signing key; that lookup-only provider cannot authenticate or issue
+sessions. Human-administration GraphQL uses the configured directory's supported
+capabilities and rejects unsupported operations explicitly.
+Successful local directory writes and protected
+callbacks evict the process cache and cancel all its authenticated WebSocket
+connections, including workloads. Other replicas retain bounded cache/profile
+leases; callbacks are not commit notifications.
+
+The sample namespace-creator policy binds `system:staff` and requires both
+USER tier and `subjectUsername`, which matches the resource name against the
+trusted linked human's canonical directory username. Namespace creation remains
+policy-controlled, not a separate endpoint guard.
 
 See [Configure local authorization](authorization.md) for Role and ClusterRole
 bindings, namespace scope, subject matching and `resourceNames` examples.
+
+#### Reference identity schemas and metadata
+
+The optional reference stack uses Kratos, Hydra and the Ory self-service UI
+at v26.2.0. New public registrations use the Customer schema. Staff and
+ServiceAccount schemas cannot be selected through public registration.
+Human username and email are both password identifiers and are unique across
+human schemas when enrolled as credentials. The reference directory registers
+only the Staff, Customer and ServiceAccount schemas.
+
+The integration uses supported blocking registration/settings hooks and the
+Kratos Admin JSON Patch API, without modifying Kratos's database tables.
+Registration stamps `metadata_admin.creation_actor` and `update_actor` with
+the registering username in the registration write. Profile settings reject
+username/schema changes before persistence and preserve protected metadata.
+GitStore mutations preserve the creator and stamp the initiating actor using
+the normal resource-owner subject encoding. Missing creator metadata falls
+back to the represented identity's canonical username, not the reader.
+
+Enable callbacks only together with `api.auth.userdir.provider = "kratos"`
+and the private `api.auth.kratos.webhook_uri` listener. For the container
+reference, use `http://0.0.0.0:8085` and set
+`KRATOS_CONFIG_FILES=/etc/config/kratos/kratos.yml,/etc/config/kratos/gitstore-hooks.yml`
+as shown in [the environment example](../config/oidc/oidc.env.example).
+The additional Kratos configuration retains the password-session hook and
+selects HTTP mail delivery. Enable the development notification adapter and
+inject its shared credential at the same time, as described below.
+Standalone `make oidc` sends no GitStore callbacks by default.
+
+Do not publish the callback port or route it through public ingress.
+Wildcard binding is intended only for an isolated container network; use a
+private or loopback address on a host and restrict network access to trusted
+Kratos callers. The receiver trusts that network boundary, not public session
+credentials. A configured listener returns **404** when Kratos UserDir is
+disabled; remove the sender configuration when disabling the provider.
+
+**Limitations**
+
+| Area | Supported boundary and limitation |
+|---|---|
+| Staff revisions | GitStore/profile writes advance generation for author-owned changes and resourceVersion for integrated writes. These are best-effort: concurrent replicas can lose increments and overwrite changes. Neither the observed-version check nor Admin PATCH is database CAS; v26.2.0 rejects PATCH `test`. |
+| Customer revisions | Generation is `-1` and resourceVersion is `"-1"`. Neither is a concurrency token. |
+| Customer groups | `customer_groups` defines mandatory memberships for every Customer, not an allowlist for individual edits. Protected identity metadata cannot override them. Individual removal and assignment outside the configured groups are rejected. |
+| Coverage and setup | Counters do not track every credential, verification-address or out-of-band Admin change. The reference callback covers profile settings and completed password settings, not every self-service method. New Staff remain unfinished until the blocking password-settings callback records setup completion; verification or administrative reactivation alone cannot bypass setup. |
+| Identifier enrollment | Credentialless Staff creation and password-identifier reservation are separate native writes. Failed reservation attempts bounded cleanup of the newly created identity; failed cleanup can leave an unreserved identity. There is no cross-operation transaction. |
+| Invitations | A configured delivery provider is required before creating an invitation. Identity creation, recovery-link creation and delivery are not atomic: delivery failure can leave an identity or changed revision. Resend is limited to Staff awaiting setup/verification. Private setup links are delivered only in mail, never returned in directory profiles. |
+| Lifecycle and sessions | Suspension/deactivation writes state and then revokes native sessions. Revocation failure can leave the state change applied. Reactivation preserves unfinished setup/verification and does not restore revoked sessions. Other API replicas still enforce their bounded profile/connection freshness rather than immediate global revocation. |
+| Privileged Admin access | Direct Kratos Admin writes bypass hooks and can change usernames, schemas or protected metadata. The workload schema alone does not prohibit Admin-created credentials. Keep Admin access private; GitStore does not create workload credentials and remains authoritative for ServiceAccount UID, enablement and keys. |
+| Availability | Callback failures abort the protected registration/profile-settings flow. API or directory outages can therefore prevent those flows; callbacks are not a durable event consumer. |
+| Ownership and freshness | Username fallback does not reconstruct a missing creator audit record. Hook responses precede persistence; local cache invalidation is not a commit notification, and other replicas retain their bounded cache TTL. |
+| Directory cursors | Actor cursors are bound to the configured Admin endpoint. Replicas serving one logical directory must use the same stable Admin URI; changing it invalidates existing cursors. |
+
+### Workload directory mirrors
+
+With Kratos UserDir selected, each API consumes live ServiceAccount events from
+the shared internal resource journal. Scylla publishes full-image transitions
+only after enrollment completes; MemDB publishes equivalent committed events.
+Native ServiceAccount writes do not wait for Kratos.
+
+Mirrors are linked by immutable GitStore UID, contain only source traits and
+protected metadata, and are created without login credentials or
+verification/recovery addresses. Updates preserve directory groups. GitStore
+remains authoritative for UID, keys and enablement; name reuse never transfers
+the previous account's groups.
+
+Delivery uses a 64-event buffer, three attempts per event and bounded request
+deadlines, with 100 ms and 200 ms retry delays. Overflow and exhausted events
+are discarded, not stored in another queue. Startup and provider reload begin
+at the current journal boundary; retention/epoch discontinuities also resume
+at the current boundary. There is no persisted consumer position, replay,
+inventory scan or automatic repair. Missing, stale or orphaned mirrors can
+remain indefinitely, and unified actor lists can be incomplete.
+
+On a fresh Scylla deployment, consumer initialization waits for the producer to
+initialize the journal, using bounded reads and cancellable polling. It then
+captures the current boundary, not a historical catch-up position. Directory
+delivery does not prevent API startup or become a journal readiness guarantee.
+
+SDK metrics report application attempts, delivery outcomes, duration and buffer
+depth without identity labels. These are best-effort consumer signals, not
+durable producer progress or acknowledgements. ServiceAccount synchronization
+does not add a public watch endpoint.
+
+#### Identity rollout and rollback
+
+Keep a stable private directory endpoint and shared identity database across API
+replicas. Roll out schema-dependent clients only after every routed API exposes
+the required concrete human types, `User` interface and mutations. During a
+mixed deployment, use only the schema and configuration supported by all
+serving versions.
+
+Enabling ServiceAccount CDC is a forward database migration. Preserve applied
+migration history and source UIDs; an older binary whose migration bundle omits
+an applied migration cannot restart against that database. Do not remove the
+migration or rewrite its checksum to force rollback.
+
+The reference stack no longer registers the earlier generic identity schema.
+Existing identities using an unregistered schema need an explicitly reviewed
+directory transition; changing configuration is not an identity migration.
+Preserve identity storage, backups and UIDs rather than deleting or recreating
+users. If disabling the UserDir callbacks, remove the Kratos hook overlay at the
+same time so blocking self-service hooks do not target a disabled receiver.
+
+### Identity mail
+
+The optional identity integration delivers native verification/recovery mail
+through `POST /internal/notifications/mail` on the Admin listener. This route
+is absent when notification delivery is disabled and is never mounted on
+Storefront. Restrict ingress to trusted internal senders; requests require
+`GitStore-Mail-Key` before the body is read.
+
+| Key | Env Var | Default | Description |
+|---|---|---|---|
+| `api.notification.provider` | `GITSTORE_API__NOTIFICATION__PROVIDER` | `none` | `none` or `development`; no production backend is shipped |
+| `api.notification.api_key` | `GITSTORE_API__NOTIFICATION__API_KEY` | empty | Required sensitive 32+ character credential when enabled |
+| `api.notification.max_body_bytes` | `GITSTORE_API__NOTIFICATION__MAX_BODY_BYTES` | `65536` | At most 1 MiB; the smaller Admin body limit still applies |
+| `api.notification.max_concurrent` | `GITSTORE_API__NOTIFICATION__MAX_CONCURRENT` | `16` | At most 128 in-flight parsing/delivery operations; saturation returns 503 |
+| `api.notification.timeout` | `GITSTORE_API__NOTIFICATION__TIMEOUT` | `2s` | Delivery deadline, at most 10s; SMTP additionally caps work at 2s |
+| `api.notification.development.smtp_uri` | `GITSTORE_API__NOTIFICATION__DEVELOPMENT__SMTP_URI` | empty | Private mail-catcher `smtp://` or `smtps://` endpoint |
+| `api.notification.development.sender` | `GITSTORE_API__NOTIFICATION__DEVELOPMENT__SENDER` | `noreply@gitstore.local` | Development envelope/header sender |
+
+The reference catcher uses implicit, self-signed TLS:
+`smtps://mailslurper:1025/?skip_ssl_verify=true`. That verification bypass is
+explicitly development-only; certificate verification is on by default.
+Configure the hook overlay, `development` provider and privately injected key
+together using [the environment example](../config/oidc/oidc.env.example).
+Compose supplies the same key to native Kratos courier authentication.
+Override `COURIER_HTTP_REQUEST_CONFIG_URL` if the internal Admin address differs
+from `http://api:4000/internal/notifications/mail`.
+
+Delivery succeeds only after the catcher accepts the message. Provider outage,
+timeout or saturation returns a retryable 503; GitStore keeps no retry queue.
+Kratos owns retries, and ambiguous responses can produce duplicate messages.
+This at-least-once mail boundary is distinct from best-effort workload-mirror
+events; it does not promise exactly-once delivery or a production mail service.
+
+GitStore records only finite outcome/template-class metrics, duration and a
+trace correlation ID, never recipients, subjects, bodies or codes. **Upstream
+Kratos logs have a separate privacy boundary:** native courier failure logs
+can include the native subject, and default code-flow subjects can contain
+verification/recovery codes. Restrict those logs and configure non-sensitive
+native subject templates where required.
+
+Directory contact resolution uses the immutable subject and a fresh native
+identity read, never an email-based identity lookup. When the primary address
+changes, the previous verified address remains the contact snapshot until the
+replacement is verified. A bounce observation for the old address does not
+block a newly verified replacement. Without a trusted deliverability
+observation, deliverability defaults to false; initial verification alone does
+not invent one.
+
+Consent boolean changes receive a server-generated timestamp; caller-supplied
+timestamps are ignored. Bounce and timestamp-only changes do not advance
+generation. These protected metadata updates are best-effort native writes,
+not remote compare-and-swap: concurrent or privileged changes can be lost or
+remain untracked. ServiceAccounts do not have human contact operations.
+The delivery adapter is development-only and provides no consent policy engine,
+production mail backend or durable retry queue.
 
 ### Logging
 

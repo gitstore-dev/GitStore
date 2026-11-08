@@ -52,6 +52,18 @@ func New(cfg config.AuthConfig, logger *zap.Logger) (*StaticUsersProvider, error
 	return NewWithRevocationStore(cfg, logger, newMemoryRevocationStore())
 }
 
+func NewDirectory(cfg config.StaticUsersConfig, logger *zap.Logger) (*StaticUsersProvider, error) {
+	path := cfg.UsersFile
+	if path == "" {
+		path = "users.yaml"
+	}
+	users, err := loadUsers(path)
+	if err != nil {
+		return nil, err
+	}
+	return &StaticUsersProvider{users: users, path: path, logger: logger}, nil
+}
+
 func NewWithRevocationStore(cfg config.AuthConfig, logger *zap.Logger, revocations RevocationStore) (*StaticUsersProvider, error) {
 	path := cfg.StaticUsers.UsersFile
 	if path == "" {
@@ -88,6 +100,9 @@ func NewWithRevocationStore(cfg config.AuthConfig, logger *zap.Logger, revocatio
 func (p *StaticUsersProvider) Name() string { return "static-users" }
 func (p *StaticUsersProvider) Shutdown()    {}
 func (p *StaticUsersProvider) Capabilities() auth.Capability {
+	if len(p.jwtSecret) == 0 {
+		return auth.CapUserLookup
+	}
 	return auth.CapAuthenticate | auth.CapIssueSession | auth.CapIntrospect | auth.CapUserLookup
 }
 func (p *StaticUsersProvider) Reload() error {
@@ -114,6 +129,9 @@ func (p *StaticUsersProvider) Usernames() []string {
 	return out
 }
 func (p *StaticUsersProvider) Authenticate(ctx context.Context, req auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
+	if len(p.jwtSecret) == 0 {
+		return nil, auth.Deny(p.Name(), "directory-only provider"), auth.ErrNotSupported
+	}
 	h := req.Header.Get("Authorization")
 	if h == "" {
 		return nil, auth.Challenge(p.Name(), "no authorization header"), nil
@@ -186,6 +204,9 @@ func (p *StaticUsersProvider) authenticateBearer(ctx context.Context, token stri
 	return pr, auth.Allow(p.Name(), "valid jwt"), nil
 }
 func (p *StaticUsersProvider) IssueSession(_ context.Context, subject string) (string, time.Time, error) {
+	if len(p.jwtSecret) == 0 {
+		return "", time.Time{}, auth.ErrNotSupported
+	}
 	return p.issueToken(subject)
 }
 func (p *StaticUsersProvider) issueToken(subject string) (string, time.Time, error) {
@@ -209,6 +230,9 @@ func (p *StaticUsersProvider) issueToken(subject string) (string, time.Time, err
 	return signed, exp, nil
 }
 func (p *StaticUsersProvider) RevokeSession(ctx context.Context, jti string, expiresAt time.Time) error {
+	if len(p.jwtSecret) == 0 {
+		return auth.ErrNotSupported
+	}
 	until := expiresAt.Add(2 * time.Minute)
 	if until.Before(time.Now()) {
 		until = time.Now().Add(2 * time.Minute)
@@ -216,6 +240,9 @@ func (p *StaticUsersProvider) RevokeSession(ctx context.Context, jti string, exp
 	return p.revocations.RevokeSession(ctx, jti, until)
 }
 func (p *StaticUsersProvider) RefreshSession(ctx context.Context, old string) (string, time.Time, error) {
+	if len(p.jwtSecret) == 0 {
+		return "", time.Time{}, auth.ErrNotSupported
+	}
 	c := &refreshClaims{}
 	_, err := jwt.ParseWithClaims(old, c, func(t *jwt.Token) (any, error) {
 		if t.Method != jwt.SigningMethodHS256 {
@@ -269,7 +296,7 @@ func (p *StaticUsersProvider) GetBySubject(_ context.Context, s string) (*auth.U
 	if !ok {
 		return nil, ErrUserNotFound
 	}
-	return &auth.UserProfile{Subject: u.Username, DisplayName: u.DisplayName, Email: u.Email, Active: true}, nil
+	return &auth.UserProfile{Subject: u.Username, Username: u.Username, DisplayName: u.DisplayName, Email: u.Email, Active: true, Lifecycle: auth.ActorActive}, nil
 }
 func (p *StaticUsersProvider) ListGroups(ctx context.Context, s string) ([]string, error) {
 	if _, err := p.GetBySubject(ctx, s); err != nil {
@@ -290,7 +317,7 @@ func (p *StaticUsersProvider) SearchUsers(_ context.Context, q string, limit int
 	for _, username := range usernames {
 		u := p.users[username]
 		if q == "" || strings.Contains(strings.ToLower(u.Username), q) || strings.Contains(strings.ToLower(u.DisplayName), q) || strings.Contains(strings.ToLower(u.Email), q) {
-			out = append(out, &auth.UserProfile{Subject: u.Username, DisplayName: u.DisplayName, Email: u.Email, Active: true})
+			out = append(out, &auth.UserProfile{Subject: u.Username, Username: u.Username, DisplayName: u.DisplayName, Email: u.Email, Active: true, Lifecycle: auth.ActorActive})
 			if limit > 0 && len(out) >= limit {
 				break
 			}

@@ -306,6 +306,19 @@ func TestGraphQLWebSocketConnectionClosesAtTokenExpiry(t *testing.T) {
 	assert.Equal(t, websocket.CloseNormalClosure, closeErr.Code)
 }
 
+func TestDirectoryInvalidationClosesLocalWebSocketTransportAndAllowsFreshAdmission(t *testing.T) {
+	env := newWebSocketTestEnvironment(t, time.Now().Add(time.Minute))
+	conn := env.dial(t)
+	require.Equal(t, "connection_ack", initWebSocket(t, conn, map[string]any{"Authorization": "Bearer valid"})["type"])
+	env.connections.Invalidate()
+	_, _, err := conn.ReadMessage()
+	var closeErr *websocket.CloseError
+	require.ErrorAs(t, err, &closeErr)
+	require.Equal(t, websocket.CloseNormalClosure, closeErr.Code)
+	fresh := env.dial(t)
+	require.Equal(t, "connection_ack", initWebSocket(t, fresh, map[string]any{"Authorization": "Bearer valid"})["type"])
+}
+
 func TestGraphQLFilePoolLookupAcceptsBoundedAliasesAndTypedProjection(t *testing.T) {
 	env := newWebSocketTestEnvironment(t, time.Now().Add(time.Minute))
 	for i := range 100 {

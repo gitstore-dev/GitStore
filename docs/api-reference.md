@@ -21,6 +21,40 @@ These are native listener defaults; Compose publishes Storefront on host 4100.
 | Method       | `POST`                             |
 | Content type | `application/json`                 |
 
+### Internal identity mail
+
+When the development notification provider is enabled, the Admin listener
+accepts `POST /internal/notifications/mail` with `Content-Type: application/json`
+and the privately injected `GitStore-Mail-Key` header. This is an internal
+HTTP courier adapter, not a GraphQL mutation or a Storefront endpoint.
+
+The JSON message contains `recipient`, `subject`, `body`, optional `html_body`,
+`template_type` and optional `message_type` (`email`). Optional native template
+data/request headers are discarded. Delivery is bounded by configured body,
+concurrency and deadline limits.
+
+| Status | Meaning |
+|---|---|
+| `204` | Development catcher accepted the message |
+| `400` / `413` / `415` | Invalid message / oversized body / unsupported content type |
+| `401` / `405` | Invalid mail credential / unsupported method |
+| `503` | Provider failure, timeout or saturation; native courier may retry |
+| `404` | Adapter disabled, or request sent to Storefront |
+
+Responses never include message content or setup/verification secrets.
+Duplicate delivery is possible; acceptance is not an exactly-once guarantee.
+See [Identity mail configuration](configuration.md#identity-mail) for private
+routing, the development TLS boundary and upstream logging limitations.
+
+Directory contact facts are resolved by immutable subject, not recipient
+email. A previous verified address is retained while a replacement remains
+unverified; an old-address bounce does not suppress a newly verified
+replacement. Initial deliverability defaults to false without a trusted
+observation. Consent changes are server-timestamped, and bounce/timestamp-only
+updates do not advance generation. Contact writes retain the external
+provider's best-effort concurrency and privileged-Admin bypass limitations.
+This contact capability does not add a public mail or contact HTTP endpoint.
+
 ## Authentication
 
 Admin introspection requires an authenticated principal. The endpoint selector
@@ -93,6 +127,9 @@ mutation Logout {
 |--------------------------------------------|-----------------------------------------|
 | `node(id: ID!)`                            | Fetch one Relay node by global ID       |
 | `nodes(ids: [ID!]!)`                       | Fetch multiple Relay nodes by global ID |
+| `actor(by: ActorBy!)`                      | Fetch a Staff, Customer or ServiceAccount |
+| `actors(...)`                             | List the configured identity directory |
+| `serviceAccounts(...)`                    | List authoritative ServiceAccounts independently of UserDir |
 | `namespace(by: NamespaceBy!)`              | Fetch one namespace                     |
 | `namespaces(...)`                          | List namespaces                         |
 | `repository(by: RepositoryBy!)`            | Fetch one repository                    |
@@ -189,8 +226,11 @@ lookups such as `category`, `product`, and `namespace`, including missing
 Repository owner namespaces. Infrastructure failures and cancellation remain
 errors, never `NOT_FOUND`; they fail the batch rather than returning a
 success-shaped partial result. Error messages do not expose underlying
-datastore details. ServiceAccount implements Actor, not Node, and is queried
-through its identity-specific operations.
+datastore details. Staff, Customer and ServiceAccount implement both Actor and
+Node. Staff and Customer also implement the human-only User interface.
+Human IDs use directory UIDs; ServiceAccount IDs use GitStore source UIDs,
+not mirror IDs. Human reads require `user.read`; workload reads require
+`serviceAccount.read`.
 Batch hydration uses at most eight concurrent resource reads per request.
 Cancellation stops scheduling new reads and cancels in-flight File lookups.
 File authorization checks use the record loaded by UID, including its owner,
@@ -690,6 +730,66 @@ query ListCollections {
 ```
 
 ## Mutation Operations
+
+### Identity administration
+
+`actor(by:)` accepts exactly one of `id`, canonical human `username` or
+`serviceAccountName`. A human and a workload may share a name; selectors do not
+merge them. Concrete human envelopes expose `metadata`, `fullName`, `identities`,
+`groups`, `lifecycle` and trusted contact facts, never credentials or setup links.
+Staff and Customer share the `User` interface for fragments over these common
+fields. ServiceAccount remains an `Actor`, not a `User`; group mutation payloads
+remain `Actor` so they can return humans or workloads.
+
+`actors` requires both `user.list` and `serviceAccount.list` before enumeration.
+Kratos supports bounded `first`/`after` pages (1-500), with opaque edge cursors and
+`pageInfo`; `last`/`before` return `UNSUPPORTED_PAGINATION`. Directory cursors are
+provider-bound. Workload mirrors are hydrated by source UID, not name; orphaned
+mirrors are skipped. A nonterminal page containing only orphans returns
+`ACTOR_PAGE_HAS_NO_VISIBLE_EDGES`, rather than scanning ahead or returning a
+cursor that cannot advance. Unified workload coverage is not guaranteed.
+
+`serviceAccounts` requires `serviceAccount.list`, supports both pagination
+directions and remains usable without UserDir. Its opaque cursors belong only
+to that connection. Neither connection exposes total counts or public filters.
+`ServiceAccount.groups: [String!]!` resolves directory memberships lazily by
+immutable GitStore source UID, never name or mirror UID. Linked Kratos profiles
+return ordinary `system:group:<name>` memberships and `system:serviceaccounts`.
+Missing mirrors or a directory without workload-group support return `[]`;
+lookup failures return `SERVICE_UNAVAILABLE`. Reads that do not select `groups`
+perform no membership lookup and remain independent of directory availability.
+Healthy internal delivery maintains credentialless UID-linked mirrors while
+preserving directory groups. Delivery retries three times, then discards; buffer
+overflow also discards events. Restart/reload starts at the current journal
+boundary without replay or automatic repair. Missing, stale or orphaned mirrors
+can therefore persist indefinitely. See
+[workload directory mirrors](configuration.md#workload-directory-mirrors).
+
+Human operations use action-specific `input` and payload wrappers:
+`createStaff` and `resendStaffInvitation` wrap `staff`; `updateUser`,
+`deactivateUser`, `reactivateUser`, `suspendUser`, `deleteUser`,
+`assignUserGroup`, `removeUserGroup` and `setUserEmailDeliverability` wrap `actor`.
+Creation requires `user.create`; deletion requires `user.delete`; group changes
+require `user.group.update`; other changes require `user.update`.
+Only `cluster-admin` receives these actions by default.
+
+Staff creation invites rather than setting a password. Setup and verification
+govern activation. `updateUser` accepts only full name, pending primary email and
+transactional/marketing consent; it cannot change username, type, groups or
+lifecycle. Authorized safe self-updates are permitted, but administrative
+self-edits are rejected. Human contact/lifecycle/delete operations reject
+workloads; workload group changes alter only protected directory membership.
+Group inputs are bare ordinary names, never `system:*` names.
+
+Customer groups are mandatory memberships configured for all Customers.
+Assigning a configured group is a no-op; individual removal and assignment
+outside that configuration are rejected.
+
+Staff revisions are best-effort and Customer counters are unsupported
+(-1/"-1"); neither provides native compare-and-swap. Directory state and session
+revocation, and invitation creation and delivery, are separate operations.
+Successful writes invalidate local profile/connection snapshots; other replicas
+retain their bounded freshness leases. See [identity configuration limitations](configuration.md#reference-identity-schemas-and-metadata).
 
 ### login
 

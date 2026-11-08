@@ -34,6 +34,18 @@ func TestServiceAccountFreshSchemaIsClusterScoped(t *testing.T) {
 	assert.Contains(t, string(raw), "service_account_assertion_replays")
 }
 
+func TestServiceAccountCDCIsAnIncrementalAuthoritativeOnlyMigration(t *testing.T) {
+	raw, err := migrations.Files.ReadFile("013_service_account_cdc.cql")
+	require.NoError(t, err)
+	cql := strings.ToLower(string(raw))
+	require.Contains(t, cql, "alter table service_accounts_by_cluster_name with "+fullImageCDC)
+	require.Equal(t, 1, strings.Count(cql, "cdc = {"))
+	require.NotContains(t, cql, "create table")
+	require.NotContains(t, cql, "drop ")
+	require.NotContains(t, cql, "truncate")
+	require.NotContains(t, createStatement(t, "009_service_account.cql", "service_accounts_by_cluster_name"), "cdc")
+}
+
 // createStatement returns the CREATE TABLE statement for table, up to its
 // terminating semicolon.
 func createStatement(t *testing.T, file, table string) string {
@@ -69,7 +81,7 @@ func TestOnlyWatchedAuthoritativeTablesEnableCDC(t *testing.T) {
 		require.NoError(t, err)
 		count += strings.Count(strings.ToLower(string(raw)), "cdc = {")
 	}
-	assert.Equal(t, 5, count, "only the five current watch sources enable CDC")
+	assert.Equal(t, 6, count, "only authoritative watched tables and the internal ServiceAccount source enable CDC")
 }
 
 func TestProductPartitionsSeparateEnvelopesNamesAndListings(t *testing.T) {

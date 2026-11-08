@@ -14,9 +14,12 @@ import (
 
 // An object that has a human-readable name. This represents both the Subject and the Delegate
 type Actor interface {
+	IsNode()
 	IsActor()
+	GetID() string
 	GetMetadata() *ObjectMeta
-	GetStatus() ActorStatus
+	// The actor's current lifecycle state.
+	GetLifecycle() *ActorLifecycle
 }
 
 // An object with a globally unique ID
@@ -34,9 +37,59 @@ type Publishable interface {
 	GetPublished() bool
 }
 
+// Shared identity and contact fields for externally managed human users.
+type User interface {
+	IsActor()
+	IsNode()
+	IsUser()
+	GetID() string
+	GetAPIVersion() string
+	GetKind() string
+	GetMetadata() *ObjectMeta
+	GetFullName() string
+	GetIdentities() []string
+	GetGroups() []string
+	GetLifecycle() *ActorLifecycle
+	GetPrimaryEmail() string
+	GetEmailVerified() bool
+	GetEmailDeliverable() bool
+	GetContactConsent() *ContactConsent
+}
+
+// Exactly one identifier; workload names are separate from human usernames.
+type ActorBy struct {
+	ID                 *string `json:"id,omitempty"`
+	Username           *string `json:"username,omitempty"`
+	ServiceAccountName *string `json:"serviceAccountName,omitempty"`
+}
+
+type ActorConnection struct {
+	Edges    []*ActorEdge `json:"edges"`
+	PageInfo *PageInfo    `json:"pageInfo"`
+}
+
+type ActorEdge struct {
+	Cursor string `json:"cursor"`
+	Node   Actor  `json:"node"`
+}
+
+type ActorLifecycle struct {
+	// Current lifecycle state.
+	State ActorLifecycleState `json:"state"`
+}
+
 type AdmissionControlDefaults struct {
 	Phase         *string `json:"phase,omitempty"`
 	BranchPattern *string `json:"branchPattern,omitempty"`
+}
+
+type AssignUserGroupInput struct {
+	ID    string `json:"id"`
+	Group string `json:"group"`
+}
+
+type AssignUserGroupPayload struct {
+	Actor Actor `json:"actor,omitempty"`
 }
 
 // A pointer to another catalogue resource.
@@ -320,6 +373,12 @@ type ConditionInput struct {
 	Message            *string         `json:"message,omitempty"`
 }
 
+// Trusted contact consent facts maintained by the identity directory.
+type ContactConsent struct {
+	Transactional bool `json:"transactional"`
+	Marketing     bool `json:"marketing"`
+}
+
 type CreateCategoryInput struct {
 	APIVersion string             `json:"apiVersion"`
 	Kind       string             `json:"kind"`
@@ -384,10 +443,85 @@ type CreateServiceAccountPayload struct {
 	ServiceAccount *ServiceAccount `json:"serviceAccount,omitempty"`
 }
 
+type CreateStaffInput struct {
+	Metadata     *ObjectMetaInput `json:"metadata"`
+	FullName     string           `json:"fullName"`
+	PrimaryEmail string           `json:"primaryEmail"`
+	Groups       []string         `json:"groups,omitempty"`
+}
+
+type CreateStaffPayload struct {
+	Staff *Staff `json:"staff,omitempty"`
+}
+
 type CredentialsRef struct {
 	Kind      string     `json:"kind"`
 	Type      string     `json:"type"`
 	SecretRef *SecretRef `json:"secretRef"`
+}
+
+// An externally managed Customer identity.
+type Customer struct {
+	ID               string          `json:"id"`
+	APIVersion       string          `json:"apiVersion"`
+	Kind             string          `json:"kind"`
+	Metadata         *ObjectMeta     `json:"metadata"`
+	FullName         string          `json:"fullName"`
+	Identities       []string        `json:"identities"`
+	Groups           []string        `json:"groups"`
+	Lifecycle        *ActorLifecycle `json:"lifecycle"`
+	PrimaryEmail     string          `json:"primaryEmail"`
+	EmailVerified    bool            `json:"emailVerified"`
+	EmailDeliverable bool            `json:"emailDeliverable"`
+	ContactConsent   *ContactConsent `json:"contactConsent"`
+}
+
+func (Customer) IsUser()                       {}
+func (this Customer) GetID() string            { return this.ID }
+func (this Customer) GetAPIVersion() string    { return this.APIVersion }
+func (this Customer) GetKind() string          { return this.Kind }
+func (this Customer) GetMetadata() *ObjectMeta { return this.Metadata }
+func (this Customer) GetFullName() string      { return this.FullName }
+func (this Customer) GetIdentities() []string {
+	if this.Identities == nil {
+		return nil
+	}
+	interfaceSlice := make([]string, 0, len(this.Identities))
+	for _, concrete := range this.Identities {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+func (this Customer) GetGroups() []string {
+	if this.Groups == nil {
+		return nil
+	}
+	interfaceSlice := make([]string, 0, len(this.Groups))
+	for _, concrete := range this.Groups {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+func (this Customer) GetLifecycle() *ActorLifecycle      { return this.Lifecycle }
+func (this Customer) GetPrimaryEmail() string            { return this.PrimaryEmail }
+func (this Customer) GetEmailVerified() bool             { return this.EmailVerified }
+func (this Customer) GetEmailDeliverable() bool          { return this.EmailDeliverable }
+func (this Customer) GetContactConsent() *ContactConsent { return this.ContactConsent }
+
+func (Customer) IsActor() {}
+
+// The actor's current lifecycle state.
+
+func (Customer) IsNode() {}
+
+// Opaque identifier encoding a resource kind and stable resource UID.
+
+type DeactivateUserInput struct {
+	ID string `json:"id"`
+}
+
+type DeactivateUserPayload struct {
+	Actor Actor `json:"actor,omitempty"`
 }
 
 // Input for deleting a category
@@ -452,6 +586,14 @@ type DeleteServiceAccountInput struct {
 // deleteServiceAccount mutation payload.
 type DeleteServiceAccountPayload struct {
 	ServiceAccount *ServiceAccount `json:"serviceAccount,omitempty"`
+}
+
+type DeleteUserInput struct {
+	ID string `json:"id"`
+}
+
+type DeleteUserPayload struct {
+	Actor Actor `json:"actor,omitempty"`
 }
 
 // Gate that controls when a price template is eligible.
@@ -1072,6 +1214,14 @@ type QuantityDefinition struct {
 type Query struct {
 }
 
+type ReactivateUserInput struct {
+	ID string `json:"id"`
+}
+
+type ReactivateUserPayload struct {
+	Actor Actor `json:"actor,omitempty"`
+}
+
 type ReceivePackHookDefaults struct {
 	PreReceive           *HookToggle `json:"preReceive,omitempty"`
 	Update               *HookToggle `json:"update,omitempty"`
@@ -1094,6 +1244,15 @@ type RefreshTokenInput struct {
 type RefreshTokenPayload struct {
 	// OIDC-compatible token payload.
 	Token *TokenResponse `json:"token"`
+}
+
+type RemoveUserGroupInput struct {
+	ID    string `json:"id"`
+	Group string `json:"group"`
+}
+
+type RemoveUserGroupPayload struct {
+	Actor Actor `json:"actor,omitempty"`
 }
 
 // A namespace-scoped GitStore Repository resource.
@@ -1197,6 +1356,14 @@ type RepositoryWatchEvent struct {
 	Name            string         `json:"name"`
 	ResourceVersion string         `json:"resourceVersion"`
 	Repository      *Repository    `json:"repository,omitempty"`
+}
+
+type ResendStaffInvitationInput struct {
+	ID string `json:"id"`
+}
+
+type ResendStaffInvitationPayload struct {
+	Staff *Staff `json:"staff,omitempty"`
 }
 
 type ResolvedCategoryDefinition struct {
@@ -1382,16 +1549,36 @@ type SelectedOptionDefinition struct {
 // and immutable UID identify the account. metadata.namespace is null on output;
 // any non-null metadata.namespace is rejected on every ServiceAccount operation.
 type ServiceAccount struct {
+	ID         string      `json:"id"`
 	APIVersion string      `json:"apiVersion"`
 	Kind       string      `json:"kind"`
 	Metadata   *ObjectMeta `json:"metadata"`
 	KeyIDs     []string    `json:"keyIDs"`
-	Status     ActorStatus `json:"status"`
+	// Directory memberships resolved by source UID. Empty without a linked group-capable directory; lookup failures remain errors.
+	Groups    []string        `json:"groups"`
+	Lifecycle *ActorLifecycle `json:"lifecycle"`
 }
 
 func (ServiceAccount) IsActor()                      {}
+func (this ServiceAccount) GetID() string            { return this.ID }
 func (this ServiceAccount) GetMetadata() *ObjectMeta { return this.Metadata }
-func (this ServiceAccount) GetStatus() ActorStatus   { return this.Status }
+
+// The actor's current lifecycle state.
+func (this ServiceAccount) GetLifecycle() *ActorLifecycle { return this.Lifecycle }
+
+func (ServiceAccount) IsNode() {}
+
+// Opaque identifier encoding a resource kind and stable resource UID.
+
+type ServiceAccountConnection struct {
+	Edges    []*ServiceAccountEdge `json:"edges"`
+	PageInfo *PageInfo             `json:"pageInfo"`
+}
+
+type ServiceAccountEdge struct {
+	Cursor string          `json:"cursor"`
+	Node   *ServiceAccount `json:"node"`
+}
 
 // Enrolled public key supplied on create/rotate.
 type ServiceAccountPublicKeyInput struct {
@@ -1403,6 +1590,71 @@ type ServiceAccountPublicKeyInput struct {
 	PublicKeyPem string `json:"publicKeyPEM"`
 }
 
+type SetUserEmailDeliverabilityInput struct {
+	ID          string `json:"id"`
+	Deliverable bool   `json:"deliverable"`
+}
+
+type SetUserEmailDeliverabilityPayload struct {
+	Actor Actor `json:"actor,omitempty"`
+}
+
+// An externally managed Staff identity.
+type Staff struct {
+	ID               string          `json:"id"`
+	APIVersion       string          `json:"apiVersion"`
+	Kind             string          `json:"kind"`
+	Metadata         *ObjectMeta     `json:"metadata"`
+	FullName         string          `json:"fullName"`
+	Identities       []string        `json:"identities"`
+	Groups           []string        `json:"groups"`
+	Lifecycle        *ActorLifecycle `json:"lifecycle"`
+	PrimaryEmail     string          `json:"primaryEmail"`
+	EmailVerified    bool            `json:"emailVerified"`
+	EmailDeliverable bool            `json:"emailDeliverable"`
+	ContactConsent   *ContactConsent `json:"contactConsent"`
+}
+
+func (Staff) IsUser()                       {}
+func (this Staff) GetID() string            { return this.ID }
+func (this Staff) GetAPIVersion() string    { return this.APIVersion }
+func (this Staff) GetKind() string          { return this.Kind }
+func (this Staff) GetMetadata() *ObjectMeta { return this.Metadata }
+func (this Staff) GetFullName() string      { return this.FullName }
+func (this Staff) GetIdentities() []string {
+	if this.Identities == nil {
+		return nil
+	}
+	interfaceSlice := make([]string, 0, len(this.Identities))
+	for _, concrete := range this.Identities {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+func (this Staff) GetGroups() []string {
+	if this.Groups == nil {
+		return nil
+	}
+	interfaceSlice := make([]string, 0, len(this.Groups))
+	for _, concrete := range this.Groups {
+		interfaceSlice = append(interfaceSlice, concrete)
+	}
+	return interfaceSlice
+}
+func (this Staff) GetLifecycle() *ActorLifecycle      { return this.Lifecycle }
+func (this Staff) GetPrimaryEmail() string            { return this.PrimaryEmail }
+func (this Staff) GetEmailVerified() bool             { return this.EmailVerified }
+func (this Staff) GetEmailDeliverable() bool          { return this.EmailDeliverable }
+func (this Staff) GetContactConsent() *ContactConsent { return this.ContactConsent }
+
+func (Staff) IsActor() {}
+
+// The actor's current lifecycle state.
+
+func (Staff) IsNode() {}
+
+// Opaque identifier encoding a resource kind and stable resource UID.
+
 // Pricing strategy applied when this price template is selected.
 type StrategyDefinition struct {
 	// Strategy identifier (e.g. fixed, percentage_discount, cost_plus).
@@ -1410,6 +1662,14 @@ type StrategyDefinition struct {
 }
 
 type Subscription struct {
+}
+
+type SuspendUserInput struct {
+	ID string `json:"id"`
+}
+
+type SuspendUserPayload struct {
+	Actor Actor `json:"actor,omitempty"`
 }
 
 // A short-lived ServiceAccount access token result.
@@ -1607,6 +1867,19 @@ type UpdateResourceStatusPayload struct {
 	Object map[string]any `json:"object,omitempty"`
 }
 
+// Only display name, pending primary email and consent may be edited.
+type UpdateUserInput struct {
+	ID                   string  `json:"id"`
+	FullName             *string `json:"fullName,omitempty"`
+	PrimaryEmail         *string `json:"primaryEmail,omitempty"`
+	TransactionalConsent *bool   `json:"transactionalConsent,omitempty"`
+	MarketingConsent     *bool   `json:"marketingConsent,omitempty"`
+}
+
+type UpdateUserPayload struct {
+	Actor Actor `json:"actor,omitempty"`
+}
+
 type VariantSummaryDefinition struct {
 	Total       int32 `json:"total"`
 	Ready       int32 `json:"ready"`
@@ -1628,54 +1901,54 @@ type WatchEvent struct {
 	Object map[string]any `json:"object,omitempty"`
 }
 
-type ActorStatus string
+type ActorLifecycleState string
 
 const (
-	ActorStatusActive              ActorStatus = "ACTIVE"
-	ActorStatusInactive            ActorStatus = "INACTIVE"
-	ActorStatusSuspended           ActorStatus = "SUSPENDED"
-	ActorStatusInvited             ActorStatus = "INVITED"
-	ActorStatusPendingVerification ActorStatus = "PENDING_VERIFICATION"
+	ActorLifecycleStateActive              ActorLifecycleState = "ACTIVE"
+	ActorLifecycleStateInactive            ActorLifecycleState = "INACTIVE"
+	ActorLifecycleStateSuspended           ActorLifecycleState = "SUSPENDED"
+	ActorLifecycleStateInvited             ActorLifecycleState = "INVITED"
+	ActorLifecycleStatePendingVerification ActorLifecycleState = "PENDING_VERIFICATION"
 )
 
-var AllActorStatus = []ActorStatus{
-	ActorStatusActive,
-	ActorStatusInactive,
-	ActorStatusSuspended,
-	ActorStatusInvited,
-	ActorStatusPendingVerification,
+var AllActorLifecycleState = []ActorLifecycleState{
+	ActorLifecycleStateActive,
+	ActorLifecycleStateInactive,
+	ActorLifecycleStateSuspended,
+	ActorLifecycleStateInvited,
+	ActorLifecycleStatePendingVerification,
 }
 
-func (e ActorStatus) IsValid() bool {
+func (e ActorLifecycleState) IsValid() bool {
 	switch e {
-	case ActorStatusActive, ActorStatusInactive, ActorStatusSuspended, ActorStatusInvited, ActorStatusPendingVerification:
+	case ActorLifecycleStateActive, ActorLifecycleStateInactive, ActorLifecycleStateSuspended, ActorLifecycleStateInvited, ActorLifecycleStatePendingVerification:
 		return true
 	}
 	return false
 }
 
-func (e ActorStatus) String() string {
+func (e ActorLifecycleState) String() string {
 	return string(e)
 }
 
-func (e *ActorStatus) UnmarshalGQL(v any) error {
+func (e *ActorLifecycleState) UnmarshalGQL(v any) error {
 	str, ok := v.(string)
 	if !ok {
 		return fmt.Errorf("enums must be strings")
 	}
 
-	*e = ActorStatus(str)
+	*e = ActorLifecycleState(str)
 	if !e.IsValid() {
-		return fmt.Errorf("%s is not a valid ActorStatus", str)
+		return fmt.Errorf("%s is not a valid ActorLifecycleState", str)
 	}
 	return nil
 }
 
-func (e ActorStatus) MarshalGQL(w io.Writer) {
+func (e ActorLifecycleState) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 
-func (e *ActorStatus) UnmarshalJSON(b []byte) error {
+func (e *ActorLifecycleState) UnmarshalJSON(b []byte) error {
 	s, err := strconv.Unquote(string(b))
 	if err != nil {
 		return err
@@ -1683,7 +1956,7 @@ func (e *ActorStatus) UnmarshalJSON(b []byte) error {
 	return e.UnmarshalGQL(s)
 }
 
-func (e ActorStatus) MarshalJSON() ([]byte, error) {
+func (e ActorLifecycleState) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

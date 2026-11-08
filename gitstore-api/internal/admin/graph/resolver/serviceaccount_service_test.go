@@ -184,6 +184,8 @@ func TestCreateServiceAccountValidatesKeysAndDuplicates(t *testing.T) {
 	assert.Equal(t, "manager", created.ServiceAccount.Metadata.Name)
 	assert.NotNil(t, created.ServiceAccount.Metadata.OwnerReferences)
 	assert.Empty(t, created.ServiceAccount.Metadata.OwnerReferences)
+	require.NotNil(t, created.ServiceAccount.Lifecycle)
+	assert.Equal(t, model.ActorLifecycleStateActive, created.ServiceAccount.Lifecycle.State)
 
 	persisted, err := h.store.GetServiceAccountBySubject(ctx, "manager")
 	require.NoError(t, err)
@@ -198,6 +200,16 @@ func TestCreateServiceAccountValidatesKeysAndDuplicates(t *testing.T) {
 	})
 	require.ErrorContains(t, err, "at least one public key")
 
+}
+
+func TestServiceAccountLifecycleStateReflectsDisabledState(t *testing.T) {
+	active := serviceAccountToModel(&datastore.ServiceAccount{UID: "source-uid"})
+	require.NotNil(t, active.Lifecycle)
+	assert.Equal(t, model.ActorLifecycleStateActive, active.Lifecycle.State)
+
+	inactive := serviceAccountToModel(&datastore.ServiceAccount{UID: "source-uid", Disabled: true})
+	require.NotNil(t, inactive.Lifecycle)
+	assert.Equal(t, model.ActorLifecycleStateInactive, inactive.Lifecycle.State)
 }
 
 func TestRotateServiceAccountKeyPreservesOverlapAndRejectsEmptyRotation(t *testing.T) {

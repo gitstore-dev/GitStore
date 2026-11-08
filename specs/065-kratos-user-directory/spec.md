@@ -33,7 +33,16 @@ foundation); #28 User Profiles (application profiles build on it later).
   groups would fragment group administration across every IdP in the chain
   and leave social and local logins without groups. Directory-owned groups
   work identically for every AuthN provider, are administered in one place,
-  and keep AuthN responsible only for identity.
+  and keep AuthN responsible for credential authentication while UserDir owns
+  directory groups.
+- Both human profile types MUST support email-and-password and
+  username-and-password login through Kratos. Email addresses and usernames
+  are globally unique across profile types and are password-login identifiers.
+- AuthN continues to synthesize `system:authenticated` for authenticated
+  principals. UserDir synthesizes `system:staff`, `system:customers` or
+  `system:serviceaccounts` from the trusted profile type; these values are
+  never accepted from token claims or user-managed directory groups. Namespace
+  creation is authorized through RBAC policy, not a separate GraphQL layer.
 - Q: Where do operators administer staff identities and groups? → A:
   GitStore's own API, authorized by canonical `user.*` actions and audited.
 - ServiceAccounts get a Kratos identity schema too: Kratos supports identities
@@ -46,6 +55,51 @@ foundation); #28 User Profiles (application profiles build on it later).
   to a pluggable notification provider; the notification provider itself is
   a later feature.
 
+### Session 2026-11-07
+
+- Staff and Customer borrow the OpenShift User envelope and, together with
+  the existing ServiceAccount, implement Actor and Node. Reuse
+  ActorLifecycleState via lifecycle.state; no GraphQL UserProfileType,
+  flat active/createdAt fields or new auditing metadata.
+- Use actor(by:) and Relay edge/cursor/PageInfo connections. Keep the standard
+  pagination arguments; validate provider support at query time and return
+  the unified error diagnostic for unsupported backward pagination.
+  Capability advertisement is deferred to #472; filters/search remain #471.
+- External ObjectMeta uses protected `creation_actor`/`update_actor` metadata,
+  defaulted from the initiating Principal. Missing ownership falls back to the
+  represented identity's username. Staff generation/resourceVersion advances
+  are best-effort for integrated GitStore/profile writes, not remote CAS or
+  all-provider-change counters. Customer self-service exposes -1/"-1" for
+  unsupported counters. Concurrent PATCH operations can lose increments or
+  overwrite changes; direct Kratos Admin writes bypass self-service hooks.
+  Use blocking internal registration/settings hooks and supported Admin APIs,
+  not Kratos-table customization or a GitStore profile database. Disabled
+  provider routes return 404; hook unavailability blocks protected flows.
+- All mutations use action-specific input and payload types. Invitation,
+  pending verification, active, inactive and suspended behavior follows
+  the existing enum, not a new state-machine framework.
+- Human identity management stays external: no GitStore subject-link,
+  user-profile or reconciliation-intent table.
+  Provider-owned explicit mapping and Kratos external_id supply linkage;
+  external ServiceAccount linkage uses immutable GitStore UID.
+- ServiceAccount CDC MUST reuse the shared resource journal backend
+  controllers depend on. UserDir consumes provider-neutral changes internally,
+  with a small finite retry budget, then discards failed events and continues.
+  No durable consumer checkpoint, replay, automatic repair, external list/watch,
+  self-GraphQL client or checkpoint directory is required.
+  A future controller can add an external adapter over the same source;
+  building it or its transport is not scope. Enabling CDC on the existing
+  authoritative table is the allowed
+  schema change, not a new identity/outbox table or approval to rewrite
+  migration history. Consumer delivery is best-effort, not distributed atomicity
+  or guaranteed eventual convergence.
+- Reference-stack updates select explicit latest stable compatible versions
+  at implementation time; historical planning pins are not the target.
+- This feature is not already deployed in production. No operator CLI,
+  legacy backfill command or production identity-migration workflow is in
+  scope. The UserDir consumer has no durability guarantee; missed/discarded
+  runtime events need not be recovered automatically.
+
 ## Architectural Position
 
 The user directory is the foundation for **identity profiles**, not for all
@@ -53,7 +107,7 @@ user profile data:
 
 - **Identity profile (this feature, directory-owned).** Who a principal is:
   stable subject, profile type, username, display name, primary email and its
-  verification and deliverability state, contact consent, active state and
+  verification and deliverability state, contact consent, lifecycle state and
   group membership. Read and administered by GitStore through the pluggable
   UserDir contract; swappable per deployment.
 - **Application profile (#28, later, GitStore-owned).** Commerce data about a
@@ -134,7 +188,7 @@ denial of every operator operation under the shipped policy.
 
 ### User Story 3 - Operators administer identities through GitStore (Priority: P2)
 
-An authorized operator creates staff identities, deactivates and reactivates
+An authorized operator invites staff, suspends, deactivates and reactivates
 identities, and assigns or removes groups through GitStore's API. Every change
 is authorized by canonical `user.*` actions and audited.
 
@@ -157,9 +211,24 @@ without grants and verify every call is denied.
    directory administration, **Then** it is denied.
 4. **Given** any human, **When** they edit their own profile, **Then** they can
    change display name and request an email change, but can never change
-   type, username, groups, active state or deliverability.
+   type, username, groups, lifecycle state or deliverability.
 5. **Given** a group name that is reserved (`system:` prefix) or empty,
    **When** an operator assigns it, **Then** it is rejected.
+6. **Given** a staff or customer identity, **When** its owner signs in with
+   either its email and password or its username and password, **Then** Kratos
+   authenticates that identity; an email address or username already used by
+   any human profile type is rejected.
+7. **Given** staff creation, **When** invitation/setup is incomplete,
+   **Then** lifecycle.state is INVITED or PENDING_VERIFICATION; completion of
+   required setup/verification is needed for ACTIVE.
+8. **Given** an active human, **When** suspended or deactivated,
+   **Then** lifecycle.state is SUSPENDED or INACTIVE respectively; valid
+   tokens do not bypass admission and reactivation cannot skip unfinished
+   verification. An outstanding staff invitation can be resent.
+9. **Given** authorized actor lookup/listing, **When** queried through
+   actor(by:), node(id:) or a connection, **Then** Staff, Customer and
+   ServiceAccount use stable Relay IDs and edges/cursors/PageInfo without a
+   profile-type enum, public filter or flat auditing fields.
 
 ---
 
@@ -181,17 +250,27 @@ authenticated request carries the group.
 **Acceptance Scenarios**:
 
 1. **Given** `createServiceAccount` for `ci-bot`, **When** it succeeds,
-   **Then** the directory holds a login-disabled ServiceAccount-schema
-   identity linked to `system:serviceaccount:ci-bot`.
+   **Then** a provider-neutral shared journal event lets the configured UserDir
+   synchronize a login-disabled ServiceAccount-schema identity, linked by
+   immutable GitStore UID using external_id in Kratos.
 2. **Given** that directory identity, **When** anyone attempts a login,
    recovery or verification flow for it, **Then** it fails.
 3. **Given** the GitStore ServiceAccount is disabled or deleted, **When** its
    profile is read, **Then** it is reported inactive or absent; GitStore's
    record wins over the directory on any disagreement.
 4. **Given** the directory is unavailable during ServiceAccount creation,
-   **When** creation is attempted, **Then** it fails as a whole with a
-   retryable error, or completes and the directory identity is reconciled
-   later — never a ServiceAccount that permanently lacks its profile (FR-009).
+   **When** the source write succeeds, **Then** native creation remains
+   independent of UserDir; application retries finitely then records a redacted
+   failure and discards the event if the provider remains unavailable.
+   Subsequent events continue. No durable delivery or convergence is claimed.
+5. **Given** an API crash during event application or duplicate/stale events,
+   **When** the consumer restarts or another replica handles an event,
+   **Then** live consumption starts without a durable provider checkpoint or
+   missed-history replay, duplicate handling is idempotent and GitStore
+   UID/enablement remain authoritative even if a mirror is absent or stale.
+6. **Given** a deleted account name is reused, **When** an old event or mirror
+   is encountered, **Then** its old UID cannot bind to the replacement or
+   transfer old directory groups.
 
 ---
 
@@ -244,8 +323,9 @@ notification provider, and the message reaches the local mail catcher.
   different people (e.g. `static-users` `bob` and an OIDC `bob`) → linking is
   per configured AuthN provider (FR-004); an unlinked provider never inherits
   another provider's identity.
-- Two identities share an email within one profile type → rejected.
-- Same person is both staff and customer → two identities, two subjects.
+- Two human identities share an email across profile types → rejected.
+- Same person is both staff and customer → two identities, two subjects, and
+  distinct globally unique email addresses and usernames.
 - Customer attempts to create a USER-tier namespace → denied (FR-018).
 - Long-lived watch subscription when groups change or the identity is
   deactivated → re-authorized or closed within FR-013/FR-014.
@@ -278,8 +358,11 @@ notification provider, and the message reaches the local mail catcher.
   and groups. Anonymous principals are not resolved.
 - **FR-004**: Linking an authenticated subject to a directory identity MUST be
   explicit and configured per AuthN provider (for example by username, by
-  the identity's external identifier, or by the identity ID). Unlinked
-  subjects carry no directory groups or type.
+  the identity's external identifier, or by the identity ID). Mapping MUST
+  be bounded, provider/issuer-qualified and owned by configuration/UserDir,
+  not a GitStore subject-link table. Unsupported alias/search capabilities
+  MUST NOT fall back to scans or email matching. Unlinked subjects carry no
+  directory groups or type.
 
 **Profile types and schemas**
 
@@ -292,46 +375,70 @@ notification provider, and the message reaches the local mail catcher.
   `serviceAccount` identities only by GitStore when a ServiceAccount is
   created.
 - **FR-007**: The resolved profile type MUST be available to authorization
-  as an attribute and as the synthesized group `system:staff`,
-  `system:customers` or `system:serviceaccounts`. At the existing
-  Admin/Storefront endpoint boundary, GitStore MUST admit staff and
-  ServiceAccount profiles on Admin/operator operations and customer profiles
-  only on Storefront/customer operations; customers MUST be denied all
+  as an attribute. UserDir MUST synthesize exactly one profile-type group:
+  `system:staff`, `system:customers` or `system:serviceaccounts`.
+  AuthN continues to synthesize the generic `system:authenticated` group.
+  At the existing Admin/Storefront endpoint boundary, GitStore MUST admit
+  staff and ServiceAccount profiles on Admin/operator operations, and customer
+  profiles only on Storefront/customer operations; customers MUST be denied all
   management operations. This feature does not change endpoint availability:
   until the Storefront prerequisites in ADR-0012 are met, Storefront requests
-  continue to receive its `STOREFRONT_UNAVAILABLE` response.
+  continue to receive its `STOREFRONT_UNAVAILABLE` response. Namespace
+  creation authorization MUST be expressed through the RBAC policy and its
+  `when` conditions, not a second hard-coded authorization path.
 - **FR-008**: ServiceAccount-schema identities MUST have no credentials and
   have every login, recovery and verification flow disabled.
 - **FR-009**: GitStore's ServiceAccount record is authoritative for keys, UID
-  and enablement. Creating, disabling and deleting a ServiceAccount MUST be
-  reflected in the directory identity, and any divergence MUST be
-  reconciled so that no ServiceAccount permanently lacks its profile and no
-  orphan directory identity remains; GitStore's record wins on conflict.
+  and enablement. Full-image CDC on its authoritative table MUST feed the
+  existing shared ResourceWatchJournal backend.
+  Gate creation on enrollment/projection visibility and preserve deletion UID.
+  The configured profile-capable UserDir consumes provider-neutral events;
+  no direct Kratos CDC reader or parallel event bus. Consume through bounded
+  internal journal reads/subscribers, not GraphQL or an external list/watch
+  client. Preserve source-qualified publication progress/leases and MemDB
+  parity; do not extend them for provider consumer checkpoints. Keep consumer
+  position/retries process-local. Retry failed event application a small finite
+  number of times with bounded backoff/deadlines, then record a redacted failure,
+  discard and continue. Bound buffers/overflow. Start at the current stream
+  boundary after restart; no durable consumer delivery, replay, automatic
+  catch-up/repair, checkpoint directory, DLQ, outbox, identity/intent table or
+  sync CLI. Missing/stale mirrors or orphans may persist after lost events.
+  Kratos mirrors use UID-derived external_id, never a reusable name as
+  linkage authority. Handling is best-effort, idempotent and replica-safe;
+  GitStore wins disagreement. No cross-system atomic transaction is claimed.
 
 **Profile contents**
 
-- **FR-010**: Human profiles MUST expose subject (stable, never reused),
-  username, display name, primary email, email-verified, email-deliverable,
-  contact consent (transactional, marketing), active state and created time.
-  ServiceAccount profiles expose subject, name, display name, active state
-  and created time; no email.
+- **FR-010**: Staff and Customer GraphQL types MUST implement Actor and Node
+  and borrow the OpenShift User envelope (apiVersion, kind, metadata,
+  fullName, identities, groups). The globally unique human username is
+  metadata.name; primary email is also a password-login identifier.
+  Human types expose email verification/deliverability and contact consent.
+  Reuse ActorLifecycleState through lifecycle.state; no UserProfileType,
+  flat active/createdAt or new GraphQL auditing fields. Creation time stays
+  in metadata.creationTimestamp. Extend the existing ServiceAccount with
+  Node identity; preserve its source-owned metadata/keys/lifecycle and no
+  human email. No GitStore human-profile database is introduced.
 - **FR-011**: Humans MAY change their own display name and request an email
-  change. Type, username, groups, active state and deliverability MUST be
+  change. Type, username, groups, lifecycle and deliverability MUST be
   stored as administrator-controlled data that the identity cannot edit.
   An email change MUST NOT replace the deliverable address until verified.
 
 **Groups**
 
-- **FR-012**: Groups MUST be sourced only from the UserDir provider and never
-  from AuthN tokens or claims. Group values are rendered as
-  `system:group:<name>`; reserved `system:` names MUST be rejected at
-  assignment and ignored at resolution. Customers only receive groups from a
-  configured customer group set.
+- **FR-012**: Directory groups and profile-type groups MUST be sourced only
+  from the UserDir provider and never from AuthN tokens or claims. AuthN
+  synthesizes `system:authenticated` as an authentication-state group.
+  Ordinary directory group values are rendered as `system:group:<name>`;
+  reserved `system:` names MUST be rejected at assignment and ignored when
+  resolving directory group metadata. Customers only receive ordinary groups
+  from a configured customer group set.
 - **FR-013**: Group changes MUST take effect on new requests within 5
   minutes; long-lived subscriptions MUST be re-evaluated or closed within the
   same bound.
-- **FR-014**: Deactivation MUST take effect within 5 minutes for new requests
-  and subscriptions, even for unexpired tokens or valid local credentials.
+- **FR-014**: Deactivation and suspension MUST take effect within 5 minutes
+  for new requests and subscriptions, even for unexpired tokens or valid
+  local credentials.
 - **FR-015**: A failed or timed-out directory lookup MUST fail the request
   closed with a retryable error. A provider without group capability
   (`none`, `static-users`) MUST yield no groups without failing.
@@ -339,20 +446,30 @@ notification provider, and the message reaches the local mail catcher.
 **Administration**
 
 - **FR-016**: GitStore's API MUST provide directory administration — create
-  staff identity, read, list/search, update administrator-controlled fields,
-  deactivate/reactivate, delete, assign and remove groups, set
-  deliverability — authorized by cluster-scoped canonical actions on a new
-  `user` kind: `user.create`, `user.read`, `user.list`, `user.update`,
+  staff invitation, resend invitation, read, list, update administrator-
+  controlled fields, suspend/deactivate/reactivate, delete, assign and remove
+  groups, set deliverability — authorized by cluster-scoped canonical actions
+  on a new `user` kind: `user.create`, `user.read`, `user.list`, `user.update`,
   `user.delete`, `user.group.update`. Spec 064's `cluster-admin` includes them;
-  `admin`/`edit`/`view` do not.
+  `admin`/`edit`/`view` do not. Every mutation MUST use an action-specific input
+  and payload. Human lifecycle maps to all existing ActorLifecycleState
+  values, including unfinished setup and distinct suspension; reactivation
+  cannot bypass required verification. Preserve existing ServiceAccount
+  actions for source-owned workload administration.
 - **FR-017**: Every directory administration change MUST be audit-logged with
   actor, target subject, change and time, without credentials or full email
   addresses.
 
 **Integration with spec 064**
 
-- **FR-018**: Only `staff` principals MAY own USER-tier namespaces; customer
-  principals MUST be denied namespace creation regardless of policy.
+- **FR-018**: The reference RBAC policy MUST bind `namespace-creator` to
+  `system:staff`, not `system:authenticated` or `system:serviceaccounts`.
+  Its `when` conditions MUST restrict creation to USER-tier namespaces whose
+  `metadata.name` equals the authenticated staff principal's canonical
+  UserDir username. Customer and ServiceAccount profiles MUST NOT receive the
+  synthesized `system:staff` group. RBAC policy remains the authorization
+  authority; this feature MUST NOT add a separate hard-coded Namespace-create
+  denial path.
 - **FR-019**: The reference stack MUST ship example groups (`merchandiser`,
   `catalog-viewer`) bound to spec 064's `edit`/`view` roles in the bootstrap
   namespace.
@@ -374,16 +491,46 @@ notification provider, and the message reaches the local mail catcher.
   by subject, never by email. Deliverability MUST be updatable by a system
   process (e.g. bounce handling) through the contract.
 
+**Actor reads and implementation boundaries**
+
+- **FR-023**: Actor MUST implement Node; Staff, Customer and ServiceAccount
+  MUST explicitly implement both. Extend existing node lookup/global-ID and
+  authorization paths. Use actor(by: ActorBy!) with one unique selector;
+  separate human username and ServiceAccount-name lookup to avoid collisions.
+  Unified actors uses UserDir enumeration and Relay edges/cursors/PageInfo,
+  not a Scylla human projection or a nodes-only connection. A dedicated
+  ServiceAccount connection reuses the existing source list contract.
+  Ship Relay edges/PageInfo and the first/after/last/before signature.
+  The provider MUST validate direction support at query time and return
+  the unified error diagnostic for unsupported backward requests; Kratos
+  initially supports forward pagination only. Never emulate backward reads
+  with scans, deep offsets or process-local cursor history. Provider/extension
+  capability advertisement is deferred to #472.
+- **FR-024**: Public UserFilter/search syntax is deferred to #471. This
+  feature MUST NOT add new GitStore identity/link/intent tables. Enabling
+  ServiceAccount CDC on the existing table is the narrow schema-change
+  exception; preserve migration-history rules. Provider-specific linkage
+  stays inside UserDir. The shared ServiceAccount journal source MUST remain
+  reusable by future controllers; external watch transport and a
+  ServiceAccount controller are deferred.
+- **FR-025**: Reference-stack dependency updates MUST select and explicitly
+  pin latest stable compatible versions available at implementation time.
+  Verify configuration, flows, pagination, external_id and HTTP courier
+  against those pins, rather than freezing historical planning versions.
+
 ### Production Requirements *(mandatory for core-service or load-bearing changes)*
 
 - **PR-001 Replica Safety**: Each API replica resolves profiles and groups
   independently; any per-replica cache is bounded and expires within
   FR-013/FR-014, so replicas disagree for at most that bound. Directory
   administration writes go to the directory, not replica memory. ServiceAccount
-  ↔ directory reconciliation (FR-009) is idempotent and safe with concurrent
-  API replicas and controllers. Switching UserDir provider is a configuration
-  change plus identity provisioning; no datastore migration. The Git service
-  is unaffected.
+  ↔ directory event processing (FR-009) is idempotent and safe with concurrent
+  API replicas, duplicate/stale events and name reuse. Verify bounded retries,
+  discard/overflow and continued live delivery, not durable consumer recovery.
+  Missed events may leave absent/stale mirrors; source authority still governs.
+  No remote CAS is assumed. Switching UserDir
+  provider is a configuration change plus identity provisioning; no datastore
+  migration. The Git service is unaffected.
 - **PR-002 Multi-User Security**: Customers can never acquire staff groups or
   operator access; reserved groups cannot come from the directory;
   identities cannot edit authorization-relevant fields; directory
@@ -405,18 +552,36 @@ notification provider, and the message reaches the local mail catcher.
   group set and decision against the seeded memberships.
 - **PR-006 Fault Recovery**: `make chaos` against the identity service: while
   unavailable, authenticated requests fail closed with retryable errors and
-  ServiceAccount creation fails or defers reconciliation; within 30 s of
-  recovery, requests succeed with correct groups, no deactivated principal is
-  admitted, and pending ServiceAccount profiles are reconciled.
+  native ServiceAccount commits remain independent while mirror delivery retries
+  finitely then discards. Within 30 s of dependency readiness, requests for
+  existing profiles succeed with correct groups and no non-ACTIVE human is
+  admitted. Verify retry exhaustion, observable drops and API crash during
+  application without requiring replay or mirror/orphan repair. The recovery
+  bound does not guarantee provisioning a missing ServiceAccount mirror.
+
+### Known limitation: best-effort ServiceAccount mirrors
+
+ServiceAccount mirror synchronization has no consumer durability guarantee.
+Dropped events, exhausted retries or process crashes can leave a Kratos mirror
+missing, stale or orphaned indefinitely. Restart does not guarantee replay or
+repair. GitStore's authoritative UID/enablement checks remain effective, but
+directory profile/group availability and unified actor-list completeness are
+not guaranteed after these faults. Operator documentation MUST disclose this
+limitation; it must not promise automatic convergence.
 
 ### Key Entities *(include if feature involves data)*
 
-- **Identity Profile**: subject, type, username, display name, contact
-  (email, verified, deliverable, consent), active state, created time.
+- **Actor**: concrete Staff, Customer or existing ServiceAccount implementing
+  Actor and Node; external human envelope, shared metadata, lifecycle.state
+  and human contact facts. Internal subject/type remain provider-neutral.
 - **Identity Schema**: versioned field definition for one profile type
   (`staff`, `customer`, `serviceAccount`).
-- **Subject Link**: per-AuthN-provider mapping from an authenticated subject
-  to a directory identity.
+- **Provider Mapping**: configured bounded AuthN-provider/issuer-qualified
+  subject resolution; not a new database entity.
+- **ServiceAccount Event**: provider-neutral shared resource journal event
+  derived from authoritative CDC; shared journal producer infrastructure feeds
+  bounded best-effort internal consumption, not external GraphQL, a durable
+  provider checkpoint or a new intent entity.
 - **Group Membership**: (identity, group name); administrator-controlled;
   rendered as `system:group:<name>`.
 - **Contact Consent**: transactional/marketing flags with last-changed time.
@@ -439,9 +604,11 @@ notification provider, and the message reaches the local mail catcher.
   open subscriptions within 5 minutes in 100% of trials.
 - **SC-005**: With the identity service unavailable, 0 requests are admitted
   with an incomplete group set; recovery within 30 s of it returning.
-- **SC-006**: 0 ServiceAccounts lack a directory profile, and 0 orphan
-  ServiceAccount directory identities remain, after reconciliation in the
-  fault-recovery run.
+- **SC-006**: Successful ServiceAccount event delivery updates its mirror.
+  In fault runs, every exhausted retry budget discards the event with a redacted
+  observable outcome and subsequent events continue. Missing/stale mirrors or
+  orphans are accepted after missed/discarded events; 0 replaced UIDs inherit
+  prior grants.
 - **SC-007**: Resolution meets PR-003 latency at the declared dataset size.
 - **SC-008**: An email change never exposes an unverified address as
   deliverable (0 occurrences across the email-change test matrix).
@@ -456,6 +623,13 @@ notification provider, and the message reaches the local mail catcher.
   Admin/Storefront endpoint split; this feature applies profile-based
   admission to those endpoints without changing their availability or
   behavior otherwise.
-- A person who is both staff and customer holds two identities.
-- Email uniqueness is per profile type.
+- A person who is both staff and customer holds two identities, with distinct
+  globally unique usernames and email addresses.
+- Email addresses and usernames are globally unique across staff and customer
+  profiles, consistent with Kratos password-identifier uniqueness.
 - 5-minute freshness for groups and deactivation is acceptable for alpha.
+- Forward Relay pagination and backward-request diagnostics, external
+  ownership/version/generation concurrency, lifecycle/provider
+  mapping and multi-replica best-effort event safety are implementation gates,
+  not assumptions of already-supported Kratos functionality.
+- No production ServiceAccount backfill CLI is required or introduced.

@@ -20,6 +20,9 @@ func TestEncodeDecodeNodeID(t *testing.T) {
 		{kind: nodeKindCategory, rawID: "cat-123"},
 		{kind: nodeKindCollection, rawID: "col-123"},
 		{kind: nodeKindNamespace, rawID: "018f64aa-7f55-7d48-8ea5-517b513c01f8"},
+		{kind: "Staff", rawID: "018f64aa-7f55-7d48-8ea5-517b513c01f8"},
+		{kind: "Customer", rawID: "018f64aa-7f55-7d48-8ea5-517b513c01f8"},
+		{kind: "ServiceAccount", rawID: "018f64aa-7f55-7d48-8ea5-517b513c01f8"},
 	}
 
 	for _, tt := range tests {

@@ -61,6 +61,26 @@ provider = "rbac-local"
 [api.auth.userdir]
 provider = "static-users"
 
+# Production directories are independent of the AuthN chain. Use "kratos" above;
+# inject GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN privately only when the Admin
+# gateway requires it. Never use the development static-users or none directory
+# as a production directory.
+# [api.auth.kratos]
+# admin_uri = "http://kratos:4434"
+# webhook_uri = "http://127.0.0.1:8085"
+# timeout = "2s"
+# max_concurrent = 16
+# max_response_bytes = 1048576
+# cache_entries = 4096
+# cache_ttl = "5m"
+# customer_groups = []
+# [[api.auth.kratos.mappings]]
+# provider = "oidc-jwt"
+# issuer = "http://localhost:4444/"
+# mode = "uid"
+# Additional mappings must explicitly qualify their AuthN provider and issuer.
+# No email matching, consumer checkpoints or restart repair are configured.
+
 # Optional OIDC Relying Party. Uncomment and chain "oidc-jwt" into
 # api.auth.authn.chain to verify bearer tokens against any standards-compliant
 # OIDC issuer — e.g. the optional reference stack (make compose IDENTITY=oidc).

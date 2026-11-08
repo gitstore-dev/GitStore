@@ -9,6 +9,23 @@ development baseline and commented examples you can adapt. Review the baseline
 before production use, including its administrator and anonymous public-read
 grants.
 
+## Identity provider boundaries
+
+AuthN validates credentials, UserDir supplies trusted profiles/groups, and AuthZ
+evaluates the resulting principal. Selecting a directory does not replace
+authentication or grant permissions. For the reference human identity stack,
+pair `oidc-jwt` AuthN with Kratos UserDir; keep workload AuthN configured
+separately and GitStore-authoritative for ServiceAccount UID, keys and enablement.
+
+Avoid `static-users` AuthN/UserDir and `none` UserDir in production, including
+mixing static credentials with OIDC/Kratos profiles. These combinations remain
+configuration-valid but do not provide a shared production identity authority.
+Directory group changes are subject to bounded replica freshness. Best-effort
+workload mirrors may stay missing or stale after delivery loss; they cannot
+restore a disabled/deleted GitStore account or transfer groups on name reuse.
+See [identity guidance](configuration.md#production-identity-guidance) and
+[mirror delivery limits](configuration.md#workload-directory-mirrors).
+
 ## Roles and binding scope
 
 A role defines allowed resource/verb pairs. A binding grants those rules to
@@ -25,6 +42,13 @@ Role definitions themselves have no namespace. A `RoleBinding` referencing a
 `ClusterRole` still grants access only in its specified namespace. Cluster-scoped
 resources such as `namespace` and `serviceAccount` require a
 `ClusterRoleBinding`; a namespaced binding cannot grant those actions.
+
+Human-directory capabilities are cluster-scoped: `user.create`, `user.read`,
+`user.list`, `user.update`, `user.delete` and `user.group.update` (resource
+`user/group`, verb `update`). The shipped default grants them only through
+`cluster-admin`; catalogue `admin`, `edit`, `view` and controller roles do not
+receive them. Registering these capabilities does not enable an endpoint by
+itself or grant access without a binding.
 
 Subjects use `kind: User`, `Group` or `ServiceAccount`. User names must match the
 authenticated subject, and group names must match groups supplied by the trusted

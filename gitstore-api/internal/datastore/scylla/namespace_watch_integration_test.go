@@ -8,6 +8,7 @@ package scylla_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -504,6 +505,91 @@ func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
 		}
 	}
 	t.Fatalf("committed Namespace CDC change was not materialized into the durable journal; bounds_err=%v observed=%+v", lastBoundsErr, observed)
+}
+
+func TestServiceAccountCDCReaderEnrollmentDeletionAndNameReuse(t *testing.T) {
+	store := newTestStore(t)
+	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	lease, acquired, err := journal.AcquireLease(t.Context(), "serviceaccount-native-reader", time.Now().UTC(), 2*time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	t.Cleanup(func() { require.NoError(t, journal.ReleaseLease(context.Background(), lease)) })
+	ctx, cancel := context.WithCancel(t.Context())
+	done, ready := make(chan error, 1), make(chan struct{})
+	go func() {
+		done <- store.(catalogCDCTestRunner).RunCatalogCDC(ctx, "ServiceAccount",
+			watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour}),
+			lease, 14*24*time.Hour, 500*time.Millisecond, func() { close(ready) })
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			require.True(t, err == nil || errors.Is(err, context.Canceled))
+		case <-time.After(5 * time.Second):
+			t.Error("owned ServiceAccount CDC reader did not stop")
+		}
+	})
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatalf("ServiceAccount CDC reader failed: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("ServiceAccount CDC reader did not become ready")
+	}
+	raw := newRawSession(t)
+	partialName := "partial-" + newID()[:8]
+	partialUID := gocql.TimeUUID()
+	require.NoError(t, raw.Query("INSERT INTO service_accounts_by_cluster_name (name,uid,creation_timestamp,enrollment_complete,generation,resource_version,public_keys) VALUES (?,?,?,?,?,?,?)",
+		partialName, partialUID, time.Now().UTC(), false, int64(1), "1", "[]").Exec())
+	account := &datastore.ServiceAccount{UID: newID(), Name: "cdc-bot-" + newID()[:8], CreationTimestamp: time.Now().UTC(),
+		Generation: 1, ResourceVersion: "1"}
+	require.NoError(t, store.CreateServiceAccount(t.Context(), account))
+	require.ErrorIs(t, store.CreateServiceAccount(t.Context(), account), datastore.ErrAlreadyExists)
+	cursor := datastore.ResourceWatchCursor{}
+	var observed []datastore.ResourceWatchEvent
+	wait := func(kind datastore.ResourceWatchEventType, uid string) {
+		t.Helper()
+		deadline := time.NewTimer(30 * time.Second)
+		defer deadline.Stop()
+		for {
+			events, err := journal.ReadAfter(t.Context(), cursor, 256)
+			require.NoError(t, err)
+			for _, event := range events {
+				cursor = datastore.ResourceWatchCursor{Epoch: event.Epoch, Sequence: event.Sequence}
+				require.NotEqual(t, partialName, event.Name, "incomplete enrollment must never publish")
+				if event.Kind != "ServiceAccount" || event.Name != account.Name {
+					continue
+				}
+				observed = append(observed, event)
+				var payload datastore.ServiceAccount
+				require.NoError(t, json.Unmarshal(event.Payload, &payload))
+				if event.Type == kind && payload.UID == uid {
+					return
+				}
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("ServiceAccount CDC reader failed: %v", err)
+			case <-deadline.C:
+				t.Fatal("committed ServiceAccount event was not materialized")
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}
+	wait(datastore.ResourceWatchAdded, account.UID)
+	_, err = store.UpdateServiceAccountKeys(t.Context(), account.UID, nil, nil, "stale")
+	require.ErrorIs(t, err, datastore.ErrConflict)
+	require.NoError(t, store.SetServiceAccountDisabled(t.Context(), account.UID, true))
+	wait(datastore.ResourceWatchModified, account.UID)
+	require.NoError(t, store.DeleteServiceAccount(t.Context(), account.UID))
+	wait(datastore.ResourceWatchDeleted, account.UID)
+	require.JSONEq(t, `{"UID":"`+account.UID+`"}`, string(observed[len(observed)-1].Payload))
+	replacement := *account
+	replacement.UID = newID()
+	require.NoError(t, store.CreateServiceAccount(t.Context(), &replacement))
+	wait(datastore.ResourceWatchAdded, replacement.UID)
+	require.Len(t, observed, 4, "only enrolled, successful authoritative transitions may publish")
 }
 
 // Product foreground deletion is controller-driven, so the terminating

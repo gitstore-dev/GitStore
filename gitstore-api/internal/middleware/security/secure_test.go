@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/99designs/gqlgen/graphql"
 	"github.com/gin-gonic/gin"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
@@ -164,6 +165,108 @@ func TestAuthenticatorValidBearerSetsPrincipal(t *testing.T) {
 	assert.Equal(t, "static-users", captured.AuthMethod)
 
 	assert.NotEmpty(t, captured.TokenID)
+}
+
+type orchestrationDirectory struct {
+	auth.UserDirProvider
+	profile  *auth.UserProfile
+	err      error
+	groupErr error
+	calls    int
+}
+
+func (d *orchestrationDirectory) GetBySubject(context.Context, string) (*auth.UserProfile, error) {
+	d.calls++
+	return d.profile, d.err
+}
+
+func (d *orchestrationDirectory) ListGroups(context.Context, string) ([]string, error) {
+	return d.profile.Groups, d.groupErr
+}
+
+func TestDirectoryEnrichmentPrecedesHTTPAndGraphQLAdmission(t *testing.T) {
+	for _, transport := range []string{"bearer", "git", "graphql"} {
+		for _, scenario := range []string{"staff", "unlinked", "unavailable", "inactive", "anonymous", "group-incapable"} {
+			t.Run(transport+"/"+scenario, func(t *testing.T) {
+				directory := &orchestrationDirectory{profile: &auth.UserProfile{
+					Subject: "directory-id", Username: "alice", Kind: auth.ProfileStaff,
+					Active: true, Lifecycle: auth.ActorActive,
+					Groups: []string{"system:group:merchandiser", "system:staff"},
+				}}
+				principal := &auth.Principal{Subject: "authenticated-id", AuthMethod: "stub",
+					Groups: []string{"system:authenticated", "system:group:forged"}}
+				switch scenario {
+				case "unlinked":
+					directory.err = auth.ErrProfileNotFound
+				case "unavailable":
+					directory.err = auth.ErrDirectoryUnavailable
+				case "inactive":
+					directory.profile.Active = false
+				case "anonymous":
+					principal = auth.Anonymous()
+				case "group-incapable":
+					directory.groupErr = auth.ErrNotSupported
+				}
+				authenticator := auth.AuthNProvider(&stubAuthNProvider{
+					principal: principal, decision: auth.Allow("stub", "trusted"),
+				})
+				if scenario == "anonymous" {
+					authenticator = anonymous.New()
+				}
+				registry := auth.NewProviderRegistry(auth.NewChainedAuthN(authenticator), nil, directory)
+				middleware := NewAuthenticate(registry, zap.NewNop())
+				var admitted *auth.Principal
+				if transport == "graphql" {
+					ctx := graphql.WithOperationContext(t.Context(), &graphql.OperationContext{Headers: http.Header{}})
+					response := middleware.GraphQLAuthenticator(ctx, func(ctx context.Context) graphql.ResponseHandler {
+						admitted = auth.PrincipalFromContext(ctx)
+						return graphql.OneShot(&graphql.Response{Data: []byte("{}")})
+					})(ctx)
+					if scenario == "unavailable" || scenario == "inactive" {
+						require.Nil(t, admitted)
+						require.NotEmpty(t, response.Errors)
+						return
+					}
+				} else {
+					router := gin.New()
+					if transport == "git" {
+						router.Use(middleware.BasicAuthenticator)
+					} else {
+						router.Use(middleware.Authenticator)
+					}
+					router.GET("/", func(c *gin.Context) {
+						admitted = auth.PrincipalFromContext(c.Request.Context())
+						c.Status(http.StatusNoContent)
+					})
+					result := httptest.NewRecorder()
+					router.ServeHTTP(result, httptest.NewRequest(http.MethodGet, "/", nil))
+					if scenario == "unavailable" || scenario == "inactive" {
+						require.Nil(t, admitted)
+						if scenario == "unavailable" {
+							require.Equal(t, http.StatusServiceUnavailable, result.Code)
+						} else {
+							require.Equal(t, http.StatusForbidden, result.Code)
+						}
+						return
+					}
+					require.Equal(t, http.StatusNoContent, result.Code)
+				}
+				require.NotNil(t, admitted)
+				require.NotContains(t, admitted.Groups, "system:group:forged")
+				if scenario == "anonymous" {
+					require.Zero(t, directory.calls)
+				} else if scenario != "unlinked" {
+					require.Equal(t, "alice", admitted.Username)
+					if scenario == "staff" {
+						require.Contains(t, admitted.Groups, "system:staff")
+						require.Contains(t, admitted.Groups, "system:group:merchandiser")
+					} else {
+						require.NotContains(t, admitted.Groups, "system:staff")
+					}
+				}
+			})
+		}
+	}
 }
 
 func TestAuthenticatorNoCredentialsSetsAnonymousPrincipal(t *testing.T) {

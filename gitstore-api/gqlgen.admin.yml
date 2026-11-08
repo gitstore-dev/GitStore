@@ -219,3 +219,7 @@ models:
     fields:
       productVariants:
         resolver: true
+  ServiceAccount:
+    fields:
+      groups:
+        resolver: true

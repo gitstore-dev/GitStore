@@ -269,6 +269,17 @@ func (a *Authenticate) authenticator(c *gin.Context, authenticator authenticator
 	if aborted {
 		return
 	}
+	principal, err := auth.EnrichPrincipal(ctx, a.registry.UserDir(), principal)
+	if err != nil {
+		status := http.StatusServiceUnavailable
+		if errors.Is(err, auth.ErrProfileInactive) {
+			status = http.StatusForbidden
+		} else if errors.Is(err, auth.ErrInvalidToken) {
+			status = http.StatusUnauthorized
+		}
+		c.AbortWithStatus(status)
+		return
+	}
 	ctx = auth.ContextWithPrincipal(ctx, principal)
 	c.Request = c.Request.WithContext(ctx)
 	c.Next()

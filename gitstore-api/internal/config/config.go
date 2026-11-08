@@ -6,6 +6,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/mail"
+	"net/url"
 	"os"
 	"reflect"
 	"regexp"
@@ -46,12 +49,57 @@ type ApiConfig struct {
 	GitPort             int             `mapstructure:"git_port"  validate:"min=1,max=65535"`
 	GrpcPort            int             `mapstructure:"grpc_port" validate:"min=1,max=65535"`
 
-	RateLimit  RateLimitConfig               `mapstructure:"rate_limit"`
-	GitService GitServiceEndpointConfig      `mapstructure:"git_service"`
-	Auth       AuthConfig                    `mapstructure:"auth"`
-	Datastore  DatastoreConfig               `mapstructure:"datastore"`
-	Watch      WatchConfig                   `mapstructure:"watch"`
-	Profiling  observability.ProfilingConfig `mapstructure:"profiling"`
+	RateLimit    RateLimitConfig               `mapstructure:"rate_limit"`
+	GitService   GitServiceEndpointConfig      `mapstructure:"git_service"`
+	Auth         AuthConfig                    `mapstructure:"auth"`
+	Notification NotificationConfig            `mapstructure:"notification"`
+	Datastore    DatastoreConfig               `mapstructure:"datastore"`
+	Watch        WatchConfig                   `mapstructure:"watch"`
+	Profiling    observability.ProfilingConfig `mapstructure:"profiling"`
+}
+
+type NotificationConfig struct {
+	Provider      string                        `mapstructure:"provider"`
+	APIKey        string                        `mapstructure:"api_key"`
+	Timeout       time.Duration                 `mapstructure:"timeout"`
+	MaxConcurrent int                           `mapstructure:"max_concurrent"`
+	MaxBodyBytes  int64                         `mapstructure:"max_body_bytes"`
+	Development   DevelopmentNotificationConfig `mapstructure:"development"`
+}
+
+type DevelopmentNotificationConfig struct {
+	SMTPURI string `mapstructure:"smtp_uri"`
+	Sender  string `mapstructure:"sender"`
+}
+
+func (c NotificationConfig) Validate() error {
+	if c.Provider == "" || c.Provider == "none" {
+		return nil
+	}
+	if c.Provider != "development" {
+		return errors.New("api.notification.provider must be none or development")
+	}
+	if len(c.APIKey) < 32 || strings.ContainsAny(c.APIKey, "\r\n") {
+		return errors.New("api.notification.api_key must contain at least 32 characters without header control characters")
+	}
+	if c.Timeout <= 0 || c.Timeout > 10*time.Second || c.MaxConcurrent < 1 || c.MaxConcurrent > 128 || c.MaxBodyBytes < 1 || c.MaxBodyBytes > 1<<20 {
+		return errors.New("api.notification requires bounded timeout, concurrency and body limits")
+	}
+	endpoint, err := url.Parse(c.Development.SMTPURI)
+	if err != nil || (endpoint.Scheme != "smtp" && endpoint.Scheme != "smtps") || endpoint.Hostname() == "" || endpoint.Port() == "" ||
+		endpoint.User != nil || (endpoint.Path != "" && endpoint.Path != "/") || endpoint.Fragment != "" {
+		return errors.New("api.notification.development.smtp_uri must name an unauthenticated development mail-catcher SMTP endpoint")
+	}
+	query, err := url.ParseQuery(endpoint.RawQuery)
+	if err != nil || len(query) > 1 || (len(query) != 0 && (endpoint.Scheme != "smtps" ||
+		(query.Get("skip_ssl_verify") != "true" && query.Get("skip_ssl_verify") != "false"))) {
+		return errors.New("api.notification.development.smtp_uri contains an unsupported TLS setting")
+	}
+	sender, err := mail.ParseAddress(c.Development.Sender)
+	if err != nil || sender.Address != c.Development.Sender {
+		return errors.New("api.notification.development.sender must be an email address")
+	}
+	return nil
 }
 
 // RateLimitConfig is the sustained per-client-IP request rate allowed on
@@ -70,12 +118,13 @@ type GitServiceEndpointConfig struct {
 
 // AuthConfig holds authentication and JWT settings.
 type AuthConfig struct {
-	StaticUsers StaticUsersConfig `mapstructure:"static_users"`
-	JWT         JWTConfig         `mapstructure:"jwt"`
-	AuthN       AuthNConfig       `mapstructure:"authn"`
-	AuthZ       AuthZConfig       `mapstructure:"authz"`
-	UserDir     UserDirConfig     `mapstructure:"userdir"`
-	RBACLocal   RBACConfig        `mapstructure:"rbac_local"`
+	StaticUsers StaticUsersConfig   `mapstructure:"static_users"`
+	JWT         JWTConfig           `mapstructure:"jwt"`
+	AuthN       AuthNConfig         `mapstructure:"authn"`
+	AuthZ       AuthZConfig         `mapstructure:"authz"`
+	UserDir     UserDirConfig       `mapstructure:"userdir"`
+	RBACLocal   RBACConfig          `mapstructure:"rbac_local"`
+	Kratos      KratosUserDirConfig `mapstructure:"kratos"`
 
 	// ServiceAccount configures the serviceaccount-assertion/serviceaccount-jwt
 	// AuthN providers (spec 061). SigningKey is required only when one of
@@ -154,6 +203,94 @@ type AuthZConfig struct {
 type UserDirConfig struct {
 	// Provider is the UserDir provider name. Defaults to "none".
 	Provider string `mapstructure:"provider"`
+}
+
+type SubjectMapping struct {
+	Provider string `mapstructure:"provider"`
+	Issuer   string `mapstructure:"issuer"`
+	Mode     string `mapstructure:"mode"`
+	Prefix   string `mapstructure:"prefix"`
+}
+
+type KratosUserDirConfig struct {
+	AdminURI         string           `mapstructure:"admin_uri"`
+	WebhookURI       string           `mapstructure:"webhook_uri"`
+	AdminToken       string           `mapstructure:"admin_token"`
+	Timeout          time.Duration    `mapstructure:"timeout"`
+	MaxConcurrent    int              `mapstructure:"max_concurrent"`
+	MaxResponseBytes int64            `mapstructure:"max_response_bytes"`
+	CacheEntries     int              `mapstructure:"cache_entries"`
+	CacheTTL         time.Duration    `mapstructure:"cache_ttl"`
+	Mappings         []SubjectMapping `mapstructure:"mappings"`
+	CustomerGroups   []string         `mapstructure:"customer_groups"`
+}
+
+func (c KratosUserDirConfig) Validate() error {
+	if err := c.ValidateWebhookURI(); err != nil {
+		return err
+	}
+	endpoint, err := url.Parse(c.AdminURI)
+	if err != nil || endpoint.Hostname() == "" || (endpoint.Scheme != "https" && endpoint.Scheme != "http") ||
+		endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return errors.New("api.auth.kratos.admin_uri must be an HTTP(S) endpoint without credentials, query or fragment")
+	}
+	if strings.ContainsAny(c.AdminToken, "\r\n") {
+		return errors.New("api.auth.kratos.admin_token must not contain header control characters")
+	}
+	if c.Timeout <= 0 || c.Timeout > 2*time.Second {
+		return errors.New("api.auth.kratos.timeout must be positive and at most 2s")
+	}
+	if c.CacheTTL <= 0 || c.CacheTTL > 5*time.Minute || c.CacheEntries < 1 || c.CacheEntries > 100000 {
+		return errors.New("api.auth.kratos cache requires 1..100000 entries and a positive TTL at most 5m")
+	}
+	if c.MaxConcurrent < 1 || c.MaxConcurrent > 256 || c.MaxResponseBytes < 1 || c.MaxResponseBytes > 4<<20 {
+		return errors.New("api.auth.kratos requires 1..256 concurrent requests and a response bound at most 4MiB")
+	}
+	if len(c.Mappings) == 0 || len(c.Mappings) > 128 {
+		return errors.New("api.auth.kratos requires 1..128 explicitly qualified subject mappings")
+	}
+	seen := make(map[string]bool, len(c.Mappings))
+	for _, mapping := range c.Mappings {
+		if strings.TrimSpace(mapping.Provider) == "" || strings.TrimSpace(mapping.Issuer) == "" {
+			return errors.New("api.auth.kratos mappings require provider and issuer qualification")
+		}
+		key := mapping.Provider + "\x00" + mapping.Issuer
+		if seen[key] {
+			return errors.New("api.auth.kratos mappings contain duplicate provider/issuer qualification")
+		}
+		seen[key] = true
+		switch mapping.Mode {
+		case "uid", "username", "serviceaccount_uid":
+		case "external_id":
+			if mapping.Prefix == "" {
+				return errors.New("api.auth.kratos external_id mappings require an explicit prefix")
+			}
+		default:
+			return errors.New("api.auth.kratos mapping mode must be uid, username, external_id or serviceaccount_uid")
+		}
+	}
+	for _, group := range c.CustomerGroups {
+		if strings.TrimSpace(group) == "" || strings.HasPrefix(group, "system:") {
+			return errors.New("api.auth.kratos customer groups must be nonempty ordinary group names")
+		}
+	}
+	return nil
+}
+
+func (c KratosUserDirConfig) ValidateWebhookURI() error {
+	if c.WebhookURI == "" {
+		return nil
+	}
+	endpoint, err := url.Parse(c.WebhookURI)
+	if err != nil || endpoint.Scheme != "http" || endpoint.User != nil || endpoint.Port() == "" ||
+		endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Path != "" && endpoint.Path != "/") {
+		return errors.New("api.auth.kratos.webhook_uri must be an internal HTTP listener URI")
+	}
+	host := net.ParseIP(endpoint.Hostname())
+	if host == nil || (!host.IsPrivate() && !host.IsLoopback() && !host.IsUnspecified()) {
+		return errors.New("api.auth.kratos.webhook_uri must bind a private, loopback or container address")
+	}
+	return nil
 }
 
 // RBACConfig holds rbac-local provider settings.
@@ -409,6 +546,23 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("api.auth.authn.chain", []string{"static-users", "anonymous"})
 	v.SetDefault("api.auth.authz.provider", "rbac-local")
 	v.SetDefault("api.auth.userdir.provider", "none")
+	v.SetDefault("api.auth.kratos.admin_uri", "")
+	v.SetDefault("api.auth.kratos.webhook_uri", "")
+	v.SetDefault("api.auth.kratos.admin_token", "")
+	v.SetDefault("api.auth.kratos.timeout", "2s")
+	v.SetDefault("api.auth.kratos.max_concurrent", 16)
+	v.SetDefault("api.auth.kratos.max_response_bytes", 1<<20)
+	v.SetDefault("api.auth.kratos.cache_entries", 4096)
+	v.SetDefault("api.auth.kratos.cache_ttl", "5m")
+	v.SetDefault("api.notification.provider", "none")
+	v.SetDefault("api.notification.api_key", "")
+	v.SetDefault("api.notification.timeout", "2s")
+	v.SetDefault("api.notification.max_concurrent", 16)
+	v.SetDefault("api.notification.max_body_bytes", 65536)
+	v.SetDefault("api.notification.development.smtp_uri", "")
+	v.SetDefault("api.notification.development.sender", "noreply@gitstore.local")
+	v.SetDefault("api.auth.kratos.mappings", []SubjectMapping{})
+	v.SetDefault("api.auth.kratos.customer_groups", []string{})
 	v.SetDefault("api.auth.rbac_local.policy_file", "policy.yaml")
 	v.SetDefault("api.auth.serviceaccount.issuer", "gitstore")
 	v.SetDefault("api.auth.serviceaccount.audience", "gitstore-api")
@@ -582,6 +736,14 @@ func validateConfig(cfg *Config) error {
 		return err
 	}
 	if err := validateOIDCAuthChainConfig(&cfg.Api.Auth); err != nil {
+		return err
+	}
+	if cfg.Api.Auth.UserDir.Provider == "kratos" {
+		if err := cfg.Api.Auth.Kratos.Validate(); err != nil {
+			return err
+		}
+	}
+	if err := cfg.Api.Notification.Validate(); err != nil {
 		return err
 	}
 	return validateLogFormat(&cfg.Log)
@@ -852,6 +1014,10 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddInt("api.git_port", c.Api.GitPort)
 	enc.AddInt("api.grpc_port", c.Api.GrpcPort)
 	enc.AddString("api.git_service.uri", c.Api.GitService.Uri)
+	enc.AddString("api.auth.userdir.provider", c.Api.Auth.UserDir.Provider)
+	enc.AddString("api.auth.kratos.admin_token", redact(c.Api.Auth.Kratos.AdminToken))
+	enc.AddString("api.notification.provider", c.Api.Notification.Provider)
+	enc.AddString("api.notification.api_key", redact(c.Api.Notification.APIKey))
 	enc.AddString("api.auth.static_users.users_file", c.Api.Auth.StaticUsers.UsersFile)
 	enc.AddString("api.auth.jwt.secret", redact(c.Api.Auth.JWT.Secret))
 	enc.AddDuration("api.auth.jwt.ttl", c.Api.Auth.JWT.TTL)

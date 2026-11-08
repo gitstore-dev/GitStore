@@ -7,8 +7,11 @@ package resolver
 
 import (
 	"context"
+	"errors"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 )
 
 // IssueServiceAccountToken is the resolver for the issueServiceAccountToken field.
@@ -30,3 +33,37 @@ func (r *mutationResolver) RotateServiceAccountKey(ctx context.Context, input mo
 func (r *mutationResolver) DeleteServiceAccount(ctx context.Context, input model.DeleteServiceAccountInput) (*model.DeleteServiceAccountPayload, error) {
 	return r.Resolver.DeleteServiceAccount(ctx, &input)
 }
+
+// ServiceAccounts is the resolver for the serviceAccounts field.
+func (r *queryResolver) ServiceAccounts(ctx context.Context, first *int32, after *string, last *int32, before *string) (*model.ServiceAccountConnection, error) {
+	return r.serviceAccountConnection(ctx, first, after, last, before)
+}
+
+// Groups is the resolver for the groups field.
+func (r *serviceAccountResolver) Groups(ctx context.Context, obj *model.ServiceAccount) ([]string, error) {
+	if obj == nil || obj.Metadata == nil || obj.Metadata.UID == "" {
+		return nil, actorDirectoryError(auth.ErrDirectoryUnavailable)
+	}
+	if r.registry == nil {
+		return []string{}, nil
+	}
+	directory, ok := r.registry.UserDir().(auth.ServiceAccountGroupDirectory)
+	if !ok {
+		return []string{}, nil
+	}
+	groups, err := directory.ListServiceAccountGroups(ctx, obj.Metadata.UID)
+	if errors.Is(err, auth.ErrProfileNotFound) || errors.Is(err, auth.ErrNotSupported) {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, actorDirectoryError(err)
+	}
+	return append([]string{}, groups...), nil
+}
+
+// ServiceAccount returns generated.ServiceAccountResolver implementation.
+func (r *Resolver) ServiceAccount() generated.ServiceAccountResolver {
+	return &serviceAccountResolver{r}
+}
+
+type serviceAccountResolver struct{ *Resolver }

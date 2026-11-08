@@ -1,0 +1,36 @@
+{
+  "$id": "https://gitstore.dev/schemas/identity/staff/v1.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GitStore Staff",
+  "type": "object",
+  "properties": {
+    "traits": {
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string",
+          "title": "Username",
+          "minLength": 3,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9._-]*$",
+          "ory.sh/kratos": { "credentials": { "password": { "identifier": true } } }
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "title": "E-Mail",
+          "minLength": 3,
+          "maxLength": 254,
+          "ory.sh/kratos": {
+            "credentials": { "password": { "identifier": true } },
+            "recovery": { "via": "email" },
+            "verification": { "via": "email" }
+          }
+        },
+        "full_name": { "type": "string", "title": "Full name", "minLength": 1, "maxLength": 256 }
+      },
+      "required": ["username", "email"],
+      "additionalProperties": false
+    }
+  }
+}

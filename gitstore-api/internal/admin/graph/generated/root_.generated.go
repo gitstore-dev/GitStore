@@ -27,6 +27,7 @@ type ResolverRoot interface {
 	Mutation() MutationResolver
 	Product() ProductResolver
 	Query() QueryResolver
+	ServiceAccount() ServiceAccountResolver
 	Subscription() SubscriptionResolver
 }
 
@@ -34,9 +35,27 @@ type DirectiveRoot struct {
 }
 
 type ComplexityRoot struct {
+	ActorConnection struct {
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
+	}
+
+	ActorEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
+	}
+
+	ActorLifecycle struct {
+		State func(childComplexity int) int
+	}
+
 	AdmissionControlDefaults struct {
 		BranchPattern func(childComplexity int) int
 		Phase         func(childComplexity int) int
+	}
+
+	AssignUserGroupPayload struct {
+		Actor func(childComplexity int) int
 	}
 
 	CatalogObjectReference struct {
@@ -152,6 +171,11 @@ type ComplexityRoot struct {
 		Type               func(childComplexity int) int
 	}
 
+	ContactConsent struct {
+		Marketing     func(childComplexity int) int
+		Transactional func(childComplexity int) int
+	}
+
 	CreateCategoryPayload struct {
 		Category func(childComplexity int) int
 	}
@@ -172,10 +196,33 @@ type ComplexityRoot struct {
 		ServiceAccount func(childComplexity int) int
 	}
 
+	CreateStaffPayload struct {
+		Staff func(childComplexity int) int
+	}
+
 	CredentialsRef struct {
 		Kind      func(childComplexity int) int
 		SecretRef func(childComplexity int) int
 		Type      func(childComplexity int) int
+	}
+
+	Customer struct {
+		APIVersion       func(childComplexity int) int
+		ContactConsent   func(childComplexity int) int
+		EmailDeliverable func(childComplexity int) int
+		EmailVerified    func(childComplexity int) int
+		FullName         func(childComplexity int) int
+		Groups           func(childComplexity int) int
+		ID               func(childComplexity int) int
+		Identities       func(childComplexity int) int
+		Kind             func(childComplexity int) int
+		Lifecycle        func(childComplexity int) int
+		Metadata         func(childComplexity int) int
+		PrimaryEmail     func(childComplexity int) int
+	}
+
+	DeactivateUserPayload struct {
+		Actor func(childComplexity int) int
 	}
 
 	DeleteCategoryPayload struct {
@@ -200,6 +247,10 @@ type ComplexityRoot struct {
 
 	DeleteServiceAccountPayload struct {
 		ServiceAccount func(childComplexity int) int
+	}
+
+	DeleteUserPayload struct {
+		Actor func(childComplexity int) int
 	}
 
 	EligibilityDefinition struct {
@@ -307,6 +358,7 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
+		AssignUserGroup                    func(childComplexity int, input model.AssignUserGroupInput) int
 		CompleteCategoryDeletion           func(childComplexity int, input model.CompleteCategoryDeletionInput) int
 		CompleteNamespaceDeletion          func(childComplexity int, input model.CompleteNamespaceDeletionInput) int
 		CompleteProductDeletion            func(childComplexity int, input model.CompleteProductDeletionInput) int
@@ -316,18 +368,26 @@ type ComplexityRoot struct {
 		CreateProduct                      func(childComplexity int, input model.CreateProductInput) int
 		CreateRepository                   func(childComplexity int, input model.CreateRepositoryInput) int
 		CreateServiceAccount               func(childComplexity int, input model.CreateServiceAccountInput) int
+		CreateStaff                        func(childComplexity int, input model.CreateStaffInput) int
+		DeactivateUser                     func(childComplexity int, input model.DeactivateUserInput) int
 		DeleteCategory                     func(childComplexity int, input model.DeleteCategoryInput) int
 		DeleteNamespace                    func(childComplexity int, input model.DeleteNamespaceInput) int
 		DeleteProduct                      func(childComplexity int, input model.DeleteProductInput) int
 		DeleteRepository                   func(childComplexity int, input model.DeleteRepositoryInput) int
 		DeleteServiceAccount               func(childComplexity int, input model.DeleteServiceAccountInput) int
+		DeleteUser                         func(childComplexity int, input model.DeleteUserInput) int
 		IssueServiceAccountToken           func(childComplexity int, input model.IssueServiceAccountTokenInput) int
 		Login                              func(childComplexity int, input model.LoginInput) int
 		Logout                             func(childComplexity int) int
 		ProvisionNamespaceSystemRepository func(childComplexity int, input model.ProvisionNamespaceSystemRepositoryInput) int
 		ProvisionRepositoryStorage         func(childComplexity int, input model.ProvisionRepositoryStorageInput) int
+		ReactivateUser                     func(childComplexity int, input model.ReactivateUserInput) int
 		RefreshToken                       func(childComplexity int, input model.RefreshTokenInput) int
+		RemoveUserGroup                    func(childComplexity int, input model.RemoveUserGroupInput) int
+		ResendStaffInvitation              func(childComplexity int, input model.ResendStaffInvitationInput) int
 		RotateServiceAccountKey            func(childComplexity int, input model.RotateServiceAccountKeyInput) int
+		SetUserEmailDeliverability         func(childComplexity int, input model.SetUserEmailDeliverabilityInput) int
+		SuspendUser                        func(childComplexity int, input model.SuspendUserInput) int
 		TransferNamespaceOwner             func(childComplexity int, input model.TransferNamespaceOwnerInput) int
 		UpdateCategory                     func(childComplexity int, input model.UpdateCategoryInput) int
 		UpdateCategoryStatus               func(childComplexity int, input model.UpdateCategoryStatusInput) int
@@ -338,6 +398,7 @@ type ComplexityRoot struct {
 		UpdateRepository                   func(childComplexity int, input model.UpdateRepositoryInput) int
 		UpdateRepositoryStatus             func(childComplexity int, input model.UpdateRepositoryStatusInput) int
 		UpdateResourceStatus               func(childComplexity int, input model.UpdateResourceStatusInput) int
+		UpdateUser                         func(childComplexity int, input model.UpdateUserInput) int
 	}
 
 	Namespace struct {
@@ -562,6 +623,8 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
+		Actor           func(childComplexity int, by model.ActorBy) int
+		Actors          func(childComplexity int, first *int32, after *string, last *int32, before *string) int
 		Categories      func(childComplexity int, namespace string, filter *model.CategoryFilterInput, first *int32, after *string, last *int32, before *string) int
 		Category        func(childComplexity int, by model.CategoryBy) int
 		Collection      func(childComplexity int, by model.CollectionBy) int
@@ -577,6 +640,11 @@ type ComplexityRoot struct {
 		Products        func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
 		Repositories    func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
 		Repository      func(childComplexity int, by model.RepositoryBy) int
+		ServiceAccounts func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+	}
+
+	ReactivateUserPayload struct {
+		Actor func(childComplexity int) int
 	}
 
 	ReceivePackHookDefaults struct {
@@ -590,6 +658,10 @@ type ComplexityRoot struct {
 
 	RefreshTokenPayload struct {
 		Token func(childComplexity int) int
+	}
+
+	RemoveUserGroupPayload struct {
+		Actor func(childComplexity int) int
 	}
 
 	Repository struct {
@@ -639,6 +711,10 @@ type ComplexityRoot struct {
 		Repository      func(childComplexity int) int
 		ResourceVersion func(childComplexity int) int
 		Type            func(childComplexity int) int
+	}
+
+	ResendStaffInvitationPayload struct {
+		Staff func(childComplexity int) int
 	}
 
 	ResolvedCategoryDefinition struct {
@@ -740,10 +816,41 @@ type ComplexityRoot struct {
 
 	ServiceAccount struct {
 		APIVersion func(childComplexity int) int
+		Groups     func(childComplexity int) int
+		ID         func(childComplexity int) int
 		KeyIDs     func(childComplexity int) int
 		Kind       func(childComplexity int) int
+		Lifecycle  func(childComplexity int) int
 		Metadata   func(childComplexity int) int
-		Status     func(childComplexity int) int
+	}
+
+	ServiceAccountConnection struct {
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
+	}
+
+	ServiceAccountEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
+	}
+
+	SetUserEmailDeliverabilityPayload struct {
+		Actor func(childComplexity int) int
+	}
+
+	Staff struct {
+		APIVersion       func(childComplexity int) int
+		ContactConsent   func(childComplexity int) int
+		EmailDeliverable func(childComplexity int) int
+		EmailVerified    func(childComplexity int) int
+		FullName         func(childComplexity int) int
+		Groups           func(childComplexity int) int
+		ID               func(childComplexity int) int
+		Identities       func(childComplexity int) int
+		Kind             func(childComplexity int) int
+		Lifecycle        func(childComplexity int) int
+		Metadata         func(childComplexity int) int
+		PrimaryEmail     func(childComplexity int) int
 	}
 
 	StrategyDefinition struct {
@@ -757,6 +864,10 @@ type ComplexityRoot struct {
 		WatchProducts     func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchRepositories func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchResources    func(childComplexity int, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+	}
+
+	SuspendUserPayload struct {
+		Actor func(childComplexity int) int
 	}
 
 	TokenRequest struct {
@@ -827,6 +938,10 @@ type ComplexityRoot struct {
 		Object func(childComplexity int) int
 	}
 
+	UpdateUserPayload struct {
+		Actor func(childComplexity int) int
+	}
+
 	VariantSummaryDefinition struct {
 		Ready       func(childComplexity int) int
 		Total       func(childComplexity int) int
@@ -857,6 +972,41 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 	_ = ec
 	switch typeName + "." + field {
 
+	case "ActorConnection.edges":
+		if e.ComplexityRoot.ActorConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActorConnection.Edges(childComplexity), true
+
+	case "ActorConnection.pageInfo":
+		if e.ComplexityRoot.ActorConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActorConnection.PageInfo(childComplexity), true
+
+	case "ActorEdge.cursor":
+		if e.ComplexityRoot.ActorEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActorEdge.Cursor(childComplexity), true
+
+	case "ActorEdge.node":
+		if e.ComplexityRoot.ActorEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActorEdge.Node(childComplexity), true
+
+	case "ActorLifecycle.state":
+		if e.ComplexityRoot.ActorLifecycle.State == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ActorLifecycle.State(childComplexity), true
+
 	case "AdmissionControlDefaults.branchPattern":
 		if e.ComplexityRoot.AdmissionControlDefaults.BranchPattern == nil {
 			break
@@ -870,6 +1020,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.AdmissionControlDefaults.Phase(childComplexity), true
+
+	case "AssignUserGroupPayload.actor":
+		if e.ComplexityRoot.AssignUserGroupPayload.Actor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AssignUserGroupPayload.Actor(childComplexity), true
 
 	case "CatalogObjectReference.apiVersion":
 		if e.ComplexityRoot.CatalogObjectReference.APIVersion == nil {
@@ -1315,6 +1472,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Condition.Type(childComplexity), true
 
+	case "ContactConsent.marketing":
+		if e.ComplexityRoot.ContactConsent.Marketing == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ContactConsent.Marketing(childComplexity), true
+
+	case "ContactConsent.transactional":
+		if e.ComplexityRoot.ContactConsent.Transactional == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ContactConsent.Transactional(childComplexity), true
+
 	case "CreateCategoryPayload.category":
 		if e.ComplexityRoot.CreateCategoryPayload.Category == nil {
 			break
@@ -1350,6 +1521,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CreateServiceAccountPayload.ServiceAccount(childComplexity), true
 
+	case "CreateStaffPayload.staff":
+		if e.ComplexityRoot.CreateStaffPayload.Staff == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CreateStaffPayload.Staff(childComplexity), true
+
 	case "CredentialsRef.kind":
 		if e.ComplexityRoot.CredentialsRef.Kind == nil {
 			break
@@ -1370,6 +1548,97 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CredentialsRef.Type(childComplexity), true
+
+	case "Customer.apiVersion":
+		if e.ComplexityRoot.Customer.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Customer.APIVersion(childComplexity), true
+
+	case "Customer.contactConsent":
+		if e.ComplexityRoot.Customer.ContactConsent == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Customer.ContactConsent(childComplexity), true
+
+	case "Customer.emailDeliverable":
+		if e.ComplexityRoot.Customer.EmailDeliverable == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Customer.EmailDeliverable(childComplexity), true
+
+	case "Customer.emailVerified":
+		if e.ComplexityRoot.Customer.EmailVerified == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Customer.EmailVerified(childComplexity), true
+
+	case "Customer.fullName":
+		if e.ComplexityRoot.Customer.FullName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Customer.FullName(childComplexity), true
+
+	case "Customer.groups":
+		if e.ComplexityRoot.Customer.Groups == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Customer.Groups(childComplexity), true
+
+	case "Customer.id":
+		if e.ComplexityRoot.Customer.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Customer.ID(childComplexity), true
+
+	case "Customer.identities":
+		if e.ComplexityRoot.Customer.Identities == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Customer.Identities(childComplexity), true
+
+	case "Customer.kind":
+		if e.ComplexityRoot.Customer.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Customer.Kind(childComplexity), true
+
+	case "Customer.lifecycle":
+		if e.ComplexityRoot.Customer.Lifecycle == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Customer.Lifecycle(childComplexity), true
+
+	case "Customer.metadata":
+		if e.ComplexityRoot.Customer.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Customer.Metadata(childComplexity), true
+
+	case "Customer.primaryEmail":
+		if e.ComplexityRoot.Customer.PrimaryEmail == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Customer.PrimaryEmail(childComplexity), true
+
+	case "DeactivateUserPayload.actor":
+		if e.ComplexityRoot.DeactivateUserPayload.Actor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeactivateUserPayload.Actor(childComplexity), true
 
 	case "DeleteCategoryPayload.category":
 		if e.ComplexityRoot.DeleteCategoryPayload.Category == nil {
@@ -1433,6 +1702,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.DeleteServiceAccountPayload.ServiceAccount(childComplexity), true
+
+	case "DeleteUserPayload.actor":
+		if e.ComplexityRoot.DeleteUserPayload.Actor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteUserPayload.Actor(childComplexity), true
 
 	case "EligibilityDefinition.constraints":
 		if e.ComplexityRoot.EligibilityDefinition.Constraints == nil {
@@ -1763,6 +2039,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.MediaDefinition.FileRef(childComplexity), true
 
+	case "Mutation.assignUserGroup":
+		if e.ComplexityRoot.Mutation.AssignUserGroup == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_assignUserGroup_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.AssignUserGroup(childComplexity, args["input"].(model.AssignUserGroupInput)), true
+
 	case "Mutation.completeCategoryDeletion":
 		if e.ComplexityRoot.Mutation.CompleteCategoryDeletion == nil {
 			break
@@ -1871,6 +2159,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.CreateServiceAccount(childComplexity, args["input"].(model.CreateServiceAccountInput)), true
 
+	case "Mutation.createStaff":
+		if e.ComplexityRoot.Mutation.CreateStaff == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_createStaff_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CreateStaff(childComplexity, args["input"].(model.CreateStaffInput)), true
+
+	case "Mutation.deactivateUser":
+		if e.ComplexityRoot.Mutation.DeactivateUser == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_deactivateUser_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.DeactivateUser(childComplexity, args["input"].(model.DeactivateUserInput)), true
+
 	case "Mutation.deleteCategory":
 		if e.ComplexityRoot.Mutation.DeleteCategory == nil {
 			break
@@ -1931,6 +2243,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.DeleteServiceAccount(childComplexity, args["input"].(model.DeleteServiceAccountInput)), true
 
+	case "Mutation.deleteUser":
+		if e.ComplexityRoot.Mutation.DeleteUser == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_deleteUser_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.DeleteUser(childComplexity, args["input"].(model.DeleteUserInput)), true
+
 	case "Mutation.issueServiceAccountToken":
 		if e.ComplexityRoot.Mutation.IssueServiceAccountToken == nil {
 			break
@@ -1986,6 +2310,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.ProvisionRepositoryStorage(childComplexity, args["input"].(model.ProvisionRepositoryStorageInput)), true
 
+	case "Mutation.reactivateUser":
+		if e.ComplexityRoot.Mutation.ReactivateUser == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_reactivateUser_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ReactivateUser(childComplexity, args["input"].(model.ReactivateUserInput)), true
+
 	case "Mutation.refreshToken":
 		if e.ComplexityRoot.Mutation.RefreshToken == nil {
 			break
@@ -1998,6 +2334,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.RefreshToken(childComplexity, args["input"].(model.RefreshTokenInput)), true
 
+	case "Mutation.removeUserGroup":
+		if e.ComplexityRoot.Mutation.RemoveUserGroup == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_removeUserGroup_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.RemoveUserGroup(childComplexity, args["input"].(model.RemoveUserGroupInput)), true
+
+	case "Mutation.resendStaffInvitation":
+		if e.ComplexityRoot.Mutation.ResendStaffInvitation == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_resendStaffInvitation_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ResendStaffInvitation(childComplexity, args["input"].(model.ResendStaffInvitationInput)), true
+
 	case "Mutation.rotateServiceAccountKey":
 		if e.ComplexityRoot.Mutation.RotateServiceAccountKey == nil {
 			break
@@ -2009,6 +2369,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.RotateServiceAccountKey(childComplexity, args["input"].(model.RotateServiceAccountKeyInput)), true
+
+	case "Mutation.setUserEmailDeliverability":
+		if e.ComplexityRoot.Mutation.SetUserEmailDeliverability == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_setUserEmailDeliverability_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.SetUserEmailDeliverability(childComplexity, args["input"].(model.SetUserEmailDeliverabilityInput)), true
+
+	case "Mutation.suspendUser":
+		if e.ComplexityRoot.Mutation.SuspendUser == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_suspendUser_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.SuspendUser(childComplexity, args["input"].(model.SuspendUserInput)), true
 
 	case "Mutation.transferNamespaceOwner":
 		if e.ComplexityRoot.Mutation.TransferNamespaceOwner == nil {
@@ -2129,6 +2513,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.UpdateResourceStatus(childComplexity, args["input"].(model.UpdateResourceStatusInput)), true
+
+	case "Mutation.updateUser":
+		if e.ComplexityRoot.Mutation.UpdateUser == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateUser_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateUser(childComplexity, args["input"].(model.UpdateUserInput)), true
 
 	case "Namespace.apiVersion":
 		if e.ComplexityRoot.Namespace.APIVersion == nil {
@@ -3010,6 +3406,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.QuantityDefinition.Min(childComplexity), true
 
+	case "Query.actor":
+		if e.ComplexityRoot.Query.Actor == nil {
+			break
+		}
+
+		args, err := ec.field_Query_actor_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.Actor(childComplexity, args["by"].(model.ActorBy)), true
+
+	case "Query.actors":
+		if e.ComplexityRoot.Query.Actors == nil {
+			break
+		}
+
+		args, err := ec.field_Query_actors_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.Actors(childComplexity, args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
+
 	case "Query.categories":
 		if e.ComplexityRoot.Query.Categories == nil {
 			break
@@ -3190,6 +3610,25 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.Repository(childComplexity, args["by"].(model.RepositoryBy)), true
 
+	case "Query.serviceAccounts":
+		if e.ComplexityRoot.Query.ServiceAccounts == nil {
+			break
+		}
+
+		args, err := ec.field_Query_serviceAccounts_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ServiceAccounts(childComplexity, args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
+
+	case "ReactivateUserPayload.actor":
+		if e.ComplexityRoot.ReactivateUserPayload.Actor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ReactivateUserPayload.Actor(childComplexity), true
+
 	case "ReceivePackHookDefaults.postReceive":
 		if e.ComplexityRoot.ReceivePackHookDefaults.PostReceive == nil {
 			break
@@ -3238,6 +3677,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.RefreshTokenPayload.Token(childComplexity), true
+
+	case "RemoveUserGroupPayload.actor":
+		if e.ComplexityRoot.RemoveUserGroupPayload.Actor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RemoveUserGroupPayload.Actor(childComplexity), true
 
 	case "Repository.apiVersion":
 		if e.ComplexityRoot.Repository.APIVersion == nil {
@@ -3434,6 +3880,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.RepositoryWatchEvent.Type(childComplexity), true
+
+	case "ResendStaffInvitationPayload.staff":
+		if e.ComplexityRoot.ResendStaffInvitationPayload.Staff == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResendStaffInvitationPayload.Staff(childComplexity), true
 
 	case "ResolvedCategoryDefinition.name":
 		if e.ComplexityRoot.ResolvedCategoryDefinition.Name == nil {
@@ -3785,6 +4238,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ServiceAccount.APIVersion(childComplexity), true
 
+	case "ServiceAccount.groups":
+		if e.ComplexityRoot.ServiceAccount.Groups == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceAccount.Groups(childComplexity), true
+
+	case "ServiceAccount.id":
+		if e.ComplexityRoot.ServiceAccount.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceAccount.ID(childComplexity), true
+
 	case "ServiceAccount.keyIDs":
 		if e.ComplexityRoot.ServiceAccount.KeyIDs == nil {
 			break
@@ -3799,6 +4266,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ServiceAccount.Kind(childComplexity), true
 
+	case "ServiceAccount.lifecycle":
+		if e.ComplexityRoot.ServiceAccount.Lifecycle == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceAccount.Lifecycle(childComplexity), true
+
 	case "ServiceAccount.metadata":
 		if e.ComplexityRoot.ServiceAccount.Metadata == nil {
 			break
@@ -3806,12 +4280,124 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ServiceAccount.Metadata(childComplexity), true
 
-	case "ServiceAccount.status":
-		if e.ComplexityRoot.ServiceAccount.Status == nil {
+	case "ServiceAccountConnection.edges":
+		if e.ComplexityRoot.ServiceAccountConnection.Edges == nil {
 			break
 		}
 
-		return e.ComplexityRoot.ServiceAccount.Status(childComplexity), true
+		return e.ComplexityRoot.ServiceAccountConnection.Edges(childComplexity), true
+
+	case "ServiceAccountConnection.pageInfo":
+		if e.ComplexityRoot.ServiceAccountConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceAccountConnection.PageInfo(childComplexity), true
+
+	case "ServiceAccountEdge.cursor":
+		if e.ComplexityRoot.ServiceAccountEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceAccountEdge.Cursor(childComplexity), true
+
+	case "ServiceAccountEdge.node":
+		if e.ComplexityRoot.ServiceAccountEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ServiceAccountEdge.Node(childComplexity), true
+
+	case "SetUserEmailDeliverabilityPayload.actor":
+		if e.ComplexityRoot.SetUserEmailDeliverabilityPayload.Actor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SetUserEmailDeliverabilityPayload.Actor(childComplexity), true
+
+	case "Staff.apiVersion":
+		if e.ComplexityRoot.Staff.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Staff.APIVersion(childComplexity), true
+
+	case "Staff.contactConsent":
+		if e.ComplexityRoot.Staff.ContactConsent == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Staff.ContactConsent(childComplexity), true
+
+	case "Staff.emailDeliverable":
+		if e.ComplexityRoot.Staff.EmailDeliverable == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Staff.EmailDeliverable(childComplexity), true
+
+	case "Staff.emailVerified":
+		if e.ComplexityRoot.Staff.EmailVerified == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Staff.EmailVerified(childComplexity), true
+
+	case "Staff.fullName":
+		if e.ComplexityRoot.Staff.FullName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Staff.FullName(childComplexity), true
+
+	case "Staff.groups":
+		if e.ComplexityRoot.Staff.Groups == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Staff.Groups(childComplexity), true
+
+	case "Staff.id":
+		if e.ComplexityRoot.Staff.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Staff.ID(childComplexity), true
+
+	case "Staff.identities":
+		if e.ComplexityRoot.Staff.Identities == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Staff.Identities(childComplexity), true
+
+	case "Staff.kind":
+		if e.ComplexityRoot.Staff.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Staff.Kind(childComplexity), true
+
+	case "Staff.lifecycle":
+		if e.ComplexityRoot.Staff.Lifecycle == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Staff.Lifecycle(childComplexity), true
+
+	case "Staff.metadata":
+		if e.ComplexityRoot.Staff.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Staff.Metadata(childComplexity), true
+
+	case "Staff.primaryEmail":
+		if e.ComplexityRoot.Staff.PrimaryEmail == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Staff.PrimaryEmail(childComplexity), true
 
 	case "StrategyDefinition.type":
 		if e.ComplexityRoot.StrategyDefinition.Type == nil {
@@ -3891,6 +4477,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.WatchResources(childComplexity, args["kind"].(string), args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
+	case "SuspendUserPayload.actor":
+		if e.ComplexityRoot.SuspendUserPayload.Actor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SuspendUserPayload.Actor(childComplexity), true
 
 	case "TokenRequest.apiVersion":
 		if e.ComplexityRoot.TokenRequest.APIVersion == nil {
@@ -4074,6 +4667,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateResourceStatusPayload.Object(childComplexity), true
 
+	case "UpdateUserPayload.actor":
+		if e.ComplexityRoot.UpdateUserPayload.Actor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateUserPayload.Actor(childComplexity), true
+
 	case "VariantSummaryDefinition.ready":
 		if e.ComplexityRoot.VariantSummaryDefinition.Ready == nil {
 			break
@@ -4145,6 +4745,8 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
+		ec.unmarshalInputActorBy,
+		ec.unmarshalInputAssignUserGroupInput,
 		ec.unmarshalInputCatalogObjectReferenceInput,
 		ec.unmarshalInputCategoryBy,
 		ec.unmarshalInputCategoryFilterInput,
@@ -4162,11 +4764,14 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCreateProductInput,
 		ec.unmarshalInputCreateRepositoryInput,
 		ec.unmarshalInputCreateServiceAccountInput,
+		ec.unmarshalInputCreateStaffInput,
+		ec.unmarshalInputDeactivateUserInput,
 		ec.unmarshalInputDeleteCategoryInput,
 		ec.unmarshalInputDeleteNamespaceInput,
 		ec.unmarshalInputDeleteProductInput,
 		ec.unmarshalInputDeleteRepositoryInput,
 		ec.unmarshalInputDeleteServiceAccountInput,
+		ec.unmarshalInputDeleteUserInput,
 		ec.unmarshalInputFileBy,
 		ec.unmarshalInputFileNamespacePath,
 		ec.unmarshalInputFileReferenceInput,
@@ -4189,17 +4794,22 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputProductVariantNamespacePath,
 		ec.unmarshalInputProvisionNamespaceSystemRepositoryInput,
 		ec.unmarshalInputProvisionRepositoryStorageInput,
+		ec.unmarshalInputReactivateUserInput,
 		ec.unmarshalInputRefreshTokenInput,
+		ec.unmarshalInputRemoveUserGroupInput,
 		ec.unmarshalInputRepositoryBy,
 		ec.unmarshalInputRepositoryNamespacePath,
 		ec.unmarshalInputRepositoryResolvedStatusInput,
 		ec.unmarshalInputRepositorySpecInput,
+		ec.unmarshalInputResendStaffInvitationInput,
 		ec.unmarshalInputResolvedCategoryRefInput,
 		ec.unmarshalInputResolvedCategoryTaxonomyInput,
 		ec.unmarshalInputResolvedProductStatusInput,
 		ec.unmarshalInputResourceOwnerInput,
 		ec.unmarshalInputRotateServiceAccountKeyInput,
 		ec.unmarshalInputServiceAccountPublicKeyInput,
+		ec.unmarshalInputSetUserEmailDeliverabilityInput,
+		ec.unmarshalInputSuspendUserInput,
 		ec.unmarshalInputTokenRequestSpecInput,
 		ec.unmarshalInputTransferNamespaceOwnerInput,
 		ec.unmarshalInputUpdateCategoryInput,
@@ -4211,6 +4821,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputUpdateRepositoryInput,
 		ec.unmarshalInputUpdateRepositoryStatusInput,
 		ec.unmarshalInputUpdateResourceStatusInput,
+		ec.unmarshalInputUpdateUserInput,
 	)
 	first := true
 
@@ -6627,20 +7238,12 @@ An object that has a human-readable name. This represents both the Subject and t
 # - update_actor
 # - creation_on_behalf_of_actor OR creation_subject
 # - update_on_behalf_of_actor OR update_subject
-#
-# Implementations include:
-# - User (Staff, Customer)
-# - ServiceAccount
-interface Actor {
+interface Actor implements Node {
+  id: ID!
   metadata: ObjectMeta!
-  # inspired by product lifecycle
-  # lifecycle.state: ActorLifecycleState!
-  # Does status conflict with .status for Resource types?
-  status: ActorStatus!
-  # OpenShift-style envelope
-  # fullName: String ??
-  # identities: [String!]
-  # groups: [String!]
+
+  """The actor's current lifecycle state."""
+  lifecycle: ActorLifecycle!
 }
 
 """
@@ -6932,7 +7535,12 @@ enum ConditionStatus {
   UNKNOWN
 }
 
-enum ActorStatus {
+type ActorLifecycle {
+  """Current lifecycle state."""
+  state: ActorLifecycleState!
+}
+
+enum ActorLifecycleState {
   ACTIVE
   INACTIVE
   SUSPENDED
@@ -7031,12 +7639,30 @@ A cluster-scoped GitStore-issued non-human identity. Its global metadata.name
 and immutable UID identify the account. metadata.namespace is null on output;
 any non-null metadata.namespace is rejected on every ServiceAccount operation.
 """
-type ServiceAccount implements Actor {
+type ServiceAccount implements Actor & Node {
+  id: ID!
   apiVersion: String!
   kind: String!
   metadata: ObjectMeta!
   keyIDs: [String!]!
-  status: ActorStatus!
+  """Directory memberships resolved by source UID. Empty without a linked group-capable directory; lookup failures remain errors."""
+  groups: [String!]!
+  lifecycle: ActorLifecycle!
+}
+
+type ServiceAccountEdge {
+  cursor: String!
+  node: ServiceAccount!
+}
+
+type ServiceAccountConnection {
+  edges: [ServiceAccountEdge!]!
+  pageInfo: PageInfo!
+}
+
+extend type Query {
+  """List authoritative ServiceAccounts independently of directory availability."""
+  serviceAccounts(first: Int, after: String, last: Int, before: String): ServiceAccountConnection!
 }
 
 """
@@ -7193,6 +7819,133 @@ extend type Mutation {
   deleteServiceAccount(input: DeleteServiceAccountInput!): DeleteServiceAccountPayload!
 }
 `, BuiltIn: false},
+	{Name: "../../../../../shared/schemas/admin/user.graphqls", Input: `"""Shared identity and contact fields for externally managed human users."""
+interface User implements Actor & Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  fullName: String!
+  identities: [String!]!
+  groups: [String!]!
+  lifecycle: ActorLifecycle!
+  primaryEmail: String!
+  emailVerified: Boolean!
+  emailDeliverable: Boolean!
+  contactConsent: ContactConsent!
+}
+
+"""An externally managed Staff identity."""
+type Staff implements User & Actor & Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  fullName: String!
+  identities: [String!]!
+  groups: [String!]!
+  lifecycle: ActorLifecycle!
+  primaryEmail: String!
+  emailVerified: Boolean!
+  emailDeliverable: Boolean!
+  contactConsent: ContactConsent!
+}
+
+"""An externally managed Customer identity."""
+type Customer implements User & Actor & Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  fullName: String!
+  identities: [String!]!
+  groups: [String!]!
+  lifecycle: ActorLifecycle!
+  primaryEmail: String!
+  emailVerified: Boolean!
+  emailDeliverable: Boolean!
+  contactConsent: ContactConsent!
+}
+
+"""Trusted contact consent facts maintained by the identity directory."""
+type ContactConsent {
+  transactional: Boolean!
+  marketing: Boolean!
+}
+
+"""Exactly one identifier; workload names are separate from human usernames."""
+input ActorBy @oneOf {
+  id: ID
+  username: String
+  serviceAccountName: String
+}
+
+type ActorEdge {
+  cursor: String!
+  node: Actor!
+}
+
+type ActorConnection {
+  edges: [ActorEdge!]!
+  pageInfo: PageInfo!
+}
+
+extend type Query {
+  """Look up a concrete actor. Directory usernames are not email aliases."""
+  actor(by: ActorBy!): Actor
+
+  """List the configured directory. Workload coverage is best-effort."""
+  actors(first: Int, after: String, last: Int, before: String): ActorConnection!
+}
+
+input CreateStaffInput {
+  metadata: ObjectMetaInput!
+  fullName: String!
+  primaryEmail: String!
+  groups: [String!]
+}
+type CreateStaffPayload { staff: Staff }
+
+"""Only display name, pending primary email and consent may be edited."""
+input UpdateUserInput {
+  id: ID!
+  fullName: String
+  primaryEmail: String
+  transactionalConsent: Boolean
+  marketingConsent: Boolean
+}
+type UpdateUserPayload { actor: Actor }
+
+input DeactivateUserInput { id: ID! }
+type DeactivateUserPayload { actor: Actor }
+input ReactivateUserInput { id: ID! }
+type ReactivateUserPayload { actor: Actor }
+input SuspendUserInput { id: ID! }
+type SuspendUserPayload { actor: Actor }
+input ResendStaffInvitationInput { id: ID! }
+type ResendStaffInvitationPayload { staff: Staff }
+input DeleteUserInput { id: ID! }
+type DeleteUserPayload { actor: Actor }
+input AssignUserGroupInput { id: ID!, group: String! }
+type AssignUserGroupPayload { actor: Actor }
+input RemoveUserGroupInput { id: ID!, group: String! }
+type RemoveUserGroupPayload { actor: Actor }
+input SetUserEmailDeliverabilityInput { id: ID!, deliverable: Boolean! }
+type SetUserEmailDeliverabilityPayload { actor: Actor }
+
+extend type Mutation {
+  createStaff(input: CreateStaffInput!): CreateStaffPayload!
+  updateUser(input: UpdateUserInput!): UpdateUserPayload!
+  deactivateUser(input: DeactivateUserInput!): DeactivateUserPayload!
+  reactivateUser(input: ReactivateUserInput!): ReactivateUserPayload!
+  suspendUser(input: SuspendUserInput!): SuspendUserPayload!
+  resendStaffInvitation(input: ResendStaffInvitationInput!): ResendStaffInvitationPayload!
+  deleteUser(input: DeleteUserInput!): DeleteUserPayload!
+  assignUserGroup(input: AssignUserGroupInput!): AssignUserGroupPayload!
+  removeUserGroup(input: RemoveUserGroupInput!): RemoveUserGroupPayload!
+  setUserEmailDeliverability(input: SetUserEmailDeliverabilityInput!): SetUserEmailDeliverabilityPayload!
+}
+`, BuiltIn: false},
 	{Name: "../../../../../shared/schemas/common/node.graphqls", Input: `"""
 An object with a globally unique ID
 """
@@ -7210,6 +7963,34 @@ var parsedSchema = gqlparser.MustLoadSchema(sources...)
 // Each function is generated once per unique object type, deduplicating the
 // switch statements that were previously inlined in every fieldContext_* function.
 
+func (ec *executionContext) childFields_ActorConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "edges":
+		return ec.fieldContext_ActorConnection_edges(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_ActorConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ActorConnection", field.Name)
+}
+
+func (ec *executionContext) childFields_ActorEdge(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "cursor":
+		return ec.fieldContext_ActorEdge_cursor(ctx, field)
+	case "node":
+		return ec.fieldContext_ActorEdge_node(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ActorEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_ActorLifecycle(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "state":
+		return ec.fieldContext_ActorLifecycle_state(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ActorLifecycle", field.Name)
+}
+
 func (ec *executionContext) childFields_AdmissionControlDefaults(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "phase":
@@ -7218,6 +7999,14 @@ func (ec *executionContext) childFields_AdmissionControlDefaults(ctx context.Con
 		return ec.fieldContext_AdmissionControlDefaults_branchPattern(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type AdmissionControlDefaults", field.Name)
+}
+
+func (ec *executionContext) childFields_AssignUserGroupPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "actor":
+		return ec.fieldContext_AssignUserGroupPayload_actor(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type AssignUserGroupPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_CatalogObjectReference(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -7446,6 +8235,16 @@ func (ec *executionContext) childFields_Condition(ctx context.Context, field gra
 	return nil, fmt.Errorf("no field named %q was found under type Condition", field.Name)
 }
 
+func (ec *executionContext) childFields_ContactConsent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "transactional":
+		return ec.fieldContext_ContactConsent_transactional(ctx, field)
+	case "marketing":
+		return ec.fieldContext_ContactConsent_marketing(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ContactConsent", field.Name)
+}
+
 func (ec *executionContext) childFields_CreateCategoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "category":
@@ -7486,6 +8285,14 @@ func (ec *executionContext) childFields_CreateServiceAccountPayload(ctx context.
 	return nil, fmt.Errorf("no field named %q was found under type CreateServiceAccountPayload", field.Name)
 }
 
+func (ec *executionContext) childFields_CreateStaffPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "staff":
+		return ec.fieldContext_CreateStaffPayload_staff(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CreateStaffPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_CredentialsRef(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "kind":
@@ -7496,6 +8303,14 @@ func (ec *executionContext) childFields_CredentialsRef(ctx context.Context, fiel
 		return ec.fieldContext_CredentialsRef_secretRef(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CredentialsRef", field.Name)
+}
+
+func (ec *executionContext) childFields_DeactivateUserPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "actor":
+		return ec.fieldContext_DeactivateUserPayload_actor(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type DeactivateUserPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_DeleteCategoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -7544,6 +8359,14 @@ func (ec *executionContext) childFields_DeleteServiceAccountPayload(ctx context.
 		return ec.fieldContext_DeleteServiceAccountPayload_serviceAccount(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DeleteServiceAccountPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_DeleteUserPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "actor":
+		return ec.fieldContext_DeleteUserPayload_actor(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type DeleteUserPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_EligibilityDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8196,6 +9019,14 @@ func (ec *executionContext) childFields_QuantityDefinition(ctx context.Context, 
 	return nil, fmt.Errorf("no field named %q was found under type QuantityDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_ReactivateUserPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "actor":
+		return ec.fieldContext_ReactivateUserPayload_actor(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ReactivateUserPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_ReceivePackHookDefaults(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "preReceive":
@@ -8220,6 +9051,14 @@ func (ec *executionContext) childFields_RefreshTokenPayload(ctx context.Context,
 		return ec.fieldContext_RefreshTokenPayload_token(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type RefreshTokenPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_RemoveUserGroupPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "actor":
+		return ec.fieldContext_RemoveUserGroupPayload_actor(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RemoveUserGroupPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_Repository(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8318,6 +9157,14 @@ func (ec *executionContext) childFields_RepositoryWatchEvent(ctx context.Context
 		return ec.fieldContext_RepositoryWatchEvent_repository(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type RepositoryWatchEvent", field.Name)
+}
+
+func (ec *executionContext) childFields_ResendStaffInvitationPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "staff":
+		return ec.fieldContext_ResendStaffInvitationPayload_staff(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ResendStaffInvitationPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_ResolvedCategoryDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8516,6 +9363,8 @@ func (ec *executionContext) childFields_SelectedOptionDefinition(ctx context.Con
 
 func (ec *executionContext) childFields_ServiceAccount(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
+	case "id":
+		return ec.fieldContext_ServiceAccount_id(ctx, field)
 	case "apiVersion":
 		return ec.fieldContext_ServiceAccount_apiVersion(ctx, field)
 	case "kind":
@@ -8524,10 +9373,70 @@ func (ec *executionContext) childFields_ServiceAccount(ctx context.Context, fiel
 		return ec.fieldContext_ServiceAccount_metadata(ctx, field)
 	case "keyIDs":
 		return ec.fieldContext_ServiceAccount_keyIDs(ctx, field)
-	case "status":
-		return ec.fieldContext_ServiceAccount_status(ctx, field)
+	case "groups":
+		return ec.fieldContext_ServiceAccount_groups(ctx, field)
+	case "lifecycle":
+		return ec.fieldContext_ServiceAccount_lifecycle(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ServiceAccount", field.Name)
+}
+
+func (ec *executionContext) childFields_ServiceAccountConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "edges":
+		return ec.fieldContext_ServiceAccountConnection_edges(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_ServiceAccountConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ServiceAccountConnection", field.Name)
+}
+
+func (ec *executionContext) childFields_ServiceAccountEdge(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "cursor":
+		return ec.fieldContext_ServiceAccountEdge_cursor(ctx, field)
+	case "node":
+		return ec.fieldContext_ServiceAccountEdge_node(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ServiceAccountEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_SetUserEmailDeliverabilityPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "actor":
+		return ec.fieldContext_SetUserEmailDeliverabilityPayload_actor(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SetUserEmailDeliverabilityPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_Staff(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_Staff_id(ctx, field)
+	case "apiVersion":
+		return ec.fieldContext_Staff_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_Staff_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_Staff_metadata(ctx, field)
+	case "fullName":
+		return ec.fieldContext_Staff_fullName(ctx, field)
+	case "identities":
+		return ec.fieldContext_Staff_identities(ctx, field)
+	case "groups":
+		return ec.fieldContext_Staff_groups(ctx, field)
+	case "lifecycle":
+		return ec.fieldContext_Staff_lifecycle(ctx, field)
+	case "primaryEmail":
+		return ec.fieldContext_Staff_primaryEmail(ctx, field)
+	case "emailVerified":
+		return ec.fieldContext_Staff_emailVerified(ctx, field)
+	case "emailDeliverable":
+		return ec.fieldContext_Staff_emailDeliverable(ctx, field)
+	case "contactConsent":
+		return ec.fieldContext_Staff_contactConsent(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type Staff", field.Name)
 }
 
 func (ec *executionContext) childFields_StrategyDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8536,6 +9445,14 @@ func (ec *executionContext) childFields_StrategyDefinition(ctx context.Context, 
 		return ec.fieldContext_StrategyDefinition_type(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type StrategyDefinition", field.Name)
+}
+
+func (ec *executionContext) childFields_SuspendUserPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "actor":
+		return ec.fieldContext_SuspendUserPayload_actor(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SuspendUserPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_TokenRequest(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8672,6 +9589,14 @@ func (ec *executionContext) childFields_UpdateResourceStatusPayload(ctx context.
 		return ec.fieldContext_UpdateResourceStatusPayload_object(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateResourceStatusPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateUserPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "actor":
+		return ec.fieldContext_UpdateUserPayload_actor(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateUserPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_VariantSummaryDefinition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

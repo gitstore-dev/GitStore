@@ -21,20 +21,12 @@ An object that has a human-readable name. This represents both the Subject and t
 # - update_actor
 # - creation_on_behalf_of_actor OR creation_subject
 # - update_on_behalf_of_actor OR update_subject
-#
-# Implementations include:
-# - User (Staff, Customer)
-# - ServiceAccount
-interface Actor {
+interface Actor implements Node {
+  id: ID!
   metadata: ObjectMeta!
-  # inspired by product lifecycle
-  # lifecycle.state: ActorLifecycleState!
-  # Does status conflict with .status for Resource types?
-  status: ActorStatus!
-  # OpenShift-style envelope
-  # fullName: String ??
-  # identities: [String!]
-  # groups: [String!]
+
+  """The actor's current lifecycle state."""
+  lifecycle: ActorLifecycle!
 }
 
 """
@@ -326,7 +318,12 @@ enum ConditionStatus {
   UNKNOWN
 }
 
-enum ActorStatus {
+type ActorLifecycle {
+  """Current lifecycle state."""
+  state: ActorLifecycleState!
+}
+
+enum ActorLifecycleState {
   ACTIVE
   INACTIVE
   SUSPENDED

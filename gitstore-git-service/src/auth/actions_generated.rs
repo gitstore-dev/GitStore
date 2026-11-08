@@ -91,6 +91,12 @@ pub const SERVICEACCOUNT_LIST: &str = "serviceAccount.list";
 pub const SERVICEACCOUNT_READ: &str = "serviceAccount.read";
 pub const SERVICEACCOUNT_TOKEN_ISSUE: &str = "serviceAccount.token.issue";
 pub const SERVICEACCOUNT_UPDATE: &str = "serviceAccount.update";
+pub const USER_CREATE: &str = "user.create";
+pub const USER_DELETE: &str = "user.delete";
+pub const USER_GROUP_UPDATE: &str = "user.group.update";
+pub const USER_LIST: &str = "user.list";
+pub const USER_READ: &str = "user.read";
+pub const USER_UPDATE: &str = "user.update";
 pub const WORKFLOW_BUNDLE_INSTALL: &str = "workflow.bundle.install";
 pub const WORKFLOW_DEFINITION_MANAGE: &str = "workflow.definition.manage";
 pub const WORKFLOW_EXECUTION_TRANSITION: &str = "workflow.execution.transition";
@@ -176,6 +182,12 @@ pub const AUTHORIZATION_ACTIONS: &[ActionDefinition] = &[
     ActionDefinition { action: "serviceAccount.read", kind: "serviceAccount", scope: "cluster", resource: "serviceAccount", verb: "read", reserved: false },
     ActionDefinition { action: "serviceAccount.token.issue", kind: "serviceAccount", scope: "cluster", resource: "serviceAccount/token", verb: "issue", reserved: false },
     ActionDefinition { action: "serviceAccount.update", kind: "serviceAccount", scope: "cluster", resource: "serviceAccount", verb: "update", reserved: false },
+    ActionDefinition { action: "user.create", kind: "user", scope: "cluster", resource: "user", verb: "create", reserved: false },
+    ActionDefinition { action: "user.delete", kind: "user", scope: "cluster", resource: "user", verb: "delete", reserved: false },
+    ActionDefinition { action: "user.group.update", kind: "user", scope: "cluster", resource: "user/group", verb: "update", reserved: false },
+    ActionDefinition { action: "user.list", kind: "user", scope: "cluster", resource: "user", verb: "list", reserved: false },
+    ActionDefinition { action: "user.read", kind: "user", scope: "cluster", resource: "user", verb: "read", reserved: false },
+    ActionDefinition { action: "user.update", kind: "user", scope: "cluster", resource: "user", verb: "update", reserved: false },
     ActionDefinition { action: "workflow.bundle.install", kind: "workflow", scope: "namespace", resource: "workflow/bundle", verb: "install", reserved: true },
     ActionDefinition { action: "workflow.definition.manage", kind: "workflow", scope: "namespace", resource: "workflow/definition", verb: "manage", reserved: true },
     ActionDefinition { action: "workflow.execution.transition", kind: "workflow", scope: "namespace", resource: "workflow/execution", verb: "transition", reserved: true },
