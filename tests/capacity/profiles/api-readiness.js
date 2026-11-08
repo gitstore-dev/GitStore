@@ -30,8 +30,8 @@ if (identityReadiness) {
       rate: integer('CAPACITY_RATE', 500),
       timeUnit: '1s',
       duration: __ENV.CAPACITY_DURATION || '30m',
-      preAllocatedVUs: integer('CAPACITY_PREALLOCATED_VUS', 50),
-      maxVUs: integer('CAPACITY_MAX_VUS', 100),
+      preAllocatedVUs: integer('CAPACITY_PREALLOCATED_VUS', 100),
+      maxVUs: integer('CAPACITY_MAX_VUS', 200),
     };
   }
 } else {

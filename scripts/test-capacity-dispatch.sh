@@ -93,7 +93,11 @@ for name, value in documents.items():
 PY
 CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-verifier"
 jq -e '.passed and (.replicas | length) == 2' "${test_dir}/identity-verifier/identity-verifier.json" >/dev/null
-jq '.metrics["identity_groups{replica:1}"].values.count -= 1' "${test_dir}/identity-verifier/summary.json" >"${test_dir}/identity-verifier/summary.tmp"
+jq '.metrics |= with_entries(.value = .value.values)' "${test_dir}/identity-verifier/summary.json" >"${test_dir}/identity-verifier/summary.tmp"
+mv "${test_dir}/identity-verifier/summary.tmp" "${test_dir}/identity-verifier/summary.json"
+CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-verifier"
+jq -e '.passed' "${test_dir}/identity-verifier/identity-verifier.json" >/dev/null
+jq '.metrics["identity_groups{replica:1}"].count -= 1' "${test_dir}/identity-verifier/summary.json" >"${test_dir}/identity-verifier/summary.tmp"
 mv "${test_dir}/identity-verifier/summary.tmp" "${test_dir}/identity-verifier/summary.json"
 if CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-verifier" >/dev/null 2>&1; then
   echo "identity verifier accepted a request without matching membership evidence" >&2

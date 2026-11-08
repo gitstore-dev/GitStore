@@ -258,6 +258,14 @@ confidence_window = "500ms"
 		configFile := filepath.Join(privateDir, fmt.Sprintf("api-%d.toml", replica))
 		if r.capacity {
 			config = strings.Replace(config, `cache_ttl = "500ms"`, `cache_ttl = "5m"`, 1)
+			config += `
+[api.rate_limit]
+per_second = 1000
+burst = 2000
+[api.admin.limits]
+principal_per_second = 500
+principal_burst = 2000
+`
 		}
 		require.NoError(t, os.WriteFile(configFile, []byte(config), 0600))
 		r.command(t, nil, "run", "-d", "--name", name, "--label", "dev.gitstore.test_owner="+r.owner,

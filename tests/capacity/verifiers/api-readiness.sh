@@ -36,6 +36,10 @@ def total(samples, name, labels=None):
 def duration(at):
     return datetime.datetime.fromisoformat(at.replace('Z', '+00:00'))
 
+def metric_values(name):
+    metric = summary[name]
+    return metric.get('values', metric)
+
 try:
     metadata = document('metadata.json')
     preflight = document('preflight-environment.json')
@@ -46,16 +50,16 @@ try:
     elapsed = (duration(metadata['loadCompletedAt']) - duration(metadata['loadStartedAt'])).total_seconds()
     seconds = identity['durationSeconds']
     require(seconds >= 1800 and elapsed >= seconds, 'full identity duration not observed')
-    require(summary['checks']['values']['fails'] == 0, 'identity group/action mismatch')
-    require(summary.get('dropped_iterations', {'values': {'count': 0}})['values']['count'] == 0, 'offered identity work was dropped')
+    require(metric_values('checks')['fails'] == 0, 'identity group/action mismatch')
+    require('dropped_iterations' not in summary or metric_values('dropped_iterations')['count'] == 0, 'offered identity work was dropped')
     replicas = preflight['topology']['apiReplicas']
     results = []
     for index in range(replicas):
         before = metric_samples(f'identity-before-{index}.prom')
         after = metric_samples(f'identity-after-{index}.prom')
-        requests = summary[f'identity_requests{{replica:{index}}}']['values']['count']
-        decisions = summary[f'identity_decisions{{replica:{index}}}']['values']['count']
-        groups = summary[f'identity_groups{{replica:{index}}}']['values']['count']
+        requests = metric_values(f'identity_requests{{replica:{index}}}')['count']
+        decisions = metric_values(f'identity_decisions{{replica:{index}}}')['count']
+        groups = metric_values(f'identity_groups{{replica:{index}}}')['count']
         require(requests >= identity['ratePerReplica'] * seconds, 'principal throughput below declared rate')
         require(requests == decisions == groups, 'not every principal request has matching groups and decision')
         call_rate = (total(after, 'gitstore_userdir_requests_total') - total(before, 'gitstore_userdir_requests_total')) / elapsed

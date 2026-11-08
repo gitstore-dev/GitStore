@@ -570,6 +570,10 @@ a default.
   Every principal request checks the seeded grant/denial and group set;
   denied principals' group evidence is obtained by a separately authorized
   directory read, never exposed through their denied request.
+  The owned fixture explicitly allows 1,000 Admin requests/s per client IP
+  and 500 requests/s per principal, with bounded bursts of 2,000. These
+  capacity-only settings include the additional operator membership probes;
+  normal deployment and native fixture admission defaults are unchanged.
   The domain verifier joins K6 request/decision/membership counts to SDK
   complete profile-resolution histograms, sustained outbound call rates,
   observed cache/buffer bounds and a live source-authority/delivery companion.
