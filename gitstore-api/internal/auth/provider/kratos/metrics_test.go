@@ -66,12 +66,20 @@ func TestDirectoryMetricsUseSDKAndNoIdentityLabels(t *testing.T) {
 		"gitstore_userdir_cache_total", map[string]string{"outcome": "hit"}))
 	families, err := registry.Gather()
 	require.NoError(t, err)
+	resolutions := map[string]uint64{}
 	for _, family := range families {
 		for _, sample := range family.Metric {
+			labels := map[string]string{}
 			for _, label := range sample.Label {
-				require.Contains(t, []string{"method", "outcome"}, label.GetName())
+				require.Contains(t, []string{"method", "outcome", "cache"}, label.GetName())
 				require.NotContains(t, label.GetValue(), "private")
+				labels[label.GetName()] = label.GetValue()
+			}
+			if family.GetName() == "gitstore_userdir_resolution_duration_seconds" {
+				resolutions[labels["cache"]+"/"+labels["outcome"]] = sample.GetHistogram().GetSampleCount()
 			}
 		}
 	}
+	require.Equal(t, map[string]uint64{"hit/success": 1, "miss/success": 1, "miss/unavailable": 1}, resolutions,
+		"resolution overhead must include complete cached and uncached profile work, including failure")
 }

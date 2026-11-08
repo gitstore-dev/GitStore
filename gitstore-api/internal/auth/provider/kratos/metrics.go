@@ -16,7 +16,9 @@ import (
 type metrics struct {
 	requests         metric.Int64Counter
 	duration         metric.Float64Histogram
+	resolution       metric.Float64Histogram
 	cache            metric.Int64Counter
+	cacheEntries     metric.Int64Histogram
 	saturation       metric.Int64Counter
 	deliveryAttempts metric.Int64Counter
 	deliveryOutcomes metric.Int64Counter
@@ -31,8 +33,14 @@ func newMetrics(meter metric.Meter) *metrics {
 		duration: observability.MustInstrument(meter.Float64Histogram("gitstore_userdir_request_duration_seconds",
 			metric.WithUnit("s"), metric.WithDescription("Kratos Admin request latency."),
 			metric.WithExplicitBucketBoundaries(.001, .005, .01, .025, .05, .1, .25, .5, 1, 2))),
+		resolution: observability.MustInstrument(meter.Float64Histogram("gitstore_userdir_resolution_duration_seconds",
+			metric.WithUnit("s"), metric.WithDescription("Complete cached or uncached directory profile lookup latency."),
+			metric.WithExplicitBucketBoundaries(.0001, .0005, .001, .005, .01, .025, .05, .1, .25, .5, 1, 2))),
 		cache: observability.MustInstrument(meter.Int64Counter("gitstore_userdir_cache_total",
 			metric.WithDescription("Directory lookup cache hits and misses."))),
+		cacheEntries: observability.MustInstrument(meter.Int64Histogram("gitstore_userdir_cache_entries",
+			metric.WithDescription("Observed per-provider lookup cache occupancy."),
+			metric.WithExplicitBucketBoundaries(0, 1, 8, 16, 32, 64, 128, 256, 1024, 8192, 50000))),
 		saturation: observability.MustInstrument(meter.Int64Counter("gitstore_userdir_saturation_total",
 			metric.WithDescription("Requests rejected at the directory concurrency bound."))),
 		deliveryAttempts: observability.MustInstrument(meter.Int64Counter("gitstore_userdir_serviceaccount_attempts_total",

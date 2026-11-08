@@ -56,6 +56,10 @@ container wiring and configuration.
   label is `com.docker.compose.project`; owned fixtures can explicitly override
   `CHAOS_OWNERSHIP_LABEL`. Process restoration receipts are not authentication
   recovery passes; see [../tests/chaos/README.md](../tests/chaos/README.md).
+- `make capacity TARGET=api PROFILE=readiness` retains health-only smoke
+  behavior unless `CAPACITY_IDENTITY_READINESS=1`. Identity acceptance requires
+  the private principal fixture, verified native counts, SDK timing/bounds
+  and live-delivery companion; see [../tests/capacity/README.md](../tests/capacity/README.md).
 
 ## Infrastructure command instructions
 

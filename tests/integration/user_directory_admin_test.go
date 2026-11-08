@@ -54,8 +54,14 @@ func (r *directoryTestRuntime) startAPIs(t *testing.T, operator string, sharedSo
 		Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key),
 	}), 0600))
 	r.command(t, nil, "cp", keyFile, r.receiver+":/issuer.pem")
+	issuerTimeout := "8m"
+	tokenTTL := 5 * time.Minute
+	if r.capacity {
+		issuerTimeout = "2h"
+		tokenTTL = time.Hour
+	}
 	r.command(t, nil, "exec", "-d", "-e", "GITSTORE_TEST_OWNED_OIDC_KEY_FILE=/issuer.pem", r.receiver,
-		"/directory-receiver.test", "-test.run=^TestOwnedUserDirectoryIssuer$", "-test.timeout=8m")
+		"/directory-receiver.test", "-test.run=^TestOwnedUserDirectoryIssuer$", "-test.timeout="+issuerTimeout)
 	require.Eventually(t, func() bool {
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 		defer cancel()
@@ -112,9 +118,27 @@ clusterRoleBindings:
   - roleRef: {kind: ClusterRole, name: workload-token}
     subjects: [{kind: ServiceAccount, name: owned-ci-bot}]
 `, operator)
+	if r.capacity {
+		policy = strings.Replace(policy, "resources: [user]\n        verbs: [read]",
+			"resources: [user, serviceAccount]\n        verbs: [read]", 1)
+	}
 	require.NoError(t, os.WriteFile(filepath.Join(privateDir, "policy.yaml"), []byte(policy), 0600))
 	root, err := filepath.Abs("../..")
 	require.NoError(t, err)
+	apiImage, apiEntrypoint := "postgres:16-alpine", "/fixtures/api"
+	if r.capacity {
+		revisionCommand := exec.Command("git", "rev-parse", "HEAD")
+		revisionCommand.Dir = root
+		revision, err := revisionCommand.Output()
+		require.NoError(t, err)
+		tag := "gitstore-userdir-api:" + r.owner[:12]
+		r.command(t, nil, "build", "-q", "--build-arg", "GIT_REVISION="+strings.TrimSpace(string(revision)),
+			"--label", "dev.gitstore.test_owner="+r.owner,
+			"-f", filepath.Join(root, "docker/api.Dockerfile"), "-t", tag, root)
+		t.Cleanup(func() { r.command(t, nil, "image", "rm", tag) })
+		apiImage = strings.TrimSpace(r.command(t, nil, "image", "inspect", "--format", "{{.Id}}", tag))
+		apiEntrypoint = "/app/api"
+	}
 	source := len(sharedSource) != 0 && sharedSource[0]
 	sourceSigningKey := ""
 	if source {
@@ -232,12 +256,15 @@ confidence_window = "500ms"
 `, sourceSigningKey)
 		}
 		configFile := filepath.Join(privateDir, fmt.Sprintf("api-%d.toml", replica))
+		if r.capacity {
+			config = strings.Replace(config, `cache_ttl = "500ms"`, `cache_ttl = "5m"`, 1)
+		}
 		require.NoError(t, os.WriteFile(configFile, []byte(config), 0600))
 		r.command(t, nil, "run", "-d", "--name", name, "--label", "dev.gitstore.test_owner="+r.owner,
 			"--network", r.network, "--ip", apiIP.String(), "--memory", "384m", "--cpus", "1",
 			"-p", "127.0.0.1::4000", "-p", "127.0.0.1::4001",
-			"-v", privateDir+":/fixtures:ro", "--entrypoint", "/fixtures/api",
-			"postgres:16-alpine", "--config-file", fmt.Sprintf("/fixtures/api-%d.toml", replica))
+			"-v", privateDir+":/fixtures:ro", "--entrypoint", apiEntrypoint,
+			apiImage, "--config-file", fmt.Sprintf("/fixtures/api-%d.toml", replica))
 		r.cleanupContainer(t, name, true)
 		t.Cleanup(func() {
 			if t.Failed() {
@@ -262,7 +289,7 @@ confidence_window = "500ms"
 		now := time.Now()
 		token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 			"iss": "http://directory-receiver:8086", "sub": subject, "aud": "owned-directory",
-			"iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix(),
+			"iat": now.Unix(), "exp": now.Add(tokenTTL).Unix(),
 			"groups": []string{"system:staff", "system:group:forged"},
 		})
 		token.Header["kid"] = "owned-directory"

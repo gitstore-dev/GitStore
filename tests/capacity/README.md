@@ -559,6 +559,41 @@ a default.
 ## Included profiles
 
 - `api-readiness` is a non-mutating runner smoke test.
+- With `CAPACITY_IDENTITY_READINESS=1`, the same selector runs the identity
+  acceptance matrix instead of health-only traffic. It requires a private
+  `CAPACITY_IDENTITY_FIXTURE_FILE`, the usual private `CAPACITY_TOKEN_FILE`,
+  and `services.identity` in the configuration manifest. Native PostgreSQL
+  and Scylla counts must match the declared Staff/Customer/ServiceAccount
+  envelope; all identity dependencies must have matching explicit ownership
+  labels and positive memory/CPU bounds. The default is 500 principal
+  requests/s **per API** for thirty minutes, with no dropped iterations.
+  Every principal request checks the seeded grant/denial and group set;
+  denied principals' group evidence is obtained by a separately authorized
+  directory read, never exposed through their denied request.
+  The domain verifier joins K6 request/decision/membership counts to SDK
+  complete profile-resolution histograms, sustained outbound call rates,
+  observed cache/buffer bounds and a live source-authority/delivery companion.
+  This is not a five-million-Product workload; the existing smoke exemption
+  remains, and all existing source/topology/resource checks are retained.
+
+  The bounded opt-in owned fixture seeds and runs both the 100,000-Customer/
+  100-ServiceAccount alpha case and the 1,000,000-Customer/1,000-ServiceAccount
+  envelope with 1,000 Staff:
+
+  ```bash
+  cd tests/integration
+  USER_DIRECTORY_TEST_OWNED_DEPLOYMENT=1 USER_DIRECTORY_TEST_CAPACITY=1 \
+    go test . -run '^TestOwnedUserDirectoryCapacity$' -count=1 -timeout=2h15m
+  ```
+
+  It invokes `make capacity TARGET=api PROFILE=readiness MODE=alpha` for each
+  separately declared envelope from a clean source-attributed checkout.
+  It reuses the native directory fixtures, canonical API/Git images and
+  canonical Scylla Compose services, with private runtime credentials and one
+  unaffected Git process. The larger identity store uses a newly named owned
+  PostgreSQL volume rather than the small schema-test tmpfs. Only its own
+  containers, networks, volumes and private credential files are cleaned up;
+  noncredential evidence remains under `.gitstore/`.
 - `namespace-admission` drives unique Namespace creates at a fixed arrival
   rate, alternates across two replicas, and fails on dropped iterations,
   GraphQL errors, or latency/error threshold violations. Each acknowledged

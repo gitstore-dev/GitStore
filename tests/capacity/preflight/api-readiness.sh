@@ -156,6 +156,70 @@ jq -e --arg base_url "${base_url}" '([.[].endpoint] | index($base_url)) != null'
   exit 2
 }
 
+if [[ "${CAPACITY_IDENTITY_READINESS:-0}" == 1 ]]; then
+  fixture="${CAPACITY_IDENTITY_FIXTURE_FILE:-}"
+  [[ -r "${fixture}" ]] || { echo "identity readiness requires a private CAPACITY_IDENTITY_FIXTURE_FILE" >&2; exit 2; }
+  jq -e '
+    (.cases | type == "array" and length >= 3) and
+    all(.cases[];
+      (.kind == "Staff" or .kind == "Customer" or .kind == "ServiceAccount") and
+      (.allowed | type == "boolean") and (.token | strings | length > 0) and
+      (.actorID | strings | length > 0) and (.groups | type == "array") and
+      (.groups | unique | length) == (.groups | length)) and
+    ([.cases[].kind] | unique | length) == 3 and
+    any(.cases[]; .kind == "Customer" and .allowed == false) and
+    any(.cases[]; .kind == "Staff" and .allowed == true) and
+    any(.cases[]; .kind == "Staff" and .allowed == false)
+  ' "${fixture}" >/dev/null || { echo "identity fixture lacks the typed grant/denial/group matrix" >&2; exit 2; }
+  identity_config="$(jq -ec '.services.identity' "${config}")"
+  jq -e '
+    (.owner | strings | length > 0) and
+    (.staff | numbers) >= 1000 and (.customers | numbers) >= 100000 and
+    (.serviceAccounts | numbers) >= 100 and .cacheEntries == 256 and
+    (.kratosContainers | length) == 2 and
+    all([.postgresContainer,.scyllaContainer,.gitContainer] + .kratosContainers | .[];
+      type == "string" and test("^gitstore-[a-zA-Z0-9_.-]+$"))
+  ' <<<"${identity_config}" >/dev/null || { echo "identity config requires an owned bounded seeded topology" >&2; exit 2; }
+  [[ "${CAPACITY_RATE:-500}" =~ ^[0-9]+$ ]] && (( ${CAPACITY_RATE:-500} >= 500 )) || {
+    echo "identity acceptance requires at least 500 principal requests/s per API" >&2; exit 2;
+  }
+  duration="${CAPACITY_DURATION:-30m}"
+  [[ "${duration}" =~ ^([0-9]+)(s|m|h)$ ]] || { echo "identity duration must use seconds, minutes or hours" >&2; exit 2; }
+  duration_seconds="${BASH_REMATCH[1]}"
+  case "${BASH_REMATCH[2]}" in m) duration_seconds=$((duration_seconds * 60)) ;; h) duration_seconds=$((duration_seconds * 3600)) ;; esac
+  (( duration_seconds >= 1800 )) || { echo "identity acceptance requires the full thirty-minute duration" >&2; exit 2; }
+  owner="$(jq -r '.owner' <<<"${identity_config}")"
+  postgres="$(jq -r '.postgresContainer' <<<"${identity_config}")"
+  scylla="$(jq -r '.scyllaContainer' <<<"${identity_config}")"
+  dependency_containers=()
+  while IFS= read -r dependency; do dependency_containers+=("${dependency}"); done \
+    < <(jq -r '[.postgresContainer,.scyllaContainer,.gitContainer] + .kratosContainers | .[]' <<<"${identity_config}")
+  dependency_inspection="$(docker inspect "${dependency_containers[@]}")"
+  jq -e --arg owner "${owner}" '
+    length == 5 and ([.[].Id] | unique | length) == 5 and
+    all(.[]; .Config.Labels["dev.gitstore.test_owner"] == $owner and .State.Running and
+      (.State.Paused | not) and (.State.OOMKilled | not) and .HostConfig.Memory > 0 and .HostConfig.NanoCpus > 0)
+  ' <<<"${dependency_inspection}" >/dev/null || { echo "identity dependencies must be distinct live bounded owned containers" >&2; exit 2; }
+  counts="$(docker exec "${postgres}" psql -U kratos -d kratos -At -v ON_ERROR_STOP=1 -c \
+    "SELECT json_build_object('staff',count(*) FILTER(WHERE schema_id='staff'),'customers',count(*) FILTER(WHERE schema_id='customer'),'serviceAccounts',count(*) FILTER(WHERE schema_id='serviceAccount')) FROM identities;")"
+  source_count="$(docker exec "${scylla}" cqlsh -e 'SELECT count(*) FROM gitstore.service_accounts_by_cluster_name;' |
+    awk 'NF == 1 && $1 ~ /^[0-9]+$/ {print $1}')"
+  jq -e --argjson declared "${identity_config}" --argjson source "${source_count}" '
+    .staff == $declared.staff and .customers == $declared.customers and
+    .serviceAccounts == $declared.serviceAccounts and .serviceAccounts == $source
+  ' <<<"${counts}" >/dev/null || { echo "native directory/source counts do not match the declared identity envelope" >&2; exit 2; }
+  if [[ "${CAPACITY_IDENTITY_ENVELOPE:-alpha}" == production ]]; then
+    jq -e '.customers >= 1000000 and .serviceAccounts >= 1000' <<<"${counts}" >/dev/null || {
+      echo "production identity envelope requires one million customers and one thousand ServiceAccounts" >&2; exit 2;
+    }
+  fi
+  jq -n --argjson counts "${counts}" --argjson duration "${duration_seconds}" \
+    --argjson rate "${CAPACITY_RATE:-500}" --argjson dependencies "${dependency_inspection}" \
+    '{schemaVersion:1,passed:true,counts:$counts,durationSeconds:$duration,ratePerReplica:$rate,
+      dependencies:[$dependencies[] | {id:.Id,name:.Name,image:.Image,startedAt:.State.StartedAt,
+        memoryBytes:.HostConfig.Memory,nanoCPUs:.HostConfig.NanoCpus}]}' >"${evidence_dir}/identity-preflight.json"
+fi
+
 jq -n \
   --arg mode "${mode}" --arg base_url "${base_url}" --arg api_build "${config_build}" \
   --argjson api_replicas "${config_replicas}" --argjson runtime_memory_bytes "${environment_memory}" \

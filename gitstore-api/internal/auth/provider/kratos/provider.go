@@ -86,9 +86,20 @@ func validIdentifier(value string) bool {
 		strings.IndexFunc(value, unicode.IsControl) < 0
 }
 
-func (p *Provider) lookup(ctx context.Context, cacheKey, path string, query url.Values, username string) (*auth.UserProfile, error) {
+func (p *Provider) lookup(ctx context.Context, cacheKey, path string, query url.Values, username string) (profile *auth.UserProfile, lookupErr error) {
+	start := time.Now()
+	cacheOutcome := "miss"
+	defer func() {
+		p.metrics.resolution.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(
+			attribute.String("cache", cacheOutcome), attribute.String("outcome", auth.DirectoryErrorClass(lookupErr))))
+		p.cache.mu.Lock()
+		cacheSize := len(p.cache.entries)
+		p.cache.mu.Unlock()
+		p.metrics.cacheEntries.Record(ctx, int64(cacheSize))
+	}()
 	generation := p.cache.snapshotGeneration()
 	if profile := p.cache.get(cacheKey); profile != nil {
+		cacheOutcome = "hit"
 		p.metrics.cache.Add(ctx, 1, metric.WithAttributes(attribute.String("outcome", "hit")))
 		return profile, nil
 	}

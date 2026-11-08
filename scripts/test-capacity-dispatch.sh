@@ -60,6 +60,46 @@ if CAPACITY_DRY_RUN=1 "${dispatcher}" namespace watch gate >/dev/null 2>&1; then
 fi
 
 mkdir -p "${test_dir}/bin" "${test_dir}/readiness-valid" "${test_dir}/readiness-missing"
+mkdir -p "${test_dir}/identity-verifier"
+python3 - "${test_dir}/identity-verifier" <<'PY'
+import json
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+documents = {
+    'metadata.json': {'gitDirty': False, 'loadStartedAt': '2026-01-01T00:00:00Z', 'loadCompletedAt': '2026-01-01T00:30:01Z'},
+    'preflight-environment.json': {'passed': True, 'topology': {'apiReplicas': 2}},
+    'identity-preflight.json': {'passed': True, 'counts': {'staff': 1000, 'customers': 100000, 'serviceAccounts': 100}, 'durationSeconds': 1800, 'ratePerReplica': 500},
+    'identity-connected.json': {'events': 90, 'sourceAuthorityPassed': True, 'groupsPassed': True, 'laterDeliveryPassed': True, 'gitProcessUnchanged': True, 'sharedStoragePreserved': True},
+    'summary.json': {'metrics': {'checks': {'values': {'fails': 0}}, 'dropped_iterations': {'values': {'count': 0}}}},
+}
+for index in range(2):
+    for name in ['identity_requests', 'identity_decisions', 'identity_groups']:
+        documents['summary.json']['metrics'][f'{name}{{replica:{index}}}'] = {'values': {'count': 900000}}
+    (root / f'identity-before-{index}.prom').write_text('')
+    (root / f'identity-after-{index}.prom').write_text('''gitstore_userdir_requests_total{outcome="success",method="GET"} 9000
+gitstore_userdir_resolution_duration_seconds_count{cache="hit",outcome="success"} 900000
+gitstore_userdir_resolution_duration_seconds_bucket{cache="hit",outcome="success",le="0.01"} 900000
+gitstore_userdir_resolution_duration_seconds_count{cache="miss",outcome="success"} 9000
+gitstore_userdir_resolution_duration_seconds_bucket{cache="miss",outcome="success",le="0.1"} 9000
+gitstore_userdir_cache_entries_count 909000
+gitstore_userdir_cache_entries_bucket{le="256"} 909000
+gitstore_userdir_serviceaccount_buffer_depth_count 90
+gitstore_userdir_serviceaccount_buffer_depth_bucket{le="64"} 90
+gitstore_userdir_serviceaccount_delivery_total{outcome="applied"} 90
+''')
+for name, value in documents.items():
+    (root / name).write_text(json.dumps(value))
+PY
+CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-verifier"
+jq -e '.passed and (.replicas | length) == 2' "${test_dir}/identity-verifier/identity-verifier.json" >/dev/null
+jq '.metrics["identity_groups{replica:1}"].values.count -= 1' "${test_dir}/identity-verifier/summary.json" >"${test_dir}/identity-verifier/summary.tmp"
+mv "${test_dir}/identity-verifier/summary.tmp" "${test_dir}/identity-verifier/summary.json"
+if CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-verifier" >/dev/null 2>&1; then
+  echo "identity verifier accepted a request without matching membership evidence" >&2
+  exit 1
+fi
+jq -e '.passed == false' "${test_dir}/identity-verifier/identity-verifier.json" >/dev/null
 mkdir -p "${test_dir}/chaos-bin"
 cat >"${test_dir}/chaos-bin/docker" <<'MOCK'
 #!/usr/bin/env bash

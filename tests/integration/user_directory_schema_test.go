@@ -38,6 +38,8 @@ type directoryTestRuntime struct {
 	adminReplicas                                   []string
 	client                                          *http.Client
 	mailAPI                                         string
+	capacity                                        bool
+	postgresVolume                                  string
 }
 
 func startDirectoryTestRuntime(t *testing.T, enableMail ...bool) *directoryTestRuntime {
@@ -53,6 +55,7 @@ func startDirectoryTestRuntime(t *testing.T, enableMail ...bool) *directoryTestR
 		owner: owner, network: "gitstore-userdir-test-" + owner[:12],
 		postgres: "gitstore-userdir-postgres-" + owner[:12],
 		secret:   owner, client: &http.Client{Timeout: 2 * time.Second},
+		capacity: os.Getenv("USER_DIRECTORY_TEST_CAPACITY") == "1",
 	}
 	withMail := len(enableMail) > 0 && enableMail[0]
 	if withMail {
@@ -68,13 +71,32 @@ func startDirectoryTestRuntime(t *testing.T, enableMail ...bool) *directoryTestR
 		}
 		r.command(t, nil, "network", "rm", r.network)
 	})
-	r.command(t, nil, "run", "-d", "--rm", "--name", r.postgres,
-		"--label", "dev.gitstore.test_owner="+owner, "--network", r.network,
-		"--network-alias", "postgres", "--memory", "512m", "--cpus", "1",
-		"--tmpfs", "/var/lib/postgresql/data:rw,size=256m",
+	postgresArgs := []string{"run", "-d", "--rm", "--name", r.postgres,
+		"--label", "dev.gitstore.test_owner=" + owner, "--network", r.network,
+		"--network-alias", "postgres"}
+	if r.capacity {
+		r.postgresVolume = r.postgres + "-data"
+		r.command(t, nil, "volume", "create", "--label", "dev.gitstore.test_owner="+owner, r.postgresVolume)
+		t.Cleanup(func() {
+			label := strings.TrimSpace(r.command(t, nil, "volume", "inspect", "--format",
+				`{{index .Labels "dev.gitstore.test_owner"}}`, r.postgresVolume))
+			if label != r.owner {
+				t.Errorf("refusing cleanup of a capacity volume with unexpected ownership")
+				return
+			}
+			r.command(t, nil, "volume", "rm", r.postgresVolume)
+		})
+		postgresArgs = append(postgresArgs, "--memory", "1g", "--cpus", "2",
+			"-v", r.postgresVolume+":/var/lib/postgresql/data")
+	} else {
+		postgresArgs = append(postgresArgs, "--memory", "512m", "--cpus", "1",
+			"--tmpfs", "/var/lib/postgresql/data:rw,size=256m")
+	}
+	postgresArgs = append(postgresArgs,
 		"-e", "POSTGRES_USER=kratos", "-e", "POSTGRES_DB=kratos", "-e", "POSTGRES_PASSWORD",
 		"postgres:16-alpine",
 	)
+	r.command(t, nil, postgresArgs...)
 	r.cleanupContainer(t, r.postgres)
 	require.Eventually(t, func() bool {
 		return exec.Command("docker", "exec", r.postgres, "pg_isready", "-U", "kratos", "-d", "kratos").Run() == nil
@@ -130,9 +152,13 @@ func startDirectoryTestRuntime(t *testing.T, enableMail ...bool) *directoryTestR
 	if withMail {
 		receiverArgs = append(receiverArgs, "-e", "GITSTORE_TEST_OWNED_MAIL_KEY")
 	}
+	receiverTimeout := "5m"
+	if r.capacity {
+		receiverTimeout = "2h"
+	}
 	receiverArgs = append(receiverArgs, "-v", binary+":/directory-receiver.test:ro",
 		"-v", bridgeBinary+":/directory-bridge.test:ro", "--entrypoint", "/directory-receiver.test",
-		"postgres:16-alpine", "-test.run=^TestOwnedKratosWebhookReceiver$", "-test.timeout=5m")
+		"postgres:16-alpine", "-test.run=^TestOwnedKratosWebhookReceiver$", "-test.timeout="+receiverTimeout)
 	r.command(t, nil, receiverArgs...)
 	r.cleanupContainer(t, r.receiver, true)
 	require.Eventually(t, func() bool {
