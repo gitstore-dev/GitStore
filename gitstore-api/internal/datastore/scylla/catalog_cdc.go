@@ -20,16 +20,20 @@ import (
 	scyllacdc "github.com/scylladb/scylla-cdc-go"
 )
 
-// catalogCDCSource is one namespaced catalog kind whose authoritative table
+// catalogCDCSource is one resource kind whose authoritative table
 // feeds the shared resource watch journal. New kinds (including future
 // custom resources) register here instead of adding a dedicated runner.
 type catalogCDCSource struct {
-	table string
+	table         string
+	clusterScoped bool
 	// payload converts a decoded CDC image into the kind's datastore JSON.
 	payload func(rows []*scyllacdc.ChangeRow) (json.RawMessage, error)
 }
 
 var catalogCDCSources = map[string]catalogCDCSource{
+	"ServiceAccount": {table: "service_accounts_by_cluster_name", clusterScoped: true, payload: func(rows []*scyllacdc.ChangeRow) (json.RawMessage, error) {
+		return marshalServiceAccountCDC(serviceAccountCDCRow(rows))
+	}},
 	"Product": {table: "products_by_key", payload: func(rows []*scyllacdc.ChangeRow) (json.RawMessage, error) {
 		return marshalCDCImage(catalogCDCRow(rows), fromProductRow)
 	}},
@@ -50,7 +54,9 @@ func (s *scyllaDatastore) CatalogCDCKinds() []string {
 
 // RunCatalogCDC consumes one registered catalog kind's authoritative table.
 // Catalog rows are list-visible in that same table, so a postimage can enter
-// the shared journal without a secondary projection fence.
+// the shared journal without a secondary projection fence. ServiceAccount
+// images remain hidden until their authoritative enrollment marker confirms
+// the UID reservation and listing projection have committed.
 func (s *scyllaDatastore) RunCatalogCDC(ctx context.Context, kind string, materializer *watchjournal.Materializer, lease datastore.ResourceWatchLease, changeAgeLimit, confidenceWindow time.Duration, ready func()) error {
 	source, ok := catalogCDCSources[kind]
 	if !ok {
@@ -73,7 +79,7 @@ func (s *scyllaDatastore) runCatalogResourceCDC(ctx context.Context, materialize
 	}
 	sequencerErr := make(chan error, 1)
 	go func() { sequencerErr <- sequencer.Run(runCtx); cancel() }()
-	factory := &catalogCDCConsumerFactory{sequencer: sequencer, onReady: ready, kind: kind, payload: source.payload}
+	factory := &catalogCDCConsumerFactory{sequencer: sequencer, onReady: ready, kind: kind, payload: source.payload, clusterScoped: source.clusterScoped}
 	reader, err := scyllacdc.NewReader(runCtx, &scyllacdc.ReaderConfig{
 		Session: s.session.Session, TableNames: []string{s.keyspace + "." + source.table}, Consistency: gocql.Quorum,
 		ChangeConsumerFactory: factory, ProgressManager: progress, Logger: zapCDCLogger{s.log},
@@ -97,11 +103,12 @@ func (s *scyllaDatastore) runCatalogResourceCDC(ctx context.Context, materialize
 }
 
 type catalogCDCConsumerFactory struct {
-	sequencer *namespaceCDCSequencer
-	onReady   func()
-	readyOnce sync.Once
-	kind      string
-	payload   func([]*scyllacdc.ChangeRow) (json.RawMessage, error)
+	sequencer     *namespaceCDCSequencer
+	onReady       func()
+	readyOnce     sync.Once
+	kind          string
+	payload       func([]*scyllacdc.ChangeRow) (json.RawMessage, error)
+	clusterScoped bool
 }
 
 func (f *catalogCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, input scyllacdc.CreateChangeConsumerInput) (scyllacdc.ChangeConsumer, error) {
@@ -113,12 +120,13 @@ func (f *catalogCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, in
 		return catalogCDCFailedConsumer{err}, nil
 	}
 	return &catalogCDCConsumer{
-		sequencer: f.sequencer,
-		streamID:  streamID,
-		reporter:  input.ProgressReporter,
-		onReady:   f.markReady,
-		kind:      f.kind,
-		payload:   f.payload,
+		sequencer:     f.sequencer,
+		streamID:      streamID,
+		reporter:      input.ProgressReporter,
+		onReady:       f.markReady,
+		kind:          f.kind,
+		payload:       f.payload,
+		clusterScoped: f.clusterScoped,
 	}, nil
 }
 
@@ -135,12 +143,13 @@ func (c catalogCDCFailedConsumer) Empty(context.Context, gocql.UUID) error      
 func (catalogCDCFailedConsumer) End() error                                        { return nil }
 
 type catalogCDCConsumer struct {
-	sequencer *namespaceCDCSequencer
-	streamID  string
-	reporter  *scyllacdc.ProgressReporter
-	onReady   func()
-	kind      string
-	payload   func([]*scyllacdc.ChangeRow) (json.RawMessage, error)
+	sequencer     *namespaceCDCSequencer
+	streamID      string
+	reporter      *scyllacdc.ProgressReporter
+	onReady       func()
+	kind          string
+	payload       func([]*scyllacdc.ChangeRow) (json.RawMessage, error)
+	clusterScoped bool
 }
 
 func (c *catalogCDCConsumer) Consume(ctx context.Context, change scyllacdc.Change) error {
@@ -176,7 +185,8 @@ func (c *catalogCDCConsumer) changes(change scyllacdc.Change) ([]watchjournal.Ch
 	for side, rows := range [][]*scyllacdc.ChangeRow{change.PreImage, change.PostImage} {
 		for _, row := range rows {
 			envelope := catalogCDCRow([]*scyllacdc.ChangeRow{row})
-			if envelope == nil || envelope.UID == (gocql.UUID{}) || envelope.Namespace == "" {
+			if envelope == nil || envelope.UID == (gocql.UUID{}) || envelope.Name == "" ||
+				(!c.clusterScoped && envelope.Namespace == "") || (c.clusterScoped && envelope.Namespace != "") {
 				return nil, fmt.Errorf("%w: %s CDC image has no authoritative identity", datastore.ErrNamespaceWatchDiscontinuity, c.kind)
 			}
 			pair := images[envelope.UID]
@@ -187,7 +197,8 @@ func (c *catalogCDCConsumer) changes(change scyllacdc.Change) ([]watchjournal.Ch
 				pair = &image{envelope: envelope}
 				images[envelope.UID] = pair
 			}
-			if pair.envelope.Namespace != envelope.Namespace || !pair.envelope.CreationTimestamp.Equal(envelope.CreationTimestamp) {
+			if pair.envelope.Namespace != envelope.Namespace || !pair.envelope.CreationTimestamp.Equal(envelope.CreationTimestamp) ||
+				(c.clusterScoped && pair.envelope.Name != envelope.Name) {
 				return nil, fmt.Errorf("%w: %s CDC images disagree on immutable key", datastore.ErrNamespaceWatchDiscontinuity, c.kind)
 			}
 			if side == 0 {
@@ -226,9 +237,17 @@ func (c *catalogCDCConsumer) changes(change scyllacdc.Change) ([]watchjournal.Ch
 		if len(ids) > 1 {
 			key += ":" + uid.String()
 		}
+		var deletionPayload json.RawMessage
+		if c.clusterScoped && len(before) > 0 && len(after) == 0 {
+			deletionPayload, err = json.Marshal(map[string]string{"UID": uid.String()})
+			if err != nil {
+				return nil, err
+			}
+		}
 		changes = append(changes, watchjournal.Change{
 			Kind: c.kind, Namespace: pair.envelope.Namespace, StreamID: c.streamID, Position: change.Time.Bytes(),
 			DeduplicationKey: key, Name: pair.envelope.Name, Before: before, After: after, At: change.Time.Time().UTC(),
+			DeletionPayload: deletionPayload,
 		})
 	}
 	return changes, nil

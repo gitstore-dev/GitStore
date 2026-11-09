@@ -37,6 +37,32 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 	switch obj := (obj).(type) {
 	case nil:
 		return graphql.Null
+	case model.Staff:
+		return ec._Staff(ctx, sel, &obj)
+	case *model.Staff:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._Staff(ctx, sel, obj)
+	case model.Customer:
+		return ec._Customer(ctx, sel, &obj)
+	case *model.Customer:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._Customer(ctx, sel, obj)
+	case model.User:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._User(ctx, sel, obj)
+	case model.ServiceAccount:
+		return ec._ServiceAccount(ctx, sel, &obj)
+	case *model.ServiceAccount:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ServiceAccount(ctx, sel, obj)
 	case model.Repository:
 		return ec._Repository(ctx, sel, &obj)
 	case *model.Repository:
@@ -86,6 +112,11 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 			return graphql.Null
 		}
 		return ec._Category(ctx, sel, obj)
+	case model.Actor:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._Actor(ctx, sel, obj)
 	default:
 		if typedObj, ok := obj.(graphql.Marshaler); ok {
 			return typedObj

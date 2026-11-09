@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "description": "Restart one explicitly owned Kratos replica without replacing its shared identity storage.",
+  "action": "restart",
+  "expectedRecovery": "30s",
+  "requiresOwnership": true,
+  "targetPattern": "^gitstore-(oidc-kratos|userdir-kratos-[a-zA-Z0-9_.-]+)$",
+  "recoveryContract": "The capacity verifier must prove existing-profile authentication recovery on both APIs within 30 seconds of dependency readiness. Discarded workload events are not repaired."
+}

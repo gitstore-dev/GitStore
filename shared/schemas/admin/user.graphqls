@@ -1,0 +1,126 @@
+"""Shared identity and contact fields for externally managed human users."""
+interface User implements Actor & Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  fullName: String!
+  identities: [String!]!
+  groups: [String!]!
+  lifecycle: ActorLifecycle!
+  primaryEmail: String!
+  emailVerified: Boolean!
+  emailDeliverable: Boolean!
+  contactConsent: ContactConsent!
+}
+
+"""An externally managed Staff identity."""
+type Staff implements User & Actor & Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  fullName: String!
+  identities: [String!]!
+  groups: [String!]!
+  lifecycle: ActorLifecycle!
+  primaryEmail: String!
+  emailVerified: Boolean!
+  emailDeliverable: Boolean!
+  contactConsent: ContactConsent!
+}
+
+"""An externally managed Customer identity."""
+type Customer implements User & Actor & Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  fullName: String!
+  identities: [String!]!
+  groups: [String!]!
+  lifecycle: ActorLifecycle!
+  primaryEmail: String!
+  emailVerified: Boolean!
+  emailDeliverable: Boolean!
+  contactConsent: ContactConsent!
+}
+
+"""Trusted contact consent facts maintained by the identity directory."""
+type ContactConsent {
+  transactional: Boolean!
+  marketing: Boolean!
+}
+
+"""Exactly one identifier; workload names are separate from human usernames."""
+input ActorBy @oneOf {
+  id: ID
+  username: String
+  serviceAccountName: String
+}
+
+type ActorEdge {
+  cursor: String!
+  node: Actor!
+}
+
+type ActorConnection {
+  edges: [ActorEdge!]!
+  pageInfo: PageInfo!
+}
+
+extend type Query {
+  """Look up a concrete actor. Directory usernames are not email aliases."""
+  actor(by: ActorBy!): Actor
+
+  """List the configured directory. Workload coverage is best-effort."""
+  actors(first: Int, after: String, last: Int, before: String): ActorConnection!
+}
+
+input CreateStaffInput {
+  metadata: ObjectMetaInput!
+  fullName: String!
+  primaryEmail: String!
+  groups: [String!]
+}
+type CreateStaffPayload { staff: Staff }
+
+"""Only display name, pending primary email and consent may be edited."""
+input UpdateUserInput {
+  id: ID!
+  fullName: String
+  primaryEmail: String
+  transactionalConsent: Boolean
+  marketingConsent: Boolean
+}
+type UpdateUserPayload { actor: Actor }
+
+input DeactivateUserInput { id: ID! }
+type DeactivateUserPayload { actor: Actor }
+input ReactivateUserInput { id: ID! }
+type ReactivateUserPayload { actor: Actor }
+input SuspendUserInput { id: ID! }
+type SuspendUserPayload { actor: Actor }
+input ResendStaffInvitationInput { id: ID! }
+type ResendStaffInvitationPayload { staff: Staff }
+input DeleteUserInput { id: ID! }
+type DeleteUserPayload { actor: Actor }
+input AssignUserGroupInput { id: ID!, group: String! }
+type AssignUserGroupPayload { actor: Actor }
+input RemoveUserGroupInput { id: ID!, group: String! }
+type RemoveUserGroupPayload { actor: Actor }
+input SetUserEmailDeliverabilityInput { id: ID!, deliverable: Boolean! }
+type SetUserEmailDeliverabilityPayload { actor: Actor }
+
+extend type Mutation {
+  createStaff(input: CreateStaffInput!): CreateStaffPayload!
+  updateUser(input: UpdateUserInput!): UpdateUserPayload!
+  deactivateUser(input: DeactivateUserInput!): DeactivateUserPayload!
+  reactivateUser(input: ReactivateUserInput!): ReactivateUserPayload!
+  suspendUser(input: SuspendUserInput!): SuspendUserPayload!
+  resendStaffInvitation(input: ResendStaffInvitationInput!): ResendStaffInvitationPayload!
+  deleteUser(input: DeleteUserInput!): DeleteUserPayload!
+  assignUserGroup(input: AssignUserGroupInput!): AssignUserGroupPayload!
+  removeUserGroup(input: RemoveUserGroupInput!): RemoveUserGroupPayload!
+  setUserEmailDeliverability(input: SetUserEmailDeliverabilityInput!): SetUserEmailDeliverabilityPayload!
+}

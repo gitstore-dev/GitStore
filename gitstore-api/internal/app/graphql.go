@@ -253,19 +253,41 @@ func webSocketInitFunc(registry *auth.ProviderRegistry, connectionRegistry *wsre
 			return nil, nil, errors.New("unauthorized")
 		}
 
+		generation := connectionRegistry.Generation()
+		principal, err = auth.EnrichPrincipal(authCtx, registry.UserDir(), principal)
+		if err != nil {
+			return nil, nil, errors.New("directory admission failed")
+		}
+		deadline := principal.ExpiresAt
+		if directory := registry.UserDir(); directory != nil && directory.Name() != "none" {
+			lease := 5*time.Minute - time.Second
+			if provider, ok := directory.(interface{ ProfileLeaseDuration() time.Duration }); ok {
+				lease = min(lease, provider.ProfileLeaseDuration())
+			}
+			if lease <= 0 {
+				return nil, nil, errors.New("invalid directory lease")
+			}
+			expiry := time.Now().Add(lease)
+			if !principal.ProfileExpiresAt.IsZero() && principal.ProfileExpiresAt.Before(expiry) {
+				expiry = principal.ProfileExpiresAt
+			}
+			if deadline.IsZero() || expiry.Before(deadline) {
+				deadline = expiry
+			}
+		}
 		{
 			var cancel context.CancelFunc
-			if principal.ExpiresAt.IsZero() {
+			if deadline.IsZero() {
 				authCtx, cancel = context.WithCancel(authCtx)
 			} else {
-				authCtx, cancel = context.WithDeadline(authCtx, principal.ExpiresAt)
+				authCtx, cancel = context.WithDeadline(authCtx, deadline)
 			}
 			authCtx = context.WithValue(authCtx, webSocketLifetimeCancelContextKey{}, cancel)
 			key := principal.ServiceAccountUID
 			if key == "" {
 				key = "principal:" + principalKey(principal)
 			}
-			authCtx = connectionRegistry.Register(authCtx, key, cancel)
+			authCtx = connectionRegistry.RegisterGeneration(authCtx, key, cancel, generation)
 			if authCtx.Err() != nil {
 				return nil, nil, errors.New("unauthorized")
 			}

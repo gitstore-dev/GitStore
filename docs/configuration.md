@@ -1,58 +1,14 @@
-# Configuration Reference
+# Operator Configuration Reference
 
-## Private Go profiling
+This guide covers settings used to deploy and operate `gitstore-api`,
+`gitstore-git-service`, and `gitstore-controller-manager`. Use the shipped
+service configuration examples as starting points and inject secrets through
+your deployment platform. Configuration is grouped by owning service:
+`[git_service]` is owned by `gitstore-git-service`, `[api]` by `gitstore-api`,
+and `[controller]` by `gitstore-controller-manager`. `[log]`, `[grpc_auth]`,
+and `[push_limits]` are shared by the services that use them.
 
-The API and controller share an opt-in profiler, separate from their public
-routers and independent of OTLP export. `api.profiling.uri` and
-`controller.profiling.uri` default to empty (disabled). An enabled URI must
-be plain HTTP with an explicit loopback IP and nonzero port, for example
-`http://127.0.0.1:6060` or `http://[::1]:6061`. Hostnames, wildcard addresses,
-credentials, paths, queries and fragments are rejected. Give each process its
-own port; do not publish profiler ports or proxy them onto a public network.
-
-An enabled profiler also requires its own `profiling.token`: 32–256 printable,
-non-space ASCII bytes. Generate a random secret and inject it through
-`GITSTORE_API__PROFILING__TOKEN` or
-`GITSTORE_CONTROLLER__PROFILING__TOKEN`, rather than committing it to shared
-configuration. URI overrides are `GITSTORE_API__PROFILING__URI` and
-`GITSTORE_CONTROLLER__PROFILING__URI`. Every request requires exactly one
-`Authorization: Bearer <token>` header; query-string tokens are not accepted.
-These diagnostic credentials do not replace or alter application AuthN/AuthZ
-providers. Loopback and bearer authentication are both required; neither
-provides transport encryption.
-
-Supported GET routes are `/debug/pprof/profile?seconds=1..60`,
-`/debug/pprof/trace?seconds=1..5` and binary `heap`, `allocs`, `block`, `mutex`
-and `goroutine` profiles under `/debug/pprof/`. Text/debug output, delta
-snapshots, the index, command line and symbol routes are unavailable. Only
-one capture per process can run at a time; overlapping captures return 409.
-CPU captures temporarily enable block/mutex sampling, restore the previous
-mutex rate and disable block sampling afterward. Cancelling an execution
-capture stops it and clears its optional `sample_limit=0..64` budget.
-The shared sampling helper claims that budget only for sampled, recording
-OpenTelemetry spans during an active execution capture; configuring it alone
-does not enable datastore-native tracing.
-
-Capture from inside the service's network namespace. For example, with the
-API's URI and token already set in the environment:
-
-```sh
-umask 077
-printf 'Authorization: Bearer %s\n' "$GITSTORE_API__PROFILING__TOKEN" |
-  curl --fail --max-time 65 --header @- \
-    --output cpu.pprof \
-    "$GITSTORE_API__PROFILING__URI/debug/pprof/profile?seconds=30"
-```
-
-Keep tokens out of command arguments and shell tracing. Profiles can contain
-runtime data: retain them privately, never upload them to telemetry backends,
-and delete them when the investigation ends. Profiling adds overhead and is
-not uninstrumented capacity or availability evidence. Disable the URI and
-restart the process after diagnosis. Shutdown waits at most five seconds
-before forcibly closing the private listener; no public health, metrics,
-Git-service listener or singleton-storage behavior changes.
-
-## Collector-routed telemetry
+## Telemetry export
 
 Telemetry is opt-in for the three core services. Set
 `observability.otlp.uri` (environment: `GITSTORE_OBSERVABILITY__OTLP__URI`) to
@@ -62,146 +18,27 @@ controller diagnostic metrics endpoints unchanged. Credentials, query strings
 and fragments are rejected in the URI. Do not configure applications with
 Prometheus, Loki or Tempo addresses.
 
-`make compose OBSERVABILITY=otel` adds the pinned local observability stack and
-routes API, controller and Git metrics, logs and traces through the collector.
-Pass the same selector to `make ps`, `make logs`, `make stop` and `make down`.
-Go and Rust record all application, runtime and RPC metrics through native
-OpenTelemetry SDK instruments. The Go compatibility scrape routes collect from
-the same SDK provider as OTLP; neither runtime nor third-party metrics use a
-Prometheus recording registry or bridge. **Git service has only its gRPC listener: it does not
-start an HTTP metrics server.** Remove `git_service.metrics` settings and any
-Git-service metrics port/probe/scrape target copied from earlier configurations;
-those settings now fail with a migration message. Native gRPC operation and
-the API/controller readiness routes are unchanged.
+For local evaluation, `make compose OBSERVABILITY=otel` starts the collector
+and local backends. In production, deploy and secure your own collector and
+backends; applications should send telemetry only to the collector. The Git
+service exposes metrics through its gRPC telemetry export, not an HTTP metrics
+listener. Do not configure a Git-service metrics port or scrape target.
 
-```text
-API / controller / singleton Git service
-             -- OTLP/HTTP --> otel-collector
-                                |-- metrics --> Prometheus (scrapes collector)
-                                |-- logs ----> Loki (OTLP)
-                                `-- traces --> Tempo (OTLP)
-```
-
-Applications export cumulative metrics every 10 seconds, with a final shutdown
-flush. Each instrument admits at most 2,048 attribute sets; additional sets use
-the SDK overflow series. Metric requests are limited to 2 MiB and replies to
-64 KiB. Instrumentation uses fixed operational attribute vocabularies, never
-principal, IP, resource or repository identifiers. Metrics have no retry
-backlog: a failed snapshot is dropped and the next cumulative snapshot retains
-counter/histogram totals. Transport requests time out after two seconds.
-Traces and logs use bounded 2,048-record queues, 256-record batches and
-one-second batching. Export is nonblocking for request/reconciliation work;
-full queues drop records. Normal shutdown allows five seconds for Go flushes.
-Rust flushes bounded batches using two-second exporter requests.
-An empty OTLP URI disables network export; API/controller compatibility scrapes
-continue collecting SDK metrics locally. The collector's Prometheus exporter
-uses `UnderscoreEscapingWithoutSuffixes`: instrument names already include
-their stable unit and counter suffixes. Deploy that configuration with the
-application update to avoid duplicated suffixes. Runtime GC quantiles export as
-gauges, with separate cumulative count and sum instruments under the existing
-names; no synthetic observations reconstruct summaries.
-When upgrading from Prometheus-recorded metrics, stop the Collector while
-rolling the API/controller application update and replacing the singleton Git
-process without overlap, preserving its repository volume. Start the Collector
-with the new translation configuration after every exporting application uses
-SDK instruments. Its in-memory metric-type cache cannot combine the old GC
-summary with the new same-named gauges; starting it between application
-replacements can drop those series. Verify fresh backend series for each
-service and process after the upgrade. Quantile gauges use `0.0`/`1.0` at the
-endpoints; update direct-scrape or older-backend queries that matched `0`/`1`.
-
-Collector failures during the final Git-service flush produce a local warning
-but do not turn a graceful gRPC shutdown into a failed process exit.
+Export uses bounded in-memory queues and may drop telemetry during prolonged
+collector or backend outages. Monitor collector export failures and dropped
+records. The local Compose stack is for development; it does not provide
+production dashboards, alerts, or host/database monitoring.
 
 `observability.otlp.trace_sample_ratio`
-(`GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO`) defaults to `0.05`, accepts
-`0` through `1`, and samples new roots; valid sampled W3C parents are honored.
-Only trace context is propagated, never baggage or authentication material.
-Each signal carries a fixed service name/version and a random process-scoped
-`service.instance.id`, distinguishing concurrent replicas and replacements.
-Correlated operational logs carry trace/span IDs. Formatted messages, resource
-bodies, errors and non-operational fields remain local rather than being
-forwarded; the exported body is `operational event`. Trace/span IDs are not
-ordinary metric labels. Loki indexes only `service.name`; process and trace
-identity remain structured metadata. Git service exports only its fixed-field
-RPC/work span factories; arbitrary local tracing spans and events stay local.
-
-The collector uses a 128 MiB memory limiter, batches at most 512 records and
-queues at most 128 batches per push exporter with two consumers, three-second
-timeouts and at most 30 seconds of retries. Its queues are in memory: backend
-outages beyond those bounds or collector restarts lose queued records. Monitor
-collector refused/dropped/failed export metrics and
-`gitstore_telemetry_records_total`; metric-stage counts represent snapshots,
-whereas span/log-stage counts represent records.
-
-The local stack scrapes only collector ports `8889` (application metrics) and
-`8888` (collector self-metrics) every 10 seconds. Diagnostic API/controller
-`/metrics` routes remain for compatibility, but are **not scrape targets** in
-this topology. Backend/query ports bind to loopback: Prometheus `9090`, Loki
-`3100`, Tempo `3200`, OTLP `4318`, collector health `13133`; override with
-`PROMETHEUS_PORT`, `LOKI_PORT`, `TEMPO_PORT`, `OTLP_PORT`, `OTEL_HEALTH_PORT`.
-Retention defaults to 24 hours; Prometheus additionally caps retained blocks at
-256 MB. Named volumes persist across `make down`; delete them only through an
-explicit operator-owned cleanup. For production, secure OTLP and backend
-networks, provision bounded storage and tune retention externally. This local
-stack does not provide production dashboards, alerts or host/database/identity
-collection.
-
-## Authorization baseline (064)
-
-The shipped policy uses only `rbac.authorization.gitstore.dev/v1beta1`.
-Legacy v1 policies, action aliases, deny rules and namespaced ServiceAccount
-settings are rejected at startup/reload, with no compatibility layer. Controller
-enrollment takes a name, immutable UID and signing-record reference, never a
-namespace. Local, Scylla and capacity Compose enrollment commands use this same
-contract. Use a fresh explicitly owned development keyspace for the replaced
-alpha ServiceAccount baseline; no command silently resets an existing database.
-
-Single-node and clustered Scylla Compose overlays allow five minutes of API
-startup grace for first-boot baseline migrations and distributed CDC schema
-agreement. Dependents start as soon as `/ready` succeeds; the grace period does
-not make a failed readiness check pass. The memdb startup path retains its
-shorter health interval. Copied `gitstore-dev/quickstart` Compose files need the
-same enrollment/configuration and health-grace update.
-
-`make capacity TARGET=api PROFILE=authorization MODE=diagnostic` runs bounded,
-independently sampled evaluator latency at the maximum supported policy sizes.
-This diagnostic does not replace deployed readiness/lifecycle gates; alpha and
-production mode are rejected until reload/heap and zero-I/O evidence are complete.
-
-USER namespaces are personal identities: the name must equal the authenticated
-human creator and effective User owner. Group/ServiceAccount ownership,
-ownership transfer and tier changes are rejected even for cluster administrators.
-Use ORGANIZATION for team namespaces; bootstrap commands default to that tier.
-A push that removes a USER declaration and creates another Namespace declaration
-is rejected as a possible rename; perform unrelated deletion and creation in
-separate pushes. These admission invariants cannot be bypassed by an RBAC grant.
-
-Product, CategoryTaxonomy, Collection and ProductVariant replacements use
-explicit resource-version preconditions on both memdb and Scylla. A concurrent
-owner, status or spec change causes a conflict; admission repair reloads and
-reauthorizes before trying again. Creator and update actors come from the trusted
-request identity. There is no unconditional-update compatibility overload.
-
-Both directions of API/Git RPC use HMAC-SHA256 signed, 60-second, single-use
-request envelopes. The shared key is not a bearer credential. Git retains
-`.rpc-replay-v1` under its data directory across non-overlapping replacement;
-API replicas share atomic replay reservations in their datastore. Full queues,
-storage errors, invalid/expired signatures and replays fail closed. Keep clocks
-synchronized and gRPC isolated: signatures do not encrypt responses. Use
-`grpc_auth.hmac_secret_previous` temporarily on receivers for explicit key
-rotation, then remove it. Old bearer-only peers cannot coexist with this wire.
-
-The copied policy/config/Compose/enrollment examples in `gitstore-dev/quickstart`
-need a matching follow-up update before publishing the new baseline there.
-
-This document is the operator reference for configuring `gitstore-api`, `gitstore-git-service`, and `gitstore-controller-manager`.
-
-Configuration is grouped by owning service: `[git_service]` is owned by `gitstore-git-service`, `[api]` is owned by `gitstore-api`, `[controller]` is owned by `gitstore-controller-manager`, and `[log]`, `[grpc_auth]`, and `[push_limits]` are shared across the services that read them.
+(`GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO`) defaults to `0.05` and
+accepts values from `0` to `1`.
 
 ---
 
 ## Grammar: durations and sizes
+
+Types in the tables use language-neutral labels: `boolean`, `integer`,
+`number`, `string`, `string list`, `duration`, and `IEC size string`.
 
 Every duration-valued key accepts a string restricted to a single magnitude with
 one of the units `ms`, `s`, `m`, or `h` (for example `"30s"`, `"500ms"`,
@@ -224,10 +61,13 @@ Services load configuration from multiple sources in a fixed order. A higher-pri
 ```
 1. Hard-coded defaults          (lowest priority)
 2. Config file                  (optional)
-3. .env file                    (optional)
-4. Environment variables        (highest priority)
-5. CLI value overrides such as `--log-level` (where supported)
+3. `.env` file                  (optional)
+4. Environment variables
+5. CLI value overrides such as `--log-level` (highest priority, where supported)
 ```
+
+Use `.env` files only for local development; inject environment variables
+through your deployment platform in production.
 
 All three services accept `--config-file <path>`. The flag selects the file
 source; values from the environment still override values in that file. An
@@ -243,50 +83,22 @@ key), so an overlay only needs to declare the keys it changes rather than
 duplicating the whole base file. `gitstore-git-service` does not support this
 — it only accepts a single `--config-file`.
 
-For production-friendly local templates, copy the per-service example files in
-this repo:
+Use the maintained per-service examples as starting points:
 
-- `../gitstore-git-service/config.toml.example`
-- `../gitstore-api/config.toml.example`
-- `../gitstore-controller-manager/config.toml.example`
+- [Git service](../gitstore-git-service/config.toml.example)
+- [API](../gitstore-api/config.toml.example)
+- [Controller manager](../gitstore-controller-manager/config.toml.example)
 
-These are intended to be copied to `/etc/gitstore/...` or another deployment
-managed config directory and tuned per environment.
+Mount the selected files through your deployment platform and tune them per
+environment.
 
-## Shared Local Compose Configuration
+## Sensitive values
 
-`make compose` activates the Compose `local` profile and mounts
-`config/config.toml` read-only into all three core containers at
-`/etc/gitstore/gitstore.toml`. The API also receives the development RBAC
-policy at `/etc/gitstore/policy.yaml`. Select another host-side file explicitly
-with:
-
-```bash
-make compose CONFIG_FILE=./config/config.stage.toml
-```
-
-The tracked file contains only development credentials (`admin` / `admin123`),
-a long-lived development controller token, and a development HMAC/JWT secret.
-Never deploy it to production. Production deployments should mount a reviewed
-configuration/policy revision on every replica and inject secrets through the
-deployment platform. Configuration is startup-only, so replicas remain
-stateless and rolling upgrades can mix binaries with and without the additive
-flag while existing environment/default discovery remains supported.
-
-### Sensitive values
-
-Keys marked **Sensitive** are always logged as `<redacted>` (when set) or `<unset>` (when absent), regardless of log level. Production secrets should be supplied externally rather than committed to config files; the tracked local fixture is intentionally development-only.
+Keys marked **Sensitive** are always logged as `<redacted>` (when set) or
+`<unset>` (when absent), regardless of log level. Supply production secrets
+through your deployment platform rather than committing them to configuration.
 
 An empty string (`KEY=`) for a **Required** key is treated identically to an absent key and causes a startup failure listing all failing keys.
-
-### Legacy keys fail closed
-
-Every TOML key and environment variable a service used to own before its
-current grouping is checked independently at startup. Setting a removed or
-renamed key (in either the config file or the environment) makes the owning
-service refuse to start with an error naming its replacement, instead of
-silently falling back to a default. See [Upgrading configuration](#upgrading-configuration)
-for the full old-key → new-key mapping.
 
 ---
 
@@ -296,7 +108,6 @@ for the full old-key → new-key mapping.
 
 **Explicit file**: `gitstore-api --config-file /path/to/config.toml` (required when selected). Repeat the flag to layer overlays: `--config-file base.toml --config-file overlay.toml` (later file wins per key).
 
-**`.env` file**: `.env` (optional, current working directory)
 **Env var prefix**: `GITSTORE_`
 
 ### API Server
@@ -307,7 +118,7 @@ for the full old-key → new-key mapping.
 | `api.storefront_port` | `GITSTORE_API__STOREFRONT_PORT` | integer | `4001` | No | No | Storefront listener port, distinct from Admin/Git/catalog |
 | `api.git_port`               | `GITSTORE_API__GIT_PORT`                | integer | `9000`  | No       | No        | Git Smart HTTP port the API server listens on (1–65535)                     |
 | `api.grpc_port`              | `GITSTORE_API__GRPC_PORT`               | integer | `6000`  | No       | No        | CatalogService gRPC port called by gitstore-git-service                     |
-| `api.rate_limit.per_second`  | `GITSTORE_API__RATE_LIMIT__PER_SECOND`  | float   | `50`    | No       | No        | Sustained per-client-IP request rate on the Admin listener                   |
+| `api.rate_limit.per_second`  | `GITSTORE_API__RATE_LIMIT__PER_SECOND`  | number  | `50`    | No       | No        | Sustained per-client-IP request rate on the Admin listener                   |
 | `api.rate_limit.burst`       | `GITSTORE_API__RATE_LIMIT__BURST`       | integer | `100`   | No       | No        | Per-client-IP token-bucket burst size on top of `api.rate_limit.per_second` |
 
 ### Endpoint policies
@@ -352,9 +163,8 @@ When `page_size` is below 100, request an explicit positive page within that
 bound; otherwise validation rejects the operation before datastore access.
 `in_flight` defaults to 128 for Admin and 32 for Storefront; admission has no
 waiting queue. Admin additionally bounds `ws_connections=1000` and
-`ws_operations=20` per principal. These document/parser controls do not bound
-WebSocket allocation before decoding; adversarial frame-size hardening remains
-open. Long-lived subscriptions are outside the operation deadline.
+`ws_operations=20` per principal. Long-lived subscriptions are outside the
+per-operation deadline.
 
 Admin's `principal_per_second=50` and `principal_burst=1000` charge calculated
 operation cost before execution. Only the authenticated ServiceAccount JWT
@@ -367,26 +177,13 @@ addresses are trusted only through explicitly configured proxies.
 
 Storefront always returns HTTP 503 with `STOREFRONT_UNAVAILABLE`, no `data`,
 and `Cache-Control: no-store` until real publication and target binding exist.
-Ingress rejection may precede it. There is no enablement flag or management
-fallback. Its execution-only limits are reserved for a future reader.
+There is no configuration switch to enable it.
 
 ### Git Service Connection
 
 | Key                 | Env Var                       | Type   | Default                  | Required | Sensitive | Description                          |
 |----------------------|---------------------------------|--------|---------------------------|----------|-----------|---------------------------------------|
 | `api.git_service.uri` | `GITSTORE_API__GIT_SERVICE__URI` | string | `dns:///localhost:50051` | Yes      | No        | gRPC address of gitstore-git-service |
-
-### Git Smart HTTP Endpoints
-
-The following endpoints are served on port `api.git_port` (default `9000`):
-
-| Method | Path                                                              | Description                                       |
-|--------|-------------------------------------------------------------------|---------------------------------------------------|
-| `GET`  | `/{namespace}/{repo}.git/info/refs?service=git-upload-pack`       | Advertise refs for fetch/clone                    |
-| `GET`  | `/{namespace}/{repo}.git/info/refs?service=git-receive-pack`      | Advertise refs for push                           |
-| `POST` | `/{namespace}/{repo}.git/git-upload-pack`                         | Upload pack (fetch/clone data transfer)           |
-| `POST` | `/{namespace}/{repo}.git/git-receive-pack`                        | Receive pack (push data transfer)                 |
-| `GET`  | `/health`                                                         | Health probe — returns `{"status":"ok"}`          |
 
 ### Authentication
 
@@ -400,25 +197,9 @@ The following endpoints are served on port `api.git_port` (default `9000`):
 
 For config files, local users are selected with `[api.auth.static_users]` and `users_file = "users.yaml"`; JWT keys remain nested under `[api.auth.jwt]`.
 
-The root operator helpers target the local Compose files in `config/` by default:
-
-```bash
-make add-user USERNAME=alice PASSWORD='secret' EMAIL=alice@example.com DISPLAY_NAME='Alice Doe'
-make add-role ROLE=developer ALLOW='repository.read.own,repository.write.own'
-make assign-role SUBJECT=alice ROLE=developer
-```
-
-Background API work uses the explicit `system:api` subject. Production RBAC
-policies must bind that subject only to the repository actions required by the
-deployment; the development policy provides the `api-internal` role as the
-minimal example. It is carried to GitService as an authorization envelope and
-is not a substitute for the API-to-Git-service HMAC.
-
-Set `AUTH_CONFIG_DIR=gitstore-api` for native-development files, or override
-`USERS_FILE` and `POLICY_FILE` separately. These commands validate and atomically
-replace one YAML file at a time; `add-user` never changes authorization policy.
-
-`static-users` always appends `/static-users` to the configured issuer base when minting tokens, while accepting the exact configured base for legacy sessions during rolling upgrades. Logout and refresh rotation require the shared ScyllaDB revocation table in production; migration 007 creates it automatically.
+`static-users` appends `/static-users` to the configured issuer base when
+minting tokens. Production logout and refresh rotation require the shared
+ScyllaDB revocation table, which is created by schema migration.
 
 ### Service-account authentication
 
@@ -430,11 +211,11 @@ mounted private key to obtain them.
 
 | Key | Env Var | Type | Default | Required | Sensitive | Description |
 |-----|---------|------|---------|----------|-----------|-------------|
-| `api.auth.authn.chain` | `GITSTORE_API__AUTH__AUTHN__CHAIN` | list of strings | `["static-users","anonymous"]` | No | No | Ordered AuthN providers; include both service-account providers to enable this flow |
+| `api.auth.authn.chain` | `GITSTORE_API__AUTH__AUTHN__CHAIN` | string list | `["static-users","anonymous"]` | No | No | Ordered AuthN providers; include both service-account providers to enable this flow |
 | `api.auth.serviceaccount.issuer` | `GITSTORE_API__AUTH__SERVICEACCOUNT__ISSUER` | string | `gitstore` | No | No | Issuer for service-account access tokens |
 | `api.auth.serviceaccount.audience` | `GITSTORE_API__AUTH__SERVICEACCOUNT__AUDIENCE` | string | `gitstore-api` | No | No | Required audience for service-account access tokens |
 | `api.auth.serviceaccount.assertion_audience` | `GITSTORE_API__AUTH__SERVICEACCOUNT__ASSERTION_AUDIENCE` | string | `gitstore-api/serviceaccount-token` | No | No | Required audience for controller assertions at the token-exchange endpoint |
-| `api.auth.serviceaccount.signing_key` | `GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY` | PEM private key | (empty) | **Yes, when a service-account provider is chained** | **Yes** | API-only Ed25519 or ECDSA P-256 access-token signing key |
+| `api.auth.serviceaccount.signing_key` | `GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY` | string | (empty) | **Yes, when a service-account provider is chained** | **Yes** | API-only PEM-encoded Ed25519 or ECDSA P-256 access-token signing key |
 | `api.auth.serviceaccount.default_ttl` | `GITSTORE_API__AUTH__SERVICEACCOUNT__DEFAULT_TTL` | duration | `10m` | No | No | Requested default access-token lifetime |
 | `api.auth.serviceaccount.max_ttl` | `GITSTORE_API__AUTH__SERVICEACCOUNT__MAX_TTL` | duration | `1h` | No | No | Maximum permitted access-token lifetime |
 | `api.auth.serviceaccount.clock_skew` | `GITSTORE_API__AUTH__SERVICEACCOUNT__CLOCK_SKEW` | duration | `2m` | No | No | Allowed JWT clock skew during validation |
@@ -465,22 +246,217 @@ that verifies bearer JWTs via OIDC Discovery + JWKS. It is enabled only when
 | `api.auth.authz.provider` | `GITSTORE_API__AUTH__AUTHZ__PROVIDER` | string | `rbac-local` | No | No | Active AuthZ provider |
 | `api.auth.rbac_local.policy_file` | `GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE` | string | `policy.yaml` | No | No | YAML RBAC policy path, used when `authz.provider = "rbac-local"` |
 | `api.auth.userdir.provider` | `GITSTORE_API__AUTH__USERDIR__PROVIDER` | string | `none` | No | No | Active user-directory provider |
+| `api.auth.kratos.admin_uri` | `GITSTORE_API__AUTH__KRATOS__ADMIN_URI` | string | (empty) | When `kratos` is selected | No | Private Kratos Admin endpoint |
+| `api.auth.kratos.webhook_uri` | `GITSTORE_API__AUTH__KRATOS__WEBHOOK_URI` | string | (empty) | When callbacks are configured | No | Optional private HTTP listener; for example `http://127.0.0.1:8085` |
+| `api.auth.kratos.admin_token` | `GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN` | string | (empty) | Only for an authenticating Admin gateway | **Yes** | Bearer credential; stock self-hosted Kratos does not validate it |
+| `api.auth.kratos.max_response_size` | `GITSTORE_API__AUTH__KRATOS__MAX_RESPONSE_SIZE` | IEC size string | `1MiB` | No | No | Positive directory response and webhook body limit, at most `4MiB`; bare numbers and decimal units are rejected |
+
+#### Production identity guidance
+
+Avoid `none` as the UserDir provider in production: it performs no directory
+lookup and provides no directory profiles or groups. `static-users` is
+intended for local and development deployments; its UserDir support is limited
+to basic profile lookup and does not provide directory-managed groups or
+account changes. Do not use `static-users` as a production human AuthN or
+UserDir provider, either by itself or alongside the OIDC/Kratos identity
+setup. In particular, do not chain it alongside `oidc-jwt`, use it as UserDir
+for OIDC logins, or use `static-users` AuthN with Kratos UserDir. A mixed
+configuration can leave credentials and profile state under different
+authorities. Service-account authentication providers are separate and may
+still be configured as needed.
+
+For human login with the reference OIDC stack, use `oidc-jwt` for AuthN so
+login and directory profiles use the same identity store. The API accepts
+`none`, `static-users` and `kratos` as UserDir providers. Kratos currently
+provides bounded profile lookup, provider mutations and internal callbacks.
+Authenticated Admin/Git HTTP and GraphQL requests resolve trusted directory
+profiles before authorization. With Kratos, a human principal with no matching
+provider/issuer mapping remains unlinked. If a mapping applies but its identity
+is missing or deleted, admission fails closed rather than retaining direct
+subject permissions. Missing ServiceAccount mirrors remain unlinked; GitStore
+still enforces their authoritative UID and enablement. Directory failures fail
+closed without treating valid credentials as invalid. Inactive human profiles
+are denied. WebSocket initialization applies the same checks
+and caps profile leases below five minutes, never extending the cached
+profile's freshness or a shorter token lifetime.
+
+Selecting `static-users` for directory lookup does not require static AuthN
+or a JWT signing key; that lookup-only provider cannot authenticate or issue
+sessions. Human-administration GraphQL uses the configured directory's supported
+capabilities and rejects unsupported operations explicitly.
+Successful local directory writes and protected
+callbacks evict the process cache and cancel all its authenticated WebSocket
+connections, including workloads. Other replicas retain bounded cache/profile
+leases; callbacks are not commit notifications.
+Successful auth-provider reloads retain invitation delivery on the replacement
+directory. The private callback listener dispatches to the active directory,
+including its cache invalidation; it returns 404 while Kratos is not selected.
+
+The sample namespace-creator policy binds `system:staff` and requires both
+USER tier and `subjectUsername`, which matches the resource name against the
+trusted linked human's canonical directory username. Namespace creation remains
+policy-controlled, not a separate endpoint guard.
 
 See [Configure local authorization](authorization.md) for Role and ClusterRole
 bindings, namespace scope, subject matching and `resourceNames` examples.
 
-#### Controller deletion-completion grants
+#### Reference identity schemas and metadata
 
-The controller-only deletion-completion mutations are authorized with a
-dedicated `purge` action per resource kind: `completeNamespaceDeletion`
-requires `namespace.purge`, `completeRepositoryDeletion` requires
-`repository.purge`, `completeCategoryDeletion` requires `categoryTaxonomy.purge`,
-and `completeProductDeletion` requires `product.purge`. The shipped controller
-ClusterRole grants all four. Custom v1beta1 policies must grant them explicitly;
-status-write permissions do not substitute for purge. Old action aliases and
-mixed old/new policy or wire versions are not supported by this unreleased alpha
-baseline. Keep canonical status-write grants for separate status mutations, and
-`namespace.system-repository.provision` for namespace backing-repository provisioning.
+The optional reference stack uses Kratos, Hydra and the Ory self-service UI
+at v26.2.0. New public registrations use the Customer schema. Staff and
+ServiceAccount schemas cannot be selected through public registration.
+Human username and email are both password identifiers and are unique across
+human schemas when enrolled as credentials. The reference directory registers
+only the Staff, Customer and ServiceAccount schemas.
+
+The integration uses supported blocking registration/settings hooks and the
+Kratos Admin JSON Patch API, without modifying Kratos's database tables.
+Registration stamps `metadata_admin.creation_actor` and `update_actor` with
+the registering username in the registration write. Profile settings reject
+username/schema changes before persistence and preserve protected metadata.
+GitStore mutations preserve the creator and stamp the initiating actor using
+the normal resource-owner subject encoding. Missing creator metadata falls
+back to the represented identity's canonical username, not the reader.
+
+Enable callbacks only together with `api.auth.userdir.provider = "kratos"`
+and the private `api.auth.kratos.webhook_uri` listener. For the container
+reference, use `http://0.0.0.0:8085` and set
+`KRATOS_CONFIG_FILES=/etc/config/kratos/kratos.yml,/etc/config/kratos/gitstore-hooks.yml`
+as shown in [the environment example](../config/oidc/oidc.env.example).
+The additional Kratos configuration retains the password-session hook and
+selects HTTP mail delivery. Enable the development notification adapter and
+inject its shared credential at the same time, as described below.
+Standalone `make oidc` sends no GitStore callbacks by default.
+
+Do not publish the callback port or route it through public ingress.
+Wildcard binding is intended only for an isolated container network; use a
+private or loopback address on a host and restrict network access to trusted
+Kratos callers. The receiver trusts that network boundary, not public session
+credentials. A configured listener returns **404** when Kratos UserDir is
+disabled; remove the sender configuration when disabling the provider.
+
+**Limitations**
+
+| Area | Supported boundary and limitation |
+|---|---|
+| Staff revisions | GitStore/profile writes advance generation for author-owned changes and resourceVersion for integrated writes. These are best-effort: concurrent replicas can lose increments and overwrite changes. Neither the observed-version check nor Admin PATCH is database CAS; v26.2.0 rejects PATCH `test`. |
+| Customer revisions | Generation is `-1` and resourceVersion is `"-1"`. Neither is a concurrency token. |
+| Customer groups | `customer_groups` defines mandatory memberships for every Customer, not an allowlist for individual edits. Protected identity metadata cannot override them. Individual removal and assignment outside the configured groups are rejected. |
+| Coverage and setup | Counters do not track every credential, verification-address or out-of-band Admin change. The reference callback covers profile settings and completed password settings, not every self-service method. New Staff remain unfinished until the blocking password-settings callback records setup completion; verification or administrative reactivation alone cannot bypass setup. |
+| Identifier enrollment | Credentialless Staff creation and password-identifier reservation are separate native writes. Failed reservation attempts bounded cleanup of the newly created identity; failed cleanup can leave an unreserved identity. There is no cross-operation transaction. |
+| Invitations | A configured delivery provider is required before creating an invitation. Identity creation, recovery-link creation and delivery are not atomic: delivery failure can leave an identity or changed revision. Resend is limited to Staff awaiting setup/verification. Private setup links are delivered only in mail, never returned in directory profiles. |
+| Lifecycle and sessions | Suspension/deactivation writes state and then revokes native sessions. Revocation failure can leave the state change applied. Reactivation preserves unfinished setup/verification and does not restore revoked sessions. Other API replicas still enforce their bounded profile/connection freshness rather than immediate global revocation. |
+| Privileged Admin access | Direct Kratos Admin writes bypass hooks and can change usernames, schemas or protected metadata. The workload schema alone does not prohibit Admin-created credentials. Keep Admin access private; GitStore does not create workload credentials and remains authoritative for ServiceAccount UID, enablement and keys. |
+| Availability | Callback failures abort the protected registration/profile-settings flow. API or directory outages can therefore prevent those flows; callbacks are not a durable event consumer. |
+| Ownership and freshness | Username fallback does not reconstruct a missing creator audit record. Hook responses precede persistence; local cache invalidation is not a commit notification, and other replicas retain their bounded cache TTL. |
+| Directory cursors | Actor cursors are bound to the configured Admin endpoint. Replicas serving one logical directory must use the same stable Admin URI; changing it invalidates existing cursors. |
+
+### Workload directory mirrors
+
+With Kratos UserDir selected, each API consumes live ServiceAccount events from
+the shared internal resource journal. Scylla publishes full-image transitions
+only after enrollment completes; MemDB publishes equivalent committed events.
+Native ServiceAccount writes do not wait for Kratos.
+
+Mirrors are linked by immutable GitStore UID, contain only source traits and
+protected metadata, and are created without login credentials or
+verification/recovery addresses. Updates preserve directory groups. GitStore
+remains authoritative for UID, keys and enablement; name reuse never transfers
+the previous account's groups.
+
+Delivery uses a 64-event buffer, three attempts per event and bounded request
+deadlines, with 100 ms and 200 ms retry delays. Overflow and exhausted events
+are discarded, not stored in another queue. Startup and provider reload begin
+at the current journal boundary; retention/epoch discontinuities also resume
+at the current boundary. There is no persisted consumer position, replay,
+inventory scan or automatic repair. Missing, stale or orphaned mirrors can
+remain indefinitely, and unified actor lists can be incomplete.
+
+On a fresh Scylla deployment, consumer initialization waits for the producer to
+initialize the journal, using bounded reads and cancellable polling. It then
+captures the current boundary, not a historical catch-up position. Directory
+delivery does not prevent API startup or become a journal readiness guarantee.
+
+SDK metrics report application attempts, delivery outcomes, duration and buffer
+depth without identity labels. These are best-effort consumer signals, not
+durable producer progress or acknowledgements. ServiceAccount synchronization
+does not add a public watch endpoint.
+
+#### Identity rollout and rollback
+
+Keep a stable private directory endpoint and shared identity database across API
+replicas. Roll out schema-dependent clients only after every routed API exposes
+the required concrete human types, `User` interface and mutations. During a
+mixed deployment, use only the schema and configuration supported by all
+serving versions.
+
+Enabling ServiceAccount CDC is a forward database migration. Preserve applied
+migration history and source UIDs; an older binary whose migration bundle omits
+an applied migration cannot restart against that database. Do not remove the
+migration or rewrite its checksum to force rollback.
+
+The reference stack no longer registers the earlier generic identity schema.
+Existing identities using an unregistered schema need an explicitly reviewed
+directory transition; changing configuration is not an identity migration.
+Preserve identity storage, backups and UIDs rather than deleting or recreating
+users. If disabling the UserDir callbacks, remove the Kratos hook overlay at the
+same time so blocking self-service hooks do not target a disabled receiver.
+
+### Identity mail
+
+The optional identity integration delivers native verification/recovery mail
+through `POST /internal/notifications/mail` on the Admin listener. This route
+is absent when notification delivery is disabled and is never mounted on
+Storefront. Restrict ingress to trusted internal senders; requests require
+`GitStore-Mail-Key` before the body is read.
+
+| Key | Env Var | Default | Description |
+|---|---|---|---|
+| `api.notification.provider` | `GITSTORE_API__NOTIFICATION__PROVIDER` | `none` | `none` or `development`; no production backend is shipped |
+| `api.notification.api_key` | `GITSTORE_API__NOTIFICATION__API_KEY` | empty | Required sensitive 32+ character credential when enabled |
+| `api.notification.max_body_size` | `GITSTORE_API__NOTIFICATION__MAX_BODY_SIZE` | `64KiB` | Positive IEC size string, at most `1MiB`; bare numbers and decimal units are rejected. The smaller Admin body limit still applies |
+| `api.notification.max_concurrent` | `GITSTORE_API__NOTIFICATION__MAX_CONCURRENT` | `16` | At most 128 in-flight parsing/delivery operations; saturation returns 503 |
+| `api.notification.timeout` | `GITSTORE_API__NOTIFICATION__TIMEOUT` | `2s` | Delivery deadline, at most 10s; SMTP additionally caps work at 2s |
+| `api.notification.development.smtp_uri` | `GITSTORE_API__NOTIFICATION__DEVELOPMENT__SMTP_URI` | empty | Private mail-catcher `smtp://` or `smtps://` endpoint |
+| `api.notification.development.sender` | `GITSTORE_API__NOTIFICATION__DEVELOPMENT__SENDER` | `noreply@gitstore.local` | Development envelope/header sender |
+
+The reference catcher uses implicit, self-signed TLS:
+`smtps://mailslurper:1025/?skip_ssl_verify=true`. That verification bypass is
+explicitly development-only; certificate verification is on by default.
+Configure the hook overlay, `development` provider and privately injected key
+together using [the environment example](../config/oidc/oidc.env.example).
+Compose supplies the same key to native Kratos courier authentication.
+Override `COURIER_HTTP_REQUEST_CONFIG_URL` if the internal Admin address differs
+from `http://api:4000/internal/notifications/mail`.
+
+Delivery succeeds only after the catcher accepts the message. Provider outage,
+timeout or saturation returns a retryable 503; GitStore keeps no retry queue.
+Kratos owns retries, and ambiguous responses can produce duplicate messages.
+This at-least-once mail boundary is distinct from best-effort workload-mirror
+events; it does not promise exactly-once delivery or a production mail service.
+
+GitStore records only finite outcome/template-class metrics, duration and a
+trace correlation ID, never recipients, subjects, bodies or codes. **Upstream
+Kratos logs have a separate privacy boundary:** native courier failure logs
+can include the native subject, and default code-flow subjects can contain
+verification/recovery codes. Restrict those logs and configure non-sensitive
+native subject templates where required.
+
+Directory contact resolution uses the immutable subject and a fresh native
+identity read, never an email-based identity lookup. When the primary address
+changes, the previous verified address remains the contact snapshot until the
+replacement is verified. A bounce observation for the old address does not
+block a newly verified replacement. Without a trusted deliverability
+observation, deliverability defaults to false; initial verification alone does
+not invent one.
+
+Consent boolean changes receive a server-generated timestamp; caller-supplied
+timestamps are ignored. Bounce and timestamp-only changes do not advance
+generation. These protected metadata updates are best-effort native writes,
+not remote compare-and-swap: concurrent or privileged changes can be lost or
+remain untracked. ServiceAccounts do not have human contact operations.
+The delivery adapter is development-only and provides no consent policy engine,
+production mail backend or durable retry queue.
 
 ### Logging
 
@@ -497,14 +473,10 @@ baseline. Keep canonical status-write grants for separate status mutations, and
 
 ### Shared push-size ceiling
 
-`push_limits` is a static platform ceiling shared by `gitstore-api` and
-`gitstore-git-service`. At admission, the API rejects any Namespace
-`spec.pushPolicyDefaults` value above this ceiling. At push time,
-`gitstore-git-service` clamps the effective per-push limit to
-`min(repository policy, ceiling)`, treating a `0`/absent repository policy as
-the ceiling itself — there is no "0 = unlimited" sentinel anymore. See
-[Push Validation and Admission Pipeline](products/push-validation.md#push-size-limits)
-for the full enforcement path.
+`push_limits` sets shared platform ceilings for repository policies and
+individual pushes. A missing or zero repository limit uses the platform
+ceiling; it does not mean unlimited. See
+[push-size limits](products/push-validation.md#push-size-limits).
 
 | Key | Env Var | Type | Default | Required | Sensitive | Description |
 |-----|---------|------|---------|----------|-----------|-------------|
@@ -533,7 +505,7 @@ partially-applied migration.
 | Key                                             | Env Var                                                       | Type            | Default          | Required | Sensitive | Description                                    |
 |---------------------------------------------------|-------------------------------------------------------------------|-----------------|------------------|----------|-----------|--------------------------------------------------|
 | `api.datastore.backend`                         | `GITSTORE_API__DATASTORE__BACKEND`                             | string          | `memdb`          | No       | No        | Active datastore backend: `memdb` or `scylla`  |
-| `api.datastore.scylla.hosts`                    | `GITSTORE_API__DATASTORE__SCYLLA__HOSTS`                       | list of strings | `localhost:9042` | No       | No        | Comma-separated Scylla endpoints (`host:port`) |
+| `api.datastore.scylla.hosts`                    | `GITSTORE_API__DATASTORE__SCYLLA__HOSTS`                       | string list | `localhost:9042` | No       | No        | Scylla endpoints (`host:port`) |
 | `api.datastore.scylla.keyspace`                 | `GITSTORE_API__DATASTORE__SCYLLA__KEYSPACE`                    | string          | `gitstore`       | No       | No        | Scylla keyspace name                           |
 | `api.datastore.scylla.username`                 | `GITSTORE_API__DATASTORE__SCYLLA__USERNAME`                    | string          | —                | No       | No        | Scylla username (optional)                     |
 | `api.datastore.scylla.password`                 | `GITSTORE_API__DATASTORE__SCYLLA__PASSWORD`                    | string          | —                | No       | **Yes**   | Scylla password (optional, redacted in logs)   |
@@ -567,118 +539,33 @@ below bounds journal behavior; it does not enable or disable it.
 | `api.watch.journal.materializer.lease_renew_interval` | `GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__LEASE_RENEW_INTERVAL` | duration | `10s` | Renewal interval; must be less than `materializer.lease_ttl`.                                                                                 |
 | `api.watch.journal.materializer.max_lag`        | `GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__MAX_LAG`         | duration | `60s`   | Reader readiness freshness ceiling; must remain below the fixed 14-day CDC retention.                                                         |
 
-The CDC retention window (14 days) and the journal sequence bucket width are not
-configurable. New journals use a bucket width of 4,096; a journal initialized
-by an earlier release with a different width keeps its stored width.
-
-Scylla journal writes use logged conditional batches capped at 32 statements
-and an estimated 32 KiB of encoded event data. The caps are intentionally
-independent of the 4,096-sequence partition bucket so a lagging CDC stream
-cannot create an oversized catch-up batch.
-
-Product durable-watch rollout follows the same fenced reader/materializer
-configuration family as Namespace and Repository. Enable it only after the
-Product CDC migration and Product-aware API/controller rollout; see
-[catalog lifecycle rollout](runbooks/catalog-lifecycle.md#rollout-and-rollback) for the mixed-version
-deny and rollback sequence.
-
-See [Namespace watch contract](namespace/namespace-watch.md) and the
+CDC retention and the journal sequence layout are fixed. Tune these settings
+only when addressing replay volume, subscriber backpressure, or materializer
+freshness. For rollout and recovery procedures, see the
+[catalog lifecycle runbook](runbooks/catalog-lifecycle.md) and
 [controller watch/status runbook](runbooks/controller-watch-status.md).
 
 ### Scylla projection operations
 
-`gitctl` reads the same Scylla environment variables for offline projection
-audit and repair. The password is read only from
-`GITSTORE_API__DATASTORE__SCYLLA__PASSWORD`; do not pass it as a CLI argument.
-
-```bash
-cd gitstore-api
-go run ./cmd/gitctl scylla-projection-audit
-go run ./cmd/gitctl scylla-projection-repair --dry-run
-go run ./cmd/gitctl scylla-projection-repair --confirm
-```
-
-Optional command flags override non-secret connection settings:
-`--hosts`, `--keyspace`, `--username`, `--tls`, and
-`--disable-shard-aware-port`. Repair requires either `--dry-run` or explicit
-`--confirm`; conditional misses and post-repair findings return an error.
-
-Operational invariants:
-
-- partition hard ceiling: 100 MiB;
-- hot-partition target: 10 MiB;
-- `gc_grace_seconds`: 10 days;
-- completed anti-entropy repair interval: at most 7 days;
-- no TWCS on tables with updates or explicit deletes.
-
-Datastore metrics use bounded labels only:
-
-- `gitstore_datastore_projection_write_failures_total`
-  (`operation`, `backend`, `resource_kind`, `projection`);
-- `gitstore_datastore_compensation_attempts_total` and
-  `gitstore_datastore_compensation_failures_total` (same bounded labels);
-- `gitstore_datastore_projection_findings_total` (adds `finding_type`);
-- `gitstore_datastore_operation_duration_seconds` (`operation`, `backend`).
-
-Alert on every compensation failure, any partition above 100 MiB, repair older
-than seven days, and sustained growth in projection findings or repair backlog.
-Resource UIDs and names belong in structured logs, never metric labels. See
-[`scylla-projection-repair.md`](runbooks/scylla-projection-repair.md).
+For projection audits, repairs, and their operational safeguards, see the
+[Scylla projection repair runbook](runbooks/scylla-projection-repair.md).
 
 ### Example `config.toml`
 
-```toml
-[api]
-port = 4000
-git_port = 9000
-grpc_port = 6000
-
-[api.rate_limit]
-per_second = 50
-burst = 100
-
-[api.git_service]
-uri = "dns:///localhost:50051"
-
-[api.auth.jwt]
-secret = "replace-with-strong-random-secret-at-least-32-chars"
-ttl = "24h"
-issuer = "gitstore"
-refresh_grace = "60s"
-
-[api.datastore]
-backend = "memdb"
-
-[api.datastore.scylla]
-hosts = ["localhost:9042"]
-keyspace = "gitstore"
-tls = false
-
-[grpc_auth]
-hmac_secret = "replace-with-shared-hmac-secret"
-
-[push_limits]
-max_pack_size = "512MiB"
-max_file_size = "100MiB"
-
-[log]
-level = "debug"
-format = "json"
-```
-
-Secrets in the users file and `api.auth.jwt.secret` must remain outside committed operator configuration, never in `config.toml`.
+See the maintained [API configuration example](../gitstore-api/config.toml.example).
+Keep secrets, including the user-file credentials and `api.auth.jwt.secret`,
+outside committed configuration and inject them through your deployment platform.
 
 ## gitstore-git-service
 
 **Config file**: `gitstore.toml` (optional, current working directory)
-**`.env` file**: `.env` (optional, current working directory)
 **Env var prefix**: `GITSTORE_`
 
 ### Core
 
 | Key                              | Env Var                                       | Type   | Default                     | Required | Sensitive | Description                                       |
 |------------------------------------|--------------------------------------------------|--------|-------------------------------|----------|-----------|-----------------------------------------------------|
-| `git_service.grpc_port`          | `GITSTORE_GIT_SERVICE__GRPC_PORT`             | u16    | `50051`                      | No       | No        | GitService gRPC server port                       |
+| `git_service.grpc_port`          | `GITSTORE_GIT_SERVICE__GRPC_PORT`             | integer | `50051`                      | No       | No        | GitService gRPC server port (1–65535)             |
 | `git_service.data_dir`           | `GITSTORE_GIT_SERVICE__DATA_DIR`              | string | `/var/lib/gitstore/repos`    | No       | No        | Bare repository storage directory                 |
 | `git_service.catalog.uri`        | `GITSTORE_GIT_SERVICE__CATALOG__URI`          | string | `dns:///localhost:6000`      | No       | No        | gitstore-api CatalogService gRPC endpoint         |
 | `git_service.validation.timeout` | `GITSTORE_GIT_SERVICE__VALIDATION__TIMEOUT`   | duration | `10s`                       | No       | No        | CatalogService validation RPC timeout             |
@@ -690,32 +577,20 @@ Secrets in the users file and `api.auth.jwt.secret` must remain outside committe
 | `push_limits.max_pack_size`      | `GITSTORE_PUSH_LIMITS__MAX_PACK_SIZE`         | IEC size string | `512MiB`             | No       | No        | Platform ceiling for a single push's total pack size |
 | `push_limits.max_file_size`      | `GITSTORE_PUSH_LIMITS__MAX_FILE_SIZE`         | IEC size string | `100MiB`             | No       | No        | Platform ceiling for a single file/blob within a push |
 
-`git_service.catalog.uri` is configured with the `dns:///host:port` scheme.
-`gitstore-git-service` resolves it once at startup into a plain
-`http://host:port` URI it can dial directly — tonic has no DNS resolver, so
-unlike `gitstore-api`'s Go gRPC client this does not round-robin across
-resolved addresses; it connects to the first result once. A non-`dns:///`
-scheme is rejected at startup.
+`git_service.catalog.uri` must use the `dns:///host:port` scheme. Configure DNS
+for service discovery; a different URI scheme is rejected at startup.
 
 ### Validation and admission are always on
 
-Pre-receive schema validation and post-receive admission control run
-unconditionally on every push — there is no phase toggle and no way to
-disable or reorder them. `git_service.validation.timeout` bounds the blocking
-pre-receive `ValidateResources` call; `git_service.admission.branch_pattern`
-selects which refs trigger post-receive catalog storage via `AdmitResources`.
-See [Push Validation and Admission Pipeline](products/push-validation.md) for
-the full pipeline.
+Schema validation and admission run on every push and cannot be disabled.
+`git_service.validation.timeout` bounds validation time, while
+`git_service.admission.branch_pattern` selects refs admitted to the catalog.
 
 ### Push-size enforcement
 
-`gitstore-git-service` clamps every push to
-`effective = min(repository policy, push_limits ceiling)`, treating a
-`0`/absent repository policy (received from the API's `PushPolicyContext` on
-each `ReceivePack` call) as the ceiling itself. The ceiling is always
-positive, so the effective limit is always positive and enforceable — there
-is no "0 = unlimited" push size anymore. See
-[Push Validation and Admission Pipeline](products/push-validation.md#push-size-limits).
+The effective push limit is the lower of the repository policy and
+`push_limits` ceiling. A missing or zero repository limit uses the platform
+ceiling; it does not mean unlimited.
 
 ### CLI Flags
 
@@ -726,31 +601,7 @@ is no "0 = unlimited" push size anymore. See
 
 ### Example `gitstore.toml`
 
-```toml
-[git_service]
-grpc_port = 50051
-data_dir = "/var/lib/gitstore/repos"
-
-[git_service.catalog]
-uri = "dns:///localhost:6000"
-
-[git_service.validation]
-timeout = "10s"
-
-[git_service.admission]
-branch_pattern = "^refs/heads/main$"
-
-[grpc_auth]
-hmac_secret = "replace-with-shared-hmac-secret"
-
-[push_limits]
-max_pack_size = "512MiB"
-max_file_size = "100MiB"
-
-[log]
-level = "info"
-format = "json"
-```
+See the maintained [Git service configuration example](../gitstore-git-service/config.toml.example).
 
 ---
 
@@ -760,7 +611,6 @@ format = "json"
 
 **Explicit file**: `gitstore-controller-manager --config-file /path/to/config.toml` (required when selected). Repeat the flag to layer overlays: `--config-file base.toml --config-file overlay.toml` (later file wins per key).
 
-**`.env` file**: `.env` (optional, current working directory)
 **Env var prefix**: `GITSTORE_`
 
 | Key                                                | Env Var                                                        | Type     | Default                             | Required         | Sensitive | Description                                                         |
@@ -787,48 +637,7 @@ format = "json"
 | `log.level`                                        | `GITSTORE_LOG__LEVEL`                                          | string   | `info`                              | No               | No        | `debug` \| `info` \| `warn` \| `error`                              |
 | `log.format`                                       | `GITSTORE_LOG__FORMAT`                                         | string   | `json`                              | No               | No        | `json` \| `text`                                                    |
 
-Example:
-
-```toml
-[controller]
-port = 5001
-api_uri = "http://localhost:4000/admin/graphql"
-
-[controller.api_client.rate_limit]
-per_second = 40
-burst = 10
-
-[controller.serviceaccount]
-namespace = "controllers"
-name = "gitstore-controller-manager"
-uid = "<enrolled-service-account-uid>"
-assertion_audience = "gitstore-api/serviceaccount-token"
-access_token_audience = "gitstore-api"
-
-[controller.reconcile]
-max_attempts = 5
-stall_threshold = "5m"
-
-[controller.checkpoint]
-dir = "/var/lib/gitstore/checkpoints"
-flush_interval_events = 100
-
-[controller.watch]
-max_backoff = "30s"
-resync_interval = "10m"
-
-[controller.serviceaccount.key_ref]
-kind = "SecretRef"
-name = "controller-manager"
-
-[controller.secret_providers.bootstrap]
-type = "file"
-base_path = "/run/secrets"
-
-[log]
-level = "info"
-format = "json"
-```
+See the maintained [controller configuration example](../gitstore-controller-manager/config.toml.example).
 
 Both bootstrap providers require a whole-record `SecretRef` and an atomic JSON
 signing record containing the private key and its corresponding enrolled key ID:
@@ -864,140 +673,15 @@ prefix or variable name is derived from `key_ref.name`. Environment changes
 require process replacement. A controller-only read-only file mount is preferred
 where available.
 
-The removed `controller.secret_providers.bootstrap.format`,
-`controller.secret_providers.bootstrap.env_prefix`,
-`controller.serviceaccount.key_id`, and `controller.serviceaccount.key_ref.key`
-settings are rejected, not compatibility options. The JSON record's `format`
-field above is required and is not a TOML bootstrap setting. Do not place real
-signing records or private-key values in TOML, the shared `/config/gitstore.toml`
-file, Git, command-line arguments, or logs.
+The JSON record's `format` field is required and is not a TOML bootstrap
+setting. Do not place real signing records or private-key values in TOML, the
+shared `/config/gitstore.toml` file, Git, command-line arguments, or logs.
 
 Static controller API tokens are not supported. See [Controller
 authentication](runbooks/controller-auth.md) for enrollment, rotation,
 readiness, and recovery procedures.
 
-List-then-watch bootstrap, restart resume, and expired-watch-cursor recovery for registered
-resource kinds persist a per-kind restart checkpoint under `controller.checkpoint.dir`. Each
-checkpoint contains the `resourceVersion`, cache snapshot, and deletion replay keys needed to
-restore volatile controller state without losing queued reconciliation work.
-Checkpoint health — last successful write time, replay backlog, and write-failure count — is
-exposed on the existing `/metrics` endpoint as `gitstore_controller_checkpoint_last_write_timestamp_seconds`,
-`gitstore_controller_checkpoint_replay_backlog`, and `gitstore_controller_checkpoint_write_failures_total`
-(all labeled by `kind`).
-
----
-
-## Local Development with `.env`
-
-All Go services automatically load a `.env` file from the current working directory at startup. The Git service loads `.env` in its binary entrypoint before resolving layered configuration. Shell environment variables always override `.env` values.
-
-For the shared gRPC HMAC secret, `make secret TARGET=grpc-hmac` writes the same `GITSTORE_GRPC_AUTH__HMAC_SECRET` value to both `gitstore-api/.env` and `gitstore-git-service/.env` so local API and git-service runs stay in sync. Use `make secret TARGET=jwt` for the API session-signing secret; `make generate` is reserved for generated source and schema artifacts.
-
-Copy the example file and fill in the required values:
-
-```bash
-# gitstore-api
-cp gitstore-api/.env.example gitstore-api/.env
-
-# gitstore-git-service
-cp gitstore-git-service/.env.example gitstore-git-service/.env
-
-# gitstore-controller-manager
-cp gitstore-controller-manager/.env.example gitstore-controller-manager/.env
-```
-
-See `.env.example` in each service directory for the full list of supported variables with their types, defaults, and required/optional status.
-
----
-
-## Upgrading configuration
-
-Configuration moved from a mix of flat and service-ambiguous keys to a layout
-grouped by owning service (`[git_service]`, `[api]`, `[controller]`, plus
-shared `[log]`, `[grpc_auth]`, `[push_limits]`). Every key below fails startup
-with an explicit error naming its replacement if the old form (TOML key or
-environment variable) is still set — there is no silent fallback.
-
-### gitstore-git-service
-
-| Old key                                   | New key                                      | Notes |
-|---------------------------------------------|-------------------------------------------------|-------|
-| `grpc.port` (`GITSTORE_GRPC__PORT`)       | `git_service.grpc_port` (`GITSTORE_GIT_SERVICE__GRPC_PORT`) | |
-| `git.data_dir` (`GITSTORE_GIT__DATA_DIR`) | `git_service.data_dir` (`GITSTORE_GIT_SERVICE__DATA_DIR`) | |
-| `git.repo.max_file_size`                  | `push_limits.max_file_size`                   | Now a shared IEC size string, not a raw byte integer |
-| `git.repo.max_pack_size_bytes`            | `push_limits.max_pack_size`                   | Now a shared IEC size string, not a raw byte integer |
-| `hooks.git_receive_pack.*`                | removed                                         | Pre-receive validation and post-receive admission are unconditionally on; there is no phase toggle |
-| `schema_validation.phase`                 | removed                                         | Schema validation is fixed to pre-receive |
-| `schema_validation.timeout_secs`          | `git_service.validation.timeout`              | Now a duration string (e.g. `"10s"`), not integer seconds |
-| `admission_control.phase`                 | removed                                         | Admission is fixed to post-receive |
-| `admission_control.branch_pattern`        | `git_service.admission.branch_pattern`        | Default changed from `refs/heads/.*` to `^refs/heads/main$` |
-| `catalog_service.uri`                     | `git_service.catalog.uri`                     | Scheme changed from `http://host:port` to `dns:///host:port` |
-| `auth.grpc.hmac_secret`                   | `grpc_auth.hmac_secret`                       | Moved to the top-level shared table |
-| `auth.grpc.hmac_secret_previous`          | `grpc_auth.hmac_secret_previous`              | Moved to the top-level shared table |
-
-### gitstore-api
-
-| Old key                                              | New key                                        | Notes |
-|---------------------------------------------------------|---------------------------------------------------|-------|
-| `api.rate_limit_per_second`                           | `api.rate_limit.per_second`                      | |
-| `api.rate_limit_burst`                                | `api.rate_limit.burst`                           | |
-| `git.grpc.uri`                                        | `api.git_service.uri`                            | Scheme unchanged (`dns:///host:port`) |
-| `datastore.*` (`backend`, `scylla.*`)                 | `api.datastore.*`                                | |
-| `auth.staticusers.users_file`                         | `api.auth.static_users.users_file`               | |
-| `auth.jwt.secret`                                     | `api.auth.jwt.secret`                            | |
-| `auth.jwt.duration`                                   | `api.auth.jwt.ttl`                               | Leaf renamed `duration` → `ttl` |
-| `auth.jwt.issuer`                                     | `api.auth.jwt.issuer`                            | |
-| `auth.jwt.refresh_grace`                              | `api.auth.jwt.refresh_grace`                     | |
-| `auth.grpc.hmac_secret`                               | `grpc_auth.hmac_secret`                          | Moved out of `auth` entirely, to the top-level shared table |
-| `auth.authn.chain`                                    | `api.auth.authn.chain`                           | |
-| `auth.authz.provider`                                 | `api.auth.authz.provider`                        | |
-| `auth.userdir.provider`                               | `api.auth.userdir.provider`                      | |
-| `auth.serviceaccount.*`                               | `api.auth.serviceaccount.*`                      | Same leaf names |
-| `auth.oidc.*`                                         | `api.auth.oidc_jwt.*`                            | Provider id `oidc-jwt`; same leaf names |
-| `auth.rbac.policy_file`                                | `api.auth.rbac_local.policy_file`                | Provider id `rbac-local` |
-| `watch.namespace.readers_enabled`                     | removed                                           | The durable watch journal reader is always on |
-| `watch.namespace.materializer_enabled`                | removed                                           | The CDC materializer is always on |
-| `watch.namespace.cdc_retention_seconds`               | removed                                           | Fixed at 14 days by the baseline schema |
-| `watch.namespace.bucket_size`                         | removed                                           | New journals use 4,096; a journal initialized with another size keeps it |
-| `watch.namespace.journal_retention_seconds`           | `api.watch.journal.retention`                    | Now a duration string (e.g. `"168h"`), not integer seconds |
-| `watch.namespace.cdc_confidence_window_millis`        | `api.watch.journal.cdc.confidence_window`        | Now a duration string (e.g. `"500ms"`), not integer milliseconds |
-| `watch.namespace.read_batch_size`                     | `api.watch.journal.read.batch_size`              | |
-| `watch.namespace.max_replay_events`                   | `api.watch.journal.read.max_replay_events`       | |
-| `watch.namespace.subscriber_buffer`                   | `api.watch.journal.subscriber.buffer`            | |
-| `watch.namespace.subscriber_backpressure_millis`      | `api.watch.journal.subscriber.backpressure`      | Now a duration string, not integer milliseconds |
-| `watch.namespace.poll_min_millis`                     | `api.watch.journal.poll.min`                     | Now a duration string, not integer milliseconds |
-| `watch.namespace.poll_max_millis`                     | `api.watch.journal.poll.max`                     | Now a duration string, not integer milliseconds |
-| `watch.namespace.bookmark_interval_seconds`           | `api.watch.journal.bookmark_interval`            | Now a duration string, not integer seconds |
-| `watch.namespace.lease_ttl_seconds`                   | `api.watch.journal.materializer.lease_ttl`       | Now a duration string, not integer seconds |
-| `watch.namespace.lease_renew_interval_seconds`        | `api.watch.journal.materializer.lease_renew_interval` | Now a duration string, not integer seconds |
-| `watch.namespace.max_materializer_lag_seconds`        | `api.watch.journal.materializer.max_lag`         | Now a duration string, not integer seconds |
-| `features.namespace_repository_fence`                 | removed                                           | The namespace/repository fence is always enabled |
-
-New: shared `push_limits.max_pack_size` (default `"512MiB"`) and
-`push_limits.max_file_size` (default `"100MiB"`) — see
-[Shared push-size ceiling](#shared-push-size-ceiling).
-
-### gitstore-controller-manager
-
-| Old key                                           | New key                                           | Notes |
-|------------------------------------------------------|-------------------------------------------------------|-------|
-| `controller.api_client.requests_per_second`        | `controller.api_client.rate_limit.per_second`       | |
-| `controller.api_client.burst`                      | `controller.api_client.rate_limit.burst`            | |
-
-All controller duration keys (`reconcile.stall_threshold`, `watch.max_backoff`,
-`watch.resync_interval`) are unchanged keys, now restricted to the `ms|s|m|h`
-grammar described above (they were already duration strings before).
-
-### gitctl
-
-`gitctl` reads the same `api.datastore.*` keys/env vars as `gitstore-api` (now
-under `api.datastore` instead of top-level `datastore`). Its `gen-jwt-secret`
-and `gen-hmac-secret` subcommands now print `GITSTORE_API__AUTH__JWT__SECRET=...`
-and `GITSTORE_GRPC_AUTH__HMAC_SECRET=...` respectively (both renamed to match
-the keys above).
-
-### Unaffected
-
-`gitstore-oidc-bridge` has its own independent `GITSTORE_OIDC_BRIDGE__*`
-environment namespace and does not read `config.toml` at all — it needs no
-changes for this migration.
+Controller checkpoints are stored under `controller.checkpoint.dir`. Keep this
+directory on persistent storage across process restarts; see the
+[controller watch/status runbook](runbooks/controller-watch-status.md) for
+recovery and monitoring guidance.

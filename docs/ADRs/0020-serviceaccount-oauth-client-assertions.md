@@ -291,7 +291,9 @@ bridging issuer tokens into native bearer tokens is rejected.
 - [UserDir draft, pinned revision](https://github.com/gitstore-dev/GitStore/blob/9306c732904d67d9810f241e0d29fb759177fe22/specs/065-kratos-user-directory/spec.md):
   independent identity planes, per-provider links, credential-less SA profiles and freshness.
 - [Reference configuration](../../compose.oidc.yml), [issuer configuration](../../config/oidc/hydra/config.yaml)
-  and [directory schema](../../config/oidc/kratos/identity.schema.json): current checked-in baseline.
+  and directory schemas for [Staff](../../config/oidc/kratos/staff.schema.json),
+  [Customer](../../config/oidc/kratos/customer.schema.json) and
+  [ServiceAccount](../../config/oidc/kratos/serviceaccount.schema.json): current checked-in baseline.
 - [ADR 0009](0009-credential-secret-boundary.md): private-key bootstrap boundary.
 - [ADR 0010](0010-authorization-model.md): canonical actions and trusted principal facts.
 - [RFC 7523](https://www.rfc-editor.org/rfc/rfc7523.html): JWT client authentication.

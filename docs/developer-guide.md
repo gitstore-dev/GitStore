@@ -98,6 +98,29 @@ CHAOS_TARGET=<gitstore-container> CHAOS_CONFIRM=1` for bounded container fault
 injection. See [Production readiness testing](development/production-readiness-testing.md)
 for profile authoring, correctness-verifier, evidence, and safety requirements.
 
+## Reference identity integration
+
+AuthN, UserDir and AuthZ are independent selections. The optional
+`compose.oidc.yml` stack pins Kratos, Hydra and the self-service UI; use
+`oidc-jwt` for human AuthN, Kratos for UserDir and the configured AuthZ policy
+for permissions. Keep native Admin endpoints private and supply runtime
+credentials outside committed configuration. Kratos replicas must share the
+same PostgreSQL identity store; do not provision an identity database per API.
+Reference schema and hook configuration lives under `config/oidc/kratos/`.
+
+The local static login below is a development fixture. Avoid `static-users`
+AuthN/UserDir and `none` UserDir in production, including static/OIDC/Kratos
+mixes, even though they are accepted configuration combinations.
+ServiceAccount credentials and enablement remain GitStore-owned.
+
+Each API's workload mirror consumer starts at the current internal journal
+boundary with bounded retries and buffering. Loss, overflow or restart can
+leave missing, stale or orphaned directory mirrors and incomplete unified actor
+lists indefinitely; no automatic replay or repair is shipped. Native
+ServiceAccount reads remain source-backed. See
+[identity configuration](configuration.md#authorization-and-user-directory)
+and [workload delivery limits](configuration.md#workload-directory-mirrors).
+
 ## Local Development
 
 Start the Docker stack:
@@ -208,6 +231,41 @@ controller private key as the API issuer key.
 `make compose` and `make dev` already automate their own generation and
 enrollment; the manual sequence above is for separately started native services.
 Compose keeps its credentials in dedicated volumes, separate from native files.
+
+### Private profiling
+
+The API and controller expose opt-in `pprof` listeners for local diagnostics.
+They are disabled by default; do not enable them in production. Set
+`api.profiling.uri` or `controller.profiling.uri` to a plain HTTP URI with an
+explicit loopback IP and nonzero port, using a separate port for each process.
+Hostnames, wildcard addresses, credentials, paths, query strings, and fragments
+are rejected.
+
+An enabled listener requires a separate token of 32–256 printable, non-space
+ASCII bytes. Provide it through `GITSTORE_API__PROFILING__TOKEN` or
+`GITSTORE_CONTROLLER__PROFILING__TOKEN`; configure the corresponding URI with
+`GITSTORE_API__PROFILING__URI` or
+`GITSTORE_CONTROLLER__PROFILING__URI`. Requests require exactly one
+`Authorization: Bearer <token>` header. The listener is not encrypted, so keep
+it on loopback and capture from inside the service's network namespace.
+
+Available GET routes include CPU profiles at
+`/debug/pprof/profile?seconds=1..60`, traces at
+`/debug/pprof/trace?seconds=1..5`, and binary heap, allocs, block, mutex, and
+goroutine profiles under `/debug/pprof/`. For example, with the API URI and
+token set in the environment:
+
+```sh
+umask 077
+printf 'Authorization: Bearer %s\n' "$GITSTORE_API__PROFILING__TOKEN" |
+  curl --fail --max-time 65 --header @- \
+    --output cpu.pprof \
+    "$GITSTORE_API__PROFILING__URI/debug/pprof/profile?seconds=30"
+```
+
+Profiles may contain runtime data. Keep them private, do not upload them to
+telemetry backends, and delete them after diagnosis. Disable profiling and
+restart the process when finished.
 
 ## Datastore Backends
 

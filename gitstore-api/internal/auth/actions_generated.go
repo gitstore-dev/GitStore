@@ -89,6 +89,12 @@ const (
 	ActionServiceAccountRead                 = "serviceAccount.read"
 	ActionServiceAccountTokenIssue           = "serviceAccount.token.issue"
 	ActionServiceAccountUpdate               = "serviceAccount.update"
+	ActionUserCreate                         = "user.create"
+	ActionUserDelete                         = "user.delete"
+	ActionUserGroupUpdate                    = "user.group.update"
+	ActionUserList                           = "user.list"
+	ActionUserRead                           = "user.read"
+	ActionUserUpdate                         = "user.update"
 	ActionWorkflowBundleInstall              = "workflow.bundle.install"
 	ActionWorkflowDefinitionManage           = "workflow.definition.manage"
 	ActionWorkflowExecutionTransition        = "workflow.execution.transition"
@@ -174,6 +180,12 @@ var authorizationActions = [...]ActionDefinition{
 	{"serviceAccount.read", "serviceAccount", "cluster", "serviceAccount", "read", false},
 	{"serviceAccount.token.issue", "serviceAccount", "cluster", "serviceAccount/token", "issue", false},
 	{"serviceAccount.update", "serviceAccount", "cluster", "serviceAccount", "update", false},
+	{"user.create", "user", "cluster", "user", "create", false},
+	{"user.delete", "user", "cluster", "user", "delete", false},
+	{"user.group.update", "user", "cluster", "user/group", "update", false},
+	{"user.list", "user", "cluster", "user", "list", false},
+	{"user.read", "user", "cluster", "user", "read", false},
+	{"user.update", "user", "cluster", "user", "update", false},
 	{"workflow.bundle.install", "workflow", "namespace", "workflow/bundle", "install", true},
 	{"workflow.definition.manage", "workflow", "namespace", "workflow/definition", "manage", true},
 	{"workflow.execution.transition", "workflow", "namespace", "workflow/execution", "transition", true},

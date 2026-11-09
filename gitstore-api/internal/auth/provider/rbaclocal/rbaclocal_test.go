@@ -93,6 +93,10 @@ func TestShippedPolicyEffectiveGrants(t *testing.T) {
 				assert.Equal(t, visibility == "public", decision.Outcome == authpkg.OutcomeAllow)
 			}
 			alice := &authpkg.Principal{Subject: "alice", AuthMethod: "static-users", Groups: []string{"system:authenticated"}}
+			if strings.HasSuffix(path, "policy.yaml.example") {
+				alice.Username, alice.ProfileKind = "alice", authpkg.ProfileStaff
+				alice.Groups = append(alice.Groups, "system:staff")
+			}
 			for _, test := range []struct {
 				action, owner, tier string
 				want                bool

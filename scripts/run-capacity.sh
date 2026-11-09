@@ -122,6 +122,17 @@ elif [[ "${mode}" != "diagnostic" ]]; then
   exit 2
 fi
 
+capture_identity_metrics() {
+  local phase="$1" index=0 endpoint
+  if [[ "${profile}" != api-readiness || "${CAPACITY_IDENTITY_READINESS:-0}" != 1 ]]; then return; fi
+  IFS=',' read -r -a identity_endpoints <<<"${CAPACITY_API_ENDPOINTS}"
+  for endpoint in "${identity_endpoints[@]}"; do
+    curl -fsS --max-time 5 "${endpoint%/}/metrics" >"${evidence_dir}/identity-${phase}-${index}.prom"
+    index=$((index + 1))
+  done
+}
+capture_identity_metrics before
+
 chaos_pid=""
 profile_children=()
 cleanup_profile_children() {
@@ -213,15 +224,35 @@ else
   if [[ -n "${CAPACITY_ENV_FILE:-}" ]]; then
     docker_args+=(--env-file "${CAPACITY_ENV_FILE}")
   fi
+  if [[ "${profile}" == api-readiness && "${CAPACITY_IDENTITY_READINESS:-0}" == 1 ]]; then
+    [[ -r "${CAPACITY_IDENTITY_FIXTURE_FILE:-}" ]] || { echo "private identity fixture is required" >&2; exit 2; }
+    docker_args+=(-v "${CAPACITY_IDENTITY_FIXTURE_FILE}:/identity-fixture.json:ro")
+  fi
   while IFS='=' read -r name _; do
     case "${name}" in
       CAPACITY_*|PRODUCT_CAPACITY_*|K6_*) docker_args+=(-e "${name}") ;;
     esac
   done < <(env)
+  if [[ "${profile}" == api-readiness && "${CAPACITY_IDENTITY_READINESS:-0}" == 1 ]]; then
+    docker_args+=(-e CAPACITY_IDENTITY_FIXTURE_FILE=/identity-fixture.json)
+  fi
   docker "${docker_args[@]}" "${k6_image}" run --summary-export /evidence/summary.json "/workspace/tests/capacity/profiles/${profile}.js" 2>&1 | tee "${evidence_dir}/k6.log"
   status=${PIPESTATUS[0]}
 fi
 set -e
+capture_identity_metrics after
+if [[ "${profile}" == api-readiness && "${CAPACITY_IDENTITY_READINESS:-0}" == 1 ]]; then
+  [[ -n "${CAPACITY_IDENTITY_LOAD_DONE_FILE:-}" && -n "${CAPACITY_IDENTITY_CONNECTED_FILE:-}" ]] || {
+    echo "identity acceptance requires the owned live-delivery companion" >&2; exit 2;
+  }
+  printf 'done\n' >"${CAPACITY_IDENTITY_LOAD_DONE_FILE}"
+  identity_deadline=$((SECONDS + 60))
+  until [[ -r "${CAPACITY_IDENTITY_CONNECTED_FILE}" ]]; do
+    (( SECONDS < identity_deadline )) || { echo "identity live-delivery companion did not complete" >&2; exit 1; }
+    sleep 1
+  done
+  cp "${CAPACITY_IDENTITY_CONNECTED_FILE}" "${evidence_dir}/identity-connected.json"
+fi
 jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '. + {loadCompletedAt:$at}' "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
 if [[ "${profile}" == api-endpoint-split && "${mode}" != diagnostic ]]; then
@@ -283,6 +314,7 @@ verifier_required=false
 if [[ "${profile}" != "api-readiness" && "${mode}" != "diagnostic" ]]; then
   verifier_required=true
 fi
+if [[ "${profile}" == api-readiness && "${CAPACITY_IDENTITY_READINESS:-0}" == 1 ]]; then verifier_required=true; fi
 
 verifier_status=0
 if [[ -x "${verifier}" ]]; then

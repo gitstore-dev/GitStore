@@ -20,6 +20,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/kratos"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/oidcjwt"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountassertion"
@@ -33,6 +34,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/gitstore-dev/gitstore/api/internal/githttp"
 	"github.com/gitstore-dev/gitstore/api/internal/health"
+	"github.com/gitstore-dev/gitstore/api/internal/notification"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
@@ -119,6 +121,39 @@ func namespaceWatchMetrics(runtime *namespaceWatchRuntime) *watchjournal.Metrics
 		return nil
 	}
 	return runtime.metrics
+}
+
+func registerIdentityMailRoute(router *gin.Engine, cfg config.ApiConfig, runtime *providerRegistryRuntime) error {
+	if err := cfg.Notification.Validate(); err != nil {
+		return err
+	}
+	if cfg.Notification.Provider != "development" {
+		return nil
+	}
+	provider, err := notification.NewDevelopment(cfg.Notification.Development.SMTPURI, cfg.Notification.Development.Sender, cfg.Notification.MaxConcurrent)
+	if err != nil {
+		return err
+	}
+	bodyBytes := cfg.Notification.MaxBodyBytes
+	endpointBytes := cfg.Admin.Limits.BodyBytes
+	if endpointBytes == 0 {
+		endpointBytes = config.DefaultEndpoint("admin").Limits.BodyBytes
+	}
+	if endpointBytes < bodyBytes {
+		bodyBytes = endpointBytes
+	}
+	handler, err := notification.NewMailHandler(provider, cfg.Notification.APIKey, bodyBytes, cfg.Notification.MaxConcurrent, cfg.Notification.Timeout)
+	if err != nil {
+		return err
+	}
+	router.Any("/internal/notifications/mail", gin.WrapH(handler))
+	runtime.setInvitationSender(func(ctx context.Context, profile *auth.UserProfile, link string) error {
+		ctx, cancel := context.WithTimeout(ctx, cfg.Notification.Timeout)
+		defer cancel()
+		return provider.Send(ctx, notification.Message{Recipient: profile.Email, Subject: "Set up your GitStore account",
+			Body: "Complete your GitStore account setup:\n\n" + link, TemplateType: "invitation"})
+	})
+	return nil
 }
 
 // NewServer builds the API, Git HTTP, and catalog gRPC servers from config.
@@ -212,7 +247,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("datastore does not implement shared session revocations")
 	}
-	registry, authReloader, providerShutdowns, err := buildProviderRegistry(cfg, store, log, revocations)
+	registry, authReloader, providerShutdowns, err := buildProviderRegistry(cfg, store, log, revocations, resourceJournal)
 	if err != nil {
 		_ = gitClient.Close()
 		_ = store.Close()
@@ -254,6 +289,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, err
 	}
 	connections := wsregistry.New()
+	authReloader.setInvalidationHandler(connections.Invalidate)
 	var endpointCleanup []func()
 	registerCleanup := func(close func()) { endpointCleanup = append(endpointCleanup, close) }
 	defer func() {
@@ -288,6 +324,9 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, err
 	}
 
+	if err := registerIdentityMailRoute(gqlRouter, cfg.Api, authReloader); err != nil {
+		return nil, err
+	}
 	router := healthHandler(gqlRouter, store, log, clock, namespaceWatch, instanceID, registerCleanup)
 	var graphQlHandler http.Handler = router
 
@@ -324,7 +363,16 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, err
 	}
 	publicServer := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Api.StorefrontPort), Handler: publicRouter, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
-	endpoints, err := bindHTTPServers([]httpEndpoint{{name: "admin", server: httpServer}, {name: "storefront", server: publicServer}, {name: "git-http", server: gitHttpServer}})
+	httpEndpoints := []httpEndpoint{{name: "admin", server: httpServer}, {name: "storefront", server: publicServer}, {name: "git-http", server: gitHttpServer}}
+	webhooks, err := kratosWebhookServer(cfg.Api.Auth.Kratos, registry)
+	if err != nil {
+		_ = grpcListener.Close()
+		return nil, err
+	}
+	if webhooks != nil {
+		httpEndpoints = append(httpEndpoints, httpEndpoint{name: "kratos-webhooks", server: webhooks})
+	}
+	endpoints, err := bindHTTPServers(httpEndpoints)
 	if err != nil {
 		_ = grpcListener.Close()
 		return nil, err
@@ -400,26 +448,52 @@ type serviceAccountStore interface {
 // It reads authn chain, authz provider, and userdir provider from the resolved config.
 // The second return value validates and atomically swaps the complete auth set on
 // SIGHUP. The third return value lists resources that must be shut down with the server.
-func buildProviderRegistry(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, authReloader, []providerShutdowner, error) {
-	registry, shutdowns, err := constructProviderRegistry(cfg, store, log, revocations)
+func buildProviderRegistry(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore, journals ...datastore.ResourceWatchJournal) (*auth.ProviderRegistry, *providerRegistryRuntime, []providerShutdowner, error) {
+	registry, shutdowns, err := constructProviderRegistry(cfg, store, log, revocations, journals...)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	runtime := &providerRegistryRuntime{
 		cfg: cfg, store: store, log: log, revocations: revocations, registry: registry, shutdowns: shutdowns,
 	}
+	if len(journals) > 0 {
+		runtime.journal = journals[0]
+	}
 	return registry, runtime, []providerShutdowner{runtime}, nil
 }
 
 type providerRegistryRuntime struct {
-	mu          sync.Mutex
-	cfg         *config.Config
-	store       serviceAccountStore
-	log         *zap.Logger
-	revocations staticusers.RevocationStore
-	registry    *auth.ProviderRegistry
-	shutdowns   []providerShutdowner
-	closed      bool
+	mu                    sync.Mutex
+	cfg                   *config.Config
+	store                 serviceAccountStore
+	log                   *zap.Logger
+	revocations           staticusers.RevocationStore
+	registry              *auth.ProviderRegistry
+	shutdowns             []providerShutdowner
+	closed                bool
+	journal               datastore.ResourceWatchJournal
+	invalidateConnections func()
+	sendInvitation        func(context.Context, *auth.UserProfile, string) error
+}
+
+func (r *providerRegistryRuntime) setInvalidationHandler(handler func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.invalidateConnections = handler
+	if directory, ok := r.registry.UserDir().(interface{ SetInvalidationHandler(func()) }); ok {
+		directory.SetInvalidationHandler(handler)
+	}
+}
+
+func (r *providerRegistryRuntime) setInvitationSender(sender func(context.Context, *auth.UserProfile, string) error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sendInvitation = sender
+	if directory, ok := r.registry.UserDir().(interface {
+		SetInvitationSender(func(context.Context, *auth.UserProfile, string) error)
+	}); ok {
+		directory.SetInvitationSender(sender)
+	}
 }
 
 func (r *providerRegistryRuntime) Reload() (err error) {
@@ -446,11 +520,19 @@ func (r *providerRegistryRuntime) Reload() (err error) {
 	if r.closed {
 		return errors.New("auth provider registry is closed")
 	}
-	newRegistry, newShutdowns, err := constructProviderRegistry(r.cfg, r.store, r.log, r.revocations)
+	newRegistry, newShutdowns, err := constructProviderRegistry(r.cfg, r.store, r.log, r.revocations, r.journal)
 	if err != nil {
 		return err
 	}
 	oldShutdowns := r.shutdowns
+	if directory, ok := newRegistry.UserDir().(interface{ SetInvalidationHandler(func()) }); ok {
+		directory.SetInvalidationHandler(r.invalidateConnections)
+	}
+	if directory, ok := newRegistry.UserDir().(interface {
+		SetInvitationSender(func(context.Context, *auth.UserProfile, string) error)
+	}); ok {
+		directory.SetInvitationSender(r.sendInvitation)
+	}
 	r.registry.Swap(newRegistry.AuthN(), newRegistry.AuthZ(), newRegistry.UserDir())
 	r.shutdowns = newShutdowns
 	for _, provider := range oldShutdowns {
@@ -474,7 +556,7 @@ func (r *providerRegistryRuntime) Shutdown() {
 	}
 }
 
-func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore) (*auth.ProviderRegistry, []providerShutdowner, error) {
+func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore, journals ...datastore.ResourceWatchJournal) (*auth.ProviderRegistry, []providerShutdowner, error) {
 	// Build AuthN providers in chain order.
 	chain := cfg.Api.Auth.AuthN.Chain
 	if len(chain) == 0 {
@@ -560,10 +642,33 @@ func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, lo
 		userdirProvider = userdirnone.New()
 	case "static-users":
 		if staticUsersProvider == nil {
-			cleanup()
-			return nil, nil, errors.New("api.auth.userdir.provider=static-users requires static-users in api.auth.authn.chain")
+			p, err := staticusers.NewDirectory(cfg.Api.Auth.StaticUsers, log)
+			if err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("init static-users directory: %w", err)
+			}
+			staticUsersProvider = p
 		}
 		userdirProvider = staticUsersProvider
+	case "kratos":
+		p, err := kratos.New(cfg.Api.Auth.Kratos, log)
+		if err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("init kratos userdir provider: %w", err)
+		}
+		shutdowns = append(shutdowns, p)
+		if len(journals) > 0 && journals[0] != nil {
+			source, ok := store.(kratos.ServiceAccountSource)
+			if !ok {
+				cleanup()
+				return nil, nil, fmt.Errorf("workload mirror source does not support UID lookup")
+			}
+			if err := p.StartServiceAccountConsumer(journals[0], source); err != nil {
+				cleanup()
+				return nil, nil, fmt.Errorf("start workload directory consumer: %w", err)
+			}
+		}
+		userdirProvider = p
 	default:
 		cleanup()
 		return nil, nil, fmt.Errorf("unknown userdir provider %q", cfg.Api.Auth.UserDir.Provider)

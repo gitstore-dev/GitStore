@@ -74,14 +74,14 @@ type RolePolicy struct{ Allow, Deny []string }
 
 func (c *Condition) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind == yaml.ScalarNode && node.Tag == "!!str" {
-		if node.Value != "owner" && node.Value != "targetOwnerMember" {
+		if node.Value != "owner" && node.Value != "targetOwnerMember" && node.Value != "subjectUsername" {
 			return errors.New("unknown condition token")
 		}
 		c.Token = node.Value
 		return nil
 	}
 	if node.Kind != yaml.MappingNode {
-		return errors.New("when entries must be owner, targetOwnerMember or attribute comparisons")
+		return errors.New("when entries must be owner, targetOwnerMember, subjectUsername or attribute comparisons")
 	}
 	fields := map[string]*yaml.Node{}
 	for i := 0; i < len(node.Content); i += 2 {

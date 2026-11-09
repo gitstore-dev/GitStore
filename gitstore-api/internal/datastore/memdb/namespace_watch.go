@@ -12,6 +12,25 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
 
+func (m *memdbDatastore) recordCommittedServiceAccount(eventType datastore.ResourceWatchEventType, account *datastore.ServiceAccount) {
+	var payload []byte
+	if eventType == datastore.ResourceWatchDeleted {
+		payload, _ = json.Marshal(map[string]string{"UID": account.UID})
+	} else {
+		payload, _ = json.Marshal(account)
+	}
+	now := time.Now().UTC()
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	m.pruneLocked(now.Add(-m.namespaceWatchRetention))
+	m.namespaceWatchSequence++
+	m.namespaceWatchEvents = append(m.namespaceWatchEvents, datastore.ResourceWatchEvent{
+		Epoch: m.namespaceWatchEpoch, Sequence: m.namespaceWatchSequence,
+		Type: eventType, Kind: "ServiceAccount", Name: account.Name, Payload: payload,
+		DeduplicationKey: fmt.Sprintf("memdb:%s:%s:%d", eventType, account.UID, m.namespaceWatchSequence), At: now,
+	})
+}
+
 func (m *memdbDatastore) NamespaceWatchJournal() datastore.NamespaceWatchJournal { return m }
 
 // ResourceWatchJournal exposes the shared durable journal. The storage field

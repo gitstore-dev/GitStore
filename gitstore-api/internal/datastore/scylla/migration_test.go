@@ -358,6 +358,71 @@ func TestSchemaValidationDoesNotWriteOrIgnorePartialMigrations(t *testing.T) {
 	require.Nil(t, store)
 }
 
+func TestServiceAccountCDCUpgradePreservesDataAndMigrationHistory(t *testing.T) {
+	root, err := openRootSession(scyllaAddr)
+	require.NoError(t, err)
+	t.Cleanup(root.Close)
+	keyspace := "gitstore_scylla_test_cdc_" + strings.ReplaceAll(uuid.New().String(), "-", "")
+	require.NoError(t, root.Query("CREATE KEYSPACE "+keyspace+
+		" WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}").Exec())
+	t.Cleanup(func() {
+		assert.NoError(t, root.Query("DROP KEYSPACE "+keyspace).Exec())
+	})
+	session := newRawSessionForKeyspace(t, keyspace)
+	baseline := migrationSetThrough(t, "012_repository_resource_membership.cql")
+	require.NoError(t, scylla.RunMigrationsWithFS(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop(), baseline))
+
+	type ledgerEntry struct {
+		checksum string
+		done     int
+		written  int64
+	}
+	readHistory := func() map[string]ledgerEntry {
+		history := make(map[string]ledgerEntry)
+		iter := session.Query("SELECT name, checksum, done, writetime(done) FROM gocqlx_migrate").Iter()
+		var name string
+		var entry ledgerEntry
+		for iter.Scan(&name, &entry.checksum, &entry.done, &entry.written) {
+			history[name] = entry
+		}
+		require.NoError(t, iter.Close())
+		return history
+	}
+	before := readHistory()
+	require.Len(t, before, 12)
+	uid := gocql.TimeUUID()
+	require.NoError(t, session.Query(`INSERT INTO service_accounts_by_cluster_name
+		(name, uid, generation, resource_version, enrollment_complete, public_keys)
+		VALUES (?, ?, ?, ?, ?, ?)`, "existing-ci-bot", uid, int64(1), "1", true, "[]").Exec())
+	require.ErrorContains(t, scylla.ValidateSchema(t.Context(), session), "incompatible schema")
+	require.Equal(t, before, readHistory(), "read-only validation must not apply the pending migration")
+
+	require.NoError(t, scylla.RunMigrations(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop()))
+	after := readHistory()
+	require.Len(t, after, 13)
+	for name, entry := range before {
+		require.Equal(t, entry, after[name], "upgrade must preserve the applied ledger for %s", name)
+	}
+	require.Contains(t, after, "013_service_account_cdc.cql")
+	var retained gocql.UUID
+	require.NoError(t, session.Query("SELECT uid FROM service_accounts_by_cluster_name WHERE name=?", "existing-ci-bot").Scan(&retained))
+	require.Equal(t, uid, retained, "enabling CDC must not replace existing identities")
+	var logTable string
+	require.NoError(t, session.Query("SELECT table_name FROM system_schema.tables WHERE keyspace_name=? AND table_name=?",
+		keyspace, "service_accounts_by_cluster_name_scylla_cdc_log").Scan(&logTable))
+
+	cfg := testScyllaConfig(t)
+	cfg.Keyspace, cfg.AutoMigrate = keyspace, false
+	store, err := scylla.New(cfg, zap.NewNop())
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+	require.Equal(t, after, readHistory(), "read-only startup must not rewrite migration history")
+	require.ErrorContains(t, scylla.RunMigrationsWithFS(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop(), baseline),
+		"database is ahead")
+	require.NoError(t, scylla.RunMigrations(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop()))
+	require.Equal(t, after, readHistory(), "rerunning the forward bundle must preserve applied history")
+}
+
 // The per-resource baseline has no supported rollback below itself: a binary
 // embedding only a prefix of the baseline must refuse a newer keyspace, and
 // the complete set must remain re-runnable.

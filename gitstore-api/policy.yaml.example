@@ -39,7 +39,7 @@ clusterRoles:
     rules:
       - resources: [namespace]
         verbs: [create]
-        when: [{attr: tier, op: eq, value: USER}]
+        when: [subjectUsername, {attr: tier, op: eq, value: USER}]
   controller:
     rules:
       - resources: [namespace, repository, categoryTaxonomy, product, file]
@@ -116,7 +116,7 @@ clusterRoleBindings:
   - roleRef: {kind: ClusterRole, name: namespace-owner}
     subjects: [{kind: Group, name: 'system:authenticated'}]
   - roleRef: {kind: ClusterRole, name: namespace-creator}
-    subjects: [{kind: Group, name: 'system:authenticated'}]
+    subjects: [{kind: Group, name: 'system:staff'}]
   - roleRef: {kind: ClusterRole, name: controller}
     subjects: [{kind: ServiceAccount, name: gitstore-controller-manager}]
   - roleRef: {kind: ClusterRole, name: controller-token}
@@ -135,6 +135,6 @@ roleBindings: []
 #   # Reuse a ClusterRole, confined to gitstore-system rather than all namespaces.
 #   - namespace: gitstore-system
 #     roleRef: {kind: ClusterRole, name: view}
-#     subjects: [{kind: Group, name: catalog-readers}]
+#     subjects: [{kind: Group, name: 'system:group:catalog-readers'}]
 # A RoleBinding cannot grant cluster-scoped namespace or serviceAccount actions.
 # For those, use a ClusterRoleBinding referencing a ClusterRole, as above.

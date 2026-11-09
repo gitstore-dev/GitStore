@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -16,6 +18,11 @@ import (
 
 // ErrNotSupported is returned by providers for operations they do not implement.
 var ErrNotSupported = errors.New("auth: operation not supported by this provider")
+
+var ErrProfileNotFound = errors.New("auth: directory profile not found")
+var ErrDirectoryUnavailable = errors.New("auth: directory unavailable")
+var ErrDirectoryConflict = errors.New("auth: directory conflict")
+var ErrDirectoryInvalidInput = errors.New("auth: invalid directory input")
 
 // ErrTokenTooOld is returned when a token has exceeded the refresh grace window.
 var ErrTokenTooOld = errors.New("auth: token too old to refresh")
@@ -82,6 +89,8 @@ func normalizeAuthenticatedPrincipal(provider string, principal *Principal) (*Pr
 	}
 	normalized := *principal
 	normalized.Groups = nil
+	normalized.Username = ""
+	normalized.ProfileKind = ""
 	anonymous := provider == "anonymous" && principal.Subject == "anon" && principal.AuthMethod == "none" && principal.ServiceAccountUID == ""
 	saProvider := provider == "serviceaccount-jwt" || provider == "serviceaccount-assertion"
 	if anonymous {
@@ -162,8 +171,11 @@ type Principal struct {
 	ExpiresAt  time.Time      `json:"exp,omitempty"`
 	// TokenID is the JWT jti claim — unique per-token identifier used for revocation.
 	// Empty for Basic Auth sessions and anonymous principals.
-	TokenID           string `json:"jti,omitempty"`
-	ServiceAccountUID string `json:"service_account_uid,omitempty"`
+	TokenID           string      `json:"jti,omitempty"`
+	ServiceAccountUID string      `json:"service_account_uid,omitempty"`
+	Username          string      `json:"username,omitempty"`
+	ProfileKind       ProfileKind `json:"profile_kind,omitempty"`
+	ProfileExpiresAt  time.Time   `json:"-"`
 }
 
 // Anonymous returns a Principal with no identity.
@@ -221,11 +233,158 @@ type AuthZProvider interface {
 
 // UserProfile is a provider-agnostic user record.
 type UserProfile struct {
-	Subject     string
-	DisplayName string
-	Email       string
-	Groups      []string
-	Active      bool
+	Subject           string
+	Username          string
+	DisplayName       string
+	Email             string
+	Groups            []string
+	Active            bool
+	Kind              ProfileKind
+	Lifecycle         ActorLifecycleState
+	Metadata          *DirectoryMetadata
+	Identities        []string
+	EmailVerified     bool
+	EmailDeliverable  bool
+	DeliverableEmail  string `json:"-"`
+	ContactConsent    ContactConsent
+	ServiceAccountUID string
+	FreshUntil        time.Time `json:"-"`
+}
+
+type ProfileKind string
+
+const (
+	ProfileStaff          ProfileKind = "staff"
+	ProfileCustomer       ProfileKind = "customer"
+	ProfileServiceAccount ProfileKind = "serviceAccount"
+)
+
+type ActorLifecycleState string
+
+const (
+	ActorActive              ActorLifecycleState = "ACTIVE"
+	ActorInactive            ActorLifecycleState = "INACTIVE"
+	ActorSuspended           ActorLifecycleState = "SUSPENDED"
+	ActorInvited             ActorLifecycleState = "INVITED"
+	ActorPendingVerification ActorLifecycleState = "PENDING_VERIFICATION"
+)
+
+type ContactConsent struct {
+	Transactional bool      `json:"transactional"`
+	Marketing     bool      `json:"marketing"`
+	ChangedAt     time.Time `json:"changed_at,omitempty"`
+}
+
+type DirectoryContact struct {
+	Subject          string
+	PrimaryEmail     string
+	DeliverableEmail string
+	EmailVerified    bool
+	EmailDeliverable bool
+	ContactConsent   ContactConsent
+}
+
+type ContactDirectory interface {
+	ResolveContact(context.Context, string) (*DirectoryContact, error)
+}
+
+// DirectoryMetadata is provider-owned; advancing a copy is not a remote CAS.
+type DirectoryMetadata struct {
+	UID               string            `json:"uid"`
+	Name              string            `json:"name"`
+	OwnerSub          string            `json:"-"`
+	CreationActor     string            `json:"-"`
+	UpdateActor       string            `json:"-"`
+	Generation        int64             `json:"generation"`
+	ResourceVersion   string            `json:"resource_version"`
+	CreationTimestamp time.Time         `json:"creation_timestamp"`
+	Labels            map[string]string `json:"labels,omitempty"`
+	Annotations       map[string]string `json:"annotations,omitempty"`
+}
+
+func NewDirectoryMetadata(initiator *Principal, uid, name string, created time.Time) (*DirectoryMetadata, error) {
+	if !ValidTrustedPrincipal(initiator) {
+		return nil, errors.New("auth: directory metadata requires a trusted initiating principal")
+	}
+	if uid == "" || len(uid) > 256 || strings.TrimSpace(uid) != uid || strings.IndexFunc(uid, unicode.IsControl) >= 0 ||
+		!ValidExternalUsername(name) || strings.TrimSpace(name) != name || strings.IndexFunc(name, unicode.IsControl) >= 0 || created.IsZero() {
+		return nil, errors.New("auth: invalid directory identity metadata")
+	}
+	return &DirectoryMetadata{
+		UID: uid, Name: name, OwnerSub: initiator.Subject,
+		CreationActor: initiator.Subject, UpdateActor: initiator.Subject,
+		Generation: 1, ResourceVersion: "1", CreationTimestamp: created.UTC(),
+	}, nil
+}
+
+func (m *DirectoryMetadata) Advance(authorOwnedChange bool) error {
+	if m == nil || m.Generation < 1 || m.Generation > math.MaxInt32 || (authorOwnedChange && m.Generation >= math.MaxInt32) {
+		return errors.New("auth: directory metadata counter exhausted")
+	}
+	version, err := strconv.ParseUint(m.ResourceVersion, 10, 64)
+	if err != nil || version == 0 || version == math.MaxUint64 {
+		return errors.New("auth: directory metadata counter exhausted")
+	}
+	if authorOwnedChange {
+		m.Generation++
+	}
+	m.ResourceVersion = strconv.FormatUint(version+1, 10)
+	return nil
+}
+
+type ActorPageRequest struct {
+	First  *int
+	After  *string
+	Last   *int
+	Before *string
+}
+
+func (r ActorPageRequest) ValidateForward() error {
+	if r.Last != nil || r.Before != nil {
+		return ErrNotSupported
+	}
+	if r.First != nil && (*r.First < 1 || *r.First > 500) {
+		return ErrDirectoryInvalidInput
+	}
+	return nil
+}
+
+type ActorEdge struct {
+	Cursor  string
+	Profile *UserProfile
+}
+
+type ActorPage struct {
+	Edges           []ActorEdge
+	StartCursor     *string
+	EndCursor       *string
+	HasNextPage     bool
+	HasPreviousPage bool
+}
+
+// ActorDirectory extends the legacy boundary without requiring local providers
+// to manufacture externally managed identities or advertise public capabilities.
+type ActorDirectory interface {
+	UserDirProvider
+	ResolvePrincipal(context.Context, *Principal) (*UserProfile, error)
+	ListActors(context.Context, ActorPageRequest) (*ActorPage, error)
+}
+
+type HumanDirectory interface {
+	UserDirProvider
+	CreateStaff(context.Context, *UserProfile) error
+	ResendInvitation(context.Context, string) (*UserProfile, error)
+	SetHumanLifecycle(context.Context, string, ActorLifecycleState) (*UserProfile, error)
+	DeleteHuman(context.Context, string) (*UserProfile, error)
+}
+
+type GroupDirectory interface {
+	SetActorGroup(context.Context, ProfileKind, string, string, bool) (*UserProfile, error)
+}
+
+// ServiceAccountGroupDirectory resolves memberships by source UID, not mirror identity UID.
+type ServiceAccountGroupDirectory interface {
+	ListServiceAccountGroups(context.Context, string) ([]string, error)
 }
 
 // UserDirProvider provides user-directory operations.

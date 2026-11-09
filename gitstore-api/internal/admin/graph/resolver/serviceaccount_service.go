@@ -88,8 +88,8 @@ func (r *Resolver) CreateServiceAccount(ctx context.Context, input *model.Create
 // envelope, so the fields it lacks are populated with safe defaults: nil
 // labels/annotations, no revision, and — importantly — empty (non-nil) slices
 // for the non-null OwnerReferences/Finalizers list fields, without which
-// gqlgen marshaling would fail at runtime. The UID is returned raw (a
-// ServiceAccount is not a Relay Node). ServiceAccount is out of scope for
+// gqlgen marshaling would fail at runtime. Metadata keeps the raw source UID,
+// while the Relay ID encodes the ServiceAccount kind. ServiceAccount is out of scope for
 // ADR-0010 §14 mutable ownership (audit-only, no Annotations field), so Owner
 // always reflects CreationActor.
 func serviceAccountObjectMeta(sa *datastore.ServiceAccount) *model.ObjectMeta {
@@ -112,16 +112,17 @@ func serviceAccountToModel(sa *datastore.ServiceAccount) *model.ServiceAccount {
 	for i, pk := range sa.PublicKeys {
 		keyIDs[i] = pk.KeyID
 	}
-	status := model.ActorStatusActive
+	lifecycleState := model.ActorLifecycleStateActive
 	if sa.Disabled {
-		status = model.ActorStatusInactive
+		lifecycleState = model.ActorLifecycleStateInactive
 	}
 	return &model.ServiceAccount{
+		ID:         mustEncodeNodeID(nodeKindServiceAccount, sa.UID),
 		APIVersion: "authentication.gitstore.dev/v1beta1",
 		Kind:       "ServiceAccount",
 		Metadata:   serviceAccountObjectMeta(sa),
 		KeyIDs:     keyIDs,
-		Status:     status,
+		Lifecycle:  &model.ActorLifecycle{State: lifecycleState},
 	}
 }
 

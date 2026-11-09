@@ -128,6 +128,21 @@ func TestClassifyResourcePreservesKindScopeAndResourceLabels(t *testing.T) {
 	assert.Equal(t, "standard", event.PreviousSelectorLabels["tier"])
 }
 
+func TestClassifyResourceRetainsOnlySourceSuppliedDeletionIdentity(t *testing.T) {
+	identity := json.RawMessage(`{"UID":"source-uid"}`)
+	change := Change{Kind: "ServiceAccount", Name: "ci-bot",
+		Before: json.RawMessage(`{"UID":"source-uid","Name":"ci-bot","PublicKeys":["not-needed"]}`), DeletionPayload: identity}
+	event, ok := ClassifyResource(change, namespaceLabels)
+	require.True(t, ok)
+	require.Equal(t, datastore.ResourceWatchDeleted, event.Type)
+	require.JSONEq(t, `{"UID":"source-uid"}`, string(event.Payload))
+	identity[0] = 'x'
+	require.JSONEq(t, `{"UID":"source-uid"}`, string(event.Payload), "journal payload must not alias the source")
+	event, ok = ClassifyResource(Change{Kind: "Repository", Before: change.Before}, namespaceLabels)
+	require.True(t, ok)
+	require.Empty(t, event.Payload, "existing sources retain their payload-free deletion contract")
+}
+
 func TestClassifyResourceSuppressesNoopRepositoryCDCWrite(t *testing.T) {
 	payload := json.RawMessage(`{"Labels":{"team":"catalog"},"Name":"catalog","Namespace":"shop"}`)
 	event, ok := ClassifyResource(Change{

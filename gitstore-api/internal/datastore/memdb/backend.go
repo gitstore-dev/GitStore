@@ -150,19 +150,20 @@ func decodeCursor(cursor string) (*datastore.PageCursor, error) {
 type memdbDatastore struct {
 	db *gomemdb.MemDB
 
-	namespaceMutationMu     sync.Mutex
-	fileMutationMu          sync.Mutex
-	categoryMutationMu      sync.Mutex
-	namespaceWatchMu        sync.RWMutex
-	namespaceWatchEpoch     string
-	namespaceWatchSequence  uint64
-	namespaceWatchEvents    []datastore.NamespaceWatchEvent
-	namespaceWatchBookmark  time.Time
-	namespaceWatchLease     datastore.NamespaceWatchLease
-	namespaceWatchProgress  map[string]datastore.NamespaceCDCProgress
-	namespaceWatchRetention time.Duration
-	sessionRevocationMu     sync.RWMutex
-	sessionRevocations      map[string]time.Time
+	namespaceMutationMu      sync.Mutex
+	fileMutationMu           sync.Mutex
+	categoryMutationMu       sync.Mutex
+	serviceAccountMutationMu sync.Mutex
+	namespaceWatchMu         sync.RWMutex
+	namespaceWatchEpoch      string
+	namespaceWatchSequence   uint64
+	namespaceWatchEvents     []datastore.NamespaceWatchEvent
+	namespaceWatchBookmark   time.Time
+	namespaceWatchLease      datastore.NamespaceWatchLease
+	namespaceWatchProgress   map[string]datastore.NamespaceCDCProgress
+	namespaceWatchRetention  time.Duration
+	sessionRevocationMu      sync.RWMutex
+	sessionRevocations       map[string]time.Time
 	// categoryProducts is a projection, not an alternate product store. Keys
 	// are namespace/category UID and values are product UIDs. Keeping it
 	// alongside memdb makes the development backend exercise the same bounded
@@ -2029,9 +2030,11 @@ func cloneTimePointer(value *time.Time) *time.Time {
 // ── ServiceAccount ───────────────────────────────────────────────────────────
 
 func (m *memdbDatastore) CreateServiceAccount(_ context.Context, sa *datastore.ServiceAccount) error {
-	if sa == nil {
-		return fmt.Errorf("%w: service account is nil", datastore.ErrInvalidArgument)
+	if sa == nil || sa.UID == "" || sa.Name == "" {
+		return fmt.Errorf("%w: service account uid and global name are required", datastore.ErrInvalidArgument)
 	}
+	m.serviceAccountMutationMu.Lock()
+	defer m.serviceAccountMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	if raw, _ := txn.First("service_account", "id", sa.UID); raw != nil {
 		txn.Abort()
@@ -2046,6 +2049,7 @@ func (m *memdbDatastore) CreateServiceAccount(_ context.Context, sa *datastore.S
 		return fmt.Errorf("memdb: insert service account: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedServiceAccount(datastore.ResourceWatchAdded, sa)
 	return nil
 }
 
@@ -2084,6 +2088,8 @@ func (m *memdbDatastore) ListServiceAccounts(_ context.Context, page datastore.P
 }
 
 func (m *memdbDatastore) UpdateServiceAccountKeys(_ context.Context, uid string, add []datastore.ServiceAccountPublicKey, removeKeyIDs []string, expectedResourceVersion string) (*datastore.ServiceAccount, error) {
+	m.serviceAccountMutationMu.Lock()
+	defer m.serviceAccountMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("service_account", "id", uid)
 	if raw == nil {
@@ -2100,10 +2106,13 @@ func (m *memdbDatastore) UpdateServiceAccountKeys(_ context.Context, uid string,
 		return nil, fmt.Errorf("memdb: update service account keys: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedServiceAccount(datastore.ResourceWatchModified, updated)
 	return cloneServiceAccount(updated), nil
 }
 
 func (m *memdbDatastore) SetServiceAccountDisabled(_ context.Context, uid string, disabled bool) error {
+	m.serviceAccountMutationMu.Lock()
+	defer m.serviceAccountMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("service_account", "id", uid)
 	if raw == nil {
@@ -2119,10 +2128,13 @@ func (m *memdbDatastore) SetServiceAccountDisabled(_ context.Context, uid string
 		return fmt.Errorf("memdb: set service account disabled: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedServiceAccount(datastore.ResourceWatchModified, updated)
 	return nil
 }
 
 func (m *memdbDatastore) DeleteServiceAccount(_ context.Context, uid string) error {
+	m.serviceAccountMutationMu.Lock()
+	defer m.serviceAccountMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("service_account", "id", uid)
 	if raw == nil {
@@ -2134,6 +2146,7 @@ func (m *memdbDatastore) DeleteServiceAccount(_ context.Context, uid string) err
 		return fmt.Errorf("memdb: delete service account: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedServiceAccount(datastore.ResourceWatchDeleted, raw.(*datastore.ServiceAccount))
 	return nil
 }
 

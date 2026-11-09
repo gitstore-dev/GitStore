@@ -522,6 +522,48 @@
       "verb": "rotate"
     },
     {
+      "action": "user.create",
+      "kind": "user",
+      "scope": "cluster",
+      "resource": "user",
+      "verb": "create"
+    },
+    {
+      "action": "user.read",
+      "kind": "user",
+      "scope": "cluster",
+      "resource": "user",
+      "verb": "read"
+    },
+    {
+      "action": "user.list",
+      "kind": "user",
+      "scope": "cluster",
+      "resource": "user",
+      "verb": "list"
+    },
+    {
+      "action": "user.update",
+      "kind": "user",
+      "scope": "cluster",
+      "resource": "user",
+      "verb": "update"
+    },
+    {
+      "action": "user.delete",
+      "kind": "user",
+      "scope": "cluster",
+      "resource": "user",
+      "verb": "delete"
+    },
+    {
+      "action": "user.group.update",
+      "kind": "user",
+      "scope": "cluster",
+      "resource": "user/group",
+      "verb": "update"
+    },
+    {
       "action": "workflow.definition.manage",
       "kind": "workflow",
       "scope": "namespace",

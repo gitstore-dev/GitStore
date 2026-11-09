@@ -25,6 +25,7 @@ type Registry struct {
 	mu          sync.Mutex
 	connections map[string]map[uint64]context.CancelFunc
 	nextID      uint64
+	generation  uint64
 }
 
 func New() *Registry {
@@ -50,16 +51,35 @@ func (r *Registry) Count() int {
 // Register adds cancel to uid's active connections and returns a context that
 // CloseFunc can pass to Unregister.
 func (r *Registry) Register(ctx context.Context, uid string, cancel context.CancelFunc) context.Context {
+	return r.register(ctx, uid, cancel, nil)
+}
+
+func (r *Registry) Generation() uint64 {
+	if r == nil {
+		return 0
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.generation
+}
+
+// RegisterGeneration rejects a profile resolved before local invalidation.
+func (r *Registry) RegisterGeneration(ctx context.Context, uid string, cancel context.CancelFunc, generation uint64) context.Context {
+	return r.register(ctx, uid, cancel, &generation)
+}
+
+func (r *Registry) register(ctx context.Context, uid string, cancel context.CancelFunc, generation *uint64) context.Context {
 	if r == nil || uid == "" || cancel == nil {
 		return ctx
 	}
 
 	r.mu.Lock()
-	if r.closed {
+	if r.closed || generation != nil && *generation != r.generation {
 		r.mu.Unlock()
 		cancel()
 		return ctx
 	}
+
 	r.nextID++
 	registration := registration{uid: uid, id: r.nextID}
 	if r.connections[uid] == nil {
@@ -69,6 +89,23 @@ func (r *Registry) Register(ctx context.Context, uid string, cancel context.Canc
 	r.mu.Unlock()
 
 	return context.WithValue(ctx, registrationContextKey{}, registration)
+}
+
+// Invalidate cancels local snapshots without closing the registry to new work.
+func (r *Registry) Invalidate() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.generation++
+	connections := r.connections
+	r.connections = make(map[string]map[uint64]context.CancelFunc)
+	r.mu.Unlock()
+	for _, registrations := range connections {
+		for _, cancel := range registrations {
+			cancel()
+		}
+	}
 }
 
 // Close cancels every owned connection and rejects new registrations during

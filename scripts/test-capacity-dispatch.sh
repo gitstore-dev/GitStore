@@ -60,6 +60,182 @@ if CAPACITY_DRY_RUN=1 "${dispatcher}" namespace watch gate >/dev/null 2>&1; then
 fi
 
 mkdir -p "${test_dir}/bin" "${test_dir}/readiness-valid" "${test_dir}/readiness-missing"
+mkdir -p "${test_dir}/identity-verifier"
+python3 - "${test_dir}/identity-verifier" <<'PY'
+import json
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+documents = {
+    'metadata.json': {'gitDirty': False, 'loadStartedAt': '2026-01-01T00:00:00Z', 'loadCompletedAt': '2026-01-01T00:30:01Z'},
+    'preflight-environment.json': {'passed': True, 'topology': {'apiReplicas': 2}},
+    'identity-preflight.json': {'passed': True, 'counts': {'staff': 1000, 'customers': 100000, 'serviceAccounts': 100}, 'durationSeconds': 1800, 'ratePerReplica': 500},
+    'identity-connected.json': {'events': 90, 'sourceAuthorityPassed': True, 'groupsPassed': True, 'laterDeliveryPassed': True, 'gitProcessUnchanged': True, 'sharedStoragePreserved': True},
+    'summary.json': {'metrics': {'checks': {'values': {'fails': 0}}, 'dropped_iterations': {'values': {'count': 0}}}},
+}
+for index in range(2):
+    for name in ['identity_requests', 'identity_decisions', 'identity_groups']:
+        documents['summary.json']['metrics'][f'{name}{{replica:{index}}}'] = {'values': {'count': 900000}}
+    (root / f'identity-before-{index}.prom').write_text('')
+    (root / f'identity-after-{index}.prom').write_text('''gitstore_userdir_requests_total{outcome="success",method="GET"} 9000
+gitstore_userdir_resolution_duration_seconds_count{cache="hit",outcome="success"} 900000
+gitstore_userdir_resolution_duration_seconds_bucket{cache="hit",outcome="success",le="0.01"} 900000
+gitstore_userdir_resolution_duration_seconds_count{cache="miss",outcome="success"} 9000
+gitstore_userdir_resolution_duration_seconds_bucket{cache="miss",outcome="success",le="0.1"} 9000
+gitstore_userdir_cache_entries_count 909000
+gitstore_userdir_cache_entries_bucket{le="256"} 909000
+gitstore_userdir_serviceaccount_buffer_depth_count 90
+gitstore_userdir_serviceaccount_buffer_depth_bucket{le="64"} 90
+gitstore_userdir_serviceaccount_delivery_total{outcome="applied"} 90
+''')
+for name, value in documents.items():
+    (root / name).write_text(json.dumps(value))
+PY
+CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-verifier"
+jq -e '.passed and (.replicas | length) == 2' "${test_dir}/identity-verifier/identity-verifier.json" >/dev/null
+jq '.metrics |= with_entries(.value = .value.values)' "${test_dir}/identity-verifier/summary.json" >"${test_dir}/identity-verifier/summary.tmp"
+mv "${test_dir}/identity-verifier/summary.tmp" "${test_dir}/identity-verifier/summary.json"
+CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-verifier"
+jq -e '.passed' "${test_dir}/identity-verifier/identity-verifier.json" >/dev/null
+python3 - "${test_dir}" <<'PY'
+import datetime
+import json
+from pathlib import Path
+import shutil
+import sys
+root = Path(sys.argv[1])
+target = root / 'identity-chaos-verifier'
+shutil.copytree(root / 'identity-verifier', target)
+identity = json.loads((target / 'identity-preflight.json').read_text())
+epoch = int(datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc).timestamp() * 1000)
+identity['faultWindows'] = [
+    {'replicas': [0, 1], 'startMillis': epoch + 120000, 'endMillis': epoch + 150000},
+    {'replicas': [0], 'startMillis': epoch + 240000, 'endMillis': epoch + 270000},
+]
+(target / 'identity-preflight.json').write_text(json.dumps(identity))
+companion = json.loads((target / 'identity-connected.json').read_text())
+companion['faults'] = [
+    {'profile': profile, 'injected': True, 'processChanged': True, 'recoveredOnBoth': True,
+     'injectedMillis': window['startMillis'] + 100, 'dependencyReadyMillis': window['startMillis'] + 500,
+     'recoveredMillis': window['startMillis'] + 1000}
+    for profile, window in zip(['identity-restart', 'api-restart'], identity['faultWindows'])
+]
+old_metrics = (target / 'identity-after-0.prom').read_text()
+companion['apiRestartMetrics'] = {
+    'before': old_metrics + 'process_start_time_seconds 1\n',
+    'after': 'process_start_time_seconds 2\n',
+}
+(target / 'identity-before-0.prom').write_text('process_start_time_seconds 1\n')
+(target / 'identity-after-0.prom').write_text(old_metrics + 'process_start_time_seconds 2\n')
+(target / 'identity-connected.json').write_text(json.dumps(companion))
+summary = json.loads((target / 'summary.json').read_text())
+for index, unavailable in enumerate([100, 0]):
+    summary['metrics'][f'identity_unavailable{{replica:{index}}}'] = {'count': unavailable}
+    for name in ['identity_decisions', 'identity_groups']:
+        summary['metrics'][f'{name}{{replica:{index}}}']['count'] -= unavailable
+(target / 'summary.json').write_text(json.dumps(summary))
+for failure in ['receipt', 'reset', 'membership', 'recovery']:
+    invalid = root / f'identity-chaos-{failure}'
+    shutil.copytree(target, invalid)
+    if failure == 'membership':
+        broken = json.loads(json.dumps(summary))
+        broken['metrics']['identity_groups{replica:0}']['count'] -= 1
+        (invalid / 'summary.json').write_text(json.dumps(broken))
+    else:
+        broken = json.loads(json.dumps(companion))
+        if failure == 'receipt':
+            broken['faults'][0]['injected'] = False
+        elif failure == 'reset':
+            broken['apiRestartMetrics']['after'] = 'process_start_time_seconds 1\n'
+        else:
+            broken['faults'][0]['recoveredMillis'] = identity['faultWindows'][0]['endMillis'] + 1
+        (invalid / 'identity-connected.json').write_text(json.dumps(broken))
+PY
+CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-chaos-verifier"
+jq -e '.passed and .chaos and .replicas[0].unavailable == 100' "${test_dir}/identity-chaos-verifier/identity-verifier.json" >/dev/null
+for failure in receipt reset membership recovery; do
+  if CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" \
+    "${test_dir}/identity-chaos-${failure}" >/dev/null 2>&1; then
+    echo "identity chaos verifier accepted invalid ${failure} evidence" >&2
+    exit 1
+  fi
+done
+jq '.metrics["identity_groups{replica:1}"].count -= 1' "${test_dir}/identity-verifier/summary.json" >"${test_dir}/identity-verifier/summary.tmp"
+mv "${test_dir}/identity-verifier/summary.tmp" "${test_dir}/identity-verifier/summary.json"
+if CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-verifier" >/dev/null 2>&1; then
+  echo "identity verifier accepted a request without matching membership evidence" >&2
+  exit 1
+fi
+jq -e '.passed == false' "${test_dir}/identity-verifier/identity-verifier.json" >/dev/null
+mkdir -p "${test_dir}/chaos-bin"
+cat >"${test_dir}/chaos-bin/docker" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  inspect)
+    id=owned-identity
+    running=true
+    if [[ -e "${MOCK_CHAOS_MARKER}" ]]; then
+      if [[ "${MOCK_CHAOS_REPLACEMENT:-0}" == 1 ]]; then id=replacement; fi
+      if [[ "${MOCK_CHAOS_FAILURE:-0}" == 1 && ! -e "${MOCK_CHAOS_MARKER}.restored" ]]; then running=false; fi
+    fi
+    jq -n --arg id "${id}" --arg owner "${MOCK_CHAOS_OWNER:-owned-test}" \
+      --argjson running "${running}" --argjson paused "${MOCK_CHAOS_PAUSED:-false}" \
+      '[{Id:$id,Config:{Labels:{"com.docker.compose.project":$owner,"dev.gitstore.test_owner":$owner}},
+        State:{Running:$running,Paused:$paused}}]'
+    ;;
+  run)
+    touch "${MOCK_CHAOS_MARKER}"
+    exit "${MOCK_CHAOS_FAILURE:-0}"
+    ;;
+  start)
+    [[ "$2" == owned-identity ]]
+    touch "${MOCK_CHAOS_MARKER}.restored"
+    ;;
+  *) exit 2 ;;
+esac
+MOCK
+chmod +x "${test_dir}/chaos-bin/docker"
+export MOCK_CHAOS_MARKER="${test_dir}/chaos-marker"
+for rejection in confirmation missing-owner owner paused target; do
+  confirm=1; owner=owned-test; paused=false; target=gitstore-userdir-kratos-test
+  case "${rejection}" in
+    confirmation) confirm=0 ;;
+    missing-owner) owner="" ;;
+    owner) owner=someone-else ;;
+    paused) paused=true ;;
+    target) target=gitstore-api-test ;;
+  esac
+  if PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM="${confirm}" CHAOS_OWNER="${owner}" \
+    CHAOS_TARGET="${target}" MOCK_CHAOS_PAUSED="${paused}" \
+    CHAOS_EVIDENCE_DIR="${test_dir}/chaos" "${repo_root}/scripts/run-chaos.sh" identity-restart >/dev/null 2>&1; then
+    echo "identity chaos unexpectedly accepted ${rejection}" >&2
+    exit 1
+  fi
+  [[ ! -e "${MOCK_CHAOS_MARKER}" ]]
+done
+PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM=1 CHAOS_OWNER=owned-test \
+  CHAOS_OWNERSHIP_LABEL=dev.gitstore.test_owner CHAOS_TARGET=gitstore-userdir-kratos-test \
+  CHAOS_RUN_ID=owned CHAOS_EVIDENCE_DIR="${test_dir}/chaos" \
+  "${repo_root}/scripts/run-chaos.sh" identity-restart >/dev/null
+jq -e '.injected and .restorationRequired and .restored and .exitCode == 0' \
+  "${test_dir}/chaos/identity-restart/owned/metadata.json" >/dev/null
+for failure in injector replacement; do
+  injector_failure=0; replacement=0
+  case "${failure}" in injector) injector_failure=1 ;; replacement) replacement=1 ;; esac
+  if PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM=1 CHAOS_OWNER=owned-test \
+    CHAOS_TARGET=gitstore-userdir-kratos-test MOCK_CHAOS_FAILURE="${injector_failure}" \
+    MOCK_CHAOS_MARKER="${test_dir}/chaos-marker-${failure}" \
+    MOCK_CHAOS_REPLACEMENT="${replacement}" CHAOS_RUN_ID="${failure}" \
+    CHAOS_EVIDENCE_DIR="${test_dir}/chaos" "${repo_root}/scripts/run-chaos.sh" identity-restart >/dev/null 2>&1; then
+    echo "identity chaos unexpectedly passed ${failure}" >&2
+    exit 1
+  fi
+done
+jq -e '.restored and (.injected | not) and .exitCode != 0' \
+  "${test_dir}/chaos/identity-restart/injector/metadata.json" >/dev/null
+jq -e '(.restored | not) and .injected and .exitCode != 0' \
+  "${test_dir}/chaos/identity-restart/replacement/metadata.json" >/dev/null
 source_revision="$(git -C "${repo_root}" rev-parse HEAD)"
 image_digest="$(printf 'a%.0s' {1..64})"
 printf '#!/usr/bin/env bash\nif [[ "${MOCK_BAD_READY:-0}" == 1 && "$*" == *api-b.internal/ready* ]]; then exit 22; fi\ncase "$*" in *api-a*|*api-alias*) if [[ -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" && -e "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}" ]]; then instance=instance-a-replacement; else instance=instance-a; fi; printf "process_start_time_seconds 100\\ngitstore_api_process_instance_info{instance_id=\\"%%s\\"} 1\\n" "$instance" ;; *api-b*) if [[ "${MOCK_SAME_START:-0}" == 1 ]]; then start=100; else start=200; fi; if [[ "${MOCK_REPLACE_ALL:-0}" == 1 && -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" && -e "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}" ]]; then instance=instance-b-replacement; else instance=instance-b; fi; printf "process_start_time_seconds %%s\\ngitstore_api_process_instance_info{instance_id=\\"%%s\\"} 1\\n" "$start" "$instance" ;; *) exit 1 ;; esac\n' >"${test_dir}/bin/curl"

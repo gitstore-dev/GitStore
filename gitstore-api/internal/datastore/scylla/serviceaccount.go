@@ -13,6 +13,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gocql/gocql"
 	"github.com/scylladb/gocqlx/v3/qb"
+	scyllacdc "github.com/scylladb/scylla-cdc-go"
 )
 
 // serviceAccountRow mirrors the columns of service_accounts_by_cluster_name.
@@ -87,6 +88,44 @@ func fromServiceAccountRow(r *serviceAccountRow) (*datastore.ServiceAccount, err
 		PublicKeys:        keys,
 		DeletionTimestamp: r.DeletionTimestamp,
 	}, nil
+}
+
+func serviceAccountCDCRow(rows []*scyllacdc.ChangeRow) *serviceAccountRow {
+	if len(rows) == 0 || rows[0] == nil {
+		return nil
+	}
+	row := rows[0]
+	account := &serviceAccountRow{}
+	assignCDC(row, "enrollment_complete", &account.EnrollmentComplete)
+	assignCDC(row, "creation_timestamp", &account.CreationTimestamp)
+	assignCDC(row, "uid", &account.UID)
+	assignCDC(row, "name", &account.Name)
+	assignCDC(row, "generation", &account.Generation)
+	assignCDC(row, "resource_version", &account.ResourceVersion)
+	assignCDC(row, "creation_actor", &account.CreationActor)
+	assignCDC(row, "update_timestamp", &account.UpdateTimestamp)
+	assignCDC(row, "update_actor", &account.UpdateActor)
+	assignCDC(row, "deletion_timestamp", &account.DeletionTimestamp)
+	assignCDC(row, "disabled", &account.Disabled)
+	assignCDC(row, "public_keys", &account.PublicKeys)
+	return account
+}
+
+func marshalServiceAccountCDC(row *serviceAccountRow) (json.RawMessage, error) {
+	if row == nil || row.UID == (gocql.UUID{}) || row.Name == "" || row.CreationTimestamp.IsZero() {
+		return nil, fmt.Errorf("%w: ServiceAccount CDC image has no authoritative identity", datastore.ErrNamespaceWatchDiscontinuity)
+	}
+	if !row.EnrollmentComplete {
+		return nil, nil
+	}
+	if row.ResourceVersion == "" {
+		return nil, fmt.Errorf("%w: ServiceAccount CDC image has no source revision", datastore.ErrNamespaceWatchDiscontinuity)
+	}
+	account, err := fromServiceAccountRow(row)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(account)
 }
 
 func (s *scyllaDatastore) CreateServiceAccount(ctx context.Context, sa *datastore.ServiceAccount) error {

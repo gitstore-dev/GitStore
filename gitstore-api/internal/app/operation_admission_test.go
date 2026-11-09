@@ -4,11 +4,35 @@
 package app
 
 import (
+	"context"
+	"github.com/99designs/gqlgen/graphql"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
+
+func TestCustomerProfileCannotExecuteAdminOperations(t *testing.T) {
+	for _, kind := range []auth.ProfileKind{auth.ProfileCustomer, auth.ProfileStaff, auth.ProfileServiceAccount, ""} {
+		control := newOperationAdmission(config.DefaultEndpoint("admin"))
+		ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{
+			Subject: "identity", AuthMethod: "oidc-jwt", ProfileKind: kind,
+			Groups: []string{"system:staff", "system:serviceaccounts", "system:masters", "system:group:operators"},
+		})
+		ctx = graphql.WithOperationContext(ctx, &graphql.OperationContext{})
+		executed := false
+		response := control.middleware(ctx, func(context.Context) graphql.ResponseHandler {
+			executed = true
+			return graphql.OneShot(&graphql.Response{Data: []byte("{}")})
+		})(ctx)
+		if kind == auth.ProfileCustomer {
+			require.False(t, executed)
+			require.Equal(t, "FORBIDDEN", response.Errors[0].Extensions["code"])
+		} else {
+			require.True(t, executed)
+		}
+	}
+}
 
 func TestPrincipalBudgetOnlyExemptsVerifiedController(t *testing.T) {
 	profile := config.DefaultEndpoint("admin")

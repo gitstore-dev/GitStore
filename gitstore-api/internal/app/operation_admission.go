@@ -79,6 +79,12 @@ func throttledOperation(ctx context.Context) graphql.ResponseHandler {
 // validation. No request header can opt into the service identity exemption.
 func (a *operationAdmission) middleware(ctx context.Context, next graphql.OperationHandler) graphql.ResponseHandler {
 	p := auth.PrincipalFromContext(ctx)
+	if p != nil && p.ProfileKind == auth.ProfileCustomer {
+		return graphql.OneShot(&graphql.Response{Errors: gqlerror.List{{
+			Message:    "profile cannot access management operations",
+			Extensions: map[string]any{"code": "FORBIDDEN"},
+		}}})
+	}
 	cost := 1
 	if stats := extension.GetComplexityStats(ctx); stats != nil {
 		cost = stats.Complexity

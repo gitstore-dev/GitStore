@@ -79,6 +79,8 @@ func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (mo
 		return nil, err
 	}
 	switch kind {
+	case nodeKindStaff, nodeKindCustomer, nodeKindServiceAccount:
+		return r.actorNode(ctx, kind, rawID)
 	case nodeKindFile:
 		if file, ok := security.AuthorizedFileNode(ctx, rawID); ok {
 			if file == nil {

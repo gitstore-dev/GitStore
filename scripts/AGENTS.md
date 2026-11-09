@@ -51,6 +51,18 @@ container wiring and configuration.
 - For capacity, profiling, chaos and owned-deployment helpers, read
   [../tests/capacity/AGENTS.md](../tests/capacity/AGENTS.md). Keep
   scenario-specific command details in the existing scenario documentation.
+- `make chaos CHAOS_PROFILE=identity-restart` requires `CHAOS_CONFIRM=1`, one
+  Kratos `CHAOS_TARGET` and a matching `CHAOS_OWNER` ownership label. The default
+  label is `com.docker.compose.project`; owned fixtures can explicitly override
+  `CHAOS_OWNERSHIP_LABEL`. Process restoration receipts are not authentication
+  recovery passes; see [../tests/chaos/README.md](../tests/chaos/README.md).
+- `make capacity TARGET=api PROFILE=readiness` retains health-only smoke
+  behavior unless `CAPACITY_IDENTITY_READINESS=1`. Identity acceptance requires
+  the private principal fixture, verified native counts, SDK timing/bounds
+  and live-delivery companion; see [../tests/capacity/README.md](../tests/capacity/README.md).
+  `CAPACITY_IDENTITY_CHAOS=1` additionally requires predeclared bounded fault
+  windows, confirmed restart/recovery receipts and process-segmented counters;
+  `USER_DIRECTORY_TEST_CHAOS=1` selects that opt-in owned driver.
 
 ## Infrastructure command instructions
 

@@ -18,7 +18,14 @@ services:
       # that exact URL from inside the container.
       - "localhost:host-gateway"
     environment:
-      - GITSTORE_API__AUTH__AUTHN__CHAIN=oidc-jwt,static-users,serviceaccount-assertion,serviceaccount-jwt,anonymous
+      - GITSTORE_API__AUTH__AUTHN__CHAIN=${GITSTORE_API__AUTH__AUTHN__CHAIN:-oidc-jwt,static-users,serviceaccount-assertion,serviceaccount-jwt,anonymous}
+      - GITSTORE_API__AUTH__USERDIR__PROVIDER=${GITSTORE_API__AUTH__USERDIR__PROVIDER:-static-users}
+      - GITSTORE_API__AUTH__KRATOS__ADMIN_URI=${GITSTORE_API__AUTH__KRATOS__ADMIN_URI:-http://kratos:4434}
+      - GITSTORE_API__AUTH__KRATOS__WEBHOOK_URI=${GITSTORE_API__AUTH__KRATOS__WEBHOOK_URI:-}
+      - GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN=${GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN:-}
+      - GITSTORE_API__NOTIFICATION__PROVIDER=${GITSTORE_API__NOTIFICATION__PROVIDER:-none}
+      - GITSTORE_API__NOTIFICATION__API_KEY=${GITSTORE_API__NOTIFICATION__API_KEY:-}
+      - GITSTORE_API__NOTIFICATION__DEVELOPMENT__SMTP_URI=${GITSTORE_API__NOTIFICATION__DEVELOPMENT__SMTP_URI:-smtps://mailslurper:1025/?skip_ssl_verify=true}
       - GITSTORE_API__AUTH__OIDC_JWT__ISSUER_URI=http://localhost:${GITSTORE_HOST_OIDC_ISSUER_PORT:-4444}/
       - GITSTORE_API__AUTH__OIDC_JWT__CLIENT_ID=${GITSTORE_OIDC_CLIENT_ID:-gitstore}
       # Follows GITSTORE_OIDC_CLIENT_AUDIENCE so a custom registered audience
@@ -43,7 +50,7 @@ services:
       retries: 10
 
   hydra-migrate:
-    image: oryd/hydra:v2.3.0
+    image: oryd/hydra:v26.2.0
     container_name: gitstore-oidc-hydra-migrate
     command: migrate sql up --yes -e
     environment:
@@ -58,7 +65,7 @@ services:
     restart: "no"
 
   hydra:
-    image: oryd/hydra:v2.3.0
+    image: oryd/hydra:v26.2.0
     container_name: gitstore-oidc-hydra
     # --dev permits http:// URLs for this single-node reference deployment.
     command: serve all --config /etc/config/hydra/config.yaml --dev
@@ -90,7 +97,7 @@ services:
       retries: 12
 
   hydra-client-setup:
-    image: oryd/hydra:v2.3.0
+    image: oryd/hydra:v26.2.0
     container_name: gitstore-oidc-hydra-client-setup
     # Idempotent one-shot OAuth2 client registration (FR-010): a repeated
     # `compose up` against an already-provisioned Hydra is a no-op.
@@ -149,7 +156,7 @@ services:
       retries: 10
 
   kratos-migrate:
-    image: oryd/kratos:v1.3.1
+    image: oryd/kratos:v26.2.0
     container_name: gitstore-oidc-kratos-migrate
     command: migrate sql up --yes -e
     environment:
@@ -162,9 +169,9 @@ services:
     restart: "no"
 
   kratos:
-    image: oryd/kratos:v1.3.1
+    image: oryd/kratos:v26.2.0
     container_name: gitstore-oidc-kratos
-    command: serve --config /etc/config/kratos/kratos.yml --dev --watch-courier
+    command: serve --config ${KRATOS_CONFIG_FILES:-/etc/config/kratos/kratos.yml} --dev --watch-courier
     ports:
       - "${GITSTORE_HOST_KRATOS_PUBLIC_PORT:-4433}:4433"  # Kratos public API (self-service flows, whoami)
     environment:
@@ -173,14 +180,22 @@ services:
       - SECRETS_DEFAULT=${KRATOS_SECRETS_DEFAULT:?set KRATOS_SECRETS_DEFAULT in .env (32+ chars)}
       # Derived from the host-port override so the advertised base URL tracks it.
       - SERVE_PUBLIC_BASE_URL=http://localhost:${GITSTORE_HOST_KRATOS_PUBLIC_PORT:-4433}/
+      - COURIER_HTTP_REQUEST_CONFIG_AUTH_CONFIG_VALUE=${GITSTORE_API__NOTIFICATION__API_KEY:-}
+      - COURIER_HTTP_REQUEST_CONFIG_URL=${COURIER_HTTP_REQUEST_CONFIG_URL:-http://api:4000/internal/notifications/mail}
     volumes:
       - ./config/oidc/kratos/kratos.yml:/etc/config/kratos/kratos.yml:ro
-      - ./config/oidc/kratos/identity.schema.json:/etc/config/kratos/identity.schema.json:ro
+      - ./config/oidc/kratos/staff.schema.json:/etc/config/kratos/staff.schema.json:ro
+      - ./config/oidc/kratos/customer.schema.json:/etc/config/kratos/customer.schema.json:ro
+      - ./config/oidc/kratos/serviceaccount.schema.json:/etc/config/kratos/serviceaccount.schema.json:ro
+      - ./config/oidc/kratos/webhook.jsonnet:/etc/config/kratos/webhook.jsonnet:ro
+      - ./config/oidc/kratos/gitstore-hooks.yml:/etc/config/kratos/gitstore-hooks.yml:ro
+      - ./config/oidc/kratos/courier.jsonnet:/etc/config/kratos/courier.jsonnet:ro
     depends_on:
       kratos-migrate:
         condition: service_completed_successfully
     networks:
       - gitstore-network
+    # The API webhook listener is container-internal; do not publish its port.
     # Kratos's Admin API (container port 4434) is deliberately NOT published:
     # only gitstore-oidc-bridge may reach it, inside gitstore-network (FR-008).
     healthcheck:
@@ -192,7 +207,7 @@ services:
   kratos-selfservice-ui:
     # Ory's own reference self-service UI — part of the reference stack, so no
     # custom registration/login UI has to be built (spec.md User Story 2).
-    image: oryd/kratos-selfservice-ui-node:v1.3.1
+    image: oryd/kratos-selfservice-ui-node:v26.2.0
     container_name: gitstore-oidc-kratos-selfservice-ui
     ports:
       - "${GITSTORE_HOST_KRATOS_UI_PORT:-4455}:3000"
