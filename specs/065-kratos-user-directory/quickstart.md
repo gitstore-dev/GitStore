@@ -166,6 +166,15 @@ containers/network/storage, verify labels before faults/cleanup, and remove
 their private fixtures. These are bounded functional/fault proofs, not
 mixed-version/provider-switch acceptance or sustained identity-scale capacity.
 
+The separate `TestOwnedUserDirectoryRollingUpgrade` fixture builds the exact
+pre-directory source and keeps an old API serving source-backed requests
+through forward migration and replacement. It uses version-compatible policy
+configuration, tests new human operations only on new binaries, and reconstructs
+static/Kratos/disabled providers through real restarts at stable endpoints.
+Source authority and live-consumer cancellation survive the switch; an old
+binary refuses startup against the forward migration ledger. This is bounded
+rolling acceptance, not sustained chaos or a supported binary downgrade.
+
 `make lint` and `make check TARGET=all` now pass. The reported Go test files
 were formatted without behavior changes, and the ignored local API environment
 now uses `GITSTORE_API__ADMIN_PORT` and `GITSTORE_API__STOREFRONT_PORT` instead

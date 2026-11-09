@@ -29,7 +29,8 @@ import (
 )
 
 type directoryAPI struct {
-	name, base string
+	name, base             string
+	configFile, binaryFile string
 }
 
 type directoryGraphQLResponse struct {
@@ -78,6 +79,15 @@ func (r *directoryTestRuntime) startAPIs(t *testing.T, operator string, sharedSo
 	build.Dir, build.Env = apiDir, append(os.Environ(), "GOOS=linux", "CGO_ENABLED=0")
 	output, err := build.CombinedOutput()
 	require.NoError(t, err, "build owned API: %s", output)
+	if r.initialAPIBinary != "" {
+		r.currentAPIBinary = filepath.Join(privateDir, "api-current")
+		require.NoError(t, os.Rename(binary, r.currentAPIBinary))
+		initial, err := os.ReadFile(r.initialAPIBinary)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(binary, initial, 0755))
+		users := fmt.Sprintf("version: v1\nusers:\n  - username: %q\n    password_hash: unused-directory-only\n", operator)
+		require.NoError(t, os.WriteFile(filepath.Join(privateDir, "users.yaml"), []byte(users), 0600))
+	}
 	policy := fmt.Sprintf(`apiVersion: rbac.authorization.gitstore.dev/v1beta1
 kind: RbacLocalConfiguration
 defaultDeny: true
@@ -121,6 +131,13 @@ clusterRoleBindings:
 	if r.capacity {
 		policy = strings.Replace(policy, "resources: [user]\n        verbs: [read]",
 			"resources: [user, serviceAccount]\n        verbs: [read]", 1)
+	}
+	if r.initialAPIBinary != "" {
+		r.currentAPIPolicy = policy
+		policy = strings.Replace(policy, "        when: [subjectUsername]\n", "", 1)
+		policy = strings.ReplaceAll(policy, "[user, serviceAccount, namespace]", "[serviceAccount, namespace]")
+		policy = strings.ReplaceAll(policy, "      - resources: [user/group]\n        verbs: [update]\n", "")
+		policy = strings.ReplaceAll(policy, "resources: [user]", "resources: [serviceAccount]")
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(privateDir, "policy.yaml"), []byte(policy), 0600))
 	root, err := filepath.Abs("../..")
@@ -259,6 +276,12 @@ keyspace = "gitstore"
 confidence_window = "500ms"
 `, sourceSigningKey)
 		}
+		if r.initialAPIBinary != "" {
+			config = strings.Replace(config, `provider = "kratos"`, `provider = "static-users"`, 1)
+			config = strings.Replace(config, `"oidc-jwt", "anonymous"`, `"oidc-jwt", "static-users", "anonymous"`, 1)
+			config += "\n[api.auth.static_users]\nusers_file = \"/fixtures/users.yaml\"\n"
+			config += fmt.Sprintf("\n[api.auth.jwt]\nsecret = %q\n", r.secret)
+		}
 		configFile := filepath.Join(privateDir, fmt.Sprintf("api-%d.toml", replica))
 		if r.capacity {
 			config = strings.Replace(config, `cache_ttl = "500ms"`, `cache_ttl = "5m"`, 1)
@@ -272,9 +295,10 @@ principal_burst = 2000
 `
 		}
 		require.NoError(t, os.WriteFile(configFile, []byte(config), 0600))
+		adminPort, storefrontPort := directoryLoopbackPorts(t)
 		r.command(t, nil, "run", "-d", "--name", name, "--label", "dev.gitstore.test_owner="+r.owner,
 			"--network", r.network, "--ip", apiIP.String(), "--memory", "384m", "--cpus", "1",
-			"-p", "127.0.0.1::4000", "-p", "127.0.0.1::4001",
+			"-p", fmt.Sprintf("127.0.0.1:%d:4000", adminPort), "-p", fmt.Sprintf("127.0.0.1:%d:4001", storefrontPort),
 			"-v", privateDir+":/fixtures:ro", "--entrypoint", apiEntrypoint,
 			apiImage, "--config-file", fmt.Sprintf("/fixtures/api-%d.toml", replica))
 		r.cleanupContainer(t, name, true)
@@ -285,7 +309,7 @@ principal_burst = 2000
 		})
 		port := strings.TrimSpace(r.command(t, nil, "inspect", "--format",
 			`{{(index (index .NetworkSettings.Ports "4000/tcp") 0).HostPort}}`, name))
-		api := directoryAPI{name: name, base: "http://127.0.0.1:" + port}
+		api := directoryAPI{name: name, base: "http://127.0.0.1:" + port, configFile: configFile, binaryFile: binary}
 		require.Eventually(t, func() bool {
 			response, err := r.client.Get(api.base + "/ready")
 			if err != nil {
@@ -309,6 +333,17 @@ principal_burst = 2000
 		require.NoError(t, err)
 		return signed
 	}
+}
+
+func directoryLoopbackPorts(t *testing.T) (int, int) {
+	t.Helper()
+	admin, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer admin.Close()
+	storefront, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer storefront.Close()
+	return admin.Addr().(*net.TCPAddr).Port, storefront.Addr().(*net.TCPAddr).Port
 }
 
 func (r *directoryTestRuntime) startScylla(t *testing.T, root string) {

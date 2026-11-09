@@ -42,6 +42,9 @@ type directoryTestRuntime struct {
 	capacity                                        bool
 	postgresVolume                                  string
 	issuerURI                                       string
+	initialAPIBinary                                string
+	currentAPIBinary                                string
+	currentAPIPolicy                                string
 }
 
 func startDirectoryTestRuntime(t *testing.T, enableMail ...bool) *directoryTestRuntime {

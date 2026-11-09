@@ -429,8 +429,8 @@ are unchanged. The verifier supports both actual export and callback metric
 shapes without relaxing correctness, throughput or latency gates.
 
 These are healthy sustained workloads with live changes, not confirmed chaos,
-API replacement or mixed-version/provider-switch acceptance. T012/T078/
-T080/T083 remain open. CI and CI Integration pass on the tested source.
+API replacement acceptance. T080/T083 remain open. CI and CI Integration
+pass on the tested source.
 The spec remains open and ADR 0020 remains Proposed.
 
 ### Native conditional-write ambiguity acceptance: 2026-11-09
@@ -476,6 +476,46 @@ access on both APIs after directory group assignment without token replacement.
 The cookie jar uses a shared Kratos/bridge hostname rather than manually
 copying cookies. Private token files never enter source or public receipts.
 Bridge race tests, bridge/integration Go vet and canonical lint pass.
+
+### Native rollout acceptance: 2026-11-09
+
+Use the actual PR merge base `e9cbe2d7b22d9ca62be52bde64f20fa891a625a3`,
+not an earlier build of this feature, as the pre-directory binary. Start both
+old APIs with static directory enrichment against fresh pre-013 Scylla storage;
+write and read a source ServiceAccount before starting the new binary.
+Replace one API with current code while the other old process remains live,
+verify common source reads/writes and UID preservation through forward
+migration, then replace the second. Older GraphQL schemas do not acquire new
+human Actor fields or management operations during mixed-version operation;
+clients must direct those operations to the new version.
+
+On current binaries, reconstruct static/Kratos/disabled directory providers
+through real process restarts. Verify management admission, human actor reads
+and administration, source-authoritative workload denial, bounded freshness
+and cancellation of live mirror delivery after switching away from Kratos.
+Keep the other replica serving throughout, retain the shared identity/source
+storage and never restart or overlap the singleton Git process. A pre-013
+binary must refuse readiness against the forward migration ledger; do not
+represent unsupported binary rollback as a supported zero-downtime downgrade.
+The native driver-race test passes in 35.16 seconds, together with the affected
+human-administration, native-Hydra and workload fixtures (106.66 seconds total).
+It archives and builds the exact old source, uses that version's supported
+policy catalog/conditions and required static AuthN wiring, and only installs
+the new human policy after both binaries are upgraded. Fresh single-use
+assertions verify common enrolled-source reads on both old APIs and mixed
+old/new APIs; continuous requests to the old replica succeed while the new
+process migrates and starts. Its process start stays unchanged during that
+phase. New human fields are exercised only on new code.
+
+Static, Kratos and disabled providers are rebuilt by physical process restart
+at stable host ports. Native actor reads/admin writes and Customer denial pass;
+unexpired workload credentials cannot override source disablement with either
+provider. Switching away cancels mirror delivery and leaves the expected stale
+mirror; switching another replica to Kratos delivers later changes without
+replay or repair. The other API remains usable. A real old-binary rollback
+exits with the native migration error `database is ahead`. The singleton Git
+process stays unchanged. These bounded functional/rolling checks do not prove
+sustained-chaos acceptance.
 
 ```text
 gitstore-api/
