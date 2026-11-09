@@ -5,6 +5,9 @@ package bridge
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -183,74 +186,13 @@ func TestOwnedNativeDualIdentifierLoginPreservesOIDCSubject(t *testing.T) {
 		t.Fatal("owned identity material is required")
 	}
 	for _, identifier := range []string{username, email} {
-		jar, err := cookiejar.New(nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		client := &http.Client{Jar: jar, Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-		request := func(method, path string, payload any) *http.Response {
-			t.Helper()
-			body, err := json.Marshal(payload)
-			if err != nil {
-				t.Fatal("encode owned login request")
-			}
-			req, err := http.NewRequestWithContext(t.Context(), method, base.String()+path, strings.NewReader(string(body)))
-			if err != nil {
-				t.Fatal("create owned login request")
-			}
-			req.Header.Set("Accept", "application/json")
-			if payload != nil {
-				req.Header.Set("Content-Type", "application/json")
-			}
-			response, err := client.Do(req)
-			if err != nil {
-				t.Fatal("owned login request failed")
-			}
-			return response
-		}
-		response := request(http.MethodGet, "/self-service/login/browser", nil)
-		if response.StatusCode != http.StatusOK {
-			response.Body.Close()
-			t.Fatalf("browser flow status=%d", response.StatusCode)
-		}
-		var flow struct {
-			ID string `json:"id"`
-			UI struct {
-				Nodes []struct {
-					Attributes struct {
-						Name  string `json:"name"`
-						Value any    `json:"value"`
-					} `json:"attributes"`
-				} `json:"nodes"`
-			} `json:"ui"`
-		}
-		err = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&flow)
-		response.Body.Close()
-		if err != nil || flow.ID == "" {
-			t.Fatal("invalid owned browser flow")
-		}
-		csrf := ""
-		for _, node := range flow.UI.Nodes {
-			if node.Attributes.Name == "csrf_token" {
-				csrf, _ = node.Attributes.Value.(string)
-			}
-		}
-		if csrf == "" {
-			t.Fatal("browser login requires native CSRF")
-		}
-		response = request(http.MethodPost, "/self-service/login?flow="+url.QueryEscape(flow.ID), map[string]any{
-			"method": "password", "identifier": identifier, "password": password, "csrf_token": csrf,
-		})
-		response.Body.Close()
-		if response.StatusCode != http.StatusOK {
-			t.Fatalf("native browser login status=%d", response.StatusCode)
-		}
+		client := ownedBrowserLogin(t, base, identifier, password)
 		hydra := &fakeHydra{loginReq: &hydraclient.LoginRequest{Challenge: "owned"}, acceptLoginTo: "http://hydra.example.test/accepted"}
 		handler := NewLoginHandler(hydra, kratosclient.New(base.String(), admin), base.String(), zap.NewNop())
 		router := gin.New()
 		router.GET("/login", handler.Handle)
 		req := httptest.NewRequest(http.MethodGet, "/login?login_challenge=owned", nil)
-		for _, cookie := range jar.Cookies(base) {
+		for _, cookie := range client.Jar.Cookies(base) {
 			req.AddCookie(cookie)
 		}
 		result := httptest.NewRecorder()
@@ -258,6 +200,206 @@ func TestOwnedNativeDualIdentifierLoginPreservesOIDCSubject(t *testing.T) {
 		if result.Code != http.StatusFound || !hydra.acceptLoginCalled || hydra.acceptedLoginSubject != expected {
 			t.Fatal("both native password identifiers must yield the same immutable OIDC subject")
 		}
+	}
+}
+
+func ownedBrowserLogin(t *testing.T, base *url.URL, identifier, password string) *http.Client {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar, Timeout: 2 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	request := func(method, path string, payload any) *http.Response {
+		t.Helper()
+		body, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal("encode owned login request")
+		}
+		req, err := http.NewRequestWithContext(t.Context(), method, base.String()+path, strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatal("create owned login request")
+		}
+		req.Header.Set("Accept", "application/json")
+		if payload != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal("owned login request failed")
+		}
+		return response
+	}
+	response := request(http.MethodGet, "/self-service/login/browser", nil)
+	if response.StatusCode != http.StatusOK {
+		response.Body.Close()
+		t.Fatalf("browser flow status=%d", response.StatusCode)
+	}
+	var flow struct {
+		ID string `json:"id"`
+		UI struct {
+			Nodes []struct {
+				Attributes struct {
+					Name  string `json:"name"`
+					Value any    `json:"value"`
+				} `json:"attributes"`
+			} `json:"nodes"`
+		} `json:"ui"`
+	}
+	err = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&flow)
+	response.Body.Close()
+	if err != nil || flow.ID == "" {
+		t.Fatal("invalid owned browser flow")
+	}
+	csrf := ""
+	for _, node := range flow.UI.Nodes {
+		if node.Attributes.Name == "csrf_token" {
+			csrf, _ = node.Attributes.Value.(string)
+		}
+	}
+	if csrf == "" {
+		t.Fatal("browser login requires native CSRF")
+	}
+	response = request(http.MethodPost, "/self-service/login?flow="+url.QueryEscape(flow.ID), map[string]any{
+		"method": "password", "identifier": identifier, "password": password, "csrf_token": csrf,
+	})
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("native browser login status=%d", response.StatusCode)
+	}
+	return client
+}
+
+func TestOwnedNativeHydraLoginPreservesDirectorySubject(t *testing.T) {
+	if os.Getenv("GITSTORE_TEST_OWNED_RECEIVER") != "1" {
+		t.Skip("requires the explicitly owned native Hydra/Kratos integration fixture")
+	}
+	admin := os.Getenv("GITSTORE_TEST_KRATOS_ADMIN_URI")
+	base, err := url.Parse(admin)
+	if err != nil {
+		t.Fatal("invalid owned identity endpoint")
+	}
+	base.Host = net.JoinHostPort(base.Hostname(), "4433")
+	expected := os.Getenv("GITSTORE_TEST_LOGIN_IDENTITY_ID")
+	password := os.Getenv("GITSTORE_TEST_LOGIN_PASSWORD")
+	output := os.Getenv("GITSTORE_TEST_LOGIN_TOKEN_FILE")
+	username, email := os.Getenv("GITSTORE_TEST_LOGIN_USERNAME"), os.Getenv("GITSTORE_TEST_LOGIN_EMAIL")
+	if expected == "" || password == "" || output == "" || username == "" || email == "" {
+		t.Fatal("owned login material is required")
+	}
+	hydra := hydraclient.New("http://hydra:4445")
+	kratos := kratosclient.New(base.String(), admin)
+	router := gin.New()
+	router.GET("/login", NewLoginHandler(hydra, kratos, base.String(), zap.NewNop()).Handle)
+	router.GET("/consent", NewConsentHandler(hydra, kratos, []string{"openid", "profile", "email"},
+		"owned-directory", zap.NewNop()).Handle)
+	listener, err := net.Listen("tcp", ":8087")
+	if err != nil {
+		t.Fatal("listen on owned bridge endpoint")
+	}
+	server := &http.Server{Handler: router, ReadHeaderTimeout: time.Second}
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	t.Cleanup(func() {
+		if err := server.Close(); err != nil {
+			t.Error("close owned bridge endpoint")
+		}
+		if err := <-done; !errors.Is(err, http.ErrServerClosed) {
+			t.Error("owned bridge server did not stop cleanly")
+		}
+	})
+	callback := "http://" + net.JoinHostPort(base.Hostname(), "8087") + "/callback"
+	tokens := make([]string, 0, 2)
+	for _, identifier := range []string{username, email} {
+		client := ownedBrowserLogin(t, base, identifier, password)
+		state, verifier := rand.Text(), rand.Text()+rand.Text()
+		challenge := sha256.Sum256([]byte(verifier))
+		parameters := url.Values{
+			"client_id": {"directory-test-client"}, "response_type": {"code"},
+			"scope": {"openid profile email"}, "redirect_uri": {callback}, "state": {state},
+			"code_challenge":        {base64.RawURLEncoding.EncodeToString(challenge[:])},
+			"code_challenge_method": {"S256"},
+		}
+		next, code := "http://hydra:4444/oauth2/auth?"+parameters.Encode(), ""
+		for range 12 {
+			request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, next, nil)
+			if err != nil {
+				t.Fatal("create owned authorization request")
+			}
+			response, err := client.Do(request)
+			if err != nil {
+				t.Fatal("native authorization request failed")
+			}
+			response.Body.Close()
+			location, err := response.Location()
+			if err != nil || response.StatusCode < 300 || response.StatusCode >= 400 {
+				t.Fatalf("native authorization redirect status=%d", response.StatusCode)
+			}
+			if location.Scheme+"://"+location.Host+location.Path == callback {
+				if location.Query().Get("state") != state || location.Query().Get("error") != "" {
+					t.Fatal("native authorization callback failed state/error validation")
+				}
+				code = location.Query().Get("code")
+				break
+			}
+			if location.Host != "hydra:4444" && location.Host != net.JoinHostPort(base.Hostname(), "8087") {
+				t.Fatal("native authorization left the owned Hydra/bridge endpoints")
+			}
+			next = location.String()
+		}
+		if code == "" {
+			t.Fatal("native bridge did not complete the authorization-code flow")
+		}
+		form := url.Values{
+			"grant_type": {"authorization_code"}, "code": {code},
+			"redirect_uri": {callback}, "code_verifier": {verifier},
+		}
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://hydra:4444/oauth2/token",
+			strings.NewReader(form.Encode()))
+		if err != nil {
+			t.Fatal("create native token exchange")
+		}
+		request.SetBasicAuth("directory-test-client", password)
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal("native token exchange failed")
+		}
+		var issued struct {
+			AccessToken string `json:"access_token"`
+			IDToken     string `json:"id_token"`
+		}
+		err = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&issued)
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK || err != nil || issued.AccessToken == "" || issued.IDToken == "" {
+			t.Fatalf("native token exchange status=%d", response.StatusCode)
+		}
+		request, err = http.NewRequestWithContext(t.Context(), http.MethodPost, "http://hydra:4445/admin/oauth2/introspect",
+			strings.NewReader(url.Values{"token": {issued.AccessToken}}.Encode()))
+		if err != nil {
+			t.Fatal("create native token introspection")
+		}
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		response, err = client.Do(request)
+		if err != nil {
+			t.Fatal("native token introspection failed")
+		}
+		var claims struct {
+			Active  bool   `json:"active"`
+			Subject string `json:"sub"`
+			Scope   string `json:"scope"`
+		}
+		err = json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&claims)
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK || err != nil || !claims.Active || claims.Subject != expected ||
+			claims.Scope != "openid profile email" {
+			t.Fatal("native issued credentials must preserve the identity UID and granted scopes for both identifiers")
+		}
+		tokens = append(tokens, issued.AccessToken)
+	}
+	encoded, err := json.Marshal(tokens)
+	if err != nil || os.WriteFile(output, encoded, 0600) != nil {
+		t.Fatal("save private native token material")
 	}
 }
 

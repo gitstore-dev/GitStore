@@ -188,6 +188,10 @@ level = "error"
 		return exec.CommandContext(ctx, "docker", "exec", gitName, "nc", "-z", "127.0.0.1", "50051").Run() == nil
 	}, 15*time.Second, 100*time.Millisecond, "singleton Git process must be responsive")
 	var apis []directoryAPI
+	issuer := r.issuerURI
+	if issuer == "" {
+		issuer = "http://directory-receiver:8086"
+	}
 	for replica := range 2 {
 		apiIP[3] = byte(100 + replica)
 		name := fmt.Sprintf("gitstore-userdir-api-%s-%d", r.owner[:12], replica)
@@ -201,7 +205,7 @@ uri = "dns:///%s:50051"
 [api.auth.authn]
 chain = ["oidc-jwt", "anonymous"]
 [api.auth.oidc_jwt]
-issuer_uri = "http://directory-receiver:8086"
+issuer_uri = %q
 audience = "owned-directory"
 clock_skew = "0s"
 [api.auth.authz]
@@ -217,7 +221,7 @@ cache_entries = 256
 customer_groups = ["customers"]
 [[api.auth.kratos.mappings]]
 provider = "oidc-jwt"
-issuer = "http://directory-receiver:8086"
+issuer = %q
 mode = "uid"
 [api.notification]
 provider = "development"
@@ -229,7 +233,7 @@ hmac_secret = %q
 [log]
 level = "info"
 format = "json"
-`, gitName, r.secret, r.secret)
+`, gitName, issuer, issuer, r.secret, r.secret)
 		if source {
 			config = strings.Replace(config, `chain = ["oidc-jwt", "anonymous"]`,
 				`chain = ["serviceaccount-assertion", "serviceaccount-jwt", "oidc-jwt", "anonymous"]`, 1)

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -40,6 +41,7 @@ type directoryTestRuntime struct {
 	mailAPI                                         string
 	capacity                                        bool
 	postgresVolume                                  string
+	issuerURI                                       string
 }
 
 func startDirectoryTestRuntime(t *testing.T, enableMail ...bool) *directoryTestRuntime {
@@ -341,6 +343,118 @@ func (r *directoryTestRuntime) identity(t *testing.T, id string) directoryTestId
 	return identity
 }
 
+func (r *directoryTestRuntime) startHydra(t *testing.T, bridge, callback string) {
+	t.Helper()
+	r.sql(t, "CREATE DATABASE hydra;")
+	hydraEnv := filepath.Join(t.TempDir(), "hydra.env")
+	require.NoError(t, os.WriteFile(hydraEnv, []byte(
+		"DSN=postgres://kratos:"+r.secret+"@postgres:5432/hydra?sslmode=disable\n"+
+			"SECRETS_SYSTEM="+r.secret+"\nSECRETS_COOKIE="+r.secret+"\n"+
+			"URLS_SELF_ISSUER=http://hydra:4444/\nURLS_LOGIN="+bridge+"/login\nURLS_CONSENT="+bridge+"/consent\n"), 0600))
+	r.command(t, nil, "run", "--rm", "--label", "dev.gitstore.test_owner="+r.owner,
+		"--network", r.network, "--env-file", hydraEnv, "oryd/hydra:v26.2.0",
+		"migrate", "sql", "up", "--yes", "-e")
+	hydraConfig, err := filepath.Abs("../../config/oidc/hydra/config.yaml")
+	require.NoError(t, err)
+	hydra := "gitstore-userdir-hydra-" + r.owner[:12]
+	r.command(t, nil, "run", "-d", "--rm", "--name", hydra,
+		"--label", "dev.gitstore.test_owner="+r.owner, "--network", r.network,
+		"--network-alias", "hydra", "--memory", "512m", "--cpus", "1",
+		"--env-file", hydraEnv, "-p", "127.0.0.1::4444",
+		"-v", hydraConfig+":/etc/config/hydra/config.yaml:ro", "oryd/hydra:v26.2.0",
+		"serve", "all", "--config", "/etc/config/hydra/config.yaml", "--dev")
+	r.cleanupContainer(t, hydra)
+	hydraPort := strings.TrimSpace(r.command(t, nil, "inspect", "--format",
+		`{{(index (index .NetworkSettings.Ports "4444/tcp") 0).HostPort}}`, hydra))
+	require.Eventually(t, func() bool {
+		response, err := r.client.Get("http://127.0.0.1:" + hydraPort + "/.well-known/openid-configuration")
+		if err != nil {
+			return false
+		}
+		defer response.Body.Close()
+		return response.StatusCode == http.StatusOK
+	}, 30*time.Second, 250*time.Millisecond)
+	r.command(t, nil, "run", "--rm", "--label", "dev.gitstore.test_owner="+r.owner,
+		"--network", r.network, "oryd/hydra:v26.2.0", "create", "oauth2-client",
+		"--endpoint", "http://hydra:4445", "--id", "directory-test-client",
+		"--secret", r.secret, "--grant-type", "authorization_code,refresh_token",
+		"--response-type", "code", "--scope", "openid,profile,email", "--audience", "owned-directory",
+		"--redirect-uri", callback,
+		"--token-endpoint-auth-method", "client_secret_basic", "--format", "json")
+}
+
+func TestOwnedNativeHydraDirectoryAcrossAPIs(t *testing.T) {
+	r := startDirectoryTestRuntime(t, true)
+	operator := r.createHuman(t, "staff", "operator", "operator@example.test")
+	viewer := r.createHuman(t, "staff", "viewer", "viewer@example.test")
+	customer := r.createHuman(t, "customer", "customer", "customer@example.test")
+	kratos := "gitstore-userdir-kratos-" + r.owner[:12] + "-0"
+	bridge := "http://" + kratos + ":8087"
+	r.startHydra(t, bridge, bridge+"/callback")
+	bridgeBinary := filepath.Join(t.TempDir(), "bridge.test")
+	r.command(t, nil, "cp", r.receiver+":/directory-bridge.test", bridgeBinary)
+	// Keep Kratos and the bridge on one hostname so the browser jar sends real session cookies.
+	r.command(t, nil, "cp", bridgeBinary, kratos+":/tmp/directory-bridge.test")
+	privateTokens := make(map[string][]string)
+	for _, identity := range []directoryTestIdentity{operator, viewer, customer} {
+		status, _ := r.request(t, http.MethodPatch, "/admin/identities/"+identity.ID, []map[string]any{
+			{"op": "add", "path": "/verifiable_addresses", "value": []map[string]any{
+				{"value": identity.Traits["email"], "verified": true, "via": "email", "status": "completed"},
+			}},
+			{"op": "add", "path": "/metadata_admin/setup_complete", "value": true},
+		})
+		require.Equal(t, http.StatusOK, status)
+		r.command(t, nil, "exec", "-e", "GITSTORE_TEST_OWNED_RECEIVER=1",
+			"-e", "GITSTORE_TEST_KRATOS_ADMIN_URI=http://"+kratos+":4434",
+			"-e", "GITSTORE_TEST_LOGIN_IDENTITY_ID="+identity.ID,
+			"-e", "GITSTORE_TEST_LOGIN_USERNAME="+identity.Traits["username"].(string),
+			"-e", "GITSTORE_TEST_LOGIN_EMAIL="+identity.Traits["email"].(string),
+			"-e", "GITSTORE_TEST_LOGIN_PASSWORD", "-e", "GITSTORE_TEST_LOGIN_TOKEN_FILE=/tmp/native-tokens.json",
+			kratos, "/tmp/directory-bridge.test",
+			"-test.run=^TestOwnedNativeHydraLoginPreservesDirectorySubject$", "-test.timeout=45s")
+		path := filepath.Join(t.TempDir(), "tokens.json")
+		r.command(t, nil, "cp", kratos+":/tmp/native-tokens.json", path)
+		tokens, err := os.ReadFile(path)
+		require.NoError(t, err)
+		var decoded []string
+		require.NoError(t, json.Unmarshal(tokens, &decoded))
+		require.Len(t, decoded, 2)
+		privateTokens[identity.ID] = decoded
+	}
+	r.issuerURI = "http://hydra:4444/"
+	apis, _ := r.startAPIs(t, operator.ID)
+	operatorID := base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Staff/" + operator.ID))
+	read := fmt.Sprintf(`{node(id:%q){id ... on User{groups metadata{name}}}}`, operatorID)
+	for _, api := range apis {
+		for _, token := range privateTokens[operator.ID] {
+			result := r.graphql(t, api, token, read)
+			require.Empty(t, result.Errors, "real Hydra credentials must enrich and authorize on both replicas")
+			require.Contains(t, string(result.Data["node"]), operatorID)
+		}
+		for _, token := range privateTokens[customer.ID] {
+			result := r.graphql(t, api, token, read)
+			require.NotEmpty(t, result.Errors)
+			require.Equal(t, "FORBIDDEN", result.Errors[0].Extensions.Code,
+				"native Customer login must not grant Admin admission")
+		}
+		for _, token := range privateTokens[viewer.ID] {
+			require.NotEmpty(t, r.graphql(t, api, token, read).Errors,
+				"native Staff credentials alone must not grant directory management")
+		}
+	}
+	viewerID := base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Staff/" + viewer.ID))
+	assign := fmt.Sprintf(`mutation{assignUserGroup(input:{id:%q,group:"merchandiser"}){actor{id}}}`, viewerID)
+	require.Empty(t, r.graphql(t, apis[0], privateTokens[operator.ID][0], assign).Errors)
+	for _, api := range apis {
+		for _, token := range privateTokens[viewer.ID] {
+			require.Eventually(t, func() bool {
+				return len(r.graphql(t, api, token, read).Errors) == 0
+			}, 3*time.Second, 100*time.Millisecond,
+				"directory membership must authorize already-issued native credentials on either API")
+		}
+	}
+}
+
 func TestKratosSchemaContracts(t *testing.T) {
 	r := startDirectoryTestRuntime(t)
 	staff := r.createHuman(t, "staff", "operator", "operator@example.test")
@@ -598,42 +712,8 @@ func TestKratosSchemaContracts(t *testing.T) {
 			"-test.run=^TestOwnedKratosAdminPatch$", "-test.timeout=20s")
 	})
 	t.Run("selected Hydra and UI images remain compatible", func(t *testing.T) {
-		r.sql(t, "CREATE DATABASE hydra;")
+		r.startHydra(t, "http://localhost:4445", "http://localhost:3000/callback")
 		privateDir := t.TempDir()
-		hydraEnv := filepath.Join(privateDir, "hydra.env")
-		require.NoError(t, os.WriteFile(hydraEnv, []byte(
-			"DSN=postgres://kratos:"+r.secret+"@postgres:5432/hydra?sslmode=disable\n"+
-				"SECRETS_SYSTEM="+r.secret+"\nSECRETS_COOKIE="+r.secret+"\n"), 0600))
-		r.command(t, nil, "run", "--rm", "--label", "dev.gitstore.test_owner="+r.owner,
-			"--network", r.network, "--env-file", hydraEnv, "oryd/hydra:v26.2.0",
-			"migrate", "sql", "up", "--yes", "-e")
-		hydraConfig, err := filepath.Abs("../../config/oidc/hydra/config.yaml")
-		require.NoError(t, err)
-		hydra := "gitstore-userdir-hydra-" + r.owner[:12]
-		r.command(t, nil, "run", "-d", "--rm", "--name", hydra,
-			"--label", "dev.gitstore.test_owner="+r.owner, "--network", r.network,
-			"--network-alias", "hydra", "--memory", "512m", "--cpus", "1",
-			"--env-file", hydraEnv, "-p", "127.0.0.1::4444",
-			"-v", hydraConfig+":/etc/config/hydra/config.yaml:ro", "oryd/hydra:v26.2.0",
-			"serve", "all", "--config", "/etc/config/hydra/config.yaml", "--dev")
-		r.cleanupContainer(t, hydra)
-		hydraPort := strings.TrimSpace(r.command(t, nil, "inspect", "--format",
-			`{{(index (index .NetworkSettings.Ports "4444/tcp") 0).HostPort}}`, hydra))
-		require.Eventually(t, func() bool {
-			response, err := r.client.Get("http://127.0.0.1:" + hydraPort + "/.well-known/openid-configuration")
-			if err != nil {
-				return false
-			}
-			defer response.Body.Close()
-			return response.StatusCode == http.StatusOK
-		}, 30*time.Second, 250*time.Millisecond)
-		r.command(t, nil, "run", "--rm", "--label", "dev.gitstore.test_owner="+r.owner,
-			"--network", r.network, "oryd/hydra:v26.2.0", "create", "oauth2-client",
-			"--endpoint", "http://hydra:4445", "--id", "directory-test-client",
-			"--secret", r.secret, "--grant-type", "authorization_code,refresh_token",
-			"--response-type", "code", "--scope", "openid,profile,email",
-			"--redirect-uri", "http://localhost:3000/callback",
-			"--token-endpoint-auth-method", "client_secret_basic", "--format", "json")
 		uiEnv := filepath.Join(privateDir, "ui.env")
 		require.NoError(t, os.WriteFile(uiEnv, []byte(
 			"KRATOS_PUBLIC_URL=http://gitstore-userdir-kratos-"+r.owner[:12]+"-0:4433/\n"+

@@ -116,9 +116,16 @@ Customer public-flow tests reject non-Customer schema selection, preserve
 protected metadata and immutable usernames, and return conflict errors without
 another actor's UID/schema. Native browser sessions obtained by username or
 email pass through the bridge's real Kratos client and accept the same immutable
-Hydra subject. The Hydra acceptance callback is stubbed in that focused proof;
-it is not a deployed OAuth token exchange. The bridge forwards sessions, not
-password identifiers, so no login-handler change is required.
+Hydra subject. The additional native Hydra fixture exercises the actual HTTP
+login/consent handlers, authorization-code redirects, S256 PKCE exchange and
+native token introspection for Staff and Customers using both login forms.
+It shares the Kratos hostname with the bridge, so the browser jar sends real
+session cookies without copying them across hosts. Both API replicas verify
+Hydra-issued access tokens through discovery/JWKS and enrich their UID subjects.
+Customers remain denied Admin admission; adding a Staff directory group
+authorizes already-issued native credentials on either API. Credentials and
+captured tokens stay in private temporary files. The bridge forwards sessions,
+not password identifiers, so no login-handler change is required.
 Focused admission tests deny Customers even with forged privileged groups and
 an allow-all AuthZ provider; Staff and source-backed workloads retain the
 existing boundary. Storefront remains unavailable.
@@ -131,7 +138,8 @@ setup, safe contact changes, Customer mandatory groups, concurrent best-effort
 writes, stable-endpoint cross-process Relay continuation, redacted mutation
 receipts, WebSocket expiry, API process restart and physical directory
 pause/restoration within the existing-profile 30-second bound. The issuer is
-controlled RS256 OIDC, not native Hydra token exchange.
+controlled RS256 OIDC; the separate native Hydra fixture supplies the real
+token-exchange and two-API credential-admission proof.
 
 The shared-Scylla variant reuses the canonical Compose source services with an
 owned private override. Both deployed APIs consume native CDC events and
@@ -149,7 +157,7 @@ Run the deployed fixtures explicitly from `tests/integration`:
 
 ```sh
 USER_DIRECTORY_TEST_OWNED_DEPLOYMENT=1 go test -race . \
-  -run '^TestOwned(UserDirectoryAdministrationAcrossAPIs|ScyllaWorkloadDirectoryAcrossAPIs)$' \
+  -run '^TestOwned(UserDirectoryAdministrationAcrossAPIs|ScyllaWorkloadDirectoryAcrossAPIs|NativeHydraDirectoryAcrossAPIs)$' \
   -count=1 -timeout=10m
 ```
 

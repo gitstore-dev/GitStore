@@ -430,7 +430,7 @@ shapes without relaxing correctness, throughput or latency gates.
 
 These are healthy sustained workloads with live changes, not confirmed chaos,
 API replacement or mixed-version/provider-switch acceptance. T012/T078/
-T080/T081/T083 remain open. CI and CI Integration pass on the tested source.
+T080/T083 remain open. CI and CI Integration pass on the tested source.
 The spec remains open and ADR 0020 remains Proposed.
 
 ### Native conditional-write ambiguity acceptance: 2026-11-09
@@ -454,6 +454,28 @@ pre-013 upgrade/history test passes in the same owned run, preserving data,
 checksums and ledger write times and rejecting a rollback bundle missing the
 forward migration. Integration and tagged datastore Go vet pass. This is
 native acknowledgement-loss evidence, not a fabricated client error.
+
+### Complete native quickstart acceptance: 2026-11-09
+
+T081 passes as a seven-fixture owned native matrix with driver race detection
+(121.54 seconds): schema/public registration, native HTTP mail, two-API human
+administration, ServiceAccount mirrors, conditional-write CDC/history,
+shared-Scylla source authority/faults and the native Hydra flow. Existing
+fixtures cover invitation/setup, all lifecycle states, contact delivery,
+forward Relay/backward diagnostics, ownership/counters and finite delivery
+retry/discard; no sustained chaos or mixed-version pass is inferred.
+
+`TestOwnedNativeHydraDirectoryAcrossAPIs` uses selected native Hydra/Kratos
+images and the actual bridge login/consent handlers over HTTP. Staff and
+Customers log in with both password identifiers using native browser cookies;
+S256 PKCE code exchange and native introspection verify immutable UID subjects
+and granted scopes. Two current API processes independently verify the native
+access tokens using Hydra discovery/JWKS and trusted UID directory mapping.
+Customers cannot enter Admin. Staff initially denied by policy gain read
+access on both APIs after directory group assignment without token replacement.
+The cookie jar uses a shared Kratos/bridge hostname rather than manually
+copying cookies. Private token files never enter source or public receipts.
+Bridge race tests, bridge/integration Go vet and canonical lint pass.
 
 ```text
 gitstore-api/
