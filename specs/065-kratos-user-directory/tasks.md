@@ -138,7 +138,7 @@ Fresh-journal startup and missing live discard logging exposed by that
 deployment are fixed and covered by focused race-enabled regressions. All
 owned directory fixtures pass together with driver race detection. Full
 `make generate TARGET=all`, `make test`, `make lint` and `make check TARGET=all`
-pass. Mixed-version/provider-switch, ambiguous-write, sustained chaos and
+pass. Mixed-version/provider-switch, sustained chaos and
 complete native Hydra quickstart gates remain open. Separate declared
 identity-scale readiness acceptance now passes as recorded in plan.md; the
 functional fixtures are not its substitute.
@@ -252,7 +252,7 @@ functional fixtures are not its substitute.
 
 ### Tests first
 
-- [ ] T051 [US4] Add failing full-image CDC/enrollment/delete/schema-history tests in `gitstore-api/internal/datastore/scylla/serviceaccount_cdc_test.go` and `migration_schema_test.go`; cover conditional/ambiguous writes, incomplete projection enrollment, retained deletion UID and shared producer lease/progress behavior in an isolated owned keyspace.
+- [X] T051 [US4] Add failing full-image CDC/enrollment/delete/schema-history tests in `gitstore-api/internal/datastore/scylla/serviceaccount_cdc_test.go` and `migration_schema_test.go`; cover conditional/ambiguous writes, incomplete projection enrollment, retained deletion UID and shared producer lease/progress behavior in an isolated owned keyspace. Native reader and upgrade coverage reuse `namespace_watch_integration_test.go` and `migration_test.go`; the owned driver is `TestOwnedServiceAccountCDCWriteAcceptance`.
 - [X] T052 [P] [US4] Add failing backend parity tests in `gitstore-api/internal/datastore/memdb/serviceaccount_journal_test.go` for provider-neutral create/update/delete journal events, enrollment visibility, immutable UID and equivalent source scope without a new event bus.
 - [X] T053 [P] [US4] Add failing finite-retry/live-consumer tests in `gitstore-api/internal/auth/provider/kratos/consumer_test.go` for success advancement, exhausted retries/discard, bounded buffer overflow, continued later events, cancellation/reload and startup at the current boundary with no persisted cursor or catch-up. Registry reload/callback coverage reuses `provider_registry_test.go`.
 - [X] T054 [P] [US4] Add failing mirror/authority tests in `gitstore-api/internal/auth/provider/kratos/serviceaccounts_test.go` and `tests/integration/user_directory_serviceaccount_test.go` for immutable UID-derived external_id, no credentials/login/recovery/verification, duplicate/stale/out-of-order writes, preserved directory groups, finite retry/discard/restart and disabled/deleted/replaced source accounts across replicas.

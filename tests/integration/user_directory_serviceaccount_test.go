@@ -13,6 +13,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +29,29 @@ func TestOwnedKratosServiceAccountMirrors(t *testing.T) {
 	second := fmt.Sprintf("GITSTORE_TEST_KRATOS_SECOND_ADMIN_URI=http://gitstore-userdir-kratos-%s-1:4434", r.owner[:12])
 	r.command(t, nil, "exec", "-e", second, r.receiver, "/directory-receiver.test",
 		"-test.run=^TestOwnedKratosServiceAccountMirrors$", "-test.timeout=30s")
+}
+
+func TestOwnedServiceAccountCDCWriteAcceptance(t *testing.T) {
+	r := startDirectoryTestRuntime(t)
+	root, err := filepath.Abs("../..")
+	require.NoError(t, err)
+	r.startScylla(t, root)
+	binary := filepath.Join(t.TempDir(), "scylla.test")
+	build := exec.CommandContext(t.Context(), "go", "test", "-c", "-tags", "scylla", "-o", binary,
+		"./internal/datastore/scylla")
+	build.Dir = filepath.Join(root, "gitstore-api")
+	build.Env = append(os.Environ(), "GOOS=linux", "CGO_ENABLED=0")
+	output, err := build.CombinedOutput()
+	require.NoError(t, err, "build owned native CDC acceptance: %s", output)
+	r.command(t, nil, "cp", binary, r.receiver+":/scylla.test")
+	host := strings.TrimSpace(r.command(t, nil, "inspect", "--format",
+		fmt.Sprintf(`{{with index .NetworkSettings.Networks %q}}{{.IPAddress}}{{end}}`, r.network),
+		"gitstore-userdir-scylla-"+r.owner[:12]))
+	require.NotEmpty(t, host)
+	r.command(t, nil, "exec", "-e", "GITSTORE_TEST_SCYLLA_ADDR="+host+":9042", r.receiver,
+		"/scylla.test", "-test.v",
+		"-test.run=^TestServiceAccountCDC(ReaderEnrollmentDeletionAndNameReuse|UpgradePreservesDataAndMigrationHistory)$",
+		"-test.timeout=3m")
 }
 
 func TestOwnedScyllaWorkloadDirectoryAcrossAPIs(t *testing.T) {

@@ -1,6 +1,6 @@
 # Implementation Plan: Production User Directory Provider (Kratos)
 
-**Branch**: `065-kratos-user-directory` | **Updated**: 2026-11-08
+**Branch**: `065-kratos-user-directory` | **Updated**: 2026-11-09
 **Spec**: [spec.md](spec.md)
 
 ## Summary
@@ -429,9 +429,31 @@ are unchanged. The verifier supports both actual export and callback metric
 shapes without relaxing correctness, throughput or latency gates.
 
 These are healthy sustained workloads with live changes, not confirmed chaos,
-API replacement or mixed-version/provider-switch acceptance. T012/T051/T078/
+API replacement or mixed-version/provider-switch acceptance. T012/T078/
 T080/T081/T083 remain open. CI and CI Integration pass on the tested source.
 The spec remains open and ADR 0020 remains Proposed.
+
+### Native conditional-write ambiguity acceptance: 2026-11-09
+
+T051 passes through `TestOwnedServiceAccountCDCWriteAcceptance`, reusing the
+owned native deployment, canonical bounded Scylla Compose services and an
+isolated test keyspace. The reader test uses a protocol-v4 TCP proxy that
+forwards setup/prepared traffic but physically discards the server's LWT
+result. The caller times out without an acknowledgement; an independent
+authoritative read proves that the disable/revision change committed.
+The real CDC reader publishes its complete postimage through the shared
+journal. Retrying the original conditional write returns not-applied and
+produces no extra transition. Failed creates/stale revisions and incomplete
+enrollment remain unpublished; delete retains the original UID, and name
+reuse publishes the replacement UID. The existing producer lease/materializer
+path is reused, not a UserDir checkpoint.
+
+The test first failed at the expected missing-error assertion with the CAS
+response forwarded, then passed with actual response loss enabled. The native
+pre-013 upgrade/history test passes in the same owned run, preserving data,
+checksums and ledger write times and rejecting a rollback bundle missing the
+forward migration. Integration and tagged datastore Go vet pass. This is
+native acknowledgement-loss evidence, not a fabricated client error.
 
 ```text
 gitstore-api/

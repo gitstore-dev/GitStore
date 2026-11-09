@@ -6,10 +6,14 @@
 package scylla_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -507,6 +511,86 @@ func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
 	t.Fatalf("committed Namespace CDC change was not materialized into the durable journal; bounds_err=%v observed=%+v", lastBoundsErr, observed)
 }
 
+func serviceAccountAmbiguousWriter(t *testing.T) (*gocql.Session, <-chan struct{}) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	dropped := make(chan struct{}, 1)
+	accepted := make(chan struct{})
+	var workers sync.WaitGroup
+	go func() {
+		defer close(accepted)
+		for {
+			client, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				defer client.Close()
+				upstream, err := net.DialTimeout("tcp", scyllaAddr, 5*time.Second)
+				if err != nil {
+					return
+				}
+				defer upstream.Close()
+				go func() {
+					_, _ = io.Copy(upstream, client)
+					_ = upstream.Close()
+				}()
+				for {
+					var header [9]byte
+					if _, err := io.ReadFull(upstream, header[:]); err != nil {
+						return
+					}
+					length := binary.BigEndian.Uint32(header[5:])
+					if length > 16<<20 {
+						return
+					}
+					body := make([]byte, length)
+					if _, err := io.ReadFull(upstream, body); err != nil {
+						return
+					}
+					// Drop native LWT result rows, not connection setup or prepared responses.
+					if header[4] == 0x08 && len(body) >= 4 &&
+						binary.BigEndian.Uint32(body[:4]) == 2 && bytes.Contains(body, []byte("[applied]")) {
+						select {
+						case dropped <- struct{}{}:
+						default:
+						}
+						continue
+					}
+					if _, err := client.Write(append(header[:], body...)); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		require.NoError(t, listener.Close())
+		<-accepted
+		stopped := make(chan struct{})
+		go func() { workers.Wait(); close(stopped) }()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			t.Error("owned CQL response proxy did not stop")
+		}
+	})
+	address := listener.Addr().(*net.TCPAddr)
+	cluster := gocql.NewCluster("127.0.0.1")
+	cluster.Port, cluster.ProtoVersion, cluster.Keyspace = address.Port, 4, scyllaKeyspace
+	cluster.Timeout, cluster.ConnectTimeout = 2*time.Second, 5*time.Second
+	cluster.DisableShardAwarePort, cluster.IgnorePeerAddr = true, true
+	cluster.AddressTranslator = contactPointTranslator("127.0.0.1", address.Port)
+	cluster.RetryPolicy = &gocql.SimpleRetryPolicy{NumRetries: 0}
+	writer, err := cluster.CreateSession()
+	require.NoError(t, err)
+	t.Cleanup(writer.Close)
+	return writer, dropped
+}
+
 func TestServiceAccountCDCReaderEnrollmentDeletionAndNameReuse(t *testing.T) {
 	store := newTestStore(t)
 	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
@@ -580,8 +664,29 @@ func TestServiceAccountCDCReaderEnrollmentDeletionAndNameReuse(t *testing.T) {
 	wait(datastore.ResourceWatchAdded, account.UID)
 	_, err = store.UpdateServiceAccountKeys(t.Context(), account.UID, nil, nil, "stale")
 	require.ErrorIs(t, err, datastore.ErrConflict)
-	require.NoError(t, store.SetServiceAccountDisabled(t.Context(), account.UID, true))
+	writer, dropped := serviceAccountAmbiguousWriter(t)
+	statement := fmt.Sprintf("UPDATE service_accounts_by_cluster_name SET disabled=true,generation=2,resource_version='2' WHERE name='%s' IF uid=%s AND enrollment_complete=true AND resource_version='1'",
+		account.Name, account.UID)
+	applied, err := writer.Query(statement).WithContext(t.Context()).MapScanCAS(map[string]any{})
+	require.Error(t, err, "a physically discarded native CAS result must not acknowledge the committed write")
+	require.False(t, applied)
+	select {
+	case <-dropped:
+	case <-time.After(time.Second):
+		t.Fatal("the proxy did not observe and discard a native conditional result")
+	}
+	current, err := store.GetServiceAccountByUID(t.Context(), account.UID)
+	require.NoError(t, err)
+	require.True(t, current.Disabled, "the native source must prove commit independently of the lost acknowledgement")
+	require.Equal(t, "2", current.ResourceVersion)
 	wait(datastore.ResourceWatchModified, account.UID)
+	var modified datastore.ServiceAccount
+	require.NoError(t, json.Unmarshal(observed[len(observed)-1].Payload, &modified))
+	require.True(t, modified.Disabled)
+	require.Equal(t, "2", modified.ResourceVersion, "the shared journal must publish the committed full postimage")
+	applied, err = raw.Query(statement).MapScanCAS(map[string]any{})
+	require.NoError(t, err)
+	require.False(t, applied, "retrying the original conditional write must not apply twice")
 	require.NoError(t, store.DeleteServiceAccount(t.Context(), account.UID))
 	wait(datastore.ResourceWatchDeleted, account.UID)
 	require.JSONEq(t, `{"UID":"`+account.UID+`"}`, string(observed[len(observed)-1].Payload))
