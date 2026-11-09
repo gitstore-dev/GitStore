@@ -598,6 +598,20 @@ a default.
   PostgreSQL volume rather than the small schema-test tmpfs. Only its own
   containers, networks, volumes and private credential files are cleaned up;
   noncredential evidence remains under `.gitstore/`.
+
+  Add `USER_DIRECTORY_TEST_CHAOS=1` to run a separate thirty-minute alpha
+  identity envelope with the existing confirmed identity/API restart profiles.
+  The fixture invokes `make chaos` only for its explicitly owned processes.
+  `CAPACITY_IDENTITY_CHAOS=1` requires two disjoint, predeclared windows of at
+  most thirty seconds in the private fixture. Only transport/unavailable or
+  unauthenticated responses on the declared replicas can count against that
+  window; wrong grants, memberships, other errors and dropped iterations still
+  fail. The verifier requires actual injection/process-change receipts, both
+  API admissions recovered within the bound, and exact successful/unavailable
+  request accounting. Healthy acceptance retains its original strict gates.
+  SDK counters bracket the old process before injection and count the new
+  process from zero, rather than subtracting across a reset. The old process's
+  unsampled final interval is not represented as a continuous counter trace.
 - `namespace-admission` drives unique Namespace creates at a fixed arrival
   rate, alternates across two replicas, and fails on dropped iterations,
   GraphQL errors, or latency/error threshold violations. Each acknowledged

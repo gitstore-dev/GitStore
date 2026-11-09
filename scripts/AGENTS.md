@@ -60,6 +60,9 @@ container wiring and configuration.
   behavior unless `CAPACITY_IDENTITY_READINESS=1`. Identity acceptance requires
   the private principal fixture, verified native counts, SDK timing/bounds
   and live-delivery companion; see [../tests/capacity/README.md](../tests/capacity/README.md).
+  `CAPACITY_IDENTITY_CHAOS=1` additionally requires predeclared bounded fault
+  windows, confirmed restart/recovery receipts and process-segmented counters;
+  `USER_DIRECTORY_TEST_CHAOS=1` selects that opt-in owned driver.
 
 ## Infrastructure command instructions
 

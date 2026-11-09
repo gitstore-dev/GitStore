@@ -208,6 +208,17 @@ if [[ "${CAPACITY_IDENTITY_READINESS:-0}" == 1 ]]; then
     .staff == $declared.staff and .customers == $declared.customers and
     .serviceAccounts == $declared.serviceAccounts and .serviceAccounts == $source
   ' <<<"${counts}" >/dev/null || { echo "native directory/source counts do not match the declared identity envelope" >&2; exit 2; }
+  fault_windows='[]'
+  if [[ "${CAPACITY_IDENTITY_CHAOS:-0}" == 1 ]]; then
+    fault_windows="$(jq -ec '
+      .faultWindows | select(length == 2 and
+        all(.[];
+          (.replicas | length > 0) and all(.replicas[]; . == 0 or . == 1) and
+          (.startMillis | numbers) > 0 and
+          (.endMillis - .startMillis) > 0 and (.endMillis - .startMillis) <= 30000) and
+        .[0].endMillis < .[1].startMillis)
+    ' "${fixture}")" || { echo "identity chaos requires two disjoint bounded fault windows" >&2; exit 2; }
+  fi
   if [[ "${CAPACITY_IDENTITY_ENVELOPE:-alpha}" == production ]]; then
     jq -e '.customers >= 1000000 and .serviceAccounts >= 1000' <<<"${counts}" >/dev/null || {
       echo "production identity envelope requires one million customers and one thousand ServiceAccounts" >&2; exit 2;
@@ -215,8 +226,9 @@ if [[ "${CAPACITY_IDENTITY_READINESS:-0}" == 1 ]]; then
   fi
   jq -n --argjson counts "${counts}" --argjson duration "${duration_seconds}" \
     --argjson rate "${CAPACITY_RATE:-500}" --argjson dependencies "${dependency_inspection}" \
+    --argjson fault_windows "${fault_windows}" \
     '{schemaVersion:1,passed:true,counts:$counts,durationSeconds:$duration,ratePerReplica:$rate,
-      dependencies:[$dependencies[] | {id:.Id,name:.Name,image:.Image,startedAt:.State.StartedAt,
+      faultWindows:$fault_windows,dependencies:[$dependencies[] | {id:.Id,name:.Name,image:.Image,startedAt:.State.StartedAt,
         memoryBytes:.HostConfig.Memory,nanoCPUs:.HostConfig.NanoCpus}]}' >"${evidence_dir}/identity-preflight.json"
 fi
 

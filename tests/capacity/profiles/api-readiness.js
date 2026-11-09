@@ -11,6 +11,7 @@ import { env, integer } from '../lib/config.js';
 const baseURL = env('CAPACITY_BASE_URL');
 const rate = integer('CAPACITY_RATE', 10);
 const identityReadiness = __ENV.CAPACITY_IDENTITY_READINESS === '1';
+const identityChaos = __ENV.CAPACITY_IDENTITY_CHAOS === '1';
 const endpoints = identityReadiness ? env('CAPACITY_API_ENDPOINTS').split(',') : [baseURL];
 const identityCases = identityReadiness ? new SharedArray('identity cases', () => {
   const fixture = JSON.parse(open(env('CAPACITY_IDENTITY_FIXTURE_FILE')));
@@ -22,6 +23,9 @@ const identityCases = identityReadiness ? new SharedArray('identity cases', () =
 const identityRequests = new Counter('identity_requests');
 const identityDecisions = new Counter('identity_decisions');
 const identityGroups = new Counter('identity_groups');
+const identityUnavailable = new Counter('identity_unavailable');
+const faultWindows = identityChaos ? new SharedArray('identity fault windows', () =>
+  JSON.parse(open(env('CAPACITY_IDENTITY_FIXTURE_FILE'))).faultWindows) : [];
 const scenarios = {};
 if (identityReadiness) {
   for (let index = 0; index < endpoints.length; index++) {
@@ -50,7 +54,7 @@ export const options = {
   thresholds: {
     checks: ['rate==1'],
     dropped_iterations: ['count==0'],
-    http_req_failed: ['rate<0.001'],
+    ...(identityChaos ? {} : { http_req_failed: ['rate<0.001'] }),
     http_req_duration: ['p(95)<1000', 'p(99)<3000'],
     ...(identityReadiness ? {
       identity_requests: ['count>0'],
@@ -65,6 +69,9 @@ if (identityReadiness) {
     options.thresholds[`identity_requests{replica:${index}}`] = ['count>0'];
     options.thresholds[`identity_decisions{replica:${index}}`] = ['count>0'];
     options.thresholds[`identity_groups{replica:${index}}`] = ['count>0'];
+    if (identityChaos) {
+      options.thresholds[`identity_unavailable{replica:${index}}`] = ['count>=0'];
+    }
   }
 }
 
@@ -86,6 +93,21 @@ function sameGroups(actor, expected) {
   return JSON.stringify(actual) === JSON.stringify(wanted);
 }
 
+function expectedUnavailability(response, replica) {
+  const now = Date.now();
+  if (!identityChaos || !faultWindows.some((window) =>
+    window.replicas.includes(replica) && now >= window.startMillis && now <= window.endMillis)) return false;
+  if ([0, 401, 502, 503, 504].includes(response.status)) return true;
+  if (response.status !== 200) return false;
+  try {
+    const errors = response.json().errors;
+    return Array.isArray(errors) && errors.length > 0 &&
+      errors.every((error) => error.extensions && error.extensions.code === 'UNAUTHENTICATED');
+  } catch (_) {
+    return false;
+  }
+}
+
 function identityRequest() {
   const index = Number(execution.scenario.name.split('_')[1]);
   const sample = identityCases[execution.scenario.iterationInTest % identityCases.length];
@@ -98,6 +120,11 @@ function identityRequest() {
   });
   const response = request(sample.token);
   identityRequests.add(1, tags);
+  if (identityChaos) identityUnavailable.add(0, tags);
+  if (expectedUnavailability(response, index)) {
+    identityUnavailable.add(1, tags);
+    return;
+  }
   const actor = actorResponse(response);
   let decisionMatches = false;
   if (sample.allowed) {
@@ -109,7 +136,12 @@ function identityRequest() {
         errors.every((error) => error.extensions && error.extensions.code === 'FORBIDDEN');
     } catch (_) { /* The correctness check below rejects malformed responses. */ }
   }
-  const groupActor = sample.allowed ? actor : actorResponse(request(env('CAPACITY_TOKEN')));
+  const groupResponse = sample.allowed ? response : request(env('CAPACITY_TOKEN'));
+  if (expectedUnavailability(groupResponse, index)) {
+    identityUnavailable.add(1, tags);
+    return;
+  }
+  const groupActor = sample.allowed ? actor : actorResponse(groupResponse);
   const groupsMatch = groupActor && groupActor.id === sample.actorID &&
     groupActor.__typename === sample.kind && sameGroups(groupActor, sample.groups);
   check(response, { 'identity decision matches seeded grant': () => !!decisionMatches });

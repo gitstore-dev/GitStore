@@ -37,6 +37,12 @@ type directoryCapacityCase struct {
 	Allowed bool     `json:"allowed"`
 }
 
+type directoryFaultWindow struct {
+	Replicas    []int `json:"replicas"`
+	StartMillis int64 `json:"startMillis"`
+	EndMillis   int64 `json:"endMillis"`
+}
+
 func (r *directoryTestRuntime) seedCapacityHumans(t *testing.T, kind string, start, count int) {
 	t.Helper()
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -136,6 +142,7 @@ func TestOwnedUserDirectoryCapacity(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	require.NoError(t, err)
 	r := startDirectoryTestRuntime(t)
+	chaos := os.Getenv("USER_DIRECTORY_TEST_CHAOS") == "1"
 	r.seedCapacityHumans(t, "staff", 0, 1000)
 	r.seedCapacityHumans(t, "customer", 0, 100000)
 	operator := r.capacityHuman(t, "staff", 0)
@@ -233,6 +240,9 @@ func TestOwnedUserDirectoryCapacity(t *testing.T) {
 		{"alpha", 100000, 100},
 		{"production", 1000000, 1000},
 	} {
+		if chaos && envelope.name != "alpha" {
+			break
+		}
 		if envelope.name == "production" {
 			r.seedCapacityHumans(t, "customer", 100000, envelope.customers)
 			createAccounts(100, envelope.bots)
@@ -263,7 +273,15 @@ func TestOwnedUserDirectoryCapacity(t *testing.T) {
 		}
 		cases = append(cases, directoryCapacityCase{Kind: "ServiceAccount", ActorID: serviceActorID,
 			Token: workloadToken, Groups: []string{"system:group:ci", "system:serviceaccounts"}, Allowed: true})
-		capacityJSON(t, filepath.Join(privateDir, "cases.json"), map[string]any{"cases": cases})
+		windows := []directoryFaultWindow{}
+		if chaos {
+			start := time.Now().Add(2 * time.Minute).UnixMilli()
+			windows = []directoryFaultWindow{
+				{Replicas: []int{0, 1}, StartMillis: start, EndMillis: start + 30000},
+				{Replicas: []int{0}, StartMillis: start + 120000, EndMillis: start + 150000},
+			}
+		}
+		capacityJSON(t, filepath.Join(privateDir, "cases.json"), map[string]any{"cases": cases, "faultWindows": windows})
 		require.NoError(t, os.WriteFile(filepath.Join(privateDir, "operator.token"), []byte(operatorToken), 0600))
 		var dockerInfo struct {
 			MemTotal     int64
@@ -318,6 +336,9 @@ func TestOwnedUserDirectoryCapacity(t *testing.T) {
 			"CAPACITY_DATASTORE_CONTAINERS=gitstore-userdir-scylla-"+r.owner[:12],
 			"CAPACITY_RUN_ID=identity-"+envelope.name+"-"+r.owner[:12],
 			"CAPACITY_DOCKER_NETWORK=host", "CAPACITY_DURATION=30m", "CAPACITY_RATE=500")
+		if chaos {
+			command.Env = append(command.Env, "CAPACITY_IDENTITY_CHAOS=1")
+		}
 		require.NoError(t, command.Start())
 		completed := make(chan error, 1)
 		finished := make(chan struct{})
@@ -334,6 +355,8 @@ func TestOwnedUserDirectoryCapacity(t *testing.T) {
 			}
 		})
 		events, disabled, connected := 0, false, false
+		faults := []map[string]any{}
+		restartMetrics := map[string]string{}
 		nextEvent := time.Now().Add(20 * time.Second)
 		ticker := time.NewTicker(time.Second)
 		for {
@@ -349,6 +372,29 @@ func TestOwnedUserDirectoryCapacity(t *testing.T) {
 				cancel()
 				t.Fatal("bounded identity capacity run exceeded its deadline")
 			case <-ticker.C:
+				if len(faults) < len(windows) && time.Now().UnixMilli() >= windows[len(faults)].StartMillis {
+					metadataPath := filepath.Join(root, ".gitstore", "capacity", "api", "readiness", "alpha",
+						"identity-"+envelope.name+"-"+r.owner[:12], "metadata.json")
+					body, err := os.ReadFile(metadataPath)
+					require.NoError(t, err, "faults require an active attributable capacity run")
+					var load struct {
+						Started string `json:"loadStartedAt"`
+						Ended   string `json:"loadCompletedAt"`
+					}
+					require.NoError(t, json.Unmarshal(body, &load))
+					require.NotEmpty(t, load.Started)
+					require.Empty(t, load.Ended)
+					index := len(faults)
+					profile, target := "identity-restart", "gitstore-userdir-kratos-"+r.owner[:12]+"-1"
+					if index == 1 {
+						profile, target = "api-restart", apis[0].name
+						restartMetrics["before"] = r.directoryMetrics(t, apis[0])
+					}
+					faults = append(faults, r.capacityFault(t, root, profile, target, windows[index], apis, operatorToken, cases[0].ActorID))
+					if index == 1 {
+						restartMetrics["after"] = r.directoryMetrics(t, apis[0])
+					}
+				}
 				if _, err := os.Stat(doneFile); err == nil {
 					if connected {
 						continue
@@ -387,12 +433,13 @@ func TestOwnedUserDirectoryCapacity(t *testing.T) {
 					require.True(t, unchanged)
 					capacityJSON(t, connectedFile, map[string]any{"events": events, "sourceAuthorityPassed": true,
 						"groupsPassed": true, "laterDeliveryPassed": true, "gitProcessUnchanged": unchanged,
-						"sharedStoragePreserved": preserved})
+						"sharedStoragePreserved": preserved, "faults": faults, "apiRestartMetrics": restartMetrics})
 					connected = true
 				} else {
 					if time.Now().Before(nextEvent) {
 						continue
 					}
+
 					nextEvent = time.Now().Add(20 * time.Second)
 					disabled = !disabled
 					setSource(eventUID, disabled)
@@ -412,4 +459,82 @@ func TestOwnedUserDirectoryCapacity(t *testing.T) {
 		}
 	nextEnvelope:
 	}
+}
+
+func (r *directoryTestRuntime) directoryMetrics(t *testing.T, api directoryAPI) string {
+	t.Helper()
+	response, err := r.client.Get(api.base + "/metrics")
+	require.NoError(t, err)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	require.NoError(t, err)
+	return string(body)
+}
+
+func (r *directoryTestRuntime) capacityFault(t *testing.T, root, profile, target string, window directoryFaultWindow,
+	apis []directoryAPI, operatorToken, actorID string,
+) map[string]any {
+	t.Helper()
+	require.Greater(t, window.EndMillis-time.Now().UnixMilli(), int64(20000), "fault must start within its declared bounded window")
+	require.Equal(t, r.owner, strings.TrimSpace(r.command(t, nil, "inspect", "--format",
+		`{{index .Config.Labels "dev.gitstore.test_owner"}}`, target)))
+	before := strings.TrimSpace(r.command(t, nil, "inspect", "--format", "{{.State.StartedAt}}", target))
+	runID := r.owner + "-" + profile
+	injected := time.Now().UnixMilli()
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, "make", "chaos", "CHAOS_PROFILE="+profile, "CHAOS_TARGET="+target,
+		"CHAOS_CONFIRM=1", "CHAOS_OWNER="+r.owner, "CHAOS_OWNERSHIP_LABEL=dev.gitstore.test_owner",
+		"CHAOS_RUN_ID="+runID)
+	command.Dir = root
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, "confirmed owned chaos failed: %s", output)
+	receipt, err := os.ReadFile(filepath.Join(root, ".gitstore", "chaos", profile, runID, "metadata.json"))
+	require.NoError(t, err)
+	var metadata struct {
+		Injected bool `json:"injected"`
+		ExitCode int  `json:"exitCode"`
+	}
+	require.NoError(t, json.Unmarshal(receipt, &metadata))
+	require.True(t, metadata.Injected)
+	require.Zero(t, metadata.ExitCode)
+	after := strings.TrimSpace(r.command(t, nil, "inspect", "--format", "{{.State.StartedAt}}", target))
+	require.NotEqual(t, before, after, "the native process must actually restart")
+	require.Equal(t, r.owner, strings.TrimSpace(r.command(t, nil, "inspect", "--format",
+		`{{index .Config.Labels "dev.gitstore.test_owner"}}`, target)))
+	remaining := func() time.Duration { return time.Until(time.UnixMilli(window.EndMillis)) }
+	require.Positive(t, remaining())
+	if profile == "identity-restart" {
+		require.Eventually(t, func() bool {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			return exec.CommandContext(ctx, "docker", "exec", r.postgres, "wget", "-qO", "/dev/null",
+				"http://"+target+":4433/health/ready").Run() == nil
+		}, remaining(), 100*time.Millisecond)
+	} else {
+		require.Eventually(t, func() bool {
+			response, err := r.client.Get(apis[0].base + "/ready")
+			if err != nil {
+				return false
+			}
+			response.Body.Close()
+			return response.StatusCode == http.StatusOK
+		}, remaining(), 100*time.Millisecond)
+	}
+	dependencyReady := time.Now().UnixMilli()
+	read := fmt.Sprintf(`{node(id:%q){id}}`, actorID)
+	for _, api := range apis {
+		require.Positive(t, remaining())
+		require.Eventually(t, func() bool {
+			result := r.graphql(t, api, operatorToken, read)
+			var actor struct{ ID string }
+			return len(result.Errors) == 0 && json.Unmarshal(result.Data["node"], &actor) == nil && actor.ID == actorID
+		}, remaining(), 100*time.Millisecond, "existing-profile admission must recover on both APIs within 30 seconds")
+	}
+	recovered := time.Now().UnixMilli()
+	require.LessOrEqual(t, recovered, window.EndMillis)
+	t.Logf("confirmed %s during sustained identity load; both API admissions recovered within the bounded window", profile)
+	return map[string]any{"profile": profile, "injected": true, "processChanged": true, "recoveredOnBoth": true,
+		"injectedMillis": injected, "dependencyReadyMillis": dependencyReady, "recoveredMillis": recovered}
 }

@@ -97,6 +97,69 @@ jq '.metrics |= with_entries(.value = .value.values)' "${test_dir}/identity-veri
 mv "${test_dir}/identity-verifier/summary.tmp" "${test_dir}/identity-verifier/summary.json"
 CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-verifier"
 jq -e '.passed' "${test_dir}/identity-verifier/identity-verifier.json" >/dev/null
+python3 - "${test_dir}" <<'PY'
+import datetime
+import json
+from pathlib import Path
+import shutil
+import sys
+root = Path(sys.argv[1])
+target = root / 'identity-chaos-verifier'
+shutil.copytree(root / 'identity-verifier', target)
+identity = json.loads((target / 'identity-preflight.json').read_text())
+epoch = int(datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc).timestamp() * 1000)
+identity['faultWindows'] = [
+    {'replicas': [0, 1], 'startMillis': epoch + 120000, 'endMillis': epoch + 150000},
+    {'replicas': [0], 'startMillis': epoch + 240000, 'endMillis': epoch + 270000},
+]
+(target / 'identity-preflight.json').write_text(json.dumps(identity))
+companion = json.loads((target / 'identity-connected.json').read_text())
+companion['faults'] = [
+    {'profile': profile, 'injected': True, 'processChanged': True, 'recoveredOnBoth': True,
+     'injectedMillis': window['startMillis'] + 100, 'dependencyReadyMillis': window['startMillis'] + 500,
+     'recoveredMillis': window['startMillis'] + 1000}
+    for profile, window in zip(['identity-restart', 'api-restart'], identity['faultWindows'])
+]
+old_metrics = (target / 'identity-after-0.prom').read_text()
+companion['apiRestartMetrics'] = {
+    'before': old_metrics + 'process_start_time_seconds 1\n',
+    'after': 'process_start_time_seconds 2\n',
+}
+(target / 'identity-before-0.prom').write_text('process_start_time_seconds 1\n')
+(target / 'identity-after-0.prom').write_text(old_metrics + 'process_start_time_seconds 2\n')
+(target / 'identity-connected.json').write_text(json.dumps(companion))
+summary = json.loads((target / 'summary.json').read_text())
+for index, unavailable in enumerate([100, 0]):
+    summary['metrics'][f'identity_unavailable{{replica:{index}}}'] = {'count': unavailable}
+    for name in ['identity_decisions', 'identity_groups']:
+        summary['metrics'][f'{name}{{replica:{index}}}']['count'] -= unavailable
+(target / 'summary.json').write_text(json.dumps(summary))
+for failure in ['receipt', 'reset', 'membership', 'recovery']:
+    invalid = root / f'identity-chaos-{failure}'
+    shutil.copytree(target, invalid)
+    if failure == 'membership':
+        broken = json.loads(json.dumps(summary))
+        broken['metrics']['identity_groups{replica:0}']['count'] -= 1
+        (invalid / 'summary.json').write_text(json.dumps(broken))
+    else:
+        broken = json.loads(json.dumps(companion))
+        if failure == 'receipt':
+            broken['faults'][0]['injected'] = False
+        elif failure == 'reset':
+            broken['apiRestartMetrics']['after'] = 'process_start_time_seconds 1\n'
+        else:
+            broken['faults'][0]['recoveredMillis'] = identity['faultWindows'][0]['endMillis'] + 1
+        (invalid / 'identity-connected.json').write_text(json.dumps(broken))
+PY
+CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-chaos-verifier"
+jq -e '.passed and .chaos and .replicas[0].unavailable == 100' "${test_dir}/identity-chaos-verifier/identity-verifier.json" >/dev/null
+for failure in receipt reset membership recovery; do
+  if CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" \
+    "${test_dir}/identity-chaos-${failure}" >/dev/null 2>&1; then
+    echo "identity chaos verifier accepted invalid ${failure} evidence" >&2
+    exit 1
+  fi
+done
 jq '.metrics["identity_groups{replica:1}"].count -= 1' "${test_dir}/identity-verifier/summary.json" >"${test_dir}/identity-verifier/summary.tmp"
 mv "${test_dir}/identity-verifier/summary.tmp" "${test_dir}/identity-verifier/summary.json"
 if CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-verifier" >/dev/null 2>&1; then
