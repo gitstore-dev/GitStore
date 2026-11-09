@@ -5,6 +5,7 @@ package kratos
 
 import (
 	"context"
+	"errors"
 	"net/url"
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
@@ -22,31 +23,37 @@ func (p *Provider) ResolvePrincipal(ctx context.Context, principal *auth.Princip
 			continue
 		}
 		key := mapping.Provider + "\x00" + mapping.Issuer + "\x00" + principal.Subject
+		var profile *auth.UserProfile
+		var err error
 		switch mapping.Mode {
 		case "uid":
-			return p.lookup(ctx, key, "/admin/identities/"+url.PathEscape(principal.Subject), nil, "")
+			profile, err = p.lookup(ctx, key, "/admin/identities/"+url.PathEscape(principal.Subject), nil, "")
 		case "external_id":
-			return p.lookup(ctx, key, "/admin/identities/by/external/"+url.PathEscape(mapping.Prefix+principal.Subject), nil, "")
+			profile, err = p.lookup(ctx, key, "/admin/identities/by/external/"+url.PathEscape(mapping.Prefix+principal.Subject), nil, "")
 		case "serviceaccount_uid":
 			if principal.ServiceAccountUID == "" {
-				return nil, auth.ErrProfileNotFound
+				err = auth.ErrProfileNotFound
+				break
 			}
-			profile, err := p.lookup(ctx, key+"\x00"+principal.ServiceAccountUID,
+			profile, err = p.lookup(ctx, key+"\x00"+principal.ServiceAccountUID,
 				"/admin/identities/by/external/"+url.PathEscape("gitstore:serviceaccount:"+principal.ServiceAccountUID), nil, "")
-			if err != nil {
-				return nil, err
+			if err == nil && (profile.Kind != auth.ProfileServiceAccount || profile.ServiceAccountUID != principal.ServiceAccountUID) {
+				profile, err = nil, auth.ErrProfileNotFound
 			}
-			if profile.Kind != auth.ProfileServiceAccount || profile.ServiceAccountUID != principal.ServiceAccountUID {
-				return nil, auth.ErrProfileNotFound
-			}
-			return profile, nil
 		case "username":
 			if !auth.ValidExternalUsername(principal.Subject) {
-				return nil, auth.ErrProfileNotFound
+				err = auth.ErrProfileNotFound
+				break
 			}
-			return p.lookup(ctx, key, "/admin/identities",
+			profile, err = p.lookup(ctx, key, "/admin/identities",
 				url.Values{"credentials_identifier": {principal.Subject}, "page_size": {"2"}}, principal.Subject)
+		default:
+			return nil, ErrInvalidInput
 		}
+		if errors.Is(err, auth.ErrProfileNotFound) && principal.ServiceAccountUID == "" {
+			return nil, auth.ErrProfileInactive
+		}
+		return profile, err
 	}
 	return nil, auth.ErrProfileNotFound
 }

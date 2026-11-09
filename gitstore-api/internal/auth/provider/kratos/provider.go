@@ -31,6 +31,7 @@ type Provider struct {
 	invalidateConnections func()
 	invitationMu          sync.RWMutex
 	sendInvitation        func(context.Context, *auth.UserProfile, string) error
+	webhookHandler        http.Handler
 	consumerMu            sync.Mutex
 	consumerCancel        context.CancelFunc
 	consumerDone          chan struct{}
@@ -50,7 +51,7 @@ func New(cfg config.KratosUserDirConfig, logs ...*zap.Logger) (*Provider, error)
 	if len(logs) != 0 && logs[0] != nil {
 		log = logs[0]
 	}
-	return &Provider{
+	provider := &Provider{
 		config: cfg, requests: make(chan struct{}, cfg.MaxConcurrent),
 		client: &http.Client{Timeout: cfg.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -58,7 +59,9 @@ func New(cfg config.KratosUserDirConfig, logs ...*zap.Logger) (*Provider, error)
 		cache:   newProfileCache(cfg.CacheEntries, cfg.CacheTTL),
 		metrics: newMetrics(otel.Meter("gitstore/userdir")),
 		log:     log,
-	}, nil
+	}
+	provider.webhookHandler = provider.newWebhookHandler()
+	return provider, nil
 }
 
 func (*Provider) Name() string { return "kratos" }

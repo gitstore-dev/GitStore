@@ -174,6 +174,78 @@ func TestDirectoryFailuresAreNotEmptyProfilesOrCachedOutages(t *testing.T) {
 	require.NotContains(t, again.Groups, "mutated", "cached profiles must not be shared mutable snapshots")
 }
 
+func TestMissingMappedHumanIdentitiesFailClosed(t *testing.T) {
+	for _, test := range []struct {
+		name, provider, issuer, subject, uid string
+		deny                                 bool
+	}{
+		{"UID", "oidc-jwt", "https://issuer.example", "identity-uid", "", true},
+		{"username", "static-users", "gitstore/static-users", "alice", "", true},
+		{"external ID", "external", "external", "remote", "", true},
+		{"unmapped issuer", "oidc-jwt", "https://another-issuer.example", "identity-uid", "", false},
+		{"missing workload mirror", "serviceaccount-jwt", "gitstore", "system:serviceaccount:ci-bot", "source-uid", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/admin/identities" {
+					json.NewEncoder(w).Encode([]any{})
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer server.Close()
+			cfg := directoryConfig(server.URL)
+			cfg.Mappings = append(cfg.Mappings, config.SubjectMapping{
+				Provider: "serviceaccount-jwt", Issuer: "gitstore", Mode: "serviceaccount_uid",
+			})
+			provider, err := New(cfg)
+			require.NoError(t, err)
+			principal, err := auth.EnrichPrincipal(t.Context(), provider, &auth.Principal{
+				Subject: test.subject, AuthMethod: test.provider, Issuer: test.issuer, ServiceAccountUID: test.uid,
+			})
+			if test.deny {
+				require.ErrorIs(t, err, auth.ErrProfileInactive)
+				require.Nil(t, principal, "a missing mapped identity must not retain an authorizable subject")
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, test.subject, principal.Subject)
+				require.Empty(t, principal.ProfileKind)
+			}
+		})
+	}
+}
+
+func TestDeletedMappedHumanIdentityCannotReenterAsUnlinked(t *testing.T) {
+	var deleted atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if deleted.Load() {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		if r.Method == http.MethodDelete {
+			deleted.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		json.NewEncoder(w).Encode(identityFixture())
+	}))
+	defer server.Close()
+	provider, err := New(directoryConfig(server.URL))
+	require.NoError(t, err)
+	credential := &auth.Principal{Subject: "identity-uid", AuthMethod: "oidc-jwt", Issuer: "https://issuer.example",
+		ExpiresAt: time.Now().Add(time.Hour)}
+	principal, err := auth.EnrichPrincipal(t.Context(), provider, credential)
+	require.NoError(t, err)
+	require.Equal(t, auth.ProfileStaff, principal.ProfileKind)
+	ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "operator", AuthMethod: "static-users"})
+	_, err = provider.DeleteHuman(ctx, credential.Subject)
+	require.NoError(t, err)
+	require.True(t, credential.ExpiresAt.After(time.Now()))
+	principal, err = auth.EnrichPrincipal(t.Context(), provider, credential)
+	require.ErrorIs(t, err, auth.ErrProfileInactive)
+	require.Nil(t, principal, "the still-valid subject must not reach direct User RBAC bindings")
+}
+
 func TestDirectoryDeadlineAndBackwardValidation(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -270,7 +342,7 @@ func TestExactUsernameDoesNotLinkEmailOrAmbiguousResults(t *testing.T) {
 		count int
 		want  error
 	}{
-		{"email is not a link", "alice@example.test", 1, auth.ErrProfileNotFound},
+		{"email is not a link", "alice@example.test", 1, auth.ErrProfileInactive},
 		{"ambiguous username", "alice", 2, auth.ErrDirectoryConflict},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -12,11 +12,15 @@ For every authenticated non-anonymous request:
 4. Attach profile type, username and directory groups to the principal.
 5. Run AuthZ and endpoint/profile-type admission.
 
-Anonymous requests are not looked up. A missing link is an unlinked principal
-with no directory groups or profile type. A directory timeout or provider
-failure is a retryable fail-closed response; it must never become an empty
-group set. UserDir `none` and a provider without group capability return no
-directory groups by contract.
+Anonymous requests are not looked up. With Kratos, no applicable provider/issuer
+mapping leaves the principal unlinked, with no directory groups or profile type.
+An applicable human mapping whose identity is missing or deleted fails admission
+within the freshness bound, including when credentials remain valid and RBAC
+grants the subject directly. Missing ServiceAccount mirrors remain unlinked;
+GitStore source UID and enablement remain authoritative. A directory timeout or
+provider failure is a retryable fail-closed response; it must never become an
+empty group set. UserDir `none` and a provider without group capability return
+no directory groups by contract.
 
 Token claims are not a source of profile type, username or groups. Email is
 not a subject link. Authentication and UserDir providers remain independently

@@ -123,7 +123,7 @@ func namespaceWatchMetrics(runtime *namespaceWatchRuntime) *watchjournal.Metrics
 	return runtime.metrics
 }
 
-func registerIdentityMailRoute(router *gin.Engine, cfg config.ApiConfig, directory auth.UserDirProvider) error {
+func registerIdentityMailRoute(router *gin.Engine, cfg config.ApiConfig, runtime *providerRegistryRuntime) error {
 	if err := cfg.Notification.Validate(); err != nil {
 		return err
 	}
@@ -147,16 +147,12 @@ func registerIdentityMailRoute(router *gin.Engine, cfg config.ApiConfig, directo
 		return err
 	}
 	router.Any("/internal/notifications/mail", gin.WrapH(handler))
-	if invitations, ok := directory.(interface {
-		SetInvitationSender(func(context.Context, *auth.UserProfile, string) error)
-	}); ok {
-		invitations.SetInvitationSender(func(ctx context.Context, profile *auth.UserProfile, link string) error {
-			ctx, cancel := context.WithTimeout(ctx, cfg.Notification.Timeout)
-			defer cancel()
-			return provider.Send(ctx, notification.Message{Recipient: profile.Email, Subject: "Set up your GitStore account",
-				Body: "Complete your GitStore account setup:\n\n" + link, TemplateType: "invitation"})
-		})
-	}
+	runtime.setInvitationSender(func(ctx context.Context, profile *auth.UserProfile, link string) error {
+		ctx, cancel := context.WithTimeout(ctx, cfg.Notification.Timeout)
+		defer cancel()
+		return provider.Send(ctx, notification.Message{Recipient: profile.Email, Subject: "Set up your GitStore account",
+			Body: "Complete your GitStore account setup:\n\n" + link, TemplateType: "invitation"})
+	})
 	return nil
 }
 
@@ -293,9 +289,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, err
 	}
 	connections := wsregistry.New()
-	if runtime, ok := authReloader.(*providerRegistryRuntime); ok {
-		runtime.setInvalidationHandler(connections.Invalidate)
-	}
+	authReloader.setInvalidationHandler(connections.Invalidate)
 	var endpointCleanup []func()
 	registerCleanup := func(close func()) { endpointCleanup = append(endpointCleanup, close) }
 	defer func() {
@@ -330,7 +324,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		return nil, err
 	}
 
-	if err := registerIdentityMailRoute(gqlRouter, cfg.Api, registry.UserDir()); err != nil {
+	if err := registerIdentityMailRoute(gqlRouter, cfg.Api, authReloader); err != nil {
 		return nil, err
 	}
 	router := healthHandler(gqlRouter, store, log, clock, namespaceWatch, instanceID, registerCleanup)
@@ -454,7 +448,7 @@ type serviceAccountStore interface {
 // It reads authn chain, authz provider, and userdir provider from the resolved config.
 // The second return value validates and atomically swaps the complete auth set on
 // SIGHUP. The third return value lists resources that must be shut down with the server.
-func buildProviderRegistry(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore, journals ...datastore.ResourceWatchJournal) (*auth.ProviderRegistry, authReloader, []providerShutdowner, error) {
+func buildProviderRegistry(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore, journals ...datastore.ResourceWatchJournal) (*auth.ProviderRegistry, *providerRegistryRuntime, []providerShutdowner, error) {
 	registry, shutdowns, err := constructProviderRegistry(cfg, store, log, revocations, journals...)
 	if err != nil {
 		return nil, nil, nil, err
@@ -479,6 +473,7 @@ type providerRegistryRuntime struct {
 	closed                bool
 	journal               datastore.ResourceWatchJournal
 	invalidateConnections func()
+	sendInvitation        func(context.Context, *auth.UserProfile, string) error
 }
 
 func (r *providerRegistryRuntime) setInvalidationHandler(handler func()) {
@@ -487,6 +482,17 @@ func (r *providerRegistryRuntime) setInvalidationHandler(handler func()) {
 	r.invalidateConnections = handler
 	if directory, ok := r.registry.UserDir().(interface{ SetInvalidationHandler(func()) }); ok {
 		directory.SetInvalidationHandler(handler)
+	}
+}
+
+func (r *providerRegistryRuntime) setInvitationSender(sender func(context.Context, *auth.UserProfile, string) error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sendInvitation = sender
+	if directory, ok := r.registry.UserDir().(interface {
+		SetInvitationSender(func(context.Context, *auth.UserProfile, string) error)
+	}); ok {
+		directory.SetInvitationSender(sender)
 	}
 }
 
@@ -521,6 +527,11 @@ func (r *providerRegistryRuntime) Reload() (err error) {
 	oldShutdowns := r.shutdowns
 	if directory, ok := newRegistry.UserDir().(interface{ SetInvalidationHandler(func()) }); ok {
 		directory.SetInvalidationHandler(r.invalidateConnections)
+	}
+	if directory, ok := newRegistry.UserDir().(interface {
+		SetInvitationSender(func(context.Context, *auth.UserProfile, string) error)
+	}); ok {
+		directory.SetInvitationSender(r.sendInvitation)
 	}
 	r.registry.Swap(newRegistry.AuthN(), newRegistry.AuthZ(), newRegistry.UserDir())
 	r.shutdowns = newShutdowns

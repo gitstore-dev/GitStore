@@ -165,7 +165,7 @@ func TestProviderRegistryReloadPreservesUsableBindingInvariant(t *testing.T) {
 		require.Equal(t, current.Policy.Digest, entry.ContextMap()["policy_digest"])
 		require.Equal(t, current.CatalogDigest, entry.ContextMap()["catalog_digest"])
 	}
-	reloader.(*providerRegistryRuntime).Shutdown()
+	reloader.Shutdown()
 	require.Error(t, reloader.Reload(), "a closed registry must not publish a candidate")
 	require.Equal(t, rejectedBefore+5, reloadCount("rejected"))
 	require.Equal(t, current, registry.Diagnostics())

@@ -87,7 +87,7 @@ func TestWorkloadConsumerReloadStartsFreshAndCancelsOldProvider(t *testing.T) {
 		t.Cleanup(shutdown.Shutdown)
 	}
 	var invalidations atomic.Int32
-	reloader.(*providerRegistryRuntime).setInvalidationHandler(func() { invalidations.Add(1) })
+	reloader.setInvalidationHandler(func() { invalidations.Add(1) })
 	first := registry.UserDir().(*kratos.Provider)
 	receive := func(uid string) {
 		t.Helper()

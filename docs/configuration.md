@@ -270,9 +270,13 @@ login and directory profiles use the same identity store. The API accepts
 `none`, `static-users` and `kratos` as UserDir providers. Kratos currently
 provides bounded profile lookup, provider mutations and internal callbacks.
 Authenticated Admin/Git HTTP and GraphQL requests resolve trusted directory
-profiles before authorization. Missing profiles remain unlinked; directory
-failures fail closed without treating valid credentials as invalid. Inactive
-human profiles are denied. WebSocket initialization applies the same checks
+profiles before authorization. With Kratos, a human principal with no matching
+provider/issuer mapping remains unlinked. If a mapping applies but its identity
+is missing or deleted, admission fails closed rather than retaining direct
+subject permissions. Missing ServiceAccount mirrors remain unlinked; GitStore
+still enforces their authoritative UID and enablement. Directory failures fail
+closed without treating valid credentials as invalid. Inactive human profiles
+are denied. WebSocket initialization applies the same checks
 and caps profile leases below five minutes, never extending the cached
 profile's freshness or a shorter token lifetime.
 
@@ -284,6 +288,9 @@ Successful local directory writes and protected
 callbacks evict the process cache and cancel all its authenticated WebSocket
 connections, including workloads. Other replicas retain bounded cache/profile
 leases; callbacks are not commit notifications.
+Successful auth-provider reloads retain invitation delivery on the replacement
+directory. The private callback listener dispatches to the active directory,
+including its cache invalidation; it returns 404 while Kratos is not selected.
 
 The sample namespace-creator policy binds `system:staff` and requires both
 USER tier and `subjectUsername`, which matches the resource name against the

@@ -330,8 +330,11 @@ notification provider, and the message reaches the local mail catcher.
 - Customer attempts to create a USER-tier namespace → denied (FR-018).
 - Long-lived watch subscription when groups change or the identity is
   deactivated → re-authorized or closed within FR-013/FR-014.
-- Switching UserDir provider → subjects not present in the new provider
-  resolve as unlinked; no cross-provider merging.
+- Switching UserDir provider → no cross-provider merging. With Kratos, no
+  applicable mapping leaves the principal unlinked; an applicable human
+  mapping whose identity is missing or deleted fails admission within the
+  freshness bound. Missing workload mirrors remain unlinked and source
+  UID/enablement stays authoritative.
 - Schema evolution (new optional field) → existing identities stay valid; a
   new required field needs an explicit migration step.
 - The GitStore mail endpoint is called by anything other than the directory →

@@ -21,12 +21,15 @@ func kratosWebhookServer(cfg config.KratosUserDirConfig, registry *auth.Provider
 		return nil, err
 	}
 	endpoint, _ := url.Parse(cfg.WebhookURI)
-	handler := http.NotFoundHandler()
-	if registry != nil {
-		if provider, ok := registry.UserDir().(*kratos.Provider); ok {
-			handler = provider.WebhookHandler()
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if registry != nil {
+			if provider, ok := registry.UserDir().(*kratos.Provider); ok {
+				provider.WebhookHandler().ServeHTTP(w, r)
+				return
+			}
 		}
-	}
+		http.NotFound(w, r)
+	})
 	return &http.Server{
 		Addr: endpoint.Host, Handler: handler,
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second,

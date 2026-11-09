@@ -17,6 +17,10 @@ const SettingsHookPath = "/internal/userdir/kratos/settings"
 const PasswordSettingsHookPath = "/internal/userdir/kratos/settings-password"
 
 func (p *Provider) WebhookHandler() http.Handler {
+	return p.webhookHandler
+}
+
+func (p *Provider) newWebhookHandler() http.Handler {
 	mux := http.NewServeMux()
 	active := make(chan struct{}, p.config.MaxConcurrent)
 	register := func(path string, registration bool) {
