@@ -2,7 +2,8 @@
 
 **Feature Branch**: `065-kratos-user-directory`  
 **Created**: 2026-10-06  
-**Status**: Draft  
+**Status**: Closed (2026-11-09)
+
 **Input**: User description: "let's implement the first production user-directory provider. We will support 3 different profiles - Staff users - Customer users - service accounts. these profiles can be represented with a schema for each. In the future, emails will be sent by a Notification provider such as Novu. this means user emails from the user-dir provider should take this into consideration. This should serve as the foundation for user-profiles in GitStore"
 
 **Depends on**: spec 064 (canonical authorization vocabulary, cluster-scoped

@@ -31,6 +31,34 @@ out-of-band Admin and unintegrated credential/address writes are not tracked.
 Hook delivery is configured only with the provider enabled; disabled routes
 return 404 and blocking-hook failure prevents protected self-service writes.
 
+## Acceptance outcome: 2026-11-09
+
+All 84 implementation tasks are verified and the specification is Closed.
+The dated sections below retain the implementation history; earlier pending
+statements describe those checkpoints, not the final acceptance state.
+Native human administration, source CDC/authority, real Hydra quickstart,
+actual pre-directory rolling/provider-switch acceptance, both declared healthy
+identity populations and the complete sustained restart workload pass.
+The final `make pr-ready` passes its full default lint/build/test/license/
+credential suite, and `make check TARGET=all` passes configuration, Compose
+and generated schema/catalog validation. The overflow regression now waits
+for the entire burst's discard receipts before unblocking delivery; 100
+race-enabled repetitions pass without changing production consumer behavior.
+
+The two mail-relay CodeQL findings are reviewed false positives, dismissed
+with explicit user authorization and recorded rationales; the CodeQL check
+is successful without disabling rules or changing the mail contract.
+API-key authentication precedes body reads; forwarding the authenticated
+courier message is intentional. SHA-256 normalizes the injected service key
+for fixed-size constant-time comparison, not password storage.
+
+ADRs 0010 and 0012 retain their existing Accepted status. ADR 0020 remains
+Proposed: credentialless mirrors and directory groups implement prerequisites,
+not its reference-issuer client identity/assertion/token-hook core. No ADR
+status flip is justified by this feature. The draft PR is not marked ready or
+merged. Copied reference configuration/wiring in `gitstore-dev/quickstart`
+still needs its separately coordinated downstream update.
+
 ## Technical Context
 
 **Language/Dependencies**: Use repository-pinned Go, gqlgen and existing
@@ -516,6 +544,54 @@ replay or repair. The other API remains usable. A real old-binary rollback
 exits with the native migration error `database is ahead`. The singleton Git
 process stays unchanged. These bounded functional/rolling checks do not prove
 sustained-chaos acceptance.
+
+### Native sustained fault acceptance: 2026-11-09
+
+T080 passes on clean committed source
+`6d0b6d2447a27a347754b6f70e21c447e32534d6`. The opt-in owned driver
+uses the existing readiness and confirmed chaos interfaces with 1,000 Staff,
+100,000 Customers and 100 ServiceAccounts. Two release API processes each
+receive 500 principal requests/s for the complete thirty minutes. The driver
+finishes in 1,986.73 seconds including native setup, companion verification
+and cleanup; this is separate from the two healthy population runs above.
+
+| Measurement | API 0 | API 1 |
+|---|---:|---:|
+| Principal requests | 900,001 | 900,000 |
+| Correct decision and membership receipts | 899,884 | 900,000 |
+| Accounted fault-window unavailable requests | 117 | 0 |
+| Mean directory calls/s | 0.800 | 0.495 |
+| Applied live source events | 86 | 86 |
+| Observed overflow/exhaustion/discontinuity drops | 0 | 0 |
+
+Both owned Kratos and API restart profiles physically change their target's
+process start time while sustained traffic is active. Their disjoint,
+predeclared windows are each at most thirty seconds. Both API admission
+probes recover 967 ms after identity injection and 756 ms after API injection,
+within two milliseconds of the respective dependency-readiness receipt.
+The unaffected API has no unavailable requests. All 117 unavailable
+iterations occur on the replaced API inside its allowed window; they are
+accounted separately, not counted as successful authorization. Requests equal
+matching decision/group receipts plus unavailable iterations. There are zero
+dropped iterations and zero incorrect decision or membership checks.
+
+SDK histograms pass the full-profile warm/cold p99 limits of 10/100 ms;
+observed cache/buffer samples remain within 256/64. API 0 counters are
+segmented by verified process epochs: old-process initial-to-prefault deltas
+plus new-process counters from zero. The final old-process interval between
+the prefault scrape and termination is unsampled, so these are scoped
+observations, not exact all-process delivery totals or peak call rates.
+No observed delivery drop is not a positive exhaustion-under-load result;
+finite retry/exhaustion/overflow and subsequent delivery are proved by the
+separate native functional and race-enabled consumer fixtures.
+
+The companion verifies later delivery, exact administered groups and
+source-authoritative denial using still-unexpired workload credentials.
+Shared identity storage and the singleton Git process remain unchanged.
+Native datastore resource checks pass, and the explicitly owned deployment
+is cleaned up without removing unrelated resources. This proves the exercised
+identity/API restart paths and bounded hot working set, not arbitrary chaos,
+uniform access to every identity, Git HA or automatic missed-event repair.
 
 ```text
 gitstore-api/

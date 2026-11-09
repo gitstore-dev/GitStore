@@ -107,8 +107,9 @@ func TestServiceAccountConsumerOverflowDropsAndContinues(t *testing.T) {
 		name := fmt.Sprintf("queued-%d", index)
 		require.NoError(t, store.CreateServiceAccount(t.Context(), &datastore.ServiceAccount{UID: uuid.NewString(), Name: name}))
 	}
+	// Keep delivery blocked until the reader has accounted for the entire burst.
 	require.Eventually(t, func() bool {
-		return observabilitytest.Value(t, metrics, "gitstore_userdir_serviceaccount_delivery_total", map[string]string{"outcome": "overflow"}) > 0
+		return observabilitytest.Value(t, metrics, "gitstore_userdir_serviceaccount_delivery_total", map[string]string{"outcome": "overflow"}) == 128-serviceAccountConsumerBuffer
 	}, time.Second, 10*time.Millisecond)
 	close(release)
 	require.Eventually(t, func() bool { return len(applied) == 65 }, time.Second, 10*time.Millisecond)
