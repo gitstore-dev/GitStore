@@ -68,7 +68,7 @@
   background: var(--surface);
 }
 .tableHeader,
-.productRow {
+.rowContents {
   display: grid;
   grid-template-columns: minmax(0, 2.8fr) minmax(0, 1fr) minmax(0, 1fr) minmax(
       0,
@@ -84,6 +84,7 @@
   color: var(--muted);
 }
 .productRow {
+  display: block;
   padding: 17px 20px;
   color: var(--ink);
   text-decoration: none;
@@ -607,4 +608,28 @@
   display: flex;
   justify-content: center;
   margin-top: 24px;
+}
+
+.sharedTitle {
+  display: inline-block;
+  max-width: 100%;
+}
+
+.rowContents {
+  width: 100%;
+  min-width: 0;
+}
+.productList[data-view='grid'] .rowContents {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: start;
+  gap: 14px;
+}
+@media (max-width: 760px) {
+  .rowContents,
+  .productList[data-view='grid'] .rowContents {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
 }

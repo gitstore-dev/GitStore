@@ -1,9 +1,15 @@
-import { useState } from 'react'
+import { useLayoutEffect, useState } from 'react'
 import { FilterBar } from '../../../components/FilterBar'
 import { FilterSheet } from '../../../components/FilterSheet'
 import { useGridMotion } from '../../home/shared/motion/useGridMotion'
 import { useResourceLighting } from '../../home/shared/motion/useResourceLighting'
-import { useSearch, useNavigate, Link } from '@tanstack/react-router'
+import {
+  useSearch,
+  useNavigate,
+  useRouter,
+  useLocation,
+  Link,
+} from '@tanstack/react-router'
 import { Button, Input, Label, SearchField } from 'react-aria-components'
 import { Plus, Search, LayoutGrid, List, X } from 'lucide-react'
 import type { NamespaceId } from '../../../data/demo'
@@ -21,6 +27,9 @@ import styles from './products.module.css'
 import { ProductMedia } from './ProductMedia'
 export function ProductListPage({ namespace }: { namespace: NamespaceId }) {
   const { session, reset } = useHomeDemo(namespace)
+  const motion = useRouter().options.context?.productNavigation
+  const location = useLocation()
+  const savedPosition = motion?.position(location.href, session.epoch)
   const search = productSearch(useSearch({ strict: false }))
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [draftFilters, setDraftFilters] = useState(search)
@@ -61,7 +70,11 @@ export function ProductListPage({ namespace }: { namespace: NamespaceId }) {
   const [loaded, setLoaded] = useState<{
     key: string
     cursors: readonly string[]
-  }>({ key: '', cursors: [] })
+  }>(() =>
+    savedPosition
+      ? { key: savedPosition.filterKey, cursors: savedPosition.cursors }
+      : { key: '', cursors: [] },
+  )
   const cursors = loaded.key === filterKey ? loaded.cursors : []
   let connection = productConnection(session, search)
   const visible = connection.edges.map((edge) => edge.node)
@@ -76,6 +89,17 @@ export function ProductListPage({ namespace }: { namespace: NamespaceId }) {
     visible.push(...connection.edges.map((edge) => edge.node))
     consumed.push(cursor)
   }
+  useLayoutEffect(() => {
+    motion?.bind(stage.current)
+    motion?.remember(location.href, {
+      epoch: session.epoch,
+      filterKey,
+      cursors,
+      search,
+      scroll: 0,
+    })
+    motion?.mounted(location.href, session.epoch)
+  })
   const { pageInfo } = connection
   const total = Object.values(session.catalog).filter(
     (p) => p.kind === 'Product',
@@ -294,6 +318,7 @@ export function ProductListPage({ namespace }: { namespace: NamespaceId }) {
               ref={stage}
               className={styles.productList}
               data-view={search.view}
+              data-product-epoch={session.epoch}
             >
               <div className={styles.tableHeader} aria-hidden="true">
                 <span>Product</span>
@@ -310,45 +335,56 @@ export function ProductListPage({ namespace }: { namespace: NamespaceId }) {
                     params={{ namespace, productId: id }}
                     className={styles.productRow}
                     data-resource-id={id}
+                    data-product-surface={id}
                     data-halo-card={search.view === 'grid' ? '' : undefined}
                     data-readiness={resource?.readiness}
                   >
-                    <span className="sr-only">View </span>
-                    <div className={styles.rowIdentity}>
-                      <span aria-hidden="true">
-                        <ProductMedia id={product.spec.mediaIds[0]} compact />
-                      </span>
-                      <div>
-                        <strong>{product.spec.title}</strong>
-                        <small>
-                          {product.spec.options.length
-                            ? `${product.spec.options.length} options`
-                            : 'Product'}
-                        </small>
+                    <div
+                      className={styles.rowContents}
+                      data-product-content="row"
+                    >
+                      <span className="sr-only">View </span>
+                      <div className={styles.rowIdentity}>
+                        <span aria-hidden="true" data-product-image="">
+                          <ProductMedia id={product.spec.mediaIds[0]} compact />
+                        </span>
+                        <div>
+                          <strong
+                            className={styles.sharedTitle}
+                            data-product-title=""
+                          >
+                            {product.spec.title}
+                          </strong>
+                          <small>
+                            {product.spec.options.length
+                              ? `${product.spec.options.length} options`
+                              : 'Product'}
+                          </small>
+                        </div>
                       </div>
+                      <span className={styles.category}>
+                        {product.spec.categoryId &&
+                        session.catalog[product.spec.categoryId]
+                          ? snapshotTitle(
+                              session.catalog[product.spec.categoryId]!,
+                            )
+                          : 'Uncategorized'}
+                      </span>
+                      <span>
+                        {session.deleting.includes(id) ? (
+                          <span className={styles.badge}>Deleting</span>
+                        ) : (
+                          <StatusBadge
+                            state={resource?.readiness ?? 'reconciling'}
+                          />
+                        )}
+                      </span>
+                      <span className={styles.lifecycle}>
+                        {product.spec.lifecycle.state === 'ACTIVE'
+                          ? 'Active'
+                          : 'Retired'}
+                      </span>
                     </div>
-                    <span className={styles.category}>
-                      {product.spec.categoryId &&
-                      session.catalog[product.spec.categoryId]
-                        ? snapshotTitle(
-                            session.catalog[product.spec.categoryId]!,
-                          )
-                        : 'Uncategorized'}
-                    </span>
-                    <span>
-                      {session.deleting.includes(id) ? (
-                        <span className={styles.badge}>Deleting</span>
-                      ) : (
-                        <StatusBadge
-                          state={resource?.readiness ?? 'reconciling'}
-                        />
-                      )}
-                    </span>
-                    <span className={styles.lifecycle}>
-                      {product.spec.lifecycle.state === 'ACTIVE'
-                        ? 'Active'
-                        : 'Retired'}
-                    </span>
                   </Link>
                 )
               })}

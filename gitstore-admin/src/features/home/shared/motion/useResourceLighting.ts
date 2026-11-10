@@ -17,7 +17,10 @@ export function useResourceLighting(mode: 'auto' | 'css' = 'auto') {
     let frame = 0
     let until = 0
     let started = 0
-    let paused = false
+    const pauseReasons = new Set<string>()
+    if (document.documentElement.dataset.productTransition)
+      pauseReasons.add('gitstore:product-motion')
+    let paused = pauseReasons.size > 0
     let visible = true
     let failed = false
     let disposed = false
@@ -173,7 +176,10 @@ export function useResourceLighting(mode: 'auto' | 'css' = 'auto') {
     })
     visibility.observe(page)
     const focusMotion = (event: Event) => {
-      paused = (event as CustomEvent<{ active: boolean }>).detail.active
+      if ((event as CustomEvent<{ active: boolean }>).detail.active)
+        pauseReasons.add(event.type)
+      else pauseReasons.delete(event.type)
+      paused = pauseReasons.size > 0
       if (paused) {
         cancelAnimationFrame(frame)
         frame = 0
@@ -188,6 +194,7 @@ export function useResourceLighting(mode: 'auto' | 'css' = 'auto') {
     media.addEventListener('change', sync)
     document.addEventListener('visibilitychange', tabVisibility)
     window.addEventListener('gitstore:focus-motion', focusMotion)
+    window.addEventListener('gitstore:product-motion', focusMotion)
     window.addEventListener('scroll', geometry, {
       passive: true,
       capture: true,
@@ -208,6 +215,7 @@ export function useResourceLighting(mode: 'auto' | 'css' = 'auto') {
       media.removeEventListener('change', sync)
       document.removeEventListener('visibilitychange', tabVisibility)
       window.removeEventListener('gitstore:focus-motion', focusMotion)
+      window.removeEventListener('gitstore:product-motion', focusMotion)
       window.removeEventListener('scroll', geometry, true)
       window.removeEventListener('resize', geometry)
       page.removeEventListener('pointerover', interaction)

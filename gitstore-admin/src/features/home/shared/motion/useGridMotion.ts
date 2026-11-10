@@ -31,15 +31,21 @@ export function useGridMotion() {
     })
     const media = matchMedia('(prefers-reduced-motion: reduce)')
     media.addEventListener('change', stop)
+    const pauseReasons = new Set<string>()
     const focusMotion = (event: Event) => {
-      paused.current = (event as CustomEvent<{ active: boolean }>).detail.active
+      if ((event as CustomEvent<{ active: boolean }>).detail.active)
+        pauseReasons.add(event.type)
+      else pauseReasons.delete(event.type)
+      paused.current = pauseReasons.size > 0
       stop()
     }
     window.addEventListener('gitstore:focus-motion', focusMotion)
+    window.addEventListener('gitstore:product-motion', focusMotion)
     return () => {
       observer.disconnect()
       media.removeEventListener('change', stop)
       window.removeEventListener('gitstore:focus-motion', focusMotion)
+      window.removeEventListener('gitstore:product-motion', focusMotion)
     }
   }, [])
   const capture = useCallback(() => {

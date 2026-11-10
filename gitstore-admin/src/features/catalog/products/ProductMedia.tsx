@@ -13,9 +13,11 @@ export const demoMedia: Record<string, { src: string; alt: string }> = {
 export function ProductMedia({
   id,
   compact = false,
+  priority = false,
 }: {
   id?: string
   compact?: boolean
+  priority?: boolean
 }) {
   const image = id ? demoMedia[id] : undefined
   return (
@@ -25,7 +27,12 @@ export function ProductMedia({
       data-demo-image={id}
     >
       {image ? (
-        <img src={image.src} alt={image.alt} loading="lazy" />
+        <img
+          src={image.src}
+          alt={image.alt}
+          loading={priority ? 'eager' : 'lazy'}
+          decoding={priority ? 'sync' : 'async'}
+        />
       ) : (
         <span>
           <ImageOff size={compact ? 18 : 28} aria-hidden="true" />

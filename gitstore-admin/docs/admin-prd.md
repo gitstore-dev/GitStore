@@ -463,7 +463,7 @@ condition referring to an older generation cannot establish readiness for new ed
 
 - Hover/focus feedback: 100–160ms; card lift no more than 3px and tilt no more
   than 2 degrees. Editable fields and reading surfaces stay planar.
-- Card-to-inspector transition: 220–320ms, with continuous image/title placement.
+- Card/row-to-Product-detail transition: 300ms, with continuous image/Title placement. The full detail route replaces the earlier inspector-only proposal.
 - Focus Mode: 240–360ms; navigation retracts while content remains anchored.
 - Relationship expansion: 180–300ms after results arrive, with a bounded stagger.
 - Reconciliation sweeps: roughly 2.5–4s, only for visible active work. Static
@@ -689,3 +689,11 @@ Do not save editor JSON, an invented IR vocabulary, interpolation tokens or gene
 Product list controls follow Recent activity: visible inline desktop filters, an aligned tablet row, staged mobile filter sheet and removable applied chips. Demo data remains at the far right of the page heading/toolbar, independent of CRUD actions; context trails are hidden on mobile. Product tags are committed as removable chips on Enter/comma/paste or blur. Products uses **Load more**, driven by endCursor/hasNextPage, without numbered pages or total-page claims; filters reset loaded batches.
 
 Recent activity displays only the number of loaded activities (or loaded matching activities), with Load more for additional entries. Neither the results label, load announcement, nor mobile Apply filters action promises a connection total. Local fixtures still determine whether another demo batch exists; a backend integration must use connection pageInfo/endCursor. ADR-0017 and issues #502/#503 do not supply an exact activity total; operational Events may aggregate occurrences and expire, and are distinct from the merchant change/review timeline.
+
+### Product browsing continuity (implemented with local demo data)
+
+Selecting a Product card or table row expands its surface into the detail page over 300ms. The Title and leading image have separate shared snapshots so row columns and text are not stretched into the detail layout. Destination content fades in as the surface settles; shell chrome remains anchored. Back reverses the transition. The Products return link restores the originating filters/view, loaded cursor batches, scroll and selected-item keyboard focus. This bounded, per-router in-memory navigation state is not demo-data persistence and is invalidated by store reset; reload starts normally.
+
+Only same-store list/detail journeys participate. Create/edit, unrelated destinations, missing Products, direct entry, reduced motion, and unsupported snapshot/type APIs navigate normally. Focus motion interrupts Product snapshots; grid choreography and shared lighting pause during the transition. No HTML-in-Canvas capture or new WebGPU layer is introduced.
+
+Product transition refinement: preserve uninterrupted coverage for the surface, Title and image in both directions. Use complementary crossfades rather than fading the outgoing content to zero before revealing its replacement. Separate supporting content from the moving background so the full detail page is never compressed into a card. Avoid hover-driven position changes at the snapshot-to-DOM handoff.

@@ -1,0 +1,144 @@
+/* Only the selected product participates; ordinary navigation has no snapshots. */
+html[data-product-transition] [data-product-motion='surface'] {
+  view-transition-name: gs-product-surface;
+}
+html[data-product-transition] [data-product-motion='title'] {
+  view-transition-name: gs-product-title;
+}
+html[data-product-transition] [data-product-motion='image'] {
+  view-transition-name: gs-product-image;
+}
+html[data-product-transition]::view-transition {
+  pointer-events: none;
+}
+html[data-product-transition]::view-transition-group(*) {
+  animation-duration: 300ms;
+  animation-timing-function: cubic-bezier(0.2, 0.75, 0.25, 1);
+}
+html[data-product-transition]::view-transition-old(root) {
+  animation: gs-product-out 300ms linear both;
+  mix-blend-mode: plus-lighter;
+}
+html[data-product-transition]::view-transition-new(root) {
+  animation: gs-product-in 300ms linear both;
+  mix-blend-mode: plus-lighter;
+}
+/* Shell chrome stays anchored while the working-page snapshots change. */
+html[data-product-transition] [data-focus-chrome='sidebar'] {
+  view-transition-name: gs-product-sidebar;
+}
+html[data-product-transition] [data-focus-chrome='header'] {
+  view-transition-name: gs-product-header;
+}
+html[data-product-transition] [data-focus-chrome='mobile'] {
+  view-transition-name: gs-product-mobile;
+}
+html[data-product-transition]
+  [data-focus-chrome='inspector']:not([aria-hidden='true']) {
+  view-transition-name: gs-product-inspector;
+}
+html[data-product-transition]::view-transition-group(gs-product-surface) {
+  overflow: clip;
+  border-radius: 5px;
+  /* The snapshots already contain their own shadows. An extra group shadow
+     would disappear abruptly at the handoff to the live page. */
+  background: var(--surface);
+}
+html[data-product-transition]::view-transition-old(gs-product-surface),
+html[data-product-transition]::view-transition-new(gs-product-surface) {
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  object-position: top left;
+  mix-blend-mode: plus-lighter;
+}
+/* This pair now contains only the paint surface, never the page's text. */
+html[data-product-transition]::view-transition-old(gs-product-surface),
+html[data-product-transition]::view-transition-new(gs-product-surface) {
+  animation: none;
+  opacity: 1;
+  mix-blend-mode: normal;
+}
+html[data-product-transition] [data-product-motion='row-content'] {
+  view-transition-name: gs-product-row-content;
+}
+html[data-product-transition] [data-product-motion='detail-content'] {
+  view-transition-name: gs-product-detail-content;
+}
+html[data-product-transition]::view-transition-old(gs-product-row-content),
+html[data-product-transition]::view-transition-old(gs-product-detail-content) {
+  animation: gs-product-out 120ms linear both;
+}
+html[data-product-transition]::view-transition-new(gs-product-row-content),
+html[data-product-transition]::view-transition-new(gs-product-detail-content) {
+  animation: gs-product-in 140ms 160ms linear both;
+}
+html[data-product-transition]::view-transition-group(gs-product-row-content),
+html[data-product-transition]::view-transition-group(
+    gs-product-detail-content
+  ) {
+  z-index: 2;
+}
+/* The title snapshots retain their own typography; only their group travels. */
+html[data-product-transition]::view-transition-old(gs-product-title) {
+  width: auto;
+  height: auto;
+  mix-blend-mode: plus-lighter;
+  animation: gs-product-out 300ms linear both;
+}
+html[data-product-transition]::view-transition-new(gs-product-title) {
+  width: auto;
+  height: auto;
+  mix-blend-mode: plus-lighter;
+  animation: gs-product-in 300ms linear both;
+}
+html[data-product-transition]::view-transition-image-pair(root),
+html[data-product-transition]::view-transition-image-pair(gs-product-surface),
+html[data-product-transition]::view-transition-image-pair(gs-product-title),
+html[data-product-transition]::view-transition-image-pair(gs-product-image) {
+  isolation: isolate;
+}
+@keyframes gs-product-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes gs-product-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-product-transition]::view-transition-group(*) {
+    animation-duration: 0s;
+  }
+}
+html[data-motion='reduced'][data-product-transition]::view-transition-group(*) {
+  animation-duration: 0s;
+}
+
+/* Image and Title exchange vertical order between grid and detail. Keep the
+   travelling Title above the image so it never disappears at their crossing. */
+html[data-product-transition]::view-transition-group(gs-product-surface) {
+  z-index: 1;
+}
+html[data-product-transition]::view-transition-group(gs-product-image) {
+  z-index: 3;
+}
+html[data-product-transition]::view-transition-group(gs-product-title) {
+  z-index: 4;
+}
+
+/* Both images use the same clock and additive alpha: their coverage stays at
+   one throughout the crossfade rather than exposing a blank frame. */
+html[data-product-transition]::view-transition-old(gs-product-image) {
+  animation: gs-product-out 300ms linear both;
+  mix-blend-mode: plus-lighter;
+}
+html[data-product-transition]::view-transition-new(gs-product-image) {
+  animation: gs-product-in 300ms linear both;
+  mix-blend-mode: plus-lighter;
+}

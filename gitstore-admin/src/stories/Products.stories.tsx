@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { RouterProvider } from '@tanstack/react-router'
 import type { Meta, StoryObj } from '@storybook/react-vite'
-import { expect, userEvent, within } from 'storybook/test'
+import { expect, userEvent, within, waitFor } from 'storybook/test'
 import { createAppRouter } from '../app/router'
 import type { NamespaceId } from '../data/demo'
 import type { ProductScenario } from '../features/demo/model'
@@ -128,4 +128,47 @@ export const DiscardConfirmation: Story = {
       }),
     ).toBeVisible()
   },
+}
+
+async function expandAndReturn({
+  canvasElement,
+}: {
+  canvasElement: HTMLElement
+}) {
+  const canvas = within(canvasElement)
+  const item = await canvas.findByRole('link', {
+    name: /^View Kanso Stone Basin(?: |$)/,
+  })
+  await userEvent.click(item)
+  await expect(
+    await canvas.findByRole('heading', { name: 'Kanso Stone Basin', level: 1 }),
+  ).toBeVisible()
+  await waitFor(() =>
+    expect(canvasElement.ownerDocument.documentElement).not.toHaveAttribute(
+      'data-product-transition',
+    ),
+  )
+  await userEvent.click(
+    within(canvas.getByRole('main')).getByRole('link', {
+      name: 'Products',
+    }),
+  )
+  await waitFor(() =>
+    expect(
+      canvas.getByRole('link', { name: /^View Kanso Stone Basin(?: |$)/ }),
+    ).toHaveFocus(),
+  )
+}
+export const TableExpansion: Story = { play: expandAndReturn }
+export const GridExpansionDark: Story = {
+  args: { path: '?view=grid', theme: 'dark' },
+  play: expandAndReturn,
+}
+export const MobileExpansion: Story = {
+  globals: { viewport: { value: 'mobile1', isRotated: false } },
+  play: expandAndReturn,
+}
+export const ReducedMotionExpansion: Story = {
+  args: { motion: 'reduced' },
+  play: expandAndReturn,
 }
