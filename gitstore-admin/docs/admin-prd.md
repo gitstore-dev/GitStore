@@ -10,7 +10,7 @@
 
 **Brand reference:** [`gitstore-assets/branding/concept-v2`](../public/branding/)
 
-> Admin-only branch note: this PRD preserves the broader product plan. Backend source links point to the original GitStore checkout revision; backend services are intentionally absent here. The shell, navigation, layouts, Catalog / Products, and Home / Overview, My work, and Recent activity pages with shared per-store local demo sessions are implemented. The other 75 destinations remain placeholders; mock behavior does not establish backend capabilities.
+> Admin-only branch note: this PRD preserves the broader product plan. Backend source links point to the original GitStore checkout revision; backend services are intentionally absent here. The shell, navigation, layouts, Catalog / Products, and Home / Overview, My work, Recent activity, and Setup guide pages with shared per-store local demo sessions are implemented. The other 74 destinations remain placeholders; mock behavior does not establish backend capabilities.
 
 ## 1. Product direction
 
@@ -672,7 +672,7 @@ Enter/Space toggling. Narrow manager-canvas checks complement static build check
 
 ## Implemented Product catalog demo increment
 
-**Scope:** Catalog / Products is the fourth mock destination. The 79-destination registry retains 75 placeholders, including Home / Setup guide. This is a local demo, not shipped backend authoring.
+**Scope:** Catalog / Products is the fourth mock destination. The 79-destination registry now retains 74 placeholders; Home / Setup guide is the fifth mock destination. This is a local demo, not shipped backend authoring.
 
 **Visual reference:** [Product Canvas (Focus Mode)](https://stitch.google.com/projects/13975495090411370806?node-id=42860fe6eac54d098d5041326457bbfb), in the original GitStore Admin project, supplements the latest GitStore Admin II designs. Reuse its narrow document composition, inline Title, restrained writing controls and lower media/variant sections with the current Split / Return identity. Do not copy its invented publication or telemetry controls.
 
@@ -697,3 +697,13 @@ Selecting a Product card or table row expands its surface into the detail page o
 Only same-store list/detail journeys participate. Create/edit, unrelated destinations, missing Products, direct entry, reduced motion, and unsupported snapshot/type APIs navigate normally. Focus motion interrupts Product snapshots; grid choreography and shared lighting pause during the transition. No HTML-in-Canvas capture or new WebGPU layer is introduced.
 
 Product transition refinement: preserve uninterrupted coverage for the surface, Title and image in both directions. Use complementary crossfades rather than fading the outgoing content to zero before revealing its replacement. Separate supporting content from the moving background so the full detail page is never compressed into a card. Avoid hover-driven position changes at the snapshot-to-DOM handoff.
+
+### Home / Setup guide: implemented local demo
+
+Visual reference: [P04 Home — Setup guide, GitStore Admin II](https://stitch.withgoogle.com/projects/12282348560453912861?node-id=c059af7b8a8f499cb64fe55b826c1886). Retain the vertical checklist/progress composition, adapting it for merchants. Deployment, credentials, telemetry, policy activation, and storefront syncing in the mockup are not implemented claims.
+
+Four ordered steps are independently available: Review store details, Review categories, Add your first product, and Review catalog checks. Three steps record confirmed guidance reviews only; reopening a review reverses that flag. The Product step derives completion from saved non-deleting Products, including retired or processing Products. Buffers do not count. Deleting the last eligible Product reopens the step. Atelier Kyoto starts at 3/4; Studio Berlin starts at 0/4. Overview uses the same definitions and selector, with task links into Setup guide.
+
+Progress lives in the shared per-store memory session, surviving routes/store switches and Focus Mode until reload or confirmed store reset. Reviews do not enter catalog history or My work and do not change resources, settings, categories, readiness, or publication. Completed copy says Checklist complete, not ready for commerce. Repository and future storefront topics remain informational outside progress.
+
+Optional `step` search values are `store-details`, `categories`, `first-product`, and `catalog-checks`; valid values open guidance in the shell inspector and invalid values are ignored. Closing removes the parameter with replacement navigation. Settings/Category links retain canonical placeholder destinations with Page not implemented disclosure; Product creation uses its existing route. Loading, unavailable, and read-only stories are presentation specimens, not network/authentication contracts. Five destinations are mock, 74 remain placeholders, and all 79 remain reachable.

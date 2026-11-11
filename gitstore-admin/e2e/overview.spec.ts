@@ -154,8 +154,11 @@ test('namespace switching and navigation preserve demo changes; reload restores 
     .getByRole('link', { name: 'Open setup guide', exact: true })
     .click()
   await expect(
-    page.getByText('PAGE NOT IMPLEMENTED', { exact: true }),
+    page.getByRole('heading', { name: 'Setup guide', exact: true }),
   ).toBeVisible()
+  await expect(
+    page.getByRole('progressbar', { name: 'Demo setup progress' }),
+  ).toHaveAttribute('value', '0')
   await page.goBack()
   await expect(
     page.getByRole('heading', { name: 'Your catalog starts here' }),

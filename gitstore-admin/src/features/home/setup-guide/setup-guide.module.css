@@ -1,0 +1,303 @@
+.eyebrow {
+  font: 9px/1.6 var(--mono);
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+.progressPanel {
+  padding: 25px 28px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--hover);
+  margin-bottom: 32px;
+}
+.progressTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+.progressTop svg {
+  color: var(--muted);
+}
+.progressTop h2,
+.checklist h2 {
+  font: 500 27px/1.2 var(--display);
+  margin: 5px 0 18px;
+}
+.progressLabel {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.progressLabel strong {
+  font: 12px var(--mono);
+  color: var(--ink);
+}
+.progressPanel progress {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 4px;
+  border: 0;
+  background: var(--line);
+  margin: 12px 0 22px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progressPanel progress::-webkit-progress-bar {
+  background: var(--line);
+}
+.progressPanel progress::-webkit-progress-value {
+  background: var(--ink);
+  transition: width 180ms ease-out;
+}
+.progressPanel progress::-moz-progress-bar {
+  background: var(--ink);
+  transition: width 180ms ease-out;
+}
+.progressNote,
+.completion p {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--muted);
+  margin: 14px 0 0;
+  max-width: 680px;
+}
+.steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 12px;
+}
+.steps li {
+  min-width: 0;
+}
+.stepButton {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  text-align: left;
+  gap: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 23px 26px;
+  color: var(--ink);
+  font-family: var(--body);
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    border-color 140ms ease;
+}
+.stepButton:hover {
+  background: var(--hover);
+}
+.stepButton[data-selected] {
+  border-color: var(--accent);
+}
+.stepButton > svg {
+  flex: none;
+  color: var(--muted);
+  margin-top: 6px;
+}
+.stepIndex {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  background: var(--canvas);
+  border-radius: 4px;
+  flex: none;
+  font: 12px var(--mono);
+  color: var(--muted);
+}
+[data-complete] .stepIndex {
+  color: var(--ink);
+  background: var(--hover);
+}
+.stepBody {
+  display: block;
+  flex: 1;
+  min-width: 0;
+}
+.stepTitle {
+  display: block;
+  font: 500 24px/1.25 var(--display);
+  margin-bottom: 5px;
+}
+.stepDescription {
+  display: block;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.stepStatus {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font: 10px/1.5 var(--mono);
+  color: var(--muted);
+  margin-top: 12px;
+}
+.later {
+  margin-top: 30px;
+  border-top: 1px solid var(--line);
+}
+.later details {
+  border-bottom: 1px solid var(--line-soft);
+  padding: 16px 0;
+  font-size: 12px;
+}
+.later summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.later p {
+  color: var(--muted);
+  line-height: 1.8;
+  max-width: 680px;
+  margin-bottom: 0;
+}
+.inspector {
+  font-size: 12px;
+  line-height: 1.75;
+}
+.inspector h2 {
+  margin-top: 13px;
+  overflow-wrap: anywhere;
+}
+.inspector p,
+.instructions {
+  color: var(--muted);
+}
+.instructions {
+  padding-left: 20px;
+  margin: 22px 0;
+}
+.instructions li + li {
+  margin-top: 14px;
+}
+.status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font: 10px var(--mono);
+  margin: 14px 0 22px;
+}
+.explanation {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--hover);
+}
+.explanation p {
+  margin: 5px 0 0;
+}
+.inspectorActions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
+  margin-top: 22px;
+}
+.primaryLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #101b18;
+  border-radius: 4px;
+  padding: 9px 12px;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 500;
+}
+.textLink,
+.inlineLinks a {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--link);
+  text-underline-offset: 3px;
+  font-size: 12px;
+}
+.planned,
+.note {
+  color: var(--muted);
+  font-size: 11px;
+}
+.dialogActions,
+.inlineLinks {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+.readOnly {
+  border-left: 2px solid var(--accent);
+  padding: 10px 14px;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0 0 20px;
+}
+@media (max-width: 760px) {
+  .progressPanel {
+    padding: 18px;
+    margin-bottom: 24px;
+  }
+  .progressTop .eyebrow,
+  .progressNote {
+    display: none;
+  }
+  .progressTop h2 {
+    font-size: 23px;
+    margin: 0 0 16px;
+  }
+  .progressPanel progress {
+    margin-bottom: 17px;
+  }
+  .stepButton {
+    padding: 18px 15px;
+    gap: 12px;
+  }
+  .stepTitle {
+    font-size: 22px;
+  }
+  .stepIndex {
+    width: 30px;
+    height: 30px;
+  }
+  .stepDescription {
+    font-size: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stepButton {
+    transition: none;
+  }
+  .progressPanel progress::-webkit-progress-value {
+    transition: none;
+  }
+  .progressPanel progress::-moz-progress-bar {
+    transition: none;
+  }
+}
+:global(html[data-motion='reduced']) .stepButton {
+  transition: none;
+}
+:global(html[data-motion='reduced'])
+  .progressPanel
+  progress::-webkit-progress-value {
+  transition: none;
+}
+:global(html[data-motion='reduced'])
+  .progressPanel
+  progress::-moz-progress-bar {
+  transition: none;
+}

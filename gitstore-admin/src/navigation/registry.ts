@@ -214,6 +214,7 @@ export const destinations: readonly NavigationDestination[] = groups
       'home.overview',
       'home.my-work',
       'home.recent-activity',
+      'home.setup-guide',
       'catalog.products',
     ].includes(destination.id)
       ? 'mock'

@@ -2,7 +2,7 @@
 
 ## Boundaries
 
-The shell, shared controls, layouts, navigation, Catalog / Products, and Home / Overview, My work, and Recent activity are implemented. They use deterministic fixtures and shared per-store in-memory sessions; the other 75 destinations remain placeholders. No network transport, authentication, live operational metrics, Apollo cache, GraphQL endpoint, or API mock server is present. Presentation specimens do not enforce authorization.
+The shell, shared controls, layouts, navigation, Catalog / Products, and Home / Overview, My work, Recent activity, and Setup guide are implemented. They use deterministic fixtures and shared per-store in-memory sessions; the other 74 destinations remain placeholders. No network transport, authentication, live operational metrics, Apollo cache, GraphQL endpoint, or API mock server is present. Presentation specimens do not enforce authorization.
 
 The PRD covers future commerce capabilities. Source references in the copied PRD describe the backend's historical planning baseline, which is intentionally absent on this branch. Stitch project GitStore Admin II is visual reference, not production source code.
 
@@ -43,7 +43,7 @@ namespace: authored snapshots, readiness metadata, saved work, unsaved draft buf
 immutable events, deterministic counters, and a reset epoch. All application routes
 and store switches preserve these sessions. Reload restores both stores. Reset demo
 requires confirmation, restores only the active store, clears its buffers and all
-Products and the three Home views, and remounts its shell to dismiss stale inspectors and selections.
+Products and the four Home views, and remounts its shell to dismiss stale inspectors and selections.
 Preferences remain separate and may persist normally; demo data never uses storage.
 
 File-backed Product, ProductVariant, CategoryTaxonomy, and Collection display titles
@@ -150,8 +150,8 @@ heading, concise explanation, and optional relevant action. An empty catalog say
 history says “No activity yet”. These differ from empty tabs and filtered results.
 Hide search/sort/filters when the whole store has no corresponding data. Retain
 work tabs for navigation. Overview omits zero-only summary cards, and zero counts
-elsewhere receive no status halos. Existing setup/catalog links still lead to
-placeholders; no creation flows are introduced.
+elsewhere receive no status halos. Setup guide and Products now open their working
+demo pages; Settings and Categories retain their canonical placeholders.
 
 At mobile widths, omit the repeated store/Home trail and subtitle, use a compact
 heading, and keep demo identification visible. The Demo data disclosure contains
@@ -172,7 +172,7 @@ Enter/Space toggling. Narrow manager-canvas checks complement static build check
 
 ## Product catalog and Markdown boundary
 
-- `src/features/catalog/products`: list selectors/URL state, CRUD reducer, document editor, media ordering, lifecycle/dependency actions, and route pages. Nested routes belong to the existing Products destination; four mock destinations and 75 placeholders remain.
+- `src/features/catalog/products`: list selectors/URL state, CRUD reducer, document editor, media ordering, lifecycle/dependency actions, and route pages. Nested routes belong to the existing Products destination; five mock destinations and 74 placeholders remain.
 - `src/features/demo`: shared session provider, authored snapshots, events, Product buffers, draft buffers, revision counters and owner fixtures. Local category/media IDs are demo lookup keys, not GraphQL input envelopes; introduce an explicit contract adapter with real API integration.
 - `src/components/markdown`: lazy Milkdown Crepe adapter, CommonMark/GFM semantic comparison, explicit source fallback and safe React Markdown preview. Rich AST is disposable. No image uploads, math, AI, collaboration or interpolation. Frontmatter fields are edited outside body.
 
@@ -199,3 +199,9 @@ Product browsing transitions are coordinated by `features/catalog/products/produ
 Product transition continuity: root, Title and image snapshots crossfade on the same 300ms linear clock using isolated additive blending, with no opacity gap. The surface pair is always opaque and contains only background/border paint. Selected row metadata and detail contents have separate unmatched snapshots: they fade at their own final geometry rather than scaling a whole page into a row. Snapshot rules are removed two animation frames after completion. Row hover uses color rather than translation so native hit-testing changes at the end cannot produce a 2px snap. Regression checks sample actual composited opacity each animation frame for grid/table in both directions and verify cleanup geometry.
 
 The leading Product detail image uses eager, synchronous decoding for snapshot presentation. If the source thumbnail is not yet loaded, navigation proceeds without a spatial capture rather than animating a blank image. Transition-only decoration must not add a shadow that disappears at the final DOM handoff.
+
+## Setup guide
+
+`src/features/home/setup-guide` owns typed step definitions, selectors, presentation, and inspector confirmations. The shared demo session owns three review flags and a `setup-review` reducer action; acknowledgements leave catalog/history/work/buffers and revision unchanged. The fourth step is derived from Product presence excluding deleting IDs. Overview imports this shared progress model; its old fixture-only checklist was removed.
+
+Task search parameters are validated by the thin route. Guidance selections use normal history; inspector dismissal removes `step` with replacement navigation and restores trigger focus. Review dialogs live with the selected inspector task, so changing tasks/unmounting removes stale confirmation state. Focus and theme changes preserve the selection and session. Reset restores the selected store's reviews and catalog alongside all other Home state; no browser-storage persistence or API transport is introduced. P04 is visual direction only. Use Setup guide stories for presentation states; read-only/error specimens do not enforce authorization.

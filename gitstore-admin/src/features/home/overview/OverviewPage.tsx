@@ -17,9 +17,8 @@ import {
 import { ActionButton } from '../../../components/controls'
 import { namespaces } from '../../../data/demo'
 import type { NamespaceId } from '../../../data/demo'
-import { destinationById } from '../../../navigation/registry'
 import { usePageInspector } from '../../../shell/PageInspector'
-import { overviewFixture } from './fixtures'
+import { setupProgress } from '../setup-guide/model'
 import { overviewSummary, queueCounts, workQueue, healthMatrix } from './model'
 import type { OverviewScenario, QueueFilter, SortOrder } from './model'
 import { ChoiceSelect } from '../../../components/ChoiceSelect'
@@ -52,10 +51,6 @@ export function OverviewPage({
   scenario?: OverviewScenario
   lighting?: 'auto' | 'css'
 }) {
-  const fixture = useMemo(
-    () => overviewFixture(namespace, scenario),
-    [namespace, scenario],
-  )
   const {
     session,
     resources,
@@ -111,7 +106,8 @@ export function OverviewPage({
   const summary = overviewSummary(state.resources)
   const counts = queueCounts(state.resources)
   const matrix = healthMatrix(state.resources)
-  const completed = fixture.setup.filter((step) => step.complete).length
+  const setup = setupProgress(session)
+  const { completed } = setup
   const presentation = recovered ? 'populated' : scenario
   function reset() {
     requestReset()
@@ -542,23 +538,22 @@ export function OverviewPage({
                 </div>
                 <div className={styles.progressLabel}>
                   <span>
-                    {completed} of {fixture.setup.length} demo steps complete
+                    {completed} of {setup.total} demo steps complete
                   </span>
                   <strong>
-                    {Math.round((completed / fixture.setup.length) * 100)}%
+                    {Math.round((completed / setup.total) * 100)}%
                   </strong>
                 </div>
                 <progress
                   aria-label="Demo setup progress"
                   value={completed}
-                  max={fixture.setup.length}
+                  max={setup.total}
                   className={styles.progress}
                 />
                 <ul className={styles.steps}>
-                  {fixture.setup.map((step) => {
-                    const destination = destinationById(step.destinationId)
+                  {setup.steps.map((step) => {
                     return (
-                      <li key={step.destinationId}>
+                      <li key={step.id}>
                         <span
                           className={
                             step.complete
@@ -576,8 +571,12 @@ export function OverviewPage({
                             <CircleDot size={15} aria-hidden="true" />
                           )}
                         </span>
-                        <Link to={destination.to} params={{ namespace }}>
-                          {step.label}
+                        <Link
+                          to="/w/$namespace/home/setup-guide"
+                          params={{ namespace }}
+                          search={{ step: step.id }}
+                        >
+                          {step.title}
                           <ArrowUpRight size={13} aria-hidden="true" />
                         </Link>
                       </li>
@@ -585,8 +584,8 @@ export function OverviewPage({
                   })}
                 </ul>
                 <p className={styles.disclaimer}>
-                  Example setup progress. Products opens the demo catalog; other
-                  steps open destination placeholders.
+                  Demo checklist progress. Open a step to review its guidance.
+                  Product completion follows your demo catalog.
                 </p>
               </section>
             </div>

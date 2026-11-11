@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import { destinations, destinationHref } from '../src/navigation/registry'
 const home = '/w/atelier-kyoto/home/overview'
-test('all 79 destinations are reachable with four mock destinations and 75 placeholders', async ({
+test('all 79 destinations are reachable with five mock destinations and 74 placeholders', async ({
   page,
 }) => {
   test.setTimeout(120000)
@@ -31,6 +31,10 @@ test('all 79 destinations are reachable with four mock destinations and 75 place
         await expect(
           page.getByRole('tablist', { name: 'My work views' }),
         ).toBeVisible()
+      else if (destination.id === 'home.setup-guide')
+        await expect(
+          page.getByRole('progressbar', { name: 'Demo setup progress' }),
+        ).toHaveAttribute('value', '3')
       else
         await expect(
           page.getByRole('searchbox', {

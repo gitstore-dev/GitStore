@@ -204,55 +204,11 @@ const atelier: OverviewFixture = {
       time: '2 Nov 2026 · 09:00 UTC',
     },
   ],
-  setup: [
-    {
-      label: 'Review store details',
-      complete: true,
-      destinationId: 'settings.store-details',
-    },
-    {
-      label: 'Organize your categories',
-      complete: true,
-      destinationId: 'catalog.categories',
-    },
-    {
-      label: 'Add your first product',
-      complete: true,
-      destinationId: 'catalog.products',
-    },
-    {
-      label: 'Review the setup guide',
-      complete: false,
-      destinationId: 'home.setup-guide',
-    },
-  ],
 }
 const berlin: OverviewFixture = {
   namespace: 'studio-berlin',
   resources: [],
   activity: [],
-  setup: [
-    {
-      label: 'Review store details',
-      complete: false,
-      destinationId: 'settings.store-details',
-    },
-    {
-      label: 'Organize your categories',
-      complete: false,
-      destinationId: 'catalog.categories',
-    },
-    {
-      label: 'Add your first product',
-      complete: false,
-      destinationId: 'catalog.products',
-    },
-    {
-      label: 'Review the setup guide',
-      complete: false,
-      destinationId: 'home.setup-guide',
-    },
-  ],
 }
 export function overviewFixture(
   namespace: NamespaceId,

@@ -1,3 +1,9 @@
+import { initialSetupReviews } from '../home/setup-guide/model'
+import type {
+  SetupReviews,
+  SetupReviewId,
+  SetupScenario,
+} from '../home/setup-guide/model'
 import { reduceProduct } from '../catalog/products/model'
 import type { ProductBuffer, ProductAction } from '../catalog/products/model'
 import type { NamespaceId } from '../../data/demo'
@@ -62,12 +68,14 @@ export interface ActivityEvent {
 export type ProductScenario =
   'unsupported' | 'stale-edit' | 'deleting' | 'deleted'
 export interface DemoSeed {
+  setupScenario?: SetupScenario
   productScenario?: ProductScenario
   overviewScenario?: OverviewScenario
   myWorkScenario?: WorkScenario
   activityScenario?: ActivityScenario
 }
 export interface DemoSession {
+  setupReviews: SetupReviews
   namespace: NamespaceId
   catalog: Readonly<Record<string, ItemSnapshot>>
   resources: readonly DemoResource[]
@@ -82,6 +90,7 @@ export interface DemoSession {
   variantOwners: Readonly<Record<string, string>>
 }
 export type HomeAction =
+  | { type: 'setup-review'; step: SetupReviewId; reviewed: boolean }
   | ProductAction
   | { type: 'resolve'; id: string }
   | { type: 'work'; action: Exclude<WorkAction, { type: 'reset' }> }
@@ -237,6 +246,7 @@ export function createSession(
       }
   }
   let session: DemoSession = {
+    setupReviews: initialSetupReviews(namespace, seed.setupScenario),
     namespace,
     catalog,
     resources: fixture.resources,
@@ -380,6 +390,13 @@ export function sessionReducer(
   session: DemoSession,
   action: HomeAction,
 ): DemoSession {
+  if (action.type === 'setup-review') {
+    if (session.setupReviews[action.step] === action.reviewed) return session
+    return {
+      ...session,
+      setupReviews: { ...session.setupReviews, [action.step]: action.reviewed },
+    }
+  }
   if (
     action.type === 'product-buffer' ||
     action.type === 'product-save' ||

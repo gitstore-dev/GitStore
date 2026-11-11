@@ -60,16 +60,10 @@ export interface DemoActivity {
   time: string
   local?: boolean
 }
-export interface SetupStep {
-  label: string
-  complete: boolean
-  destinationId: string
-}
 export interface OverviewFixture {
   namespace: NamespaceId
   resources: readonly DemoResource[]
   activity: readonly DemoActivity[]
-  setup: readonly SetupStep[]
 }
 export const resourceDestinations: Record<ResourceKind, string> = {
   Product: 'catalog.products',

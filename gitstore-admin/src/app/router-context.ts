@@ -1,3 +1,4 @@
+import type { SetupScenario } from '../features/home/setup-guide/model'
 import type { Theme, MotionPreference } from '../state/preferences'
 import type { LayoutMode } from '../shell/WorkspaceLayout'
 import type { OverviewScenario } from '../features/home/overview/model'
@@ -5,6 +6,7 @@ import type { WorkScenario, WorkTab } from '../features/home/my-work/model'
 import type { ActivityScenario, ProductScenario } from '../features/demo/model'
 import type { ProductNavigation } from '../features/catalog/products/productNavigation'
 export interface AppRouterContext {
+  setupScenario?: SetupScenario
   productNavigation?: ProductNavigation
   preferences?: {
     initialTheme?: Theme

@@ -30,11 +30,12 @@ describe('PRD navigation contract', () => {
       'home.overview',
       'home.my-work',
       'home.recent-activity',
+      'home.setup-guide',
       'catalog.products',
     ])
     expect(
       destinations.filter((d) => d.implementation === 'placeholder'),
-    ).toHaveLength(75)
+    ).toHaveLength(74)
     for (const d of destinations) {
       expect(
         d.to.startsWith(
