@@ -359,7 +359,11 @@ notification provider, and the message reaches the local mail catcher.
   come only from the UserDir.
 - **FR-003**: After authentication and before authorization, the system MUST
   resolve the principal's subject through the UserDir and attach profile type
-  and groups. Anonymous principals are not resolved.
+  and groups. Anonymous principals are not resolved. Enrichment MUST preserve
+  the winning AuthN provider's `Subject`, `Issuer` and `AuthMethod`: OIDC uses
+  its configured username claim with `sub` fallback, while `static-users` uses
+  the authenticated static username. Directory usernames and identity UIDs
+  MUST NOT replace this subject for User bindings or USER namespace identity.
 - **FR-004**: Linking an authenticated subject to a directory identity MUST be
   explicit and configured per AuthN provider (for example by username, by
   the identity's external identifier, or by the identity ID). Mapping MUST
@@ -469,8 +473,12 @@ notification provider, and the message reaches the local mail catcher.
 - **FR-018**: The reference RBAC policy MUST bind `namespace-creator` to
   `system:staff`, not `system:authenticated` or `system:serviceaccounts`.
   Its `when` conditions MUST restrict creation to USER-tier namespaces whose
-  `metadata.name` equals the authenticated staff principal's canonical
-  UserDir username. Customer and ServiceAccount profiles MUST NOT receive the
+  `metadata.name` equals the authenticated staff principal's AuthN-selected
+  subject, not its UserDir username or identity UID. The `subjectUsername`
+  condition MUST still require a valid directory username and a trusted Staff
+  or Customer profile; the reference binding restricts this grant to Staff.
+  Existing immutable USER namespace ownership remains unchanged.
+  Customer and ServiceAccount profiles MUST NOT receive the
   synthesized `system:staff` group. RBAC policy remains the authorization
   authority; this feature MUST NOT add a separate hard-coded Namespace-create
   denial path.

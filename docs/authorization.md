@@ -17,6 +17,17 @@ authentication or grant permissions. For the reference human identity stack,
 pair `oidc-jwt` AuthN with Kratos UserDir; keep workload AuthN configured
 separately and GitStore-authoritative for ServiceAccount UID, keys and enablement.
 
+The winning AuthN provider determines the authenticated subject: `oidc-jwt`
+uses its configured username claim with `sub` fallback; `static-users` uses
+the authenticated static username. Directory enrichment preserves that subject,
+issuer and authentication method regardless of the selected UserDir. Directory
+usernames and identity UIDs do not identify User bindings or USER namespaces.
+The `subjectUsername` condition matches the resource name to the authenticated
+subject while still requiring a valid directory username and a trusted Staff
+or Customer profile. The sample namespace-creator binding grants only Staff
+permission to create their own USER namespace; immutable ownership checks
+remain independent of the authorization provider.
+
 Avoid `static-users` AuthN/UserDir and `none` UserDir in production, including
 mixing static credentials with OIDC/Kratos profiles. These combinations remain
 configuration-valid but do not provide a shared production identity authority.
