@@ -297,8 +297,11 @@ including its cache invalidation; it returns 404 while Kratos is not selected.
 
 The sample namespace-creator policy binds `system:staff` and requires both
 USER tier and `subjectUsername`, which matches the resource name against the
-trusted linked human's canonical directory username. Namespace creation remains
-policy-controlled, not a separate endpoint guard.
+authenticated subject, not the directory username or identity UID. A valid
+directory username and a trusted Staff or Customer profile are still required
+by the condition; the sample binding grants creation only to Staff. Namespace
+creation remains policy-controlled, with immutable USER namespace ownership
+validated independently.
 
 See [Configure local authorization](authorization.md) for Role and ClusterRole
 bindings, namespace scope, subject matching and `resourceNames` examples.

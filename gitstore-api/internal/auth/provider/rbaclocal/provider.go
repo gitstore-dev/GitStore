@@ -273,7 +273,7 @@ func (p *RBACLocalProvider) Authorize(_ context.Context, principal *auth.Princip
 	member := ownerMatches(target, principal)
 	username := auth.ValidExternalUsername(principal.Username) &&
 		(principal.ProfileKind == auth.ProfileStaff || principal.ProfileKind == auth.ProfileCustomer) &&
-		principal.Username == resource.Name
+		principal.Subject == resource.Name
 	var visited [(maxPolicyRules*2 + 63) / 64]uint64 // cluster/namespaced provenance
 	reason := "no matching binding"
 	for word, matches := range candidates {
