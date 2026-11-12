@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNamedEndpointPortsAndLegacyRejection(t *testing.T) {
+func TestNamedEndpointPorts(t *testing.T) {
 	defer clearEnv(t)()
 	setRequiredAuth(t)
 	cfg, err := Load()
@@ -21,9 +21,6 @@ func TestNamedEndpointPortsAndLegacyRejection(t *testing.T) {
 	require.True(t, public.IsValid(), "missing named Storefront port")
 	require.EqualValues(t, 4000, admin.Int())
 	require.EqualValues(t, 4001, public.Int())
-	t.Setenv("GITSTORE_API__PORT", "4800")
-	_, err = Load()
-	require.ErrorContains(t, err, "api.admin_port")
 }
 
 func TestEndpointPortCollisionsFailClosed(t *testing.T) {

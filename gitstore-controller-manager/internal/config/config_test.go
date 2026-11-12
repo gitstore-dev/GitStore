@@ -13,27 +13,6 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
 )
 
-func TestRemovedServiceAccountNamespaceSettingIsRejected(t *testing.T) {
-	for _, source := range []string{"toml", "env"} {
-		t.Run(source, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "config.toml")
-			contents := ""
-			if source == "toml" {
-				contents = "[controller.serviceaccount]\nnamespace = 'legacy'\n"
-			} else {
-				t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE", "legacy")
-			}
-			if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
-				t.Fatal(err)
-			}
-			_, err := config.LoadFrom(path)
-			if err == nil || !strings.Contains(err.Error(), "cluster-scoped") {
-				t.Fatalf("expected actionable namespace removal error, got %v", err)
-			}
-		})
-	}
-}
-
 func TestShippedComposeConfigUsesClusterIdentity(t *testing.T) {
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "enrolled-by-compose")
 	cfg, err := config.LoadFrom("../../../config/config.toml")
@@ -442,17 +421,5 @@ func TestLoad_ServiceAccountCredentialModeRequiresCompleteIdentity(t *testing.T)
 	}
 	if !strings.Contains(err.Error(), "controller.serviceaccount.uid") {
 		t.Errorf("Load() error = %q, want missing UID", err)
-	}
-}
-
-func TestLoad_RejectsStaticTokenOnlyConfiguration(t *testing.T) {
-	t.Setenv("GITSTORE_CONTROLLER__API_TOKEN", "legacy-token")
-
-	_, err := config.Load()
-	if err == nil {
-		t.Fatal("Load() error = nil")
-	}
-	if !strings.Contains(err.Error(), "GITSTORE_CONTROLLER__API_TOKEN") {
-		t.Errorf("Load() error = %q, want obsolete static-token path error", err)
 	}
 }

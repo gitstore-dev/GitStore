@@ -68,3 +68,18 @@ func catalogOperator(op model.LabelSelectorOperator) string {
 		return ""
 	}
 }
+
+func graphQLSelectorOperator(op string) model.LabelSelectorOperator {
+	switch op {
+	case "In":
+		return model.LabelSelectorOperatorIn
+	case "NotIn":
+		return model.LabelSelectorOperatorNotIn
+	case "Exists":
+		return model.LabelSelectorOperatorExists
+	case "DoesNotExist":
+		return model.LabelSelectorOperatorDoesNotExist
+	default:
+		return model.LabelSelectorOperator(op)
+	}
+}

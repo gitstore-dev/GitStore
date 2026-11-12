@@ -36,7 +36,7 @@ metadata:
 spec:
   contentType: image/jpeg
   type: gitstore.dev/media
-  provider: git
+  provider: Git
   source:
     uri: git:///media/product-hero.jpg?ref=main
     checksum:
@@ -82,13 +82,15 @@ referenced by `File`, `MediaAsset`, `DigitalAsset`, or datastore-only records.
 
 ## Object URI References
 
-`spec.provider` selects the storage provider: `git`, `lfs`, `s3`, or `gcs`.
+`spec.provider` selects the storage provider: `Git`, `Lfs`, `S3`, or `Gcs`.
+Legacy `git`, `lfs`, `s3` and `gcs` remain accepted. The GraphQL field is a
+string (not an enum) and retains these established lowercase identifiers.
 It is required and separate from the optional logical category `spec.type`.
 `spec.source` contains the URI, optional checksum, and optional credentials.
 For example, the following snippets belong inside `spec`:
 
 ```yaml
-provider: s3
+provider: S3
 source:
   uri: s3://catalog-assets/products/product-hero.jpg
   checksum:
@@ -97,7 +99,7 @@ source:
 ```
 
 ```yaml
-provider: git
+provider: Git
 source:
   uri: git:///media/product-hero.jpg?ref=main
   checksum:
@@ -106,7 +108,7 @@ source:
 ```
 
 ```yaml
-provider: gcs
+provider: Gcs
 source:
   uri: gs://catalog-assets/products/product-hero.jpg
   checksum:
@@ -117,7 +119,7 @@ source:
 Credentials should be referenced indirectly:
 
 ```yaml
-provider: s3
+provider: S3
 source:
   uri: s3://catalog-assets/products/product-hero.jpg
   credentialsRef:

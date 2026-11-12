@@ -76,7 +76,7 @@ accepted admission clears that condition.
 | `spec.tags`            | []string                  | No per-tag length constraint                                                                                 |
 | `spec.media`           | []MediaDefinition         | Each entry: `fileRef.name` and `fileRef.kind` required                                                       |
 | `spec.options`         | []ProductOptionDefinition | Each entry: `name` required and unique within the list                                                       |
-| `spec.lifecycle.state` | `ACTIVE` or `RETIRED`     | Defaults to `ACTIVE`; `RETIRED` remains private desired state and is excluded from future release candidates |
+| `spec.lifecycle.state` | `Active` or `Retired`     | Defaults to `Active`; `Retired` remains private desired state and is excluded from future release candidates. Legacy `ACTIVE`/`RETIRED` remain accepted; GraphQL uses those uppercase values. |
 
 ### MediaDefinition
 

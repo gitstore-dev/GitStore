@@ -500,6 +500,17 @@ type ChangeOrEmptyNotificationConsumer interface {
 	Empty(ctx context.Context, ackTime gocql.UUID) error
 }
 
+// QueryCompletedNotificationConsumer acknowledges fully consumed query windows,
+// including windows containing changes in other streams of the batch.
+type QueryCompletedNotificationConsumer interface {
+	ChangeConsumer
+
+	// QueryCompleted runs after all changes were consumed and the query closed
+	// successfully. Returning an error stops the reader. Implementations receive
+	// this callback instead of Empty, including for empty windows.
+	QueryCompleted(ctx context.Context, ackTime gocql.UUID) error
+}
+
 // MakeChangeConsumerFactoryFromFunc can be used if your processing is very
 // simple, and don't need to keep any per-stream state or save any progress.
 // The function supplied as an argument will be shared by all consumers created

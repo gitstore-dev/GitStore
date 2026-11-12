@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.1.0-alpha.10](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.9...v0.1.0-alpha.10) (2026-11-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **observability:** record metrics through OpenTelemetry SDKs ([#543](https://github.com/gitstore-dev/GitStore/issues/543))
+
+### Features
+
+* **auth:** implement Kratos user directory and actor administration ([#454](https://github.com/gitstore-dev/GitStore/issues/454)) ([010a4bc](https://github.com/gitstore-dev/GitStore/commit/010a4bcd5c120f8886515cbc8a98fa54166e1a8c))
+* **ownership:** complete resource owner-reference lifecycle ([#379](https://github.com/gitstore-dev/GitStore/issues/379)) ([845c8eb](https://github.com/gitstore-dev/GitStore/commit/845c8ebb93bd8c6e5b0d260ce27a9f1e977df256))
+
+
+### Bug Fixes
+
+* **admission:** finish endpoint-split push convergence acceptance ([#535](https://github.com/gitstore-dev/GitStore/issues/535)) ([fad8bbb](https://github.com/gitstore-dev/GitStore/commit/fad8bbba7ca219217d504dd807a2786d5a49156a))
+* **capacity:** require controller readiness in managed runs ([#541](https://github.com/gitstore-dev/GitStore/issues/541)) ([52791c9](https://github.com/gitstore-dev/GitStore/commit/52791c9444162c073ea67b92759dc757806939a3))
+* salvage Git negotiation and capacity metric correctness ([#544](https://github.com/gitstore-dev/GitStore/issues/544)) ([b5c3f97](https://github.com/gitstore-dev/GitStore/commit/b5c3f97471961c1e9c066f883d18eedea197113b))
+* **scylla:** paginate owner dependents by kind ([#546](https://github.com/gitstore-dev/GitStore/issues/546)) ([e9cbe2d](https://github.com/gitstore-dev/GitStore/commit/e9cbe2d7b22d9ca62be52bde64f20fa891a625a3))
+
+
+### Documentation
+
+* **spec:** correct Status for specs 050 and 070 ([#539](https://github.com/gitstore-dev/GitStore/issues/539)) ([4551c9d](https://github.com/gitstore-dev/GitStore/commit/4551c9d4d2f1a2aee71f2f7449f260e0b4c22723))
+
+
+### Code Refactoring
+
+* **observability:** record metrics through OpenTelemetry SDKs ([#543](https://github.com/gitstore-dev/GitStore/issues/543)) ([1022add](https://github.com/gitstore-dev/GitStore/commit/1022add004df8586ee63c6cef5480d4ad3d11417))
+
 ## [0.1.0-alpha.9](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.8...v0.1.0-alpha.9) (2026-11-05)
 
 

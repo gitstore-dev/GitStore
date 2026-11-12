@@ -139,6 +139,16 @@ catalog-work/
     └── featured.md
 ```
 
+### Enum spelling
+
+Frontmatter enum values use UpperCamelCase; GraphQL enums use
+SCREAMING_SNAKE_CASE. For example, author `Retired`, `Deny` and `NotIn` in Git;
+GraphQL returns `RETIRED`, `DENY` and `NOT_IN`. Existing uppercase/lowercase
+manifest spellings remain accepted through explicit compatibility mappings.
+See the [enum spelling reference](../schemas/gitstore/v1beta1/README.md#enum-spelling)
+for the complete list. Labels, names, option values, URIs and Markdown are
+never case-converted.
+
 ### Product
 
 `Product` is the non-sellable parent descriptor.
@@ -198,10 +208,10 @@ spec:
           amount: "3499.00"
           priority: 0
           strategy:
-            type: fixed
+            type: Fixed
   inventory:
     managed: true
-    policy: deny
+    policy: Deny
 ---
 
 High-memory configuration for large builds, media pipelines, and local AI work.

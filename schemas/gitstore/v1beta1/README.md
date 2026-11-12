@@ -6,6 +6,32 @@ developers** can reliably author valid resource manifests without needing to
 read the Go source — see the top-level `README.md` for GitStore's stated
 target users.
 
+## Enum spelling
+
+Author enum values in **UpperCamelCase**. GraphQL enum values use
+**SCREAMING_SNAKE_CASE**; the API maps explicitly between the two boundaries.
+This does not change resource kinds, type names, field names, labels, option
+values, identifiers, URIs or Markdown.
+
+| Frontmatter field | Canonical authored values | Accepted legacy spellings |
+| --- | --- | --- |
+| Namespace `spec.tier` | `User`, `Organization` | `USER`, `ORGANIZATION` |
+| Repository `spec.visibility`, Namespace `spec.repositoryDefaults.visibility` | `Public`, `Private`, `Internal` | uppercase and lowercase equivalents |
+| Product `spec.lifecycle.state` | `Active`, `Retired` | `ACTIVE`, `RETIRED` |
+| ProductVariant `spec.inventory.policy` | `Deny`, `Backorder` | `deny`, `backorder` |
+| ProductVariant pricing `strategy.type` | `Fixed`, `FixedUnitPrice`, `Percentage`, `Tiered` | `fixed`, `fixedUnitPrice`, `percentage`, `tiered` |
+| ProductVariant pricing `eligibility.operator` | `All`, `Any` | unchanged |
+| Collection selector `operator` | `In`, `NotIn`, `Exists`, `DoesNotExist` | unchanged |
+| File `spec.provider` | `Git`, `Lfs`, `S3`, `Gcs` | `git`, `lfs`, `s3`, `gcs` |
+
+Legacy manifests need not be rewritten. Decoding preserves established internal
+values and semantics; newly encoded frontmatter uses canonical spelling.
+Omitted values and defaults are unchanged, including the empty inventory policy.
+Compatibility is an explicit set of aliases, not arbitrary case folding.
+GraphQL fields that are strings rather than enums (`File.spec.provider` and
+pricing `strategy.type`) retain their established provider/strategy identifiers.
+System-owned status is not authored frontmatter.
+
 ## Scope: frontmatter only
 
 Every GitStore resource is a Markdown file: a YAML frontmatter block

@@ -375,6 +375,43 @@ func TestQuery_HTTPErrorStatusReturnsError(t *testing.T) {
 	}
 }
 
+func TestMutationUnavailableIsDeferredWithoutReplaying(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		status      int
+		body        string
+		unavailable bool
+	}{
+		{"internal-error", http.StatusInternalServerError, `private upstream error`, true},
+		{"bad-gateway", http.StatusBadGateway, `private upstream error`, true},
+		{"service-unavailable", http.StatusServiceUnavailable, `private upstream error`, true},
+		{"gateway-timeout", http.StatusGatewayTimeout, `private upstream error`, true},
+		{"snapshot", http.StatusOK, `{"data":{"result":null},"errors":[{"message":"unavailable","path":["result"],"extensions":{"code":"AUTHORIZATION_UNAVAILABLE","retryable":true}}]}`, true},
+		{"forbidden", http.StatusOK, `{"errors":[{"message":"denied","extensions":{"code":"FORBIDDEN"}}]}`, false},
+		{"nonretryable", http.StatusOK, `{"errors":[{"message":"unavailable","extensions":{"code":"AUTHORIZATION_UNAVAILABLE"}}]}`, false},
+		{"false-retryable", http.StatusOK, `{"errors":[{"message":"unavailable","extensions":{"code":"AUTHORIZATION_UNAVAILABLE","retryable":false}}]}`, false},
+		{"unrelated-retryable", http.StatusOK, `{"errors":[{"message":"conflict","extensions":{"code":"CONFLICT","retryable":true}}]}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				writer.WriteHeader(tc.status)
+				_, _ = writer.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			source := &rejectingCredentials{}
+			client := graphqlclient.New(server.URL, source)
+			err := client.Mutate(t.Context(), `mutation { result: updateResourceStatus { object } }`, nil, &struct{}{})
+			require.Error(t, err)
+			require.Equal(t, tc.unavailable, errors.Is(err, types.ErrAPIUnavailable))
+			require.EqualValues(t, 1, calls.Load(), "an uncertain mutation outcome cannot be replayed")
+			require.Zero(t, source.invalidations.Load())
+			require.NotContains(t, err.Error(), "private upstream error")
+		})
+	}
+}
+
 func TestQuery_RateLimitStatusReturnsRetryableSentinel(t *testing.T) {
 	var connections atomic.Int32
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

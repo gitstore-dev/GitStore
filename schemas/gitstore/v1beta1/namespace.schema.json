@@ -60,8 +60,8 @@
       "properties": {
         "visibility": {
           "type": "string",
-          "enum": ["PUBLIC", "PRIVATE", "INTERNAL"],
-          "description": "Default visibility for new repositories in this namespace."
+          "enum": ["Public", "Private", "Internal", "PUBLIC", "PRIVATE", "INTERNAL", "public", "private", "internal"],
+          "description": "Default visibility for new repositories. Author Public, Private or Internal; uppercase and lowercase legacy spellings remain accepted."
         },
         "defaultBranch": {
           "type": "string",
@@ -97,8 +97,8 @@
         },
         "tier": {
           "type": "string",
-          "enum": ["USER", "ORGANIZATION"],
-          "description": "Required. Determines namespace ownership semantics."
+          "enum": ["User", "Organization", "USER", "ORGANIZATION"],
+          "description": "Required. Determines namespace ownership semantics. Author User or Organization; uppercase legacy spellings remain accepted."
         },
         "repositoryDefaults": { "$ref": "#/$defs/RepositoryDefaults" },
         "pushPolicyDefaults": { "$ref": "#/$defs/PushPolicyDefaults" }
@@ -115,9 +115,9 @@
       },
       "spec": {
         "title": "Acme Store",
-        "tier": "ORGANIZATION",
+        "tier": "Organization",
         "repositoryDefaults": {
-          "visibility": "PRIVATE",
+          "visibility": "Private",
           "defaultBranch": "main"
         },
         "pushPolicyDefaults": {

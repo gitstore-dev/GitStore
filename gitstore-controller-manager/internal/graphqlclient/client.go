@@ -263,6 +263,10 @@ func (c *Client) doAttempt(ctx context.Context, doc string, vars map[string]any,
 			c.recordThrottle()
 			return fmt.Errorf("%w: HTTP status %d", types.ErrRateLimited, resp.StatusCode)
 		}
+		if resp.StatusCode >= http.StatusInternalServerError && resp.StatusCode < 600 {
+			c.recordThrottle()
+			return fmt.Errorf("%w: HTTP status %d", types.ErrAPIUnavailable, resp.StatusCode)
+		}
 		return fmt.Errorf("graphqlclient: unexpected HTTP status %d: %s", resp.StatusCode, body)
 	}
 
@@ -277,6 +281,11 @@ func (c *Client) doAttempt(ctx context.Context, doc string, vars map[string]any,
 				_ = resp.Body.Close()
 				return c.doAttempt(ctx, doc, vars, out, false)
 			}
+		}
+		if gr.Errors[0] != nil && gr.Errors[0].Extensions["code"] == "AUTHORIZATION_UNAVAILABLE" &&
+			gr.Errors[0].Extensions["retryable"] == true {
+			c.recordThrottle()
+			return fmt.Errorf("%w: %w", types.ErrAPIUnavailable, gr.Errors[0])
 		}
 		return gr.Errors[0]
 	}

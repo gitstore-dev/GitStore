@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/mail"
 	"net/url"
-	"os"
 	"reflect"
 	"regexp"
 	"slices"
@@ -421,72 +420,6 @@ type ScyllaConfig struct {
 	AddressTranslator interface{} `mapstructure:"-"`
 }
 
-// legacyKey names a removed or renamed configuration path that must fail
-// startup rather than silently falling back to a default. replacement names
-// the new path (or explains the removal) in operator-facing form.
-type legacyKey struct {
-	path        string
-	replacement string
-}
-
-// legacyKeys lists every TOML path gitstore-api used to own before the
-// config-grouping refactor. Each one is checked independently of viper's
-// final merged state so a renamed/removed key never silently resolves to a
-// default. Ordered most-specific-first so the most helpful match wins.
-var legacyKeys = []legacyKey{
-	{"api.notification.max_body_bytes", "api.notification.max_body_size (IEC size string)"},
-	{"api.auth.kratos.max_response_bytes", "api.auth.kratos.max_response_size (IEC size string)"},
-	{"api.port", "api.admin_port and api.storefront_port"},
-	{"observability.otlp.endpoint", "observability.otlp.uri"},
-	{"git_service.metrics", "observability.otlp.uri (metrics use OTLP; remove the HTTP metrics listener)"},
-	// Shared-file validation must reject the removed identity selector before
-	// Compose starts any services, not only when the controller finally boots.
-	{"controller.serviceaccount.namespace", "controller.serviceaccount.name (ServiceAccounts are cluster-scoped; remove namespace)"},
-	{"api.rate_limit_per_second", "api.rate_limit.per_second"},
-	{"api.rate_limit_burst", "api.rate_limit.burst"},
-	{"git.grpc.uri", "api.git_service.uri"},
-	{"git.grpc", "api.git_service.uri"},
-	{"git.repo.max_file_size", "push_limits.max_file_size (now a shared static ceiling)"},
-	{"git.repo.max_pack_size_bytes", "push_limits.max_pack_size (now a shared static ceiling)"},
-	{"git.repo", "push_limits"},
-	{"git", "api.git_service.uri / push_limits"},
-	{"datastore.backend", "api.datastore.backend"},
-	{"datastore.scylla", "api.datastore.scylla"},
-	{"datastore", "api.datastore"},
-	{"auth.staticusers", "api.auth.static_users"},
-	{"auth.grpc.hmac_secret", "grpc_auth.hmac_secret"},
-	{"auth.grpc", "grpc_auth"},
-	{"auth.jwt.duration", "api.auth.jwt.ttl"},
-	{"auth.rbac.policy_file", "api.auth.rbac_local.policy_file"},
-	{"auth.rbac", "api.auth.rbac_local"},
-	{"auth.oidc", "api.auth.oidc_jwt"},
-	{"auth.jwt", "api.auth.jwt"},
-	{"auth.authn", "api.auth.authn"},
-	{"auth.authz", "api.auth.authz"},
-	{"auth.userdir", "api.auth.userdir"},
-	{"auth.serviceaccount", "api.auth.serviceaccount"},
-	{"auth", "api.auth"},
-	{"watch.namespace.readers_enabled", "removed; the durable watch journal reader is always on"},
-	{"watch.namespace.materializer_enabled", "removed; the CDC materializer is always on"},
-	{"watch.namespace.cdc_retention_seconds", "removed; fixed at 14 days by the baseline schema"},
-	{"watch.namespace.bucket_size", "removed; fixed at 4096, persisted on first init"},
-	{"watch.namespace.journal_retention_seconds", "api.watch.journal.retention"},
-	{"watch.namespace.cdc_confidence_window_millis", "api.watch.journal.cdc.confidence_window"},
-	{"watch.namespace.read_batch_size", "api.watch.journal.read.batch_size"},
-	{"watch.namespace.max_replay_events", "api.watch.journal.read.max_replay_events"},
-	{"watch.namespace.subscriber_buffer", "api.watch.journal.subscriber.buffer"},
-	{"watch.namespace.subscriber_backpressure_millis", "api.watch.journal.subscriber.backpressure"},
-	{"watch.namespace.poll_min_millis", "api.watch.journal.poll.min"},
-	{"watch.namespace.poll_max_millis", "api.watch.journal.poll.max"},
-	{"watch.namespace.bookmark_interval_seconds", "api.watch.journal.bookmark_interval"},
-	{"watch.namespace.lease_ttl_seconds", "api.watch.journal.materializer.lease_ttl"},
-	{"watch.namespace.lease_renew_interval_seconds", "api.watch.journal.materializer.lease_renew_interval"},
-	{"watch.namespace.max_materializer_lag_seconds", "api.watch.journal.materializer.max_lag"},
-	{"watch.namespace", "api.watch.journal"},
-	{"watch", "api.watch"},
-	{"features.namespace_repository_fence", "removed; the namespace repository fence is always enabled"},
-}
-
 // Load reads configuration from all sources (defaults → config file → env vars)
 // and returns the resolved, validated Config.
 func Load() (*Config, error) {
@@ -644,10 +577,6 @@ func load(paths []string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
 	v.AutomaticEnv()
 
-	if err := checkLegacyKeys(v); err != nil {
-		return nil, err
-	}
-
 	var cfg Config
 	decodeHook := mapstructure.ComposeDecodeHookFunc(
 		strictDurationHookFunc,
@@ -685,24 +614,6 @@ func load(paths []string) (*Config, error) {
 	logger.Info("Configuration loaded", zap.Object("config", &cfg))
 
 	return &cfg, nil
-}
-
-// checkLegacyKeys fails startup when any removed/renamed configuration path
-// (TOML or env var) is present, naming its replacement. One file is mounted
-// into every service, so this cannot use a global strict/deny-unknown-fields
-// check — each service checks only the keys it used to own.
-func checkLegacyKeys(v *viper.Viper) error {
-	for _, legacy := range legacyKeys {
-		envName := "GITSTORE_" + strings.ToUpper(strings.ReplaceAll(legacy.path, ".", "__"))
-		_, envPresent := os.LookupEnv(envName)
-		if v.IsSet(legacy.path) || envPresent {
-			return fmt.Errorf(
-				"config: %s (env: %s) is no longer recognised; use %s instead",
-				legacy.path, envName, legacy.replacement,
-			)
-		}
-	}
-	return nil
 }
 
 // validateConfig runs all struct validations and returns a combined error.

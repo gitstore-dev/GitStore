@@ -31,9 +31,6 @@ CONTROLLER_SECRET_KEY ?= privateKey
 # validateServiceAccountSigningKeySource) — it must be supplied via the
 # GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY env var, never via config.toml.
 API_SERVICEACCOUNT_SIGNING_KEY_PATH ?= $(ROOT)/.gitstore/secrets/api-issuer/privateKey
-ifneq ($(origin CONTROLLER_SERVICEACCOUNT_NAMESPACE),undefined)
-$(error CONTROLLER_SERVICEACCOUNT_NAMESPACE is removed; ServiceAccounts are cluster-scoped. Use CONTROLLER_SERVICEACCOUNT_NAME)
-endif
 CONTROLLER_SERVICEACCOUNT_NAME ?= gitstore-controller-manager
 CONTROLLER_SERVICEACCOUNT_KEY_ID ?= controller-key
 # Custom destinations get a sibling record; explicitly empty requests PEM only.

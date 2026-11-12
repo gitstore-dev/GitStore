@@ -199,6 +199,16 @@ This also applies when credentials become unavailable inside an existing retry
 loop. Durable pending work remains available after credentials recover; a
 provider outage must not create thousands of poisoned resource records.
 
+HTTP 5xx responses and GraphQL `AUTHORIZATION_UNAVAILABLE` errors explicitly
+marked `retryable:true` likewise defer reconciliation without consuming the
+quarantine budget, including inside an existing retry loop. The shared HTTP
+client applies a one-second cooldown and does not replay the failed mutation.
+Pending disk-backed work survives controller replacement and is acknowledged
+only after reconciliation succeeds. Check API readiness and upstream service
+health when logs report "API unavailable for reconciliation"; restore the
+dependency rather than clearing checkpoints or manually requeueing poison
+records. A normal authorization denial is not classified as an outage.
+
 Correlate these per-kind metrics by scrape instance and
 `gitstore_controller_process_instance_info` across replacements:
 
@@ -244,8 +254,9 @@ same retryable throttle classification as HTTP queries and mutations.
 The manager defers throttled work without quarantine or a successful-reconcile
 acknowledgement, including throttles encountered during an existing retry.
 Throttle waits occupy bounded worker slots and are canceled at shutdown;
-checkpoint replay keys remain pending until real success. Non-throttle
-failures still use the existing retry/quarantine policy. A delayed requeue
+checkpoint replay keys remain pending until real success. Failures other than
+the shared dependency outages described above still use the existing
+retry/quarantine policy. A delayed requeue
 returned during retry is also preserved instead of being mistaken for success.
 Initial/recovery list retries continue with capped exponential delay until
 success or cancellation, without the backoff library's default 15-minute

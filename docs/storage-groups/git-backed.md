@@ -74,7 +74,7 @@ metadata:
   name: acme-store
 spec:
   title: Acme Store
-  tier: ORGANIZATION
+  tier: Organization
 ---
 
 Primary namespace for Acme commerce resources.
@@ -185,7 +185,7 @@ metadata:
 spec:
   contentType: image/jpeg
   type: gitstore.dev/media
-  provider: git
+  provider: Git
   source:
     uri: git:///media/product-hero.jpg?ref=main
     checksum:

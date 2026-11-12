@@ -14,8 +14,8 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// clearEnv unsets every GITSTORE_ env var touched by this file (new-schema
-// and legacy) and returns a restore function, so a developer's shell or a
+// clearEnv unsets every GITSTORE_ env var touched by this file
+// and returns a restore function, so a developer's shell or a
 // prior test's os.Setenv call never leaks into the next test.
 func clearEnv(t *testing.T) func() {
 	t.Helper()
@@ -47,7 +47,6 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_API__NOTIFICATION__API_KEY",
 		"GITSTORE_API__NOTIFICATION__TIMEOUT",
 		"GITSTORE_API__NOTIFICATION__MAX_CONCURRENT",
-		"GITSTORE_API__NOTIFICATION__MAX_BODY_BYTES",
 		"GITSTORE_API__NOTIFICATION__MAX_BODY_SIZE",
 		"GITSTORE_API__NOTIFICATION__DEVELOPMENT__SMTP_URI",
 		"GITSTORE_API__NOTIFICATION__DEVELOPMENT__SENDER",
@@ -56,7 +55,6 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN",
 		"GITSTORE_API__AUTH__KRATOS__TIMEOUT",
 		"GITSTORE_API__AUTH__KRATOS__MAX_CONCURRENT",
-		"GITSTORE_API__AUTH__KRATOS__MAX_RESPONSE_BYTES",
 		"GITSTORE_API__AUTH__KRATOS__MAX_RESPONSE_SIZE",
 		"GITSTORE_API__AUTH__KRATOS__CACHE_ENTRIES",
 		"GITSTORE_API__AUTH__KRATOS__CACHE_TTL",
@@ -96,18 +94,6 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__LEASE_TTL",
 		"GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__LEASE_RENEW_INTERVAL",
 		"GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__MAX_LAG",
-		// Legacy keys exercised by rejection tests.
-		"GITSTORE_API__RATE_LIMIT_PER_SECOND",
-		"GITSTORE_API__RATE_LIMIT_BURST",
-		"GITSTORE_GIT__GRPC__URI",
-		"GITSTORE_DATASTORE__BACKEND",
-		"GITSTORE_AUTH__STATICUSERS__USERS_FILE",
-		"GITSTORE_AUTH__GRPC__HMAC_SECRET",
-		"GITSTORE_AUTH__JWT__DURATION",
-		"GITSTORE_WATCH__NAMESPACE__READERS_ENABLED",
-		"GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED",
-		"GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE",
-		"GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE",
 	}
 	saved := make(map[string]string, len(keys))
 	for _, k := range keys {
@@ -213,16 +199,6 @@ func TestNotificationBodySizeRequiresBoundedIECUnits(t *testing.T) {
 		cfg, err := Load()
 		require.NoError(t, err)
 		require.Equal(t, int64(128<<10), cfg.Api.Notification.MaxBodyBytes)
-	})
-	t.Run("renamed TOML key", func(t *testing.T) {
-		defer clearEnv(t)()
-		setRequiredAuth(t)
-		path := filepath.Join(t.TempDir(), "config.toml")
-		require.NoError(t, os.WriteFile(path, []byte(
-			"[api.notification]\nmax_body_bytes = 65536\n",
-		), 0600))
-		_, err := LoadFrom(path)
-		require.ErrorContains(t, err, "api.notification.max_body_size")
 	})
 }
 
@@ -354,16 +330,6 @@ func TestKratosResponseSizeRequiresBoundedIECUnits(t *testing.T) {
 			require.Equal(t, test.bytes, cfg.Api.Auth.Kratos.MaxResponseBytes)
 		})
 	}
-	t.Run("renamed TOML key", func(t *testing.T) {
-		defer clearEnv(t)()
-		setRequiredAuth(t)
-		path := filepath.Join(t.TempDir(), "config.toml")
-		require.NoError(t, os.WriteFile(path, []byte(
-			"[api.auth.kratos]\nmax_response_bytes = 1048576\n",
-		), 0600))
-		_, err := LoadFrom(path)
-		require.ErrorContains(t, err, "api.auth.kratos.max_response_size")
-	})
 	t.Run("environment override", func(t *testing.T) {
 		defer clearEnv(t)()
 		setRequiredAuth(t)
@@ -1001,35 +967,6 @@ func TestLoad_DatastoreBackendDefaultsToMemdb(t *testing.T) {
 	assert.Equal(t, "memdb", cfg.Api.Datastore.Backend)
 }
 
-func TestLoad_RejectsLegacyNamespaceRepositoryFenceEnvVar(t *testing.T) {
-	restore := clearEnv(t)
-	defer restore()
-	setRequiredAuth(t)
-	t.Setenv("GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE", "enabled")
-
-	_, err := Load()
-	require.ErrorContains(t, err, "features.namespace_repository_fence")
-	require.ErrorContains(t, err, "always enabled")
-}
-
-func TestLoad_RejectsLegacyNamespaceRepositoryFenceConfigFile(t *testing.T) {
-	restore := clearEnv(t)
-	defer restore()
-	setRequiredAuth(t)
-
-	dir := t.TempDir()
-	content := "[features]\nnamespace_repository_fence = \"auto\"\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0600))
-
-	orig, _ := os.Getwd()
-	require.NoError(t, os.Chdir(dir))
-	defer os.Chdir(orig)
-
-	_, err := Load()
-	require.ErrorContains(t, err, "features.namespace_repository_fence")
-	require.ErrorContains(t, err, "always enabled")
-}
-
 func TestLoad_DatastoreBackendMemdbIsValid(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
@@ -1488,79 +1425,6 @@ func TestLoad_GrpcAuthHmacSecretLoadedAndRedactable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "my-hmac-secret", cfg.GrpcAuth.HmacSecret)
 	assert.Equal(t, "<redacted>", redact(cfg.GrpcAuth.HmacSecret))
-}
-
-// Legacy-key rejection: a representative sample of renamed/removed paths,
-// each confirmed to fail Load() naming its replacement. The full mapping
-// lives in config.go's legacyKeys table; this is not exhaustive.
-
-func TestLoad_RejectsLegacyConfigKeysViaEnv(t *testing.T) {
-	cases := []struct {
-		name            string
-		envVar          string
-		envValue        string
-		wantReplacement string
-	}{
-		{"rate_limit_per_second_renamed", "GITSTORE_API__RATE_LIMIT_PER_SECOND", "10", "api.rate_limit.per_second"},
-		{"kratos_response_size_renamed", "GITSTORE_API__AUTH__KRATOS__MAX_RESPONSE_BYTES", "1048576", "api.auth.kratos.max_response_size"},
-		{"notification_body_size_renamed", "GITSTORE_API__NOTIFICATION__MAX_BODY_BYTES", "65536", "api.notification.max_body_size"},
-		{"git_grpc_uri_renamed", "GITSTORE_GIT__GRPC__URI", "dns:///x:1", "api.git_service.uri"},
-		{"auth_jwt_duration_renamed", "GITSTORE_AUTH__JWT__DURATION", "1h", "api.auth.jwt.ttl"},
-		{"datastore_backend_renamed", "GITSTORE_DATASTORE__BACKEND", "scylla", "api.datastore.backend"},
-		{"auth_grpc_hmac_secret_renamed", "GITSTORE_AUTH__GRPC__HMAC_SECRET", "x", "grpc_auth.hmac_secret"},
-		{"watch_namespace_bucket_size_removed", "GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE", "4096", "fixed at 4096"},
-		{"watch_namespace_readers_enabled_removed", "GITSTORE_WATCH__NAMESPACE__READERS_ENABLED", "false", "always on"},
-		{"serviceaccount_namespace_removed", "GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE", "controllers", "cluster-scoped"},
-		{"empty_serviceaccount_namespace_removed", "GITSTORE_CONTROLLER__SERVICEACCOUNT__NAMESPACE", "", "cluster-scoped"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			restore := clearEnv(t)
-			defer restore()
-			setRequiredAuth(t)
-			t.Setenv(tc.envVar, tc.envValue)
-
-			_, err := Load()
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.wantReplacement)
-		})
-	}
-}
-
-func TestLoad_RejectsLegacyGitGrpcUriConfigFile(t *testing.T) {
-	restore := clearEnv(t)
-	defer restore()
-	setRequiredAuth(t)
-
-	dir := t.TempDir()
-	content := "[git.grpc]\nuri = \"dns:///localhost:1\"\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0600))
-
-	orig, _ := os.Getwd()
-	require.NoError(t, os.Chdir(dir))
-	defer os.Chdir(orig)
-
-	_, err := Load()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "api.git_service.uri")
-}
-
-func TestLoad_RejectsLegacyAuthStaticusersConfigFile(t *testing.T) {
-	restore := clearEnv(t)
-	defer restore()
-	setRequiredAuth(t)
-
-	dir := t.TempDir()
-	content := "[auth.staticusers]\nusers_file = \"legacy-users.yaml\"\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0600))
-
-	orig, _ := os.Getwd()
-	require.NoError(t, os.Chdir(dir))
-	defer os.Chdir(orig)
-
-	_, err := Load()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "api.auth.static_users")
 }
 
 func TestLoad_RejectsNonPositiveServiceAccountTokenTTLs(t *testing.T) {

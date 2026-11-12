@@ -264,6 +264,10 @@ func (c *catalogCDCConsumer) Empty(ctx context.Context, ackTime gocql.UUID) erro
 	}
 	return err
 }
+func (c *catalogCDCConsumer) QueryCompleted(ctx context.Context, ackTime gocql.UUID) error {
+	return c.Empty(ctx, ackTime)
+}
+
 func (c *catalogCDCConsumer) End() error { return c.sequencer.Unregister(c.streamID) }
 
 func catalogCDCRow(rows []*scyllacdc.ChangeRow) *productRow {

@@ -13,7 +13,8 @@
   Controller spans cover individual reconciliation
   attempts, requests and WebSocket dials, not entire watches.
 - `scylla-cdc-go` is a production-source copy of the existing v1.2.1 dependency
-  with a minimal reader-shutdown patch. Preserve its Apache-2.0 license and
+  with minimal reader-shutdown and completed-query notification patches.
+  Preserve its Apache-2.0 license and
   provenance in `NOTICE.md`. Native and container API builds use the same
   local replacement.
 - All three Go modules participate in the existing build/test/lint families

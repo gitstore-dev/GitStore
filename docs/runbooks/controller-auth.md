@@ -50,9 +50,8 @@ administrator-issued bearer token.
 The controller requires `controller.serviceaccount.key_ref`; static controller
 API tokens are not supported.
 
-ServiceAccounts are cluster-scoped. `--namespace`,
-`controller.serviceaccount.namespace`, its environment equivalent and the
-`CONTROLLER_SERVICEACCOUNT_NAMESPACE` Make variable are errors, even when empty.
+ServiceAccounts are cluster-scoped; enroll and configure them by name without
+a namespace.
 Old v1 policies and namespaced token subjects are rejected; there is no
 translation or dual-format period. The shipped Compose enrollment job uses
 name-only enrollment and keeps the existing isolated key/UID mounts.
