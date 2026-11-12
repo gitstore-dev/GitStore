@@ -227,46 +227,8 @@ func validateSource(path string, value any) error {
 }
 
 func sourceError(path, env string) error {
-	if path == "observability.otlp.endpoint" {
-		if env != "" {
-			return fmt.Errorf("obsolete configuration path %s; use GITSTORE_OBSERVABILITY__OTLP__URI", env)
-		}
-		return errors.New("obsolete configuration path observability.otlp.endpoint; use observability.otlp.uri")
-	}
-	if strings.Contains(path, "serviceaccount.namespace") || strings.Contains(path, "serviceaccount_namespace") {
-		return fmt.Errorf("ServiceAccount is cluster-scoped: remove %s %s; configure controller.serviceaccount.name, uid and key_ref", path, env)
-	}
-	replacement := strings.Replace(path, "controller.controller.", "controller.", 1)
-	for old, next := range map[string]string{
-		"api_client.requests_per_second":       "api_client.rate_limit.per_second",
-		"api_client.burst":                     "api_client.rate_limit.burst",
-		"serviceaccount_name":                  "serviceaccount.name",
-		"serviceaccount_uid":                   "serviceaccount.uid",
-		"serviceaccount_key_id":                "serviceaccount.key_id",
-		"serviceaccount_key_ref":               "serviceaccount.key_ref",
-		"serviceaccount_assertion_audience":    "serviceaccount.assertion_audience",
-		"serviceaccount_access_token_audience": "serviceaccount.access_token_audience",
-		"secret_provider_bootstrap":            "secret_providers.bootstrap",
-		"checkpoint_dir":                       "checkpoint.dir",
-		"checkpoint_flush_interval_events":     "checkpoint.flush_interval_events",
-		"default_max_attempts":                 "reconcile.max_attempts",
-		"default_stall_threshold":              "reconcile.stall_threshold",
-		"max_watch_backoff":                    "watch.max_backoff",
-		"resync_interval":                      "watch.resync_interval",
-		"api_token":                            "serviceaccount.key_ref",
-	} {
-		prefix := "controller." + old
-		if replacement == prefix || strings.HasPrefix(replacement, prefix+".") {
-			replacement = "controller." + next + strings.TrimPrefix(replacement, prefix)
-			break
-		}
-	}
 	if env != "" {
 		path = env
-		replacement = "GITSTORE_" + strings.ToUpper(strings.ReplaceAll(replacement, ".", "__"))
-	}
-	if replacement != path {
-		return fmt.Errorf("obsolete configuration path %s; use %s", path, replacement)
 	}
 	return fmt.Errorf("unknown configuration path %s; use canonical nested settings", path)
 }
