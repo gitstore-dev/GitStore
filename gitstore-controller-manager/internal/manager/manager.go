@@ -525,6 +525,10 @@ func (m *Manager) handleTransient(
 		m.requeueUnavailable(ctx, ks, key, max(time.Second, r.BackoffHint), "credentials unavailable for reconciliation", log)
 		return
 	}
+	if errors.Is(r.Err, types.ErrAPIUnavailable) {
+		m.requeueUnavailable(ctx, ks, key, max(time.Second, r.BackoffHint), "API unavailable for reconciliation", log)
+		return
+	}
 	if r.BackoffHint > 0 {
 		select {
 		case <-ctx.Done():
@@ -552,7 +556,8 @@ func (m *Manager) handleTransient(
 		_ = m.logPanic(log, key, inner)
 		switch iv := inner.(type) {
 		case types.TransientFailure:
-			if errors.Is(iv.Err, types.ErrRateLimited) || errors.Is(iv.Err, types.ErrCredentialsUnavailable) || errors.Is(iv.Err, checkpoint.ErrSnapshotInProgress) {
+			if errors.Is(iv.Err, types.ErrRateLimited) || errors.Is(iv.Err, types.ErrCredentialsUnavailable) ||
+				errors.Is(iv.Err, types.ErrAPIUnavailable) || errors.Is(iv.Err, checkpoint.ErrSnapshotInProgress) {
 				return backoff.Permanent(iv.Err)
 			}
 			return iv.Err
@@ -581,6 +586,10 @@ func (m *Manager) handleTransient(
 	}
 	if errors.Is(lastErr, types.ErrCredentialsUnavailable) {
 		m.requeueUnavailable(ctx, ks, key, time.Second, "credentials unavailable for reconciliation", log)
+		return
+	}
+	if errors.Is(lastErr, types.ErrAPIUnavailable) {
+		m.requeueUnavailable(ctx, ks, key, time.Second, "API unavailable for reconciliation", log)
 		return
 	}
 	var deferred *requeueDuringRetryError
