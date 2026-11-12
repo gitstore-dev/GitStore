@@ -13,8 +13,18 @@ on every exit of its stop-monitor goroutine. Upstream stops it only for explicit
 errgroup from finishing.
 
 `reader_shutdown_test.go` reproduces cancellation and consumer-error exits with
-a queued generation and checks explicit stop behavior. No CDC ordering,
-checkpoint, retry, schema or API semantics are changed. The API module uses a
+a queued generation and checks explicit stop behavior.
+
+The optional `QueryCompletedNotificationConsumer` callback in `change.go` and
+`stream_batch.go` acknowledges every successfully consumed and closed query
+window. GitStore's consumers use it to advance quiet streams even when another
+stream in the same batch contains changes. Existing consumers retain their
+original `Empty` behavior. Queries that fail during iteration, closure or change
+consumption do not issue completed-window notifications; an error from a
+completion callback stops the reader. `stream_batch_test.go` covers mixed
+active/quiet streams, empty windows and query/consumer failures.
+
+CDC ordering, retry and schema semantics are preserved. The API module uses a
 local Go module replacement; its container includes this directory. The module
 uses the API's existing Scylla gocql v1.18.0 replacement for consistent standalone
 and workspace tests, rather than upstream's older v1.17.3 replacement.
@@ -24,4 +34,4 @@ An existing upstream `nolint:unused` annotation also has an equivalent
 `lint:ignore U1000` annotation for the root staticcheck command.
 
 Remove the replacement and local copy when an upstream release includes the
-same fix, after rerunning these regressions and live replacement tests.
+same fixes, after rerunning these regressions and live replacement tests.

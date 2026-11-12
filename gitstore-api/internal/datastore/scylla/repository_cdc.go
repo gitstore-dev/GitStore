@@ -130,6 +130,10 @@ func (c *repositoryCDCConsumer) Empty(ctx context.Context, ackTime gocql.UUID) e
 		return c.reporter.MarkProgress(markCtx, scyllacdc.Progress{LastProcessedRecordTime: ackTime})
 	}})
 }
+func (c *repositoryCDCConsumer) QueryCompleted(ctx context.Context, ackTime gocql.UUID) error {
+	return c.Empty(ctx, ackTime)
+}
+
 func (c *repositoryCDCConsumer) End() error { return c.sequencer.Unregister(c.streamID) }
 
 func repositoryCDCPostimage(rows []*scyllacdc.ChangeRow) *datastore.Repository {
