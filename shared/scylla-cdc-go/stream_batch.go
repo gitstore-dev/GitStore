@@ -151,8 +151,12 @@ outer:
 				// all streams to the window end
 				sbr.advanceAllStreamsTo(wnd.end)
 
-				if !hadRows {
-					for _, c := range sbr.consumers {
+				for _, c := range sbr.consumers {
+					if completed, ok := c.(QueryCompletedNotificationConsumer); ok {
+						if err := completed.QueryCompleted(ctx, wnd.end); err != nil {
+							return err
+						}
+					} else if !hadRows {
 						if enc, ok := c.(ChangeOrEmptyNotificationConsumer); ok {
 							err = enc.Empty(ctx, wnd.end)
 						}

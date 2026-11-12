@@ -140,7 +140,10 @@ type namespaceCDCFailedConsumer struct{ err error }
 
 func (c namespaceCDCFailedConsumer) Consume(context.Context, scyllacdc.Change) error { return c.err }
 func (c namespaceCDCFailedConsumer) Empty(context.Context, gocql.UUID) error         { return c.err }
-func (namespaceCDCFailedConsumer) End() error                                        { return nil }
+func (c namespaceCDCFailedConsumer) QueryCompleted(context.Context, gocql.UUID) error {
+	return c.err
+}
+func (namespaceCDCFailedConsumer) End() error { return nil }
 
 type namespaceCDCConsumer struct {
 	sequencer     *namespaceCDCSequencer
@@ -245,6 +248,10 @@ func (c *namespaceCDCConsumer) Empty(ctx context.Context, ackTime gocql.UUID) er
 			return c.reporter.MarkProgress(markCtx, scyllacdc.Progress{LastProcessedRecordTime: ackTime})
 		},
 	})
+}
+
+func (c *namespaceCDCConsumer) QueryCompleted(ctx context.Context, ackTime gocql.UUID) error {
+	return c.Empty(ctx, ackTime)
 }
 
 type namespaceCDCSequenceRequest struct {

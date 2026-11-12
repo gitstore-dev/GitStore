@@ -96,6 +96,13 @@ A transport `complete` without one of these errors is normal only after client
 cancellation or clean server shutdown. Backpressure overflow and any detected
 journal gap terminate explicitly as `WATCH_EXPIRED`.
 
+CDC progress advances for every stream after a query window is fully consumed
+and closed successfully, including quiet streams sharing a query with busy
+streams. This prevents an idle stream from blocking ordered journal publication
+while other streams remain active. Failed queries or errors while consuming
+changes do not acknowledge a completed window. Window progress does not create
+public resource events or change the resume contract.
+
 ## Event payloads
 
 | Type | `name` | `resourceVersion` | `namespace` |

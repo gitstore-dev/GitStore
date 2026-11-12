@@ -78,6 +78,83 @@ func TestNamespaceCDCSequencerOrdersConcurrentStreams(t *testing.T) {
 	assert.ErrorIs(t, <-done, context.Canceled)
 }
 
+func TestCDCConsumersAdmitCompletedWindowsWithoutInventingChanges(t *testing.T) {
+	for _, kind := range []string{"Namespace", "Repository", "Product"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(&sequencerStore{}, watchjournal.MaterializerConfig{}), datastore.ResourceWatchLease{})
+			var consumer scyllacdc.QueryCompletedNotificationConsumer
+			switch kind {
+			case "Namespace":
+				consumer = &namespaceCDCConsumer{sequencer: sequencer, streamID: "quiet"}
+			case "Repository":
+				consumer = &repositoryCDCConsumer{sequencer: sequencer, streamID: "quiet"}
+			default:
+				consumer = &catalogCDCConsumer{sequencer: sequencer, streamID: "quiet", kind: kind}
+			}
+			through := gocql.MinTimeUUID(time.Now().UTC())
+			done := make(chan error, 1)
+			go func() { done <- consumer.QueryCompleted(ctx, through) }()
+			select {
+			case message := <-sequencer.messages:
+				assert.Equal(t, namespaceCDCEnqueue, message.kind)
+				assert.Equal(t, "quiet", message.request.streamID)
+				assert.Equal(t, through, message.request.cdcTime)
+				assert.True(t, message.request.progressOnly)
+				assert.Empty(t, message.request.change)
+				assert.Empty(t, message.request.changes)
+				require.NotNil(t, message.request.markProgress)
+				message.result <- nil
+			case <-ctx.Done():
+				t.Fatal("completed window did not reach the sequencer")
+			}
+			require.NoError(t, <-done)
+		})
+	}
+}
+
+func TestCDCCompletedWindowUnblocksBusyStreamWithoutRetiringQuietStream(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.ResourceWatchLease{})
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"busy", "quiet"})
+	require.NoError(t, sequencer.Register(ctx, "busy"))
+	require.NoError(t, sequencer.Register(ctx, "quiet"))
+	base := time.Now().UTC()
+	progressed := make(chan string, 3)
+	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("busy", "event", gocql.MinTimeUUID(base), progressed)))
+	select {
+	case <-progressed:
+		t.Fatal("busy stream published before the quiet stream completed its window")
+	case <-time.After(2 * namespaceCDCFlushInterval):
+	}
+	through := gocql.MinTimeUUID(base.Add(time.Second))
+	for _, stream := range []string{"busy", "quiet"} {
+		request := sequenceTestRequest(stream, stream+"-window", through, progressed)
+		request.progressOnly = true
+		require.NoError(t, sequencer.Submit(ctx, request))
+	}
+	var checkpoints []string
+	for range 2 {
+		select {
+		case name := <-progressed:
+			checkpoints = append(checkpoints, name)
+		case <-ctx.Done():
+			t.Fatal("completed windows did not unblock materialization")
+		}
+	}
+	assert.ElementsMatch(t, []string{"busy-window", "quiet-window"}, checkpoints, "only the latest checkpoint per stream is needed")
+	store.mu.Lock()
+	assert.Equal(t, []string{"event"}, store.names, "completed windows must not become public events")
+	store.mu.Unlock()
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
 func TestRepositoryCDCUsesSharedSequencerAndJournalEnvelope(t *testing.T) {
 	store := &sequencerStore{}
 	materializer := watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{})
@@ -476,6 +553,9 @@ func TestNamespaceCDCConsumerFactoryReturnsNonNilConsumerAfterSequencerFailure(t
 	require.NoError(t, err)
 	require.NotNil(t, consumer)
 	require.Error(t, consumer.Consume(ctx, scyllacdc.Change{}))
+	completed, ok := consumer.(scyllacdc.QueryCompletedNotificationConsumer)
+	require.True(t, ok)
+	require.Error(t, completed.QueryCompleted(ctx, gocql.MinTimeUUID(base)))
 }
 
 func TestCatalogCDCConsumerFactorySignalsReadyAfterStreamPoll(t *testing.T) {
