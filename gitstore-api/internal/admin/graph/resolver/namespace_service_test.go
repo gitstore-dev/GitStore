@@ -103,12 +103,19 @@ func TestCreateNamespace_commitsManifestToBootstrapRepository(t *testing.T) {
 	writer := &mockGitWriter{}
 	svc := newTestSvc(t, writer)
 	input := createNamespaceInput("committed-namespace", model.NamespaceTierOrganization)
+	visibility := model.RepositoryVisibilityPrivate
+	input.Spec.RepositoryDefaults = &model.NamespaceRepositoryDefaultsInput{Visibility: &visibility}
 	ns, err := svc.CreateNamespace(context.Background(), input, "alice")
 	require.NoError(t, err)
 	require.NotNil(t, ns)
 	require.Len(t, writer.commitCalls, 1)
 	assert.Equal(t, "namespaces/committed-namespace.md", writer.commitCalls[0].Path)
 	assert.Contains(t, string(writer.commitCalls[0].Content), "kind: Namespace")
+	assert.Contains(t, string(writer.commitCalls[0].Content), "tier: Organization")
+	assert.Contains(t, string(writer.commitCalls[0].Content), "visibility: Private")
+	assert.Equal(t, datastore.NamespaceTierOrganization, ns.Tier)
+	assert.Equal(t, model.NamespaceTierOrganization, input.Spec.Tier)
+	assert.Equal(t, model.RepositoryVisibilityPrivate, *input.Spec.RepositoryDefaults.Visibility)
 	assert.NotEmpty(t, writer.commitRepoIDs[0])
 }
 

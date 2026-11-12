@@ -5,15 +5,108 @@ package resolver
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCollectionSelectorManifestGraphQLRoundTrip(t *testing.T) {
+	for _, tt := range []struct {
+		manifest, graphQL string
+		values            string
+	}{
+		{"In", "IN", "values: [USER]"},
+		{"NotIn", "NOT_IN", "values: [USER]"},
+		{"Exists", "EXISTS", ""},
+		{"DoesNotExist", "DOES_NOT_EXIST", ""},
+	} {
+		t.Run(tt.manifest, func(t *testing.T) {
+			content := fmt.Sprintf("---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Collection\nmetadata:\n  name: selected\n  namespace: acme-store\nspec:\n  title: NotIn\n  selector:\n    matchExpressions:\n    - key: tier\n      operator: %s\n      %s\n---\nNotIn USER\n", tt.manifest, tt.values)
+			parsed, body, err := validate.NewParser().ParseResource(strings.NewReader(content))
+			require.NoError(t, err)
+			require.Equal(t, "NotIn USER\n", string(body))
+			raw, err := json.Marshal(parsed.Collection.Spec)
+			require.NoError(t, err)
+			projected := collectionSpecFromJSON(raw)
+			require.Len(t, projected.Selector.MatchExpressions, 1)
+			expression := projected.Selector.MatchExpressions[0]
+			assert.Equal(t, tt.graphQL, expression.Operator.String())
+			encoded, err := json.Marshal(projected)
+			require.NoError(t, err)
+			assert.Contains(t, string(encoded), `"operator":"`+tt.graphQL+`"`)
+			require.NotNil(t, expression.Values, "GraphQL values is a non-null list, even when omitted in Git")
+			assert.Equal(t, "NotIn", projected.Title, "ordinary values must not be converted")
+			reversed := toCatalogLabelSelector(&model.LabelSelectorInput{
+				MatchExpressions: []*model.LabelSelectorRequirementInput{{Key: expression.Key, Operator: expression.Operator, Values: expression.Values}},
+			})
+			assert.Equal(t, tt.manifest, reversed.MatchExpressions[0].Operator)
+			for _, labels := range []map[string]string{{}, {"tier": "USER"}, {"tier": "other"}} {
+				assert.Equal(t, catalog.MatchesLabels(parsed.Collection.Spec.Selector, labels), catalog.MatchesLabels(reversed, labels))
+			}
+		})
+	}
+	for _, raw := range []string{`{"selector":{}}`, `{"selector":{"matchLabels":{"tier":"USER"}}}`} {
+		require.NotNil(t, collectionSpecFromJSON(json.RawMessage(raw)).Selector.MatchExpressions)
+	}
+}
+
+func TestManifestEnumsProjectToGraphQLEnums(t *testing.T) {
+	for _, spelling := range []string{"Private", "PRIVATE", "private"} {
+		repository := &datastore.Repository{Spec: json.RawMessage(fmt.Sprintf(`{"visibility":%q}`, spelling))}
+		projected, err := repositorySpecFromDatastore(repository)
+		require.NoError(t, err)
+		assert.Equal(t, model.RepositoryVisibilityPrivate, projected.Visibility)
+		namespace := &datastore.Namespace{Spec: json.RawMessage(fmt.Sprintf(`{"repositoryDefaults":{"visibility":%q}}`, spelling))}
+		ns, err := namespaceSpecFromDatastore(namespace)
+		require.NoError(t, err)
+		require.NotNil(t, ns.RepositoryDefaults.Visibility)
+		assert.Equal(t, model.RepositoryVisibilityPrivate, *ns.RepositoryDefaults.Visibility)
+	}
+	for _, tt := range []struct {
+		spelling string
+		want     model.ProductLifecycleState
+	}{
+		{"Active", model.ProductLifecycleStateActive},
+		{"ACTIVE", model.ProductLifecycleStateActive},
+		{"Retired", model.ProductLifecycleStateRetired},
+		{"RETIRED", model.ProductLifecycleStateRetired},
+	} {
+		spec := specFromJSON(json.RawMessage(fmt.Sprintf(`{"title":"ACTIVE","lifecycle":{"state":%q}}`, tt.spelling)))
+		assert.Equal(t, tt.want, spec.Lifecycle.State)
+		assert.Equal(t, "ACTIVE", spec.Title)
+	}
+	for _, tt := range []struct {
+		canonical, legacy string
+		want              model.InventoryPolicy
+	}{
+		{"Deny", "deny", model.InventoryPolicyDeny},
+		{"Backorder", "backorder", model.InventoryPolicyBackorder},
+	} {
+		for _, spelling := range []string{tt.canonical, tt.legacy} {
+			spec := variantSpecFromJSON(json.RawMessage(fmt.Sprintf(`{"inventory":{"policy":%q},"pricing":{"priceSet":{"prices":[{"eligibility":{"operator":"Any"}}]}}}`, spelling)))
+			require.NotNil(t, spec.Inventory.Policy)
+			assert.Equal(t, tt.want, *spec.Inventory.Policy)
+			assert.Equal(t, model.EligibilityOperatorAny, spec.Pricing.PriceSet.Prices[0].Eligibility.Operator)
+			status := variantStatusFromJSON(json.RawMessage(fmt.Sprintf(`{"resolved":{"inventory":{"policy":%q}}}`, spelling)))
+			require.NotNil(t, status.Resolved.Inventory.Policy)
+			assert.Equal(t, tt.want, *status.Resolved.Inventory.Policy)
+		}
+	}
+	input := &model.ProductSpecInput{Title: "ACTIVE"}
+	assert.Equal(t, map[string]any{"state": "Active"}, productManifestSpec(input)["lifecycle"])
+	assert.Equal(t, "ACTIVE", productManifestSpec(input)["title"])
+	state := model.ProductLifecycleStateRetired
+	input.Lifecycle = &model.ProductLifecycleSpecInput{State: &state}
+	assert.Equal(t, map[string]any{"state": "Retired"}, productManifestSpec(input)["lifecycle"])
+}
 
 func TestDatastoreNamespaceToGraphQL_DeclarativeProjection(t *testing.T) {
 	ns := namespaceContractFixture("6a053cdd-1f95-47f2-b3bb-d950a52a6758", "acme")

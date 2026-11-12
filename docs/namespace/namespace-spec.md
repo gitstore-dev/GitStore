@@ -16,9 +16,9 @@ metadata:
     gitstore.dev/owner: platform
 spec:
   title: Acme Store
-  tier: ORGANIZATION
+  tier: Organization
   repositoryDefaults:
-    visibility: PRIVATE
+    visibility: Private
     defaultBranch: main
   pushPolicyDefaults:
     maxPackSizeBytes: 52428800
@@ -57,9 +57,9 @@ metadata:
     gitstore.dev/owner: commerce-platform
 spec:
   title: Acme Commerce
-  tier: ORGANIZATION
+  tier: Organization
   repositoryDefaults:
-    visibility: INTERNAL
+    visibility: Internal
     defaultBranch: trunk
   pushPolicyDefaults:
     maxPackSizeBytes: 41943040
@@ -126,9 +126,9 @@ metadata:
   finalizers: []
 spec:
   title: Acme Store
-  tier: ORGANIZATION
+  tier: Organization
   repositoryDefaults:
-    visibility: PRIVATE
+    visibility: Private
     defaultBranch: main
   pushPolicyDefaults: null
 status:

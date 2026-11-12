@@ -84,8 +84,8 @@
         },
         "visibility": {
           "type": "string",
-          "enum": ["PUBLIC", "PRIVATE", "INTERNAL"],
-          "description": "Repository visibility. Today the server always resolves this to \"PRIVATE\" regardless of requested value."
+          "enum": ["Public", "Private", "Internal", "PUBLIC", "PRIVATE", "INTERNAL", "public", "private", "internal"],
+          "description": "Repository visibility. Author Public, Private or Internal; uppercase and lowercase legacy spellings remain accepted."
         },
         "pushPolicy": {
           "$ref": "#/$defs/PushPolicy",
@@ -104,7 +104,7 @@
       },
       "spec": {
         "defaultBranch": "main",
-        "visibility": "PRIVATE",
+        "visibility": "Private",
         "pushPolicy": {
           "maxPackSizeBytes": 536870912,
           "maxFileSizeBytes": 104857600

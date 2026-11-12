@@ -47,21 +47,23 @@ func namespaceBlob(path, name, tier string) *catalogv1.ResourceBlob {
 }
 
 func TestUserNamespacePreflightCannotBypassIdentityWithAdminOrMasters(t *testing.T) {
-	for _, actor := range []string{"alice", "admin"} {
-		for _, masters := range []bool{false, true} {
-			for _, name := range []string{"alice", "bob"} {
-				t.Run(actor+"/"+name+"/"+fmt.Sprint(masters), func(t *testing.T) {
-					srv := newCatalogServer(t, newNamespacePolicyDatastore(t), nil)
-					req := namespaceValidationRequest(nil, []*catalogv1.ResourceBlob{namespaceBlob("namespaces/"+name+".md", name, "USER")})
-					req.Authorization = fixtureValidationEnvelope(req.RepositoryId, req.Trees)
-					req.Authorization.Actor.Subject = actor
-					if masters {
-						req.Authorization.Actor.Groups = []string{"system:authenticated", "system:masters"}
-					}
-					resp, err := srv.Server.ValidateResources(srv.fixtureContext(context.Background(), req), req)
-					require.NoError(t, err)
-					require.Equal(t, actor == name, resp.Accepted)
-				})
+	for _, tier := range []string{"User", "USER"} {
+		for _, actor := range []string{"alice", "admin"} {
+			for _, masters := range []bool{false, true} {
+				for _, name := range []string{"alice", "bob"} {
+					t.Run(tier+"/"+actor+"/"+name+"/"+fmt.Sprint(masters), func(t *testing.T) {
+						srv := newCatalogServer(t, newNamespacePolicyDatastore(t), nil)
+						req := namespaceValidationRequest(nil, []*catalogv1.ResourceBlob{namespaceBlob("namespaces/"+name+".md", name, tier)})
+						req.Authorization = fixtureValidationEnvelope(req.RepositoryId, req.Trees)
+						req.Authorization.Actor.Subject = actor
+						if masters {
+							req.Authorization.Actor.Groups = []string{"system:authenticated", "system:masters"}
+						}
+						resp, err := srv.Server.ValidateResources(srv.fixtureContext(context.Background(), req), req)
+						require.NoError(t, err)
+						require.Equal(t, actor == name, resp.Accepted)
+					})
+				}
 			}
 		}
 	}
