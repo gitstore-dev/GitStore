@@ -91,7 +91,7 @@ Each `PriceTemplate` supports:
 | `currencyCode`                          | string   | ISO 4217 currency code                                    |
 | `amount`                                | string   | Decimal string (e.g. `"9.99"`)                            |
 | `priority`                              | integer  | Lower = higher priority                                   |
-| `strategy.type`                         | string   | One of: `fixed`, `fixedUnitPrice`, `percentage`, `tiered` |
+| `strategy.type`                         | string   | One of: `Fixed`, `FixedUnitPrice`, `Percentage`, `Tiered` |
 | `validFromTime`                         | RFC 3339 | Must be before `validUntilTime` if both set               |
 | `validUntilTime`                        | RFC 3339 | Must be after `validFromTime` if both set                 |
 | `quantity.min`                          | integer  | Must be ≤ `quantity.max`                                  |
@@ -104,7 +104,7 @@ Each `PriceTemplate` supports:
 | Field               | Type    | Constraint                                  |
 |---------------------|---------|---------------------------------------------|
 | `managed`           | boolean | Whether stock is tracked                    |
-| `policy`            | string  | One of: `""` (default), `deny`, `backorder` |
+| `policy`            | string  | One of: `""` (default), `Deny`, `Backorder` |
 | `stockLocationRefs` | list    | References to stock location resources      |
 
 ---
@@ -189,10 +189,10 @@ spec:
         amount: "19.99"
         priority: 0
         strategy:
-          type: fixed
+          type: Fixed
   inventory:
     managed: true
-    policy: deny
+    policy: Deny
   media:
   - fileRef:
       name: product-hero

@@ -396,7 +396,7 @@ func productManifestSpec(spec *model.ProductSpecInput) map[string]any {
 	if spec.Lifecycle != nil && spec.Lifecycle.State != nil {
 		state = string(*spec.Lifecycle.State)
 	}
-	result["lifecycle"] = map[string]any{"state": state}
+	result["lifecycle"] = map[string]any{"state": catalog.ProductLifecycleStateToManifest(state)}
 	return result
 }
 

@@ -107,7 +107,7 @@ roll back, point the new publication at an earlier release.
 | End a campaign on schedule                   | Set `effectiveUntilTime`. Afterwards the target serves **nothing**. It doesn't fall back to the previous publication.                               |
 | Take a target offline now                    | Delete the `Publication` manifest, or shorten `effectiveUntilTime` to now.                                                                          |
 | Remove one product or variant, keep the rest | Write a derived release (`derivedFrom` + `exclude`) and a `Publication` that supersedes the active one.                                             |
-| Stop selling something permanently           | Set `spec.lifecycle.state: RETIRED`. It is left out of every **future** release. It still needs a replacement publication to leave the current one. |
+| Stop selling something permanently           | Set `spec.lifecycle.state: Retired` in Git (`RETIRED` in GraphQL). It is left out of every **future** release. It still needs a replacement publication to leave the current one. |
 | Legal, safety or fraud takedown              | Ask an operator with `publicationSuppression.create` for an emergency suppression. Don't use `RETIRED` for this.                                             |
 
 ```markdown

@@ -8,10 +8,58 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/api/internal/catalog"
+	"github.com/go-playground/validator/v10"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
+
+func TestResourceSchemaEnumSpellingsRoundTrip(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	for _, tt := range []struct {
+		schema, definition, field string
+		newSpec                   func() any
+	}{
+		{"namespace", "NamespaceSpec", "tier", func() any { return &catalog.NamespaceSpec{} }},
+		{"namespace", "RepositoryDefaults", "visibility", func() any { return &catalog.NamespaceRepositoryDefaults{} }},
+		{"repository", "RepositorySpec", "visibility", func() any { return &catalog.RepositorySpec{} }},
+		{"product", "ProductSpec", "state", func() any { return &catalog.ProductLifecycleSpec{} }},
+		{"variant", "InventoryDefinition", "policy", func() any { return &catalog.InventoryDefinition{} }},
+		{"variant", "StrategyDefinition", "type", func() any { return &catalog.StrategyDefinition{} }},
+		{"variant", "EligibilityDefinition", "operator", func() any { return &catalog.EligibilityDefinition{} }},
+		{"collection", "LabelSelectorRequirement", "operator", func() any { return &catalog.LabelSelectorRequirement{Key: "tier"} }},
+		{"file", "FileSpec", "provider", func() any {
+			return &catalog.FileSpec{ContentType: "image/png", Source: catalog.FileSourceDefinition{URI: "git:///hero.png"}}
+		}},
+	} {
+		t.Run(tt.schema+"/"+tt.definition+"/"+tt.field, func(t *testing.T) {
+			raw, err := os.ReadFile(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "schemas", "gitstore", "v1beta1", tt.schema+".schema.json"))
+			require.NoError(t, err)
+			var schema map[string]any
+			require.NoError(t, json.Unmarshal(raw, &schema))
+			fields := objectMap(objectMap(schema["$defs"])[tt.definition]["properties"])
+			if tt.field == "state" {
+				fields = objectMap(fields["lifecycle"]["properties"])
+			}
+			spellings := stringSlice(fields[tt.field]["enum"])
+			require.NotEmpty(t, spellings)
+			for _, spelling := range spellings {
+				spec := tt.newSpec()
+				require.NoError(t, yaml.Unmarshal([]byte(tt.field+": "+strconv.Quote(spelling)), spec))
+				require.NoError(t, validator.New().Struct(spec), "schema-advertised spelling %q must pass runtime validation", spelling)
+				encoded, err := yaml.Marshal(spec)
+				require.NoError(t, err)
+				var authored map[string]any
+				require.NoError(t, yaml.Unmarshal(encoded, &authored))
+				require.Contains(t, spellings, authored[tt.field], "canonical output must remain valid in the authoring schema")
+			}
+		})
+	}
+}
 
 func TestResourceSchemasRejectEmptyRequiredStrings(t *testing.T) {
 	t.Parallel()

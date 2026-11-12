@@ -34,7 +34,7 @@ metadata:
       blockOwnerDeletion: true
 spec:
   defaultBranch: main
-  visibility: PRIVATE
+  visibility: Private
   pushPolicy:
     maxPackSizeBytes: 0
     maxFileSizeBytes: 0
@@ -60,7 +60,7 @@ status:
 | `metadata.resourceVersion`, `metadata.generation` | System                             | Maintained by existing lifecycle operations                   |
 | `spec.defaultBranch`                              | Repository manifest                | Mutable through manifest or `updateRepository`                |
 | `spec.pushPolicy.max*Bytes`                       | Persisted repository limits        | Read-only projection                                          |
-| `spec.visibility`                                 | Reserved contract field            | Always `PRIVATE`                                              |
+| `spec.visibility`                                 | Repository manifest                | `Public`, `Private`, `Internal`; legacy upper/lowercase accepted; GraphQL uses uppercase |
 | Extended push-policy groups                       | Reserved contract fields           | Always null                                                   |
 | `status`                                          | Controller                         | `updateRepositoryStatus`, never author writable               |
 | `status.resolved`                                 | System                             | Derived from repository identity and storage configuration    |

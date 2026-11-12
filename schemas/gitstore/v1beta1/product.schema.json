@@ -129,6 +129,17 @@
           "type": "array",
           "items": { "$ref": "#/$defs/MediaDefinition" }
         },
+        "lifecycle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": ["Active", "Retired", "ACTIVE", "RETIRED"],
+              "description": "Desired lifecycle state; defaults to Active. Uppercase legacy spellings remain accepted."
+            }
+          }
+        },
         "options": {
           "type": "array",
           "items": { "$ref": "#/$defs/ProductOptionDefinition" },

@@ -126,7 +126,7 @@ func namespaceSpecFromDatastore(ns *datastore.Namespace) (*model.NamespaceSpec, 
 			spec.RepositoryDefaults.DefaultBranch = &value
 		}
 		if stored.RepositoryDefaults.Visibility != "" {
-			value := model.RepositoryVisibility(strings.ToUpper(stored.RepositoryDefaults.Visibility))
+			value := model.RepositoryVisibility(catalog.RepositoryVisibilityFromManifest(stored.RepositoryDefaults.Visibility))
 			if !value.IsValid() {
 				return nil, fmt.Errorf("invalid Repository visibility %q", stored.RepositoryDefaults.Visibility)
 			}
@@ -218,10 +218,24 @@ func specFromJSON(raw json.RawMessage) *model.ProductSpec {
 	if len(raw) == 0 {
 		return empty
 	}
-	var s model.ProductSpec
-	if err := json.Unmarshal(raw, &s); err != nil {
+	var stored struct {
+		model.ProductSpec
+		Lifecycle *struct {
+			State string `json:"state"`
+		} `json:"lifecycle"`
+	}
+	if err := json.Unmarshal(raw, &stored); err != nil {
 		converterLogger.Warn("product blob unmarshal error", zap.String("field", "spec"), zap.Error(err))
 		return empty
+	}
+	s := stored.ProductSpec
+	if stored.Lifecycle != nil {
+		state := model.ProductLifecycleState(catalog.ProductLifecycleStateFromManifest(stored.Lifecycle.State))
+		if !state.IsValid() {
+			converterLogger.Warn("invalid product lifecycle state", zap.String("state", stored.Lifecycle.State))
+			return empty
+		}
+		s.Lifecycle = &model.ProductLifecycleSpec{State: state}
 	}
 	if s.Tags == nil {
 		s.Tags = []string{}
@@ -753,15 +767,16 @@ func collectionSpecFromJSON(raw json.RawMessage) *model.CollectionSpec {
 	}
 	spec := &model.CollectionSpec{Title: rs.Title, Media: []*model.MediaDefinition{}}
 	if rs.Selector != nil {
-		sel := &model.LabelSelector{MatchLabels: map[string]any{}}
+		sel := &model.LabelSelector{MatchLabels: map[string]any{}, MatchExpressions: []*model.LabelSelectorRequirement{}}
 		for k, v := range rs.Selector.MatchLabels {
 			sel.MatchLabels[k] = v
 		}
 		for _, e := range rs.Selector.MatchExpressions {
+			values := append([]string{}, e.Values...)
 			sel.MatchExpressions = append(sel.MatchExpressions, &model.LabelSelectorRequirement{
 				Key:      e.Key,
-				Operator: model.LabelSelectorOperator(e.Operator),
-				Values:   e.Values,
+				Operator: graphQLSelectorOperator(e.Operator),
+				Values:   values,
 			})
 		}
 		spec.Selector = sel
@@ -895,6 +910,28 @@ func DatastoreVariantToGraphQL(v *datastore.ProductVariant) *model.ProductVarian
 	return out
 }
 
+func graphQLInventoryPolicy(policy string) model.InventoryPolicy {
+	switch catalog.InventoryPolicyFromManifest(policy) {
+	case "deny":
+		return model.InventoryPolicyDeny
+	case "backorder":
+		return model.InventoryPolicyBackorder
+	default:
+		return model.InventoryPolicy(policy)
+	}
+}
+
+func graphQLEligibilityOperator(operator string) model.EligibilityOperator {
+	switch operator {
+	case "All":
+		return model.EligibilityOperatorAll
+	case "Any":
+		return model.EligibilityOperatorAny
+	default:
+		return model.EligibilityOperator(operator)
+	}
+}
+
 // variantSpecFromJSON deserialises a ProductVariantSpec JSON blob.
 func variantSpecFromJSON(raw json.RawMessage) *model.ProductVariantSpec {
 	empty := &model.ProductVariantSpec{
@@ -984,7 +1021,7 @@ func variantSpecFromJSON(raw json.RawMessage) *model.ProductVariantSpec {
 			StockLocationRefs: []*model.CatalogObjectReference{},
 		}
 		if rs.Inventory.Policy != "" {
-			p := model.InventoryPolicy(strings.ToUpper(rs.Inventory.Policy))
+			p := graphQLInventoryPolicy(rs.Inventory.Policy)
 			inv.Policy = &p
 		}
 		for _, sl := range rs.Inventory.StockLocationRefs {
@@ -1022,7 +1059,7 @@ func variantSpecFromJSON(raw json.RawMessage) *model.ProductVariantSpec {
 			}
 			if p.Eligibility != nil {
 				el := &model.EligibilityDefinition{
-					Operator:    model.EligibilityOperator(strings.ToUpper(p.Eligibility.Operator)),
+					Operator:    graphQLEligibilityOperator(p.Eligibility.Operator),
 					Constraints: []*model.PriceRuleConstraint{},
 				}
 				for _, c := range p.Eligibility.Constraints {
@@ -1127,7 +1164,7 @@ func variantStatusFromJSON(raw json.RawMessage) *model.ProductVariantStatus {
 				Managed:           inv.Managed,
 				AvailableQuantity: int32(inv.AvailableQuantity),
 			}
-			switch inv.Policy {
+			switch catalog.InventoryPolicyFromManifest(inv.Policy) {
 			case "deny":
 				p := model.InventoryPolicyDeny
 				ginv.Policy = &p
@@ -1231,9 +1268,18 @@ func repositorySpecFromDatastore(repository *datastore.Repository) (*model.Repos
 			},
 		}, nil
 	}
-	var spec model.RepositorySpec
-	if err := json.Unmarshal(repository.Spec, &spec); err != nil {
+	var stored struct {
+		DefaultBranch string                      `json:"defaultBranch"`
+		Visibility    string                      `json:"visibility"`
+		PushPolicy    *model.RepositoryPushPolicy `json:"pushPolicy"`
+	}
+	if err := json.Unmarshal(repository.Spec, &stored); err != nil {
 		return nil, fmt.Errorf("unmarshal spec: %w", err)
+	}
+	spec := model.RepositorySpec{
+		DefaultBranch: stored.DefaultBranch,
+		Visibility:    model.RepositoryVisibility(catalog.RepositoryVisibilityFromManifest(stored.Visibility)),
+		PushPolicy:    stored.PushPolicy,
 	}
 	if spec.DefaultBranch == "" {
 		spec.DefaultBranch = repository.DefaultBranch

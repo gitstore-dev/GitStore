@@ -149,8 +149,8 @@
         "type": { "type": "string", "description": "Optional logical file type/category, distinct from contentType." },
         "provider": {
           "type": "string",
-          "enum": ["git", "lfs", "s3", "gcs"],
-          "description": "Required. Storage provider for the source content."
+          "enum": ["Git", "Lfs", "S3", "Gcs", "git", "lfs", "s3", "gcs"],
+          "description": "Required. Author Git, Lfs, S3 or Gcs. Lowercase legacy provider identifiers remain accepted."
         },
         "source": { "$ref": "#/$defs/FileSourceDefinition" },
         "processing": { "$ref": "#/$defs/FileProcessingDefinition" }
@@ -167,7 +167,7 @@
       },
       "spec": {
         "contentType": "image/png",
-        "provider": "git",
+        "provider": "Git",
         "source": {
           "uri": "assets/hero-image.png",
           "checksum": {

@@ -119,8 +119,8 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["fixed", "fixedUnitPrice", "percentage", "tiered"],
-          "description": "Required. One of the recognised pricing strategy types."
+          "enum": ["Fixed", "FixedUnitPrice", "Percentage", "Tiered", "fixed", "fixedUnitPrice", "percentage", "tiered"],
+          "description": "Required. Author Fixed, FixedUnitPrice, Percentage or Tiered; legacy lowercase/lowerCamelCase identifiers remain accepted."
         }
       }
     },
@@ -198,8 +198,8 @@
         "managed": { "type": "boolean", "description": "Whether inventory levels are tracked. When false, the variant is always considered available." },
         "policy": {
           "type": "string",
-          "enum": ["", "deny", "backorder"],
-          "description": "Behaviour when stock is exhausted. Only meaningful when managed is true. Empty string is the default."
+          "enum": ["", "Deny", "Backorder", "deny", "backorder"],
+          "description": "Behaviour when stock is exhausted. Author Deny or Backorder; lowercase legacy spellings remain accepted. Only meaningful when managed is true. Empty string is the default."
         },
         "stockLocationRefs": {
           "type": "array",
@@ -259,14 +259,14 @@
                 "currencyCode": "USD",
                 "amount": "19.99",
                 "priority": 0,
-                "strategy": { "type": "fixed" }
+                "strategy": { "type": "Fixed" }
               }
             ]
           }
         },
         "inventory": {
           "managed": true,
-          "policy": "deny"
+          "policy": "Deny"
         },
         "media": [
           { "fileRef": { "name": "product-hero", "kind": "File", "optional": true } }

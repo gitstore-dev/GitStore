@@ -190,12 +190,14 @@ func TestRepositoryMutationsDelegateOneCommittedManifestToSharedAdmission(t *tes
 	assert.Equal(t, "repositories/catalog.md", writer.commits[0].Path)
 	assert.Contains(t, string(writer.commits[0].Content), "apiVersion: gitstore.dev/v1beta1")
 	assert.Contains(t, string(writer.commits[0].Content), "kind: Repository")
+	assert.Contains(t, string(writer.commits[0].Content), "visibility: Private")
 	require.Len(t, admitter.calls, 1)
 	assert.Equal(t, admission.OperationCreate, admitter.calls[0].Operation)
 
 	_, err = mutation.UpdateRepository(ctx, model.UpdateRepositoryInput{APIVersion: repositoryAPIVersion, Kind: repositoryKind, Metadata: input.Metadata, Spec: input.Spec})
 	require.NoError(t, err)
 	require.Len(t, writer.commits, 2)
+	assert.Contains(t, string(writer.commits[1].Content), "visibility: Private")
 	require.Len(t, admitter.calls, 2)
 	assert.Equal(t, admission.OperationUpdate, admitter.calls[1].Operation)
 }
