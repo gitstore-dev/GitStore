@@ -15,6 +15,7 @@ import (
 	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/stretchr/testify/require"
@@ -73,6 +74,8 @@ func TestManagerThrottlingNeverConsumesPoisonBudgetOrAcknowledgesUnfinishedWork(
 		{"throttle-during-retry", 2, errors.New("temporary error"), types.ResultTransient(types.ErrRateLimited)},
 		{"initial-credential-outage", 1, types.ErrCredentialsUnavailable, types.ResultTransient(types.ErrCredentialsUnavailable)},
 		{"credential-outage-during-retry", 2, errors.New("temporary error"), types.ResultTransient(types.ErrCredentialsUnavailable)},
+		{"initial-api-outage", 1, types.ErrAPIUnavailable, types.ResultTransient(types.ErrAPIUnavailable)},
+		{"api-outage-during-retry", 2, errors.New("temporary error"), types.ResultTransient(types.ErrAPIUnavailable)},
 		{"requeue-during-retry", 2, errors.New("temporary error"), types.ResultAfter(20 * time.Millisecond)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -114,6 +117,110 @@ func TestManagerThrottlingNeverConsumesPoisonBudgetOrAcknowledgesUnfinishedWork(
 			case <-done:
 			case <-time.After(time.Second):
 				t.Fatal("manager shutdown did not cancel bounded work")
+			}
+		})
+	}
+}
+
+func TestDiskManagerAPIOutageSurvivesReplicaReplacementWithoutPoison(t *testing.T) {
+	for _, duringRetry := range []bool{false, true} {
+		name := "initial"
+		if duringRetry {
+			name = "during-retry"
+		}
+		t.Run(name, func(t *testing.T) {
+			key := types.WorkItemKey{Kind: "Widget", Namespace: "shop", Name: "pending"}
+			var ready atomic.Bool
+			var calls [2]atomic.Int32
+			dirs := []string{t.TempDir(), t.TempDir()}
+			stores := make([]*checkpoint.DiskStore, 2)
+			cancels := make([]context.CancelFunc, 2)
+			done := make([]chan error, 2)
+			stop := func(replica int) {
+				if cancels[replica] != nil {
+					cancels[replica]()
+					select {
+					case err := <-done[replica]:
+						require.NoError(t, err)
+					case <-time.After(3 * time.Second):
+						t.Fatal("outage prevented bounded shutdown")
+					}
+					cancels[replica] = nil
+				}
+			}
+			t.Cleanup(func() {
+				for replica, store := range stores {
+					stop(replica)
+					if store != nil {
+						require.NoError(t, store.Close())
+					}
+				}
+			})
+			start := func(replica int) {
+				maxAttempts := 1
+				if duringRetry {
+					maxAttempts = 2
+				}
+				reconciler := diskReconcileFunc(func(context.Context, types.WorkItemKey) types.ReconcileResult {
+					n := calls[replica].Add(1)
+					if !ready.Load() {
+						if duringRetry && n == 1 {
+							return types.ResultTransient(errors.New("temporary resource error"))
+						}
+						return types.ResultTransient(types.ErrAPIUnavailable)
+					}
+					return types.ResultOK()
+				})
+				mgr := manager.New()
+				require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+					Kind: key.Kind, Cache: newSyncedCache(), Disk: stores[replica], Reconciler: reconciler,
+					WorkerCount: 1, MaxAttempts: maxAttempts, StallThreshold: time.Minute,
+					InitialInterval: time.Millisecond, MaxInterval: time.Millisecond,
+				}))
+				ctx, cancel := context.WithCancel(t.Context())
+				cancels[replica] = cancel
+				result := make(chan error, 1)
+				done[replica] = result
+				go func() { result <- mgr.Start(ctx) }()
+			}
+			for replica := range stores {
+				var err error
+				stores[replica], err = checkpoint.OpenDiskStore(dirs[replica], key.Kind)
+				require.NoError(t, err)
+				generation, err := stores[replica].BeginSnapshot(t.Context())
+				require.NoError(t, err)
+				require.NoError(t, stores[replica].PutSnapshotPage(t.Context(), generation, []checkpoint.DiskItem{
+					{Key: key, Version: "1", Value: []byte(`{"ready":true}`)},
+				}))
+				require.NoError(t, stores[replica].FinishSnapshot(t.Context(), generation, "snapshot"))
+				start(replica)
+			}
+			require.Eventually(t, func() bool {
+				return calls[0].Load() >= 3 && calls[1].Load() >= 3
+			}, 5*time.Second, 5*time.Millisecond, "outage must outlast the poison retry budget")
+			for _, store := range stores {
+				require.EqualValues(t, 1, store.Counts().Pending, "unfinished work must not be acknowledged")
+				require.Zero(t, store.Counts().Poison)
+			}
+			stop(0)
+			schedule, err := stores[0].WorkSchedule(t.Context(), key)
+			require.NoError(t, err)
+			require.Positive(t, schedule.Due)
+			require.True(t, schedule.QuarantinedAt.IsZero())
+			require.NoError(t, stores[0].Close())
+			stores[0], err = checkpoint.OpenDiskStore(dirs[0], key.Kind)
+			require.NoError(t, err)
+			before := calls[0].Load()
+			start(0)
+			require.Eventually(t, func() bool { return calls[0].Load() > before }, 3*time.Second, 5*time.Millisecond)
+			require.EqualValues(t, 1, stores[0].Counts().Pending)
+			require.Zero(t, stores[0].Counts().Poison)
+			ready.Store(true)
+			require.Eventually(t, func() bool {
+				return stores[0].Counts().Pending == 0 && stores[1].Counts().Pending == 0
+			}, 3*time.Second, 5*time.Millisecond)
+			for _, store := range stores {
+				require.Zero(t, store.Counts().Poison)
 			}
 		})
 	}
