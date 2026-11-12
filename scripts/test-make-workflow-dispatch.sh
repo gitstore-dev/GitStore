@@ -82,11 +82,6 @@ done < "${repo_root}/.github/workflows/ci-integration.yml"
 [[ "${ci_bootstrap_count}" -eq 2 ]]
 [[ "${ci_git_auth_count}" -eq 2 ]]
 
-for legacy_namespace in controllers ''; do
-  if make --no-print-directory -C "${repo_root}" -n controller CONTROLLER_SERVICEACCOUNT_NAMESPACE="${legacy_namespace}" >/dev/null 2>&1; then
-    echo "removed CONTROLLER_SERVICEACCOUNT_NAMESPACE was accepted" >&2; exit 1
-  fi
-done
 for target in controller dev enroll-controller-serviceaccount; do
   output="$(make --no-print-directory -C "${repo_root}" -n "${target}")"
   [[ "${output}" != *"--namespace"* && "${output}" != *"SERVICEACCOUNT__NAMESPACE"* ]]

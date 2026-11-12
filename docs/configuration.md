@@ -8,6 +8,9 @@ your deployment platform. Configuration is grouped by owning service:
 and `[controller]` by `gitstore-controller-manager`. `[log]`, `[grpc_auth]`,
 and `[push_limits]` are shared by the services that use them.
 
+Only the documented configuration keys are supported. Alpha configuration
+changes do not provide compatibility aliases or migration mappings.
+
 ## Telemetry export
 
 Telemetry is opt-in for the three core services. Set
