@@ -1323,13 +1323,13 @@ func (s *DiskStore) ProcessFanout(ctx context.Context) (bool, error) {
 	if staging != 0 {
 		return false, ErrSnapshotInProgress
 	}
-	active, err := s.number("active")
-	if err != nil || active == 0 {
-		return false, errors.Join(err, errors.New("checkpoint: no active disk snapshot"))
-	}
 	tasks, err := s.scan(ctx, []byte("fanout/"), "", 1)
 	if err != nil || len(tasks) == 0 {
 		return false, err
+	}
+	active, err := s.number("active")
+	if err != nil || active == 0 {
+		return false, errors.Join(err, errors.New("checkpoint: no active disk snapshot"))
 	}
 	index, err := base64.RawURLEncoding.DecodeString(string(tasks[0][0]))
 	if err != nil {

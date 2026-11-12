@@ -203,6 +203,47 @@ func TestDiskStoreSchedulingCountsAndQuarantineSurviveReplacement(t *testing.T) 
 	require.False(t, ack, "an old generation completion cleared a rescheduled obligation")
 }
 
+func TestDiskStoreFanoutBeforeFirstSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		queued  bool
+		staging bool
+	}{
+		{name: "idle"},
+		{name: "queued", queued: true},
+		{name: "staging", staging: true},
+		{name: "queued while staging", queued: true, staging: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := checkpoint.OpenDiskStore(t.TempDir(), "Product")
+			require.NoError(t, err)
+			defer s.Close()
+			if tc.queued {
+				require.NoError(t, s.RequestFanout(t.Context(), "*"))
+			}
+			if tc.staging {
+				_, err := s.BeginSnapshot(t.Context())
+				require.NoError(t, err)
+			}
+
+			progressed, err := s.ProcessFanout(t.Context())
+			require.False(t, progressed)
+			switch {
+			case tc.staging:
+				require.ErrorIs(t, err, checkpoint.ErrSnapshotInProgress)
+			case tc.queued:
+				require.ErrorContains(t, err, "no active disk snapshot")
+			default:
+				require.NoError(t, err)
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel()
+				_, err = s.ProcessFanout(ctx)
+				require.ErrorIs(t, err, context.Canceled)
+			}
+		})
+	}
+}
+
 func TestDiskStoreFanoutRestartsItsCursorAfterGenerationReplacement(t *testing.T) {
 	s, err := checkpoint.OpenDiskStore(t.TempDir(), "Product")
 	require.NoError(t, err)
