@@ -13,9 +13,9 @@ test('context selection stays checked, fits inside the sidebar, and removes redu
   await expect(
     sidebar.getByText('YOUR WORKSPACE', { exact: true }),
   ).toHaveCount(0)
-  await expect(page.getByRole('navigation', { name: 'Breadcrumb' })).toHaveText(
-    'HomeOverview',
-  )
+  await expect(
+    page.getByRole('navigation', { name: 'Breadcrumb' }).locator('ol'),
+  ).toHaveText('HomeOverview')
   const picker = page.getByRole('button', { name: /Workspace context/ })
   for (const name of [
     'Atelier Kyoto',

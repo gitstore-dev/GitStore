@@ -51,6 +51,10 @@ export const SpatialKeyboard: Story = {
     await userEvent.click(
       screen.getByRole('button', { name: /^Ceramics View category guidance/ }),
     )
+    const inspect = screen.queryByRole('button', {
+      name: 'Inspect selected category',
+    })
+    if (inspect) await userEvent.click(inspect)
     await expect(
       await within(canvasElement.ownerDocument.body).findByRole('heading', {
         name: /^Ceramics$/,

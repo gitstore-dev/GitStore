@@ -160,36 +160,29 @@ export function ProductPage({
         </Link>
         <DemoControls onReset={reset} />
       </div>
-      <div className={styles.pageActions}>
-        <div className={styles.actions}>
-          {editing && !missing && !deleting ? (
-            <>
-              <ActionButton
-                onPress={() => (dirty ? setConfirmation('cancel') : leave())}
-              >
-                Cancel
-              </ActionButton>
-              <ActionButton
-                variant="primary"
-                onPress={save}
-                isDisabled={stale || (productId !== undefined && !dirty)}
-              >
-                <Save size={14} />
-                {productId ? 'Save demo changes' : 'Create demo product'}
-              </ActionButton>
-            </>
-          ) : current && !deleting ? (
-            <Link
-              className={styles.primaryLink}
-              to="/w/$namespace/catalog/products/$productId/edit"
-              params={{ namespace, productId: productId! }}
-            >
-              <Pencil size={14} />
-              Edit product
-            </Link>
-          ) : null}
+      {editing && (
+        <div className={styles.pageActions}>
+          <div className={styles.actions}>
+            {editing && !missing && !deleting ? (
+              <>
+                <ActionButton
+                  onPress={() => (dirty ? setConfirmation('cancel') : leave())}
+                >
+                  Cancel
+                </ActionButton>
+                <ActionButton
+                  variant="primary"
+                  onPress={save}
+                  isDisabled={stale || (productId !== undefined && !dirty)}
+                >
+                  <Save size={14} />
+                  {productId ? 'Save demo changes' : 'Create demo product'}
+                </ActionButton>
+              </>
+            ) : null}
+          </div>
         </div>
-      </div>
+      )}
       {missing ? (
         <EmptyState
           title="Product unavailable"
@@ -209,6 +202,17 @@ export function ProductPage({
           data-product-epoch={session.epoch}
         >
           <div data-product-content="detail">
+            {!editing && current && !deleting && (
+              <Link
+                className={styles.editIcon}
+                aria-label="Edit product"
+                title="Edit product"
+                to="/w/$namespace/catalog/products/$productId/edit"
+                params={{ namespace, productId: productId! }}
+              >
+                <Pencil size={17} aria-hidden="true" />
+              </Link>
+            )}
             <PageContext
               namespace={namespaces.find((n) => n.id === namespace)!.name}
               section={editing ? editTitle : 'Product'}
@@ -298,13 +302,16 @@ export function ProductPage({
                       {deleting
                         ? 'Deleting'
                         : current.spec.lifecycle.state === 'ACTIVE'
-                          ? 'Active'
-                          : 'Retired'}
+                          ? 'Lifecycle · Active'
+                          : 'Lifecycle · Retired'}
                     </span>
                     {!deleting && (
-                      <StatusBadge
-                        state={resource?.readiness ?? 'reconciling'}
-                      />
+                      <span>
+                        Checks ·{' '}
+                        <StatusBadge
+                          state={resource?.readiness ?? 'reconciling'}
+                        />
+                      </span>
                     )}
                   </div>
                   <p className={styles.muted}>{resource?.diagnostic}</p>

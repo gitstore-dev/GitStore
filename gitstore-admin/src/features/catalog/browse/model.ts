@@ -120,7 +120,7 @@ export interface CatalogSearch {
   q: string
   status: string
   related: string
-  sort: 'title' | 'priority'
+  sort: 'title' | 'updated'
   view: 'table' | 'grid' | 'tree' | 'spatial'
   selected?: string
 }
@@ -143,7 +143,7 @@ export function catalogSearch(
       ? String(raw.status)
       : 'all',
     related: typeof raw.related === 'string' ? raw.related : 'all',
-    sort: raw.sort === 'priority' ? 'priority' : 'title',
+    sort: raw.sort === 'title' ? 'title' : 'updated',
     view: allowed.includes(String(raw.view))
       ? (raw.view as CatalogSearch['view'])
       : domain === 'categories'
@@ -190,13 +190,6 @@ export function filteredEntries(
   domain: CatalogDomain,
   search: CatalogSearch,
 ) {
-  const priorities = {
-    failed: 0,
-    blocked: 1,
-    stale: 2,
-    reconciling: 3,
-    ready: 4,
-  }
   return catalogEntries(session, domain)
     .filter((item) => {
       const query =
@@ -241,8 +234,12 @@ export function filteredEntries(
     })
     .toSorted(
       (a, b) =>
-        (search.sort === 'priority'
-          ? priorities[a.status] - priorities[b.status]
+        (search.sort === 'updated'
+          ? (
+              session.productUpdated[b.id] ?? '2026-11-02T11:00:00Z'
+            ).localeCompare(
+              session.productUpdated[a.id] ?? '2026-11-02T11:00:00Z',
+            )
           : 0) ||
         a.title.localeCompare(b.title) ||
         a.id.localeCompare(b.id),
@@ -315,3 +312,21 @@ export const catalogDetailPaths = {
   categories: '/w/$namespace/catalog/categories/$itemId',
   collections: '/w/$namespace/catalog/collections/$itemId',
 } as const
+
+export function categoryPath(
+  session: Pick<DemoSession, 'catalog'>,
+  id: string,
+): string[] {
+  const path: string[] = []
+  const seen = new Set<string>()
+  let next: string | null = id
+  while (next && !seen.has(next)) {
+    const item: DemoSession['catalog'][string] | undefined =
+      session.catalog[next]
+    if (item?.kind !== 'CategoryTaxonomy') break
+    seen.add(next)
+    path.unshift(next)
+    next = item.spec.parentId
+  }
+  return path
+}

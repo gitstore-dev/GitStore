@@ -21,6 +21,20 @@ export function HomePage({
     </div>
   )
 }
+export function PageContextTrail({
+  children,
+  className = '',
+}: {
+  children: ReactNode
+  className?: string
+}) {
+  return (
+    <div className={`${styles.kicker} ${className}`}>
+      <span className={styles.headingMark} aria-hidden="true" />
+      {children}
+    </div>
+  )
+}
 export function PageContext({
   namespace,
   section = 'Home',
@@ -29,13 +43,14 @@ export function PageContext({
   section?: string
 }) {
   return (
-    <div className={styles.kicker} data-page-context="">
-      <span className={styles.headingMark} aria-hidden="true" />
-      <span>{namespace}</span>
-      <span className={styles.headingSlash} aria-hidden="true">
-        /
-      </span>
-      <span>{section}</span>
+    <div data-page-context="">
+      <PageContextTrail>
+        <span>{namespace}</span>
+        <span className={styles.headingSlash} aria-hidden="true">
+          /
+        </span>
+        <span>{section}</span>
+      </PageContextTrail>
     </div>
   )
 }
@@ -47,6 +62,7 @@ export function HomePageHeader({
   onReset,
   demoDetails,
   section,
+  actions,
 }: {
   namespace: string
   title: string
@@ -55,6 +71,7 @@ export function HomePageHeader({
   onReset: () => void
   demoDetails?: ReactNode
   section?: string
+  actions?: ReactNode
 }) {
   return (
     <header className={styles.pageHeading}>
@@ -68,7 +85,10 @@ export function HomePageHeader({
         </h1>
         <p>{description}</p>
       </div>
-      <DemoControls onReset={onReset} details={demoDetails} />
+      <div className={styles.headingActions}>
+        {actions}
+        <DemoControls onReset={onReset} details={demoDetails} />
+      </div>
     </header>
   )
 }

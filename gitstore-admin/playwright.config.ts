@@ -3,7 +3,7 @@ const storybookPort = process.env.STORYBOOK_PORT ?? '6006'
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
-  globalTimeout: process.env.CI ? 180_000 : undefined,
+  globalTimeout: process.env.CI ? 240_000 : undefined,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: [['list'], ['html', { open: 'never' }]],

@@ -1,3 +1,4 @@
+import { ClearFiltersButton } from '../../../components/FilterResults'
 import { catalogPaths } from '../../catalog/browse/model'
 import { catalogSearch } from '../../catalog/browse/model'
 import type { ResourceKind } from './model'
@@ -118,6 +119,7 @@ export function OverviewPage({
     status = 'all',
     label?: string,
   ) {
+    if (value === '—' || value === 0) return value
     const domain =
       kind === 'ProductVariant'
         ? 'variants'
@@ -331,15 +333,12 @@ export function OverviewPage({
                   ))}
                 </RadioGroup>
                 {filter !== 'all' && (
-                  <ActionButton
-                    variant="ghost"
-                    onPress={() => {
+                  <ClearFiltersButton
+                    onClear={() => {
                       captureGrid()
                       setFilter('all')
                     }}
-                  >
-                    Clear filters
-                  </ActionButton>
+                  />
                 )}
               </div>
               <div ref={gridStageRef} className={homeStyles.resourceStage}>
@@ -439,7 +438,7 @@ export function OverviewPage({
                           )}
                         </th>
                         <td>
-                          {row.kind === 'Product' ? (
+                          {row.kind === 'Product' && row.total > 0 ? (
                             <Link
                               aria-label={`${row.total} All products`}
                               to="/w/$namespace/catalog/products"
@@ -458,7 +457,7 @@ export function OverviewPage({
                           )}
                         </td>
                         <td className={styles.readyNumber}>
-                          {row.kind === 'Product' ? (
+                          {row.kind === 'Product' && row.ready > 0 ? (
                             <Link
                               aria-label={`${row.ready} Ready products`}
                               to="/w/$namespace/catalog/products"
@@ -477,7 +476,7 @@ export function OverviewPage({
                           )}
                         </td>
                         <td>
-                          {row.kind === 'Product' ? (
+                          {row.kind === 'Product' && row.reconciling > 0 ? (
                             <Link
                               aria-label={`${row.reconciling || '—'} Processing products`}
                               to="/w/$namespace/catalog/products"
@@ -500,7 +499,7 @@ export function OverviewPage({
                             row.attention ? styles.attentionNumber : undefined
                           }
                         >
-                          {row.kind === 'Product' ? (
+                          {row.kind === 'Product' && row.attention > 0 ? (
                             <Link
                               aria-label={`${row.attention || '—'} Products needing attention`}
                               to="/w/$namespace/catalog/products"

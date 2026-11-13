@@ -58,6 +58,22 @@ export function PreferencesProvider({
   )
   const [namespace, setNamespace] = useState<NamespaceId>(defaultNamespace)
   useEffect(() => {
+    document.documentElement.dataset.inputModality = 'keyboard'
+    const keyboard = (event: KeyboardEvent) => {
+      if (!event.metaKey && !event.ctrlKey && !event.altKey)
+        document.documentElement.dataset.inputModality = 'keyboard'
+    }
+    const pointer = () => {
+      document.documentElement.dataset.inputModality = 'pointer'
+    }
+    document.addEventListener('keydown', keyboard, true)
+    document.addEventListener('pointerdown', pointer, true)
+    return () => {
+      document.removeEventListener('keydown', keyboard, true)
+      document.removeEventListener('pointerdown', pointer, true)
+    }
+  }, [])
+  useEffect(() => {
     const colors = matchMedia('(prefers-color-scheme: dark)')
     const movement = matchMedia('(prefers-reduced-motion: reduce)')
     const apply = () => {

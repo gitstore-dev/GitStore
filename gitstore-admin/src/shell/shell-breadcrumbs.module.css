@@ -1,0 +1,121 @@
+.breadcrumbs {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+}
+.breadcrumbs ol {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+}
+.ancestor {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+}
+.ancestor:first-child {
+  font-size: 10px;
+}
+.ancestor a {
+  text-decoration: none;
+  color: var(--muted);
+}
+.ancestor a:hover {
+  text-decoration: underline;
+}
+.current {
+  color: var(--ink);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.measure {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  display: flex;
+  width: 100%;
+  overflow: hidden;
+  gap: 10px;
+  font-size: 11px;
+}
+.measure span {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.measure span:first-child {
+  font-size: 10px;
+}
+.more {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  border-radius: 3px;
+  min-width: 28px;
+  min-height: 28px;
+  cursor: pointer;
+}
+.more[data-hovered] {
+  background: var(--hover);
+  color: var(--ink);
+}
+.more[data-focus-visible] {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.popover {
+  z-index: 250;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 5px;
+  box-shadow: 0 12px 32px #0003;
+  max-width: min(320px, calc(100vw - 32px));
+  max-height: var(--available-height);
+  overflow: auto;
+}
+.menu {
+  outline: none;
+}
+.menuItem {
+  padding: 10px 12px;
+  border-radius: 3px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  outline: none;
+}
+.menuItem[data-focused] {
+  background: var(--hover);
+  box-shadow: inset 0 0 0 1px var(--focus);
+}
+@media (max-width: 1280px) {
+  .breadcrumbs ol,
+  .ancestor {
+    gap: 7px;
+  }
+}
+@media (max-width: 760px) {
+  .breadcrumbs {
+    display: none;
+  }
+}
+
+.measure [data-current-measure] {
+  font-size: 11px;
+  font-weight: 500;
+}

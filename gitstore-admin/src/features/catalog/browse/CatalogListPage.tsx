@@ -1,3 +1,11 @@
+import { CardMediaBackdrop } from '../products/CardMediaBackdrop'
+import { useMediaQuery } from '../../../state/preferences'
+import { ActiveFilters } from '../../../components/ActiveFilters'
+import {
+  useCatalogView,
+  rememberCatalogView,
+} from '../../../state/catalog-view'
+import { ProductMedia } from '../products/ProductMedia'
 import {
   useContext,
   useEffect,
@@ -34,6 +42,7 @@ import { HomePage, HomePageHeader } from '../../home/shared/HomePage'
 import { EmptyState } from '../../home/shared/EmptyState'
 import { StatusBadge } from '../../home/overview/StatusBadge'
 import { FilterBar } from '../../../components/FilterBar'
+import { FilterResults } from '../../../components/FilterResults'
 import { FilterSheet } from '../../../components/FilterSheet'
 import { ChoiceSelect } from '../../../components/ChoiceSelect'
 import { ActionButton } from '../../../components/controls'
@@ -77,8 +86,10 @@ export function CatalogListPage({
   const router = useRouter(),
     location = useLocation(),
     navigate = useNavigate()
+  const tablet = useMediaQuery('(max-width: 1100px)')
   const scenario = router.options.context.catalogScenario
   const search = catalogSearch(useSearch({ strict: false }), domain)
+  useCatalogView(domain, search.view)
   const { stage: stageRef, capture } = useGridMotion()
   const lightingRef = useResourceLighting(
     search.view === 'grid' ? 'auto' : 'css',
@@ -192,16 +203,28 @@ export function CatalogListPage({
     )
       return
     if (selected && available) {
-      open(trigger.current)
-      requestAnimationFrame(() =>
-        document
-          .getElementById('category-map-heading')
-          ?.focus({ preventScroll: true }),
-      )
+      if (!tablet) {
+        open(trigger.current)
+        requestAnimationFrame(() =>
+          document
+            .getElementById('category-map-heading')
+            ?.focus({ preventScroll: true }),
+        )
+      }
     } else if (previousSelection.current) close()
     previousSelection.current = selected?.id
-  }, [selected, available, open, close, location.pathname, namespace, domain])
+  }, [
+    selected,
+    available,
+    open,
+    close,
+    location.pathname,
+    namespace,
+    domain,
+    tablet,
+  ])
   function update(patch: Partial<CatalogSearch>) {
+    if (patch.view) rememberCatalogView(domain, patch.view)
     capture()
     void navigate({
       to: catalogPaths[domain],
@@ -214,7 +237,7 @@ export function CatalogListPage({
   const activeCount =
     Number(search.status !== 'all') +
     Number(search.related !== 'all') +
-    Number(search.sort !== 'title')
+    Number(search.sort !== catalogSearch({}, domain).sort)
   const relatedOptions =
     domain === 'variants'
       ? [
@@ -268,8 +291,8 @@ export function CatalogListPage({
           label="Sort by"
           value={value.sort}
           options={[
+            { id: 'updated', label: 'Last updated' },
             { id: 'title', label: 'Title A–Z' },
-            { id: 'priority', label: 'Priority first' },
           ]}
           onChange={(sort) => onChange({ sort })}
         />
@@ -289,11 +312,33 @@ export function CatalogListPage({
         data-product-surface={item.id}
         data-resource-id={item.id}
         data-readiness={item.status}
+        data-catalog-card={search.view === 'grid' ? '' : undefined}
         data-halo-card={search.view === 'grid' ? '' : undefined}
       >
+        {search.view === 'grid' && (
+          <CardMediaBackdrop id={variant?.spec.mediaIds[0]} />
+        )}
         <div className={styles.rowContents} data-product-content="row">
           <div className={styles.identity}>
-            <Package size={23} aria-hidden="true" />
+            {search.view === 'grid' ? (
+              <span
+                className={styles.cardMedia}
+                aria-hidden="true"
+                data-product-image=""
+              >
+                <ProductMedia id={variant?.spec.mediaIds[0]} />
+              </span>
+            ) : domain !== 'categories' ? (
+              <span
+                className={styles.rowMedia}
+                aria-hidden="true"
+                data-product-image=""
+              >
+                <ProductMedia id={variant?.spec.mediaIds[0]} compact />
+              </span>
+            ) : (
+              <Package size={23} aria-hidden="true" />
+            )}
             <div>
               <strong data-product-title="">{item.title}</strong>
               <small>
@@ -398,6 +443,7 @@ export function CatalogListPage({
           <FilterBar
             search={
               <SearchField
+                data-composite-input=""
                 className={styles.search}
                 aria-label={`Search ${domain}`}
                 value={search.q}
@@ -443,7 +489,53 @@ export function CatalogListPage({
           >
             {fields(search, update)}
           </FilterBar>
-          <div className={styles.listHeading}>
+          <ActiveFilters
+            label={`Active ${domain} filters`}
+            filters={(['status', 'related', 'sort'] as const)
+              .filter((key) => search[key] !== catalogSearch({}, domain)[key])
+              .map((key) => ({
+                id: key,
+                label:
+                  key === 'status'
+                    ? (statusOptions.find(
+                        (option) => option.id === search.status,
+                      )?.label ?? search.status)
+                    : key === 'related'
+                      ? (relatedOptions.find(
+                          (option) => option.id === search.related,
+                        )?.label ?? search.related)
+                      : search.sort === 'updated'
+                        ? 'Last updated'
+                        : 'Title A–Z',
+                onRemove: () =>
+                  update({ [key]: catalogSearch({}, domain)[key] }),
+              }))}
+          />
+          <FilterResults
+            filtered={activeCount > 0 || !!search.q}
+            onClear={() =>
+              update({
+                q: '',
+                status: 'all',
+                related: 'all',
+                sort: catalogSearch({}, domain).sort,
+              })
+            }
+          >
+            {selected && tablet && (
+              <ActionButton
+                onPress={() => {
+                  open(trigger.current)
+                  requestAnimationFrame(() =>
+                    document
+                      .getElementById('category-map-heading')
+                      ?.focus({ preventScroll: true }),
+                  )
+                }}
+              >
+                Inspect selected category
+              </ActionButton>
+            )}
             <p role="status" className={styles.summary}>
               {search.view === 'tree' || search.view === 'spatial'
                 ? entries.length
@@ -451,21 +543,7 @@ export function CatalogListPage({
               {domain} shown
               {activeCount || search.q ? ' · Filters applied' : ''}
             </p>
-            {(activeCount > 0 || search.q) && (
-              <ActionButton
-                onPress={() =>
-                  update({
-                    q: '',
-                    status: 'all',
-                    related: 'all',
-                    sort: 'title',
-                  })
-                }
-              >
-                Clear filters
-              </ActionButton>
-            )}
-          </div>
+          </FilterResults>
           {!entries.length ? (
             <EmptyState title={`No matching ${domain}`}>
               Try a different search or clear your filters.

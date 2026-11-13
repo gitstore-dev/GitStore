@@ -38,7 +38,7 @@ export function TagInput({
   return (
     <div className={styles.field}>
       <span id={label}>Tags</span>
-      <div ref={root} className={styles.inputArea}>
+      <div ref={root} className={styles.inputArea} data-composite-input="">
         <TagGroup
           aria-labelledby={label}
           onRemove={(keys) => onChange(value.filter((tag) => !keys.has(tag)))}

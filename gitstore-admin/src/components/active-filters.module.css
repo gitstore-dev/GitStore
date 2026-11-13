@@ -1,0 +1,18 @@
+.chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-block: -6px 14px;
+}
+.chips button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font: 11px var(--body);
+  cursor: pointer;
+}

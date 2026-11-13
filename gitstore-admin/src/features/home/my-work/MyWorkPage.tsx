@@ -365,6 +365,7 @@ export function MyWorkPage({
             {state.items.length > 0 && (
               <div className={styles.toolbar}>
                 <SearchField
+                  data-composite-input=""
                   aria-label="Search my work"
                   value={query}
                   onChange={(value) => {

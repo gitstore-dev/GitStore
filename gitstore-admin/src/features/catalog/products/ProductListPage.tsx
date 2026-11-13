@@ -1,5 +1,12 @@
+import { CardMediaBackdrop } from './CardMediaBackdrop'
+import { ActiveFilters } from '../../../components/ActiveFilters'
+import {
+  useCatalogView,
+  rememberCatalogView,
+} from '../../../state/catalog-view'
 import { useLayoutEffect, useState } from 'react'
 import { FilterBar } from '../../../components/FilterBar'
+import { FilterResults } from '../../../components/FilterResults'
 import { FilterSheet } from '../../../components/FilterSheet'
 import { useGridMotion } from '../../home/shared/motion/useGridMotion'
 import { useResourceLighting } from '../../home/shared/motion/useResourceLighting'
@@ -10,8 +17,8 @@ import {
   useLocation,
   Link,
 } from '@tanstack/react-router'
-import { Button, Input, Label, SearchField } from 'react-aria-components'
-import { Plus, Search, LayoutGrid, List, X } from 'lucide-react'
+import { Input, Label, SearchField } from 'react-aria-components'
+import { Plus, Search, LayoutGrid, List } from 'lucide-react'
 import type { NamespaceId } from '../../../data/demo'
 import { namespaces } from '../../../data/demo'
 import { useHomeDemo } from '../../demo/HomeDemoProvider'
@@ -31,6 +38,7 @@ export function ProductListPage({ namespace }: { namespace: NamespaceId }) {
   const location = useLocation()
   const savedPosition = motion?.position(location.href, session.epoch)
   const search = productSearch(useSearch({ strict: false }))
+  useCatalogView('products', search.view)
   const [filtersOpen, setFiltersOpen] = useState(false)
   const [draftFilters, setDraftFilters] = useState(search)
   const activeFilters = (
@@ -105,6 +113,7 @@ export function ProductListPage({ namespace }: { namespace: NamespaceId }) {
     (p) => p.kind === 'Product',
   ).length
   function update(values: Partial<ProductSearch>) {
+    if (values.view) rememberCatalogView('products', values.view)
     capture()
     if (Object.keys(values).some((key) => key !== 'view'))
       setLoaded({ key: '', cursors: [] })
@@ -158,7 +167,7 @@ export function ProductListPage({ namespace }: { namespace: NamespaceId }) {
           ]}
         />
         <ChoiceSelect
-          label="Sort products"
+          label="Sort by"
           value={values.sort}
           onChange={(sort) => change({ sort })}
           options={[
@@ -177,17 +186,17 @@ export function ProductListPage({ namespace }: { namespace: NamespaceId }) {
         title="Products"
         description="Shape your catalog, one thoughtful detail at a time."
         onReset={reset}
+        actions={
+          <Link
+            className={styles.primaryLink}
+            to="/w/$namespace/catalog/products/new"
+            params={{ namespace }}
+          >
+            <Plus size={15} aria-hidden="true" />
+            New product
+          </Link>
+        }
       />
-      <div className={styles.pageActions}>
-        <Link
-          className={styles.primaryLink}
-          to="/w/$namespace/catalog/products/new"
-          params={{ namespace }}
-        >
-          <Plus size={15} aria-hidden="true" />
-          New product
-        </Link>
-      </div>
       {total === 0 ? (
         <EmptyState
           title="Your catalog starts here"
@@ -209,6 +218,7 @@ export function ProductListPage({ namespace }: { namespace: NamespaceId }) {
           <FilterBar
             search={
               <SearchField
+                data-composite-input=""
                 aria-label="Search products"
                 value={search.q}
                 onChange={(q) => update({ q })}
@@ -245,23 +255,14 @@ export function ProductListPage({ namespace }: { namespace: NamespaceId }) {
           >
             {renderFilters(search, update)}
           </FilterBar>
-          {activeFilters.length > 0 && (
-            <div
-              className={styles.filterChips}
-              aria-label="Active product filters"
-            >
-              {activeFilters.map((key) => (
-                <Button
-                  key={key}
-                  onPress={() => update({ [key]: productSearch({})[key] })}
-                  aria-label={`Remove ${key} filter: ${filterLabel(key)}`}
-                >
-                  {filterLabel(key)}
-                  <X size={12} aria-hidden="true" />
-                </Button>
-              ))}
-            </div>
-          )}
+          <ActiveFilters
+            label="Active product filters"
+            filters={activeFilters.map((key) => ({
+              id: key,
+              label: filterLabel(key),
+              onRemove: () => update({ [key]: productSearch({})[key] }),
+            }))}
+          />
           <FilterSheet
             open={filtersOpen}
             title="Filter products"
@@ -284,18 +285,15 @@ export function ProductListPage({ namespace }: { namespace: NamespaceId }) {
               setDraftFilters((previous) => ({ ...previous, ...patch })),
             )}
           </FilterSheet>
-          <div className={styles.listCaption}>
+          <FilterResults
+            filtered={activeFilters.length > 0 || !!search.q}
+            onClear={() => update(productSearch({ view: search.view }))}
+          >
             <span role="status">
               {visible.length}{' '}
               {visible.length === 1 ? 'product shown' : 'products shown'}
             </span>
-            <ActionButton
-              variant="ghost"
-              onPress={() => update(productSearch({ view: search.view }))}
-            >
-              Clear filters
-            </ActionButton>
-          </div>
+          </FilterResults>
           {!results.length || connection.invalidCursor ? (
             <EmptyState
               title={
@@ -320,12 +318,6 @@ export function ProductListPage({ namespace }: { namespace: NamespaceId }) {
               data-view={search.view}
               data-product-epoch={session.epoch}
             >
-              <div className={styles.tableHeader} aria-hidden="true">
-                <span>Product</span>
-                <span>Category</span>
-                <span>Status</span>
-                <span>Lifecycle</span>
-              </div>
               {visible.map(([id, product]) => {
                 const resource = session.resources.find((r) => r.id === id)
                 return (
@@ -336,9 +328,13 @@ export function ProductListPage({ namespace }: { namespace: NamespaceId }) {
                     className={styles.productRow}
                     data-resource-id={id}
                     data-product-surface={id}
+                    data-catalog-card={search.view === 'grid' ? '' : undefined}
                     data-halo-card={search.view === 'grid' ? '' : undefined}
                     data-readiness={resource?.readiness}
                   >
+                    {search.view === 'grid' && (
+                      <CardMediaBackdrop id={product.spec.mediaIds[0]} />
+                    )}
                     <div
                       className={styles.rowContents}
                       data-product-content="row"

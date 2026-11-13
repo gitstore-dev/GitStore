@@ -1,7 +1,9 @@
+import { ActiveFilters } from '../../../components/ActiveFilters'
 import { FilterBar } from '../../../components/FilterBar'
+import { FilterResults } from '../../../components/FilterResults'
 import { useCallback, useMemo, useState } from 'react'
 import { Button, Heading, Input, SearchField } from 'react-aria-components'
-import { Clock, Search, History, RotateCcw, X } from 'lucide-react'
+import { Clock, Search, History, RotateCcw } from 'lucide-react'
 import { ActionButton } from '../../../components/controls'
 import { ChoiceSelect } from '../../../components/ChoiceSelect'
 import { ConfirmationDialog } from '../../../components/ConfirmationDialog'
@@ -127,7 +129,6 @@ export function RecentActivityPage({
   ) {
     return (
       <>
-        {' '}
         <ChoiceSelect
           label="Actor"
           value={values.actor}
@@ -244,6 +245,7 @@ export function RecentActivityPage({
                 }}
                 search={
                   <SearchField
+                    data-composite-input=""
                     className={styles.search}
                     aria-label="Search activity"
                     value={filters.query}
@@ -257,24 +259,15 @@ export function RecentActivityPage({
               >
                 {renderFilters(filters, (key, value) => filter(key, value))}
               </FilterBar>
-              {activeFilters.length > 0 && (
-                <div
-                  className={styles.filterChips}
-                  aria-label="Active activity filters"
-                >
-                  {activeFilters.map((key) => (
-                    <Button
-                      key={key}
-                      onPress={() => filter(key, 'all')}
-                      aria-label={`Remove ${key} filter: ${filterLabel(key)}`}
-                    >
-                      {filterLabel(key)}
-                      <X size={12} aria-hidden="true" />
-                    </Button>
-                  ))}
-                </div>
-              )}
-              <div className={styles.results}>
+              <ActiveFilters
+                label="Active activity filters"
+                filters={activeFilters.map((key) => ({
+                  id: key,
+                  label: filterLabel(key),
+                  onRemove: () => filter(key, 'all'),
+                }))}
+              />
+              <FilterResults filtered={filtered} onClear={clear}>
                 <p>
                   {Math.min(limit, matches.length)}{' '}
                   {filtered ? 'matching ' : ''}
@@ -283,12 +276,7 @@ export function RecentActivityPage({
                     : 'activities'}{' '}
                   shown
                 </p>
-                {filtered && (
-                  <ActionButton variant="ghost" onPress={clear}>
-                    Clear filters
-                  </ActionButton>
-                )}
-              </div>
+              </FilterResults>
             </>
           )}
           <div ref={stage} className={homeStyles.resourceStage}>

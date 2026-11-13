@@ -545,10 +545,7 @@ export function sessionReducer(
       ...session,
       revision,
       catalog: { ...session.catalog, [source.itemId]: target },
-      productUpdated:
-        target.kind === 'Product'
-          ? { ...session.productUpdated, [source.itemId]: timestamp }
-          : session.productUpdated,
+      productUpdated: { ...session.productUpdated, [source.itemId]: timestamp },
       events: [event, ...session.events],
       work: { ...session.work, items: [recovery, ...session.work.items] },
     }

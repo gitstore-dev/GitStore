@@ -15,9 +15,9 @@ test('shell navigation and mobile drawer work across engines', async ({
   await expect(
     nav.getByRole('link', { name: 'Variants', exact: true }),
   ).toBeFocused()
-  await expect(page).toHaveURL(/catalog\/products$/)
+  await expect(page).toHaveURL(/catalog\/products(?:\?|$)/)
   await page.keyboard.press('Enter')
-  await expect(page).toHaveURL(/catalog\/variants$/)
+  await expect(page).toHaveURL(/catalog\/variants(?:\?|$)/)
   await page
     .getByRole('button', { name: 'Search navigation', exact: true })
     .click()

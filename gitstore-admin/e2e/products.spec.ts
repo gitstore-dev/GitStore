@@ -332,7 +332,9 @@ test('retirement is a saved lifecycle change, and variants remain read-only', as
   await page.getByRole('button', { name: /Lifecycle$/ }).click()
   await page.getByRole('option', { name: 'Retired', exact: true }).click()
   await page.getByRole('button', { name: 'Save demo changes' }).click()
-  await expect(page.getByText('Retired', { exact: true })).toBeVisible()
+  await expect(
+    page.getByText('Lifecycle · Retired', { exact: true }),
+  ).toBeVisible()
   await expect(page.getByText('Processing', { exact: true })).toBeVisible()
   await expect(
     page.getByRole('button', { name: 'Delete demo product' }),

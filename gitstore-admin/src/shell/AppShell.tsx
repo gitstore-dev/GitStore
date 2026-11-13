@@ -1,3 +1,11 @@
+import { BreadcrumbLink, ShellBreadcrumbs } from './ShellBreadcrumbs'
+import type { ShellCrumb } from './ShellBreadcrumbs'
+import { productSearch } from '../features/catalog/products/model'
+import { catalogSearch, catalogPaths } from '../features/catalog/browse/model'
+import type {
+  CatalogDomain,
+  CatalogSearch,
+} from '../features/catalog/browse/model'
 import { useHomeDemo } from '../features/demo/HomeDemoProvider'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -8,6 +16,7 @@ import {
   useNavigate,
   useParams,
   useRouter,
+  useSearch,
 } from '@tanstack/react-router'
 import {
   Button,
@@ -20,7 +29,6 @@ import {
 import {
   Grid2X2,
   Search,
-  ChevronRight,
   X,
   Minimize2,
   ArrowUpRight,
@@ -89,6 +97,75 @@ export function AppShell({ children }: { children?: ReactNode }) {
         : nestedCatalog
           ? (catalogItemTitle ?? 'Item unavailable')
           : (active?.label ?? 'Not found')
+  const currentSearch = useSearch({ strict: false })
+  const ancestors: ShellCrumb[] = []
+  if (active) {
+    const root = destinations.find((item) => item.groupId === active.groupId)!
+    ancestors.push({
+      label: active.groupLabel,
+      link: (
+        <BreadcrumbLink to={root.to} params={{ namespace }}>
+          {active.groupLabel}
+        </BreadcrumbLink>
+      ),
+      onSelect: () => {
+        void navigate({ to: root.to, params: { namespace } })
+      },
+    })
+    if (nestedProduct) {
+      const search =
+        router.options.context.productNavigation?.returnSearch(pathname) ??
+        productSearch(currentSearch)
+      ancestors.push({
+        label: 'Products',
+        link: (
+          <BreadcrumbLink
+            to="/w/$namespace/catalog/products"
+            params={{ namespace }}
+            search={search}
+            resetScroll={false}
+          >
+            Products
+          </BreadcrumbLink>
+        ),
+        onSelect: () => {
+          void navigate({
+            to: '/w/$namespace/catalog/products',
+            params: { namespace },
+            search,
+            resetScroll: false,
+          })
+        },
+      })
+    } else if (nestedCatalog) {
+      const domain = active.id.split('.')[1] as CatalogDomain
+      const search =
+        router.options.context.productNavigation?.returnSearch<CatalogSearch>(
+          pathname,
+        ) ?? catalogSearch(currentSearch, domain)
+      ancestors.push({
+        label: active.label,
+        link: (
+          <BreadcrumbLink
+            to={catalogPaths[domain]}
+            params={{ namespace }}
+            search={search}
+            resetScroll={false}
+          >
+            {active.label}
+          </BreadcrumbLink>
+        ),
+        onSelect: () => {
+          void navigate({
+            to: catalogPaths[domain],
+            params: { namespace },
+            search,
+            resetScroll: false,
+          })
+        },
+      })
+    }
+  }
   useEffect(() => {
     document.title = `${pageTitle} · GitStore`
   }, [pageTitle])
@@ -310,51 +387,7 @@ export function AppShell({ children }: { children?: ReactNode }) {
                   onPlatformChange={openPlatform}
                 />
               </div>
-              <nav aria-label="Breadcrumb" className={styles.breadcrumbs}>
-                <ol>
-                  {active && (
-                    <>
-                      <li>
-                        <Link
-                          to={
-                            destinations.find(
-                              (item) => item.groupId === active.groupId,
-                            )!.to
-                          }
-                          params={{ namespace }}
-                        >
-                          {active.groupLabel}
-                        </Link>
-                      </li>
-                      <li>
-                        <ChevronRight size={13} aria-hidden="true" />
-                      </li>
-                    </>
-                  )}
-                  {nestedProduct && (
-                    <>
-                      <li>
-                        <Link
-                          to="/w/$namespace/catalog/products"
-                          params={{ namespace }}
-                        >
-                          Products
-                        </Link>
-                      </li>
-                      <li>
-                        <ChevronRight size={13} aria-hidden="true" />
-                      </li>
-                    </>
-                  )}
-                  <li aria-current="page">
-                    {nestedProduct
-                      ? productPageTitle
-                      : nestedCatalog
-                        ? (catalogItemTitle ?? 'Item unavailable')
-                        : (active?.label ?? 'Not found')}
-                  </li>
-                </ol>
-              </nav>
+              <ShellBreadcrumbs ancestors={ancestors} current={pageTitle} />
               <div className={styles.headerActions}>
                 <ActionButton
                   variant="ghost"

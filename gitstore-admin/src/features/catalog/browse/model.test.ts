@@ -96,7 +96,7 @@ describe('read-only catalog browsers', () => {
         { view: 'spatial', status: 'bad', sort: 'bad' },
         'variants',
       ),
-    ).toMatchObject({ view: 'table', status: 'all', sort: 'title' })
+    ).toMatchObject({ view: 'table', status: 'all', sort: 'updated' })
     expect(
       filteredEntries(
         s,
@@ -230,5 +230,21 @@ describe('read-only catalog browsers', () => {
         '/w/atelier-kyoto/catalog/products/item',
       ),
     ).toBeUndefined()
+  })
+  it('sorts recovered category and collection records by their actual latest demo update', () => {
+    for (const [domain, id] of [
+      ['categories', 'homeware'],
+      ['collections', 'autumn-objects'],
+    ] as const) {
+      const session = createSession('atelier-kyoto')
+      const changed = sessionReducer(session, {
+        type: 'restore',
+        eventId: `history-${id}-0`,
+      })
+      expect(
+        filteredEntries(changed, domain, catalogSearch({}, domain))[0]?.id,
+      ).toBe(id)
+      expect(changed.productUpdated[id]).not.toBe(session.productUpdated[id])
+    }
   })
 })

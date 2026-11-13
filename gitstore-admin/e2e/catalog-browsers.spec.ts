@@ -368,6 +368,9 @@ for (const width of [900, 375])
       name: /^Homeware View category guidance/,
     })
     await node.click()
+    await page
+      .getByRole('button', { name: 'Inspect selected category', exact: true })
+      .click()
     const inspector = page.getByRole('dialog', { name: 'Page context' })
     await expect(
       inspector.getByRole('heading', { name: 'Homeware', exact: true }),
@@ -378,6 +381,9 @@ for (const width of [900, 375])
     await expect(node).toBeFocused()
     await expect(page).not.toHaveURL(/selected=/)
     await node.click()
+    await page
+      .getByRole('button', { name: 'Inspect selected category', exact: true })
+      .click()
     await inspector
       .getByRole('link', { name: 'Open category', exact: false })
       .click()

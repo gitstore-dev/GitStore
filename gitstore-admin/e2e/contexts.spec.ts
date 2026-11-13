@@ -110,7 +110,7 @@ test('context navigation works in the mobile drawer and tablet rail', async ({
   const drawer = page.getByRole('dialog', { name: 'Mobile navigation' })
   await drawer.getByRole('button', { name: 'Catalog', exact: true }).click()
   await drawer.getByRole('link', { name: 'Products', exact: true }).click()
-  await expect(page).toHaveURL(/studio-berlin\/catalog\/products$/)
+  await expect(page).toHaveURL(/studio-berlin\/catalog\/products(?:\?|$)/)
   await expect(drawer).toBeHidden()
   await page.setViewportSize({ width: 900, height: 900 })
   await page

@@ -1,5 +1,12 @@
+import { CategoryBreadcrumb } from './CategoryBreadcrumb'
 import { useLayoutEffect, useMemo, useRef } from 'react'
-import { Link, useLocation, useRouter, useSearch } from '@tanstack/react-router'
+import {
+  Link,
+  useLocation,
+  useRouter,
+  useSearch,
+  useNavigate,
+} from '@tanstack/react-router'
 import { ArrowLeft, ArrowUpRight } from 'lucide-react'
 import type { NamespaceId } from '../../../data/demo'
 import { namespaces } from '../../../data/demo'
@@ -16,6 +23,7 @@ import {
   catalogLabels,
   matchingProducts,
   categoryHierarchy,
+  categoryPath,
 } from './model'
 import type { CatalogDomain, CatalogSearch } from './model'
 import { catalogPaths, catalogDetailPaths, catalogSearch } from './model'
@@ -29,6 +37,7 @@ export function CatalogDetailPage({
   domain: CatalogDomain
   itemId: string
 }) {
+  const navigate = useNavigate()
   const { session, reset } = useHomeDemo(namespace)
   const router = useRouter(),
     location = useLocation()
@@ -132,16 +141,35 @@ export function CatalogDetailPage({
           data-product-epoch={session.epoch}
         >
           <div className={styles.detailContent} data-product-content="detail">
-            <PageContext
-              namespace={namespaces.find((n) => n.id === namespace)!.name}
-              section={
-                domain === 'variants'
-                  ? 'Variant'
-                  : domain === 'categories'
-                    ? 'Category'
-                    : 'Collection'
-              }
-            />
+            {domain === 'categories' ? (
+              <CategoryBreadcrumb
+                incomplete={!!problem}
+                items={categoryPath(session, itemId).map((id) => ({
+                  id,
+                  title: snapshotTitle(session.catalog[id]!),
+                  link: (
+                    <Link
+                      to={catalogDetailPaths.categories}
+                      params={{ namespace, itemId: id }}
+                      title={snapshotTitle(session.catalog[id]!)}
+                    >
+                      {snapshotTitle(session.catalog[id]!)}
+                    </Link>
+                  ),
+                  onSelect: () => {
+                    void navigate({
+                      to: catalogDetailPaths.categories,
+                      params: { namespace, itemId: id },
+                    })
+                  },
+                }))}
+              />
+            ) : (
+              <PageContext
+                namespace={namespaces.find((n) => n.id === namespace)!.name}
+                section={domain === 'variants' ? 'Variant' : 'Collection'}
+              />
+            )}
             <h1 tabIndex={-1} data-product-title="">
               {entry.title}
             </h1>

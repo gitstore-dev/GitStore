@@ -633,3 +633,88 @@
     gap: 12px;
   }
 }
+
+/* Shared row anatomy: a complete interactive row, with no detached column labels. */
+.productList[data-view='table'] {
+  border: 0;
+  background: transparent;
+  overflow: visible;
+  display: grid;
+  gap: 12px;
+}
+.productList[data-view='table'] .productRow {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  padding: 22px;
+}
+.productList[data-view='table'] .rowIdentity strong {
+  font: 500 24px/1.25 var(--display);
+}
+.document {
+  max-width: none;
+  margin: 24px 0 0;
+  padding: 32px;
+  position: relative;
+}
+.canvasPage {
+  padding: 42px 44px 24px;
+}
+.canvasTop {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+.editIcon {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--muted);
+  text-decoration: none;
+  transition:
+    background 150ms ease,
+    color 150ms ease,
+    box-shadow 150ms ease;
+}
+.editIcon:hover {
+  background: var(--hover);
+  color: var(--ink);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--muted) 12%, transparent);
+}
+.titleLine h1 {
+  padding-right: 44px;
+}
+@media (max-width: 760px) {
+  .viewControls {
+    display: flex;
+  }
+  .canvasPage {
+    padding: 20px 16px 88px;
+  }
+  .document {
+    padding: 20px;
+  }
+  .editIcon {
+    top: 16px;
+    right: 16px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .editIcon {
+    transition: none;
+  }
+}
+:global([data-motion='reduced']) .editIcon {
+  transition: none;
+}
+.titleLine > span:not(.badge) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 10px var(--mono);
+  color: var(--muted);
+}

@@ -1,3 +1,4 @@
+import { readCatalogView } from '../state/catalog-view'
 import {
   createFileRoute,
   Outlet,
@@ -9,9 +10,19 @@ import { catalogSearch } from '../features/catalog/browse/model'
 export const Route = createFileRoute('/_shell/w/$namespace/catalog/categories')(
   {
     validateSearch: (raw: Partial<CatalogSearch> & SearchSchemaInput) =>
-      catalogSearch(raw, 'categories'),
+      catalogSearch(
+        { ...raw, view: raw.view ?? readCatalogView('categories') },
+        'categories',
+      ),
     search: {
-      middlewares: [stripSearchParams(catalogSearch({}, 'categories'))],
+      middlewares: [
+        stripSearchParams({
+          q: '',
+          status: 'all',
+          related: 'all',
+          sort: 'updated',
+        } as const),
+      ],
     },
     component: Outlet,
   },

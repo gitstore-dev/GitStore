@@ -4,6 +4,7 @@ permissions:
   contents: read
 jobs:
   admin:
+    name: Admin browsers (shard ${{ matrix.shard }}/2)
     strategy:
       fail-fast: false
       matrix:

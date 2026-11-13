@@ -67,7 +67,7 @@ test('navigation search, keyboard dismissal, history and reload work', async ({
     .getByRole('searchbox', { name: 'Search pages' })
     .fill('catalog variants')
   await page.getByRole('option').click()
-  await expect(page).toHaveURL(/catalog\/variants$/)
+  await expect(page).toHaveURL(/catalog\/variants(?:\?|$)/)
   await page.reload()
   await expect(
     page.getByRole('heading', { name: 'Variants', level: 1 }),
@@ -135,7 +135,7 @@ test('theme, sidebar, profile and workspace context persist or switch correctly'
   await page.getByRole('link', { name: 'Commerce', exact: true }).click()
   await page.getByRole('button', { name: 'Catalog pages', exact: true }).click()
   await page.getByRole('menuitem', { name: 'Products', exact: true }).click()
-  await expect(page).toHaveURL(/studio-berlin\/catalog\/products$/)
+  await expect(page).toHaveURL(/studio-berlin\/catalog\/products(?:\?|$)/)
 })
 test('layouts, accessibility, responsive overflow and screenshots', async ({
   page,

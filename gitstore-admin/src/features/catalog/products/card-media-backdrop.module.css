@@ -1,0 +1,65 @@
+:global([data-catalog-card]) {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+.backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(1.025);
+  transition:
+    opacity 200ms ease,
+    transform 260ms ease;
+}
+:global([data-catalog-card]) .backdrop[data-card-backdrop] > div {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  border-radius: 0;
+}
+.backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--surface) 12%, transparent),
+    color-mix(in srgb, var(--surface) 94%, transparent) 72%
+  );
+}
+:global([data-catalog-card]) :global([data-product-image]) {
+  transition: opacity 200ms ease;
+}
+:global([data-catalog-card]):focus-visible .backdrop {
+  opacity: 1;
+  transform: none;
+}
+:global([data-catalog-card]):focus-visible :global([data-product-image]) {
+  opacity: 0;
+}
+@media (hover: hover) and (pointer: fine) {
+  :global([data-catalog-card]):hover .backdrop {
+    opacity: 1;
+    transform: none;
+  }
+  :global([data-catalog-card]):hover :global([data-product-image]) {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .backdrop,
+  :global([data-catalog-card]) :global([data-product-image]) {
+    transition: none;
+    transform: none;
+  }
+}
+:global([data-motion='reduced']) .backdrop,
+:global([data-motion='reduced'])
+  :global([data-catalog-card])
+  :global([data-product-image]) {
+  transition: none;
+  transform: none;
+}
