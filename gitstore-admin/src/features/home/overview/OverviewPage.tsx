@@ -1,3 +1,6 @@
+import { catalogPaths } from '../../catalog/browse/model'
+import { catalogSearch } from '../../catalog/browse/model'
+import type { ResourceKind } from './model'
 import { productSearch } from '../../catalog/products/model'
 import { resourceLabel } from './model'
 import { useCallback, useMemo, useState } from 'react'
@@ -109,6 +112,33 @@ export function OverviewPage({
   const setup = setupProgress(session)
   const { completed } = setup
   const presentation = recovered ? 'populated' : scenario
+  function catalogHealthLink(
+    kind: ResourceKind,
+    value: string | number,
+    status = 'all',
+    label?: string,
+  ) {
+    const domain =
+      kind === 'ProductVariant'
+        ? 'variants'
+        : kind === 'CategoryTaxonomy'
+          ? 'categories'
+          : kind === 'Collection'
+            ? 'collections'
+            : undefined
+    return domain ? (
+      <Link
+        to={catalogPaths[domain]}
+        params={{ namespace }}
+        search={catalogSearch({ status }, domain)}
+        aria-label={label}
+      >
+        {value}
+      </Link>
+    ) : (
+      value
+    )
+  }
   function reset() {
     requestReset()
   }
@@ -402,7 +432,10 @@ export function OverviewPage({
                               {kindLabels[row.kind].plural}
                             </Link>
                           ) : (
-                            kindLabels[row.kind].plural
+                            catalogHealthLink(
+                              row.kind,
+                              kindLabels[row.kind].plural,
+                            )
                           )}
                         </th>
                         <td>
@@ -416,7 +449,12 @@ export function OverviewPage({
                               {row.total}
                             </Link>
                           ) : (
-                            row.total
+                            catalogHealthLink(
+                              row.kind,
+                              row.total,
+                              'all',
+                              `${row.total} All ${kindLabels[row.kind].plural.toLowerCase()}`,
+                            )
                           )}
                         </td>
                         <td className={styles.readyNumber}>
@@ -430,7 +468,12 @@ export function OverviewPage({
                               {row.ready}
                             </Link>
                           ) : (
-                            row.ready
+                            catalogHealthLink(
+                              row.kind,
+                              row.ready,
+                              'ready',
+                              `${row.ready} Ready ${kindLabels[row.kind].plural.toLowerCase()}`,
+                            )
                           )}
                         </td>
                         <td>
@@ -444,7 +487,12 @@ export function OverviewPage({
                               {row.reconciling || '—'}
                             </Link>
                           ) : (
-                            row.reconciling || '—'
+                            catalogHealthLink(
+                              row.kind,
+                              row.reconciling || '—',
+                              'reconciling',
+                              `${row.reconciling || '—'} Processing ${kindLabels[row.kind].plural.toLowerCase()}`,
+                            )
                           )}
                         </td>
                         <td
@@ -462,7 +510,12 @@ export function OverviewPage({
                               {row.attention || '—'}
                             </Link>
                           ) : (
-                            row.attention || '—'
+                            catalogHealthLink(
+                              row.kind,
+                              row.attention || '—',
+                              'attention',
+                              `${row.attention || '—'} ${kindLabels[row.kind].plural} needing attention`,
+                            )
                           )}
                         </td>
                       </tr>

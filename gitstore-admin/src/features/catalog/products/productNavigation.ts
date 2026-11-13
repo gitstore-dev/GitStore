@@ -6,16 +6,31 @@ import './productMotion.css'
 interface ProductRoute {
   namespace: string
   id?: string
+  catalog?: string
 }
 export function productRoute(path: string): ProductRoute | undefined {
-  const match = /^\/w\/([^/]+)\/catalog\/products(?:\/([^/]+))?\/?$/.exec(path)
-  if (!match || match[2] === 'new') return
-  return { namespace: match[1]!, id: match[2] }
+  const match =
+    /^\/w\/([^/]+)\/catalog\/(products|variants|categories|collections)(?:\/([^/]+))?\/?$/.exec(
+      path,
+    )
+  if (!match || match[3] === 'new') return
+  return {
+    namespace: match[1]!,
+    id: match[3],
+    ...(match[2] !== 'products' ? { catalog: match[2] } : {}),
+  }
 }
 export function productJourney(from: string, to: string) {
   const a = productRoute(from),
     b = productRoute(to)
-  if (!a || !b || a.namespace !== b.namespace || !!a.id === !!b.id) return
+  if (
+    !a ||
+    !b ||
+    a.namespace !== b.namespace ||
+    a.catalog !== b.catalog ||
+    !!a.id === !!b.id
+  )
+    return
   return {
     namespace: a.namespace,
     id: (a.id ?? b.id)!,
@@ -26,7 +41,7 @@ export interface ProductListPosition {
   epoch: number
   filterKey: string
   cursors: readonly string[]
-  search: ProductSearch
+  search: object
   scroll: number
   selected?: string
 }
@@ -59,18 +74,26 @@ export class ProductNavigation {
     this.lists.delete(href)
     this.lists.set(href, {
       ...value,
-      scroll: previous?.epoch === value.epoch ? previous.scroll : 0,
+      scroll: previous?.epoch === value.epoch ? previous.scroll : value.scroll,
       selected: previous?.epoch === value.epoch ? previous.selected : undefined,
     })
     if (this.lists.size > 32) this.lists.delete(this.lists.keys().next().value!)
   }
-  position(href: string, epoch: number) {
-    const value = this.lists.get(href)
+  position(href: string, epoch: number, filterKey?: string) {
+    const value =
+      this.lists.get(href) ??
+      (filterKey
+        ? [...this.lists.values()]
+            .reverse()
+            .find(
+              (value) => value.filterKey === filterKey && value.epoch === epoch,
+            )
+        : undefined)
     return value?.epoch === epoch ? value : undefined
   }
-  returnSearch(path: string) {
+  returnSearch<T = ProductSearch>(path: string) {
     const href = this.origins.get(path)
-    return href ? this.lists.get(href)?.search : undefined
+    return (href ? this.lists.get(href)?.search : undefined) as T | undefined
   }
   before({ fromLocation, toLocation }: Change) {
     this.finish()

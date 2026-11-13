@@ -362,11 +362,21 @@ export function ProductPage({
                       <dt>Category</dt>
                       <dd>
                         {current.spec.categoryId &&
-                        session.catalog[current.spec.categoryId]
-                          ? snapshotTitle(
+                        session.catalog[current.spec.categoryId] ? (
+                          <Link
+                            to="/w/$namespace/catalog/categories/$itemId"
+                            params={{
+                              namespace,
+                              itemId: current.spec.categoryId,
+                            }}
+                          >
+                            {snapshotTitle(
                               session.catalog[current.spec.categoryId]!,
-                            )
-                          : 'No category'}
+                            )}
+                          </Link>
+                        ) : (
+                          'No category'
+                        )}
                       </dd>
                       <dt>Tags</dt>
                       <dd>{current.spec.tags.join(', ') || 'No tags'}</dd>
@@ -393,9 +403,14 @@ export function ProductPage({
                       {blockers.map((variant) => (
                         <li key={variant.id}>
                           <strong>
-                            {'spec' in variant
-                              ? variant.spec.title
-                              : variant.name}
+                            <Link
+                              to="/w/$namespace/catalog/variants/$itemId"
+                              params={{ namespace, itemId: variant.id }}
+                            >
+                              {'spec' in variant
+                                ? variant.spec.title
+                                : variant.name}
+                            </Link>
                           </strong>
                           <StatusBadge state={variant.readiness} />
                         </li>

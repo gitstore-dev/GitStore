@@ -65,21 +65,23 @@ test('timeline filters, dates, pagination and history are local and merchant-fac
     'Loaded 10 more activities. 20 activities shown.',
   )
   await page.getByRole('button', { name: 'Load more' }).click()
-  await expect(page.locator('[data-resource-id]')).toHaveCount(24)
+  await expect(page.locator('[data-resource-id]')).toHaveCount(30)
   await expect(
-    page.getByText('24 activities shown', { exact: true }),
+    page.getByText('30 activities shown', { exact: true }),
   ).toBeVisible()
   await expect(page.getByRole('status')).toContainText(
-    'Loaded 4 more activities. 24 activities shown.',
+    'Loaded 10 more activities. 30 activities shown.',
   )
+  await page.getByRole('button', { name: 'Load more' }).click()
+  await expect(page.locator('[data-resource-id]')).toHaveCount(32)
   await expect(page.getByRole('button', { name: 'Load more' })).toHaveCount(0)
   await selectOption(page, 'Actor', 'Kenji Sato')
   await selectOption(page, 'Item type', 'Category')
   await selectOption(page, 'Event category', 'Catalog changes')
   await selectOption(page, 'Recorded date', '31 Oct 2026')
-  await expect(page.locator('[data-resource-id]')).toHaveCount(1)
+  await expect(page.locator('[data-resource-id]')).toHaveCount(2)
   await expect(
-    page.getByText('1 matching activity shown', { exact: true }),
+    page.getByText('2 matching activities shown', { exact: true }),
   ).toBeVisible()
   await expect(
     page.getByRole('button', { name: 'View details for Homeware — Original' }),

@@ -1,3 +1,5 @@
+import type { VariantFixture, CatalogScenario } from '../catalog/browse/model'
+import { matchingProducts, seedVariants } from '../catalog/browse/model'
 import { initialSetupReviews } from '../home/setup-guide/model'
 import type {
   SetupReviews,
@@ -68,6 +70,7 @@ export interface ActivityEvent {
 export type ProductScenario =
   'unsupported' | 'stale-edit' | 'deleting' | 'deleted'
 export interface DemoSeed {
+  catalogScenario?: CatalogScenario
   setupScenario?: SetupScenario
   productScenario?: ProductScenario
   overviewScenario?: OverviewScenario
@@ -75,6 +78,8 @@ export interface DemoSeed {
   activityScenario?: ActivityScenario
 }
 export interface DemoSession {
+  variants: Readonly<Record<string, VariantFixture>>
+  collectionMembers: Readonly<Record<string, readonly string[]>>
   setupReviews: SetupReviews
   namespace: NamespaceId
   catalog: Readonly<Record<string, ItemSnapshot>>
@@ -166,7 +171,10 @@ function historical(snapshot: ItemSnapshot, stage: number): ItemSnapshot {
   return {
     kind: 'Collection',
     body: 'Earlier collection notes, before the latest update.',
-    spec: { ...spec, productIds: [...snapshot.spec.productIds].reverse() },
+    spec: {
+      ...spec,
+      selector: stage === 0 ? undefined : snapshot.spec.selector,
+    },
   }
 }
 export function seedEvents(
@@ -202,7 +210,13 @@ export function seedEvents(
             : 'Authored item data changed in this demo history.',
           actor: [demoUser.name, 'Kenji Sato', 'GitStore'][index % 3]!,
           timestamp: new Date(
-            Date.UTC(2026, 9, 31 + day, 10 + (index % 2), index * 5),
+            Date.UTC(
+              2026,
+              9,
+              31 + day,
+              10 + (index % 2),
+              index < 10 ? index * 5 : ((index - 10) % 10) * 3,
+            ),
           ).toISOString(),
           category,
           local: false,
@@ -227,7 +241,32 @@ export function createSession(
   namespace: NamespaceId,
   seed: DemoSeed = {},
 ): DemoSession {
-  const fixture = overviewFixture(namespace, seed.overviewScenario)
+  const initialFixture = overviewFixture(namespace, seed.overviewScenario)
+  const fixture =
+    seed.catalogScenario === 'many'
+      ? {
+          ...initialFixture,
+          resources: [
+            ...initialFixture.resources,
+            ...initialFixture.resources
+              .filter((r) =>
+                ['ProductVariant', 'CategoryTaxonomy', 'Collection'].includes(
+                  r.kind,
+                ),
+              )
+              .flatMap((r) =>
+                Array.from({ length: 3 }, (_, index): DemoResource => ({
+                  ...r,
+                  id: `${r.id}-example-${index}`,
+                  path: r.path.replace('.md', `-example-${index}.md`),
+                  ...('spec' in r
+                    ? { spec: { title: `${r.spec.title} ${index + 2}` } }
+                    : {}),
+                })),
+              ),
+          ],
+        }
+      : initialFixture
   const catalog = seedCatalog(fixture.resources)
   const events = seed.activityScenario === 'empty' ? [] : seedEvents(catalog)
   if (seed.activityScenario === 'recovery-error') {
@@ -246,6 +285,19 @@ export function createSession(
       }
   }
   let session: DemoSession = {
+    variants: seedVariants(fixture.resources),
+    collectionMembers: Object.fromEntries(
+      Object.entries(catalog).flatMap(([id, item]) =>
+        item.kind === 'Collection'
+          ? [
+              [
+                id,
+                matchingProducts({ catalog, deleting: [] }, item.spec.selector),
+              ],
+            ]
+          : [],
+      ),
+    ),
     setupReviews: initialSetupReviews(namespace, seed.setupScenario),
     namespace,
     catalog,
@@ -264,12 +316,49 @@ export function createSession(
       Object.keys(catalog).map((id) => [id, '2026-11-02T11:00:00.000Z']),
     ),
     deleting: [],
-    variantOwners: {
-      'tunic-natural-m': 'silk-tunic',
-      'tunic-black-m': 'silk-tunic',
-      'tea-kit-natural': 'tea-ritual',
-    },
+    variantOwners: Object.fromEntries(
+      Object.entries(seedVariants(fixture.resources)).map(([id, variant]) => [
+        id,
+        variant.spec.productId,
+      ]),
+    ),
   }
+  if (
+    seed.catalogScenario === 'missing-parent' &&
+    catalog.ceramics?.kind === 'CategoryTaxonomy'
+  )
+    session = {
+      ...session,
+      catalog: {
+        ...catalog,
+        ceramics: {
+          ...catalog.ceramics,
+          spec: { ...catalog.ceramics.spec, parentId: 'missing-category' },
+        },
+      },
+    }
+  if (
+    seed.catalogScenario === 'cycle' &&
+    catalog.homeware?.kind === 'CategoryTaxonomy'
+  )
+    session = {
+      ...session,
+      catalog: {
+        ...catalog,
+        homeware: {
+          ...catalog.homeware,
+          spec: { ...catalog.homeware.spec, parentId: 'tableware' },
+        },
+      },
+    }
+  if (seed.catalogScenario === 'missing-member')
+    session = {
+      ...session,
+      collectionMembers: {
+        ...session.collectionMembers,
+        everyday: ['missing-product'],
+      },
+    }
   const product = catalog['stone-basin']
   if (product?.kind === 'Product') {
     if (seed.productScenario === 'unsupported')
@@ -356,7 +445,7 @@ export function projectedResources(
         ? [ref(snapshot.spec.parentId, 'Parent category')]
         : []
     else if (snapshot?.kind === 'Collection')
-      references = snapshot.spec.productIds.map((id) =>
+      references = (session.collectionMembers[resource.id] ?? []).map((id) =>
         ref(id, 'Collection product'),
       )
     else if (snapshot?.kind === 'File')
@@ -465,6 +554,7 @@ export function sessionReducer(
     }
   }
   if (action.type === 'resolve') {
+    const snapshot = session.catalog[action.id]
     const resource = session.resources.find((entry) => entry.id === action.id)
     if (
       !resource ||
@@ -493,6 +583,13 @@ export function sessionReducer(
     return {
       ...session,
       revision,
+      collectionMembers:
+        snapshot?.kind === 'Collection'
+          ? {
+              ...session.collectionMembers,
+              [resource.id]: matchingProducts(session, snapshot.spec.selector),
+            }
+          : session.collectionMembers,
       resources: session.resources.map((entry) =>
         entry.id === resource.id
           ? {

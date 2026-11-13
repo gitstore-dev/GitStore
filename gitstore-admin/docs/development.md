@@ -2,7 +2,7 @@
 
 ## Boundaries
 
-The shell, shared controls, layouts, navigation, Catalog / Products, and Home / Overview, My work, Recent activity, and Setup guide are implemented. They use deterministic fixtures and shared per-store in-memory sessions; the other 74 destinations remain placeholders. No network transport, authentication, live operational metrics, Apollo cache, GraphQL endpoint, or API mock server is present. Presentation specimens do not enforce authorization.
+The shell, shared controls, layouts, navigation, Catalog / Products, Variants, Categories, Collections, and Home / Overview, My work, Recent activity, and Setup guide are implemented. They use deterministic fixtures and shared per-store in-memory sessions; the other 71 destinations remain placeholders. No network transport, authentication, live operational metrics, Apollo cache, GraphQL endpoint, or API mock server is present. Presentation specimens do not enforce authorization.
 
 The PRD covers future commerce capabilities. Source references in the copied PRD describe the backend's historical planning baseline, which is intentionally absent on this branch. Stitch project GitStore Admin II is visual reference, not production source code.
 
@@ -61,7 +61,7 @@ draft. Explicitly abandoning edits uses the existing confirmation guard. Recover
 rewrites a draft base/proposal; a stale-base notice explains differences from the current
 item. Completed recovery is a discriminated read-only work type for all four kinds.
 
-Recent activity is a date-grouped local timeline: 24 baseline events, 10 initially
+Recent activity is a date-grouped local timeline: 32 baseline events, 10 initially
 visible, 10 more per Load more. Search titles/file names and filter actor, canonical
 kind, category, and UTC date. Counts describe the full filtered history; filters reset
 pagination. Entries are immutable and preserve historical titles/outcomes. New actions
@@ -151,7 +151,7 @@ history says “No activity yet”. These differ from empty tabs and filtered re
 Hide search/sort/filters when the whole store has no corresponding data. Retain
 work tabs for navigation. Overview omits zero-only summary cards, and zero counts
 elsewhere receive no status halos. Setup guide and Products now open their working
-demo pages; Settings and Categories retain their canonical placeholders.
+demo pages; Settings retains its canonical placeholder; Categories is a working read-only browser.
 
 At mobile widths, omit the repeated store/Home trail and subtitle, use a compact
 heading, and keep demo identification visible. The Demo data disclosure contains
@@ -172,7 +172,7 @@ Enter/Space toggling. Narrow manager-canvas checks complement static build check
 
 ## Product catalog and Markdown boundary
 
-- `src/features/catalog/products`: list selectors/URL state, CRUD reducer, document editor, media ordering, lifecycle/dependency actions, and route pages. Nested routes belong to the existing Products destination; five mock destinations and 74 placeholders remain.
+- `src/features/catalog/products`: list selectors/URL state, CRUD reducer, document editor, media ordering, lifecycle/dependency actions, and route pages. Nested routes belong to the existing Products destination; eight mock destinations and 71 placeholders remain.
 - `src/features/demo`: shared session provider, authored snapshots, events, Product buffers, draft buffers, revision counters and owner fixtures. Local category/media IDs are demo lookup keys, not GraphQL input envelopes; introduce an explicit contract adapter with real API integration.
 - `src/components/markdown`: lazy Milkdown Crepe adapter, CommonMark/GFM semantic comparison, explicit source fallback and safe React Markdown preview. Rich AST is disposable. No image uploads, math, AI, collaboration or interpolation. Frontmatter fields are edited outside body.
 
@@ -205,3 +205,15 @@ The leading Product detail image uses eager, synchronous decoding for snapshot p
 `src/features/home/setup-guide` owns typed step definitions, selectors, presentation, and inspector confirmations. The shared demo session owns three review flags and a `setup-review` reducer action; acknowledgements leave catalog/history/work/buffers and revision unchanged. The fourth step is derived from Product presence excluding deleting IDs. Overview imports this shared progress model; its old fixture-only checklist was removed.
 
 Task search parameters are validated by the thin route. Guidance selections use normal history; inspector dismissal removes `step` with replacement navigation and restores trigger focus. Review dialogs live with the selected inspector task, so changing tasks/unmounting removes stale confirmation state. Focus and theme changes preserve the selection and session. Reset restores the selected store's reviews and catalog alongside all other Home state; no browser-storage persistence or API transport is introduced. P04 is visual direction only. Use Setup guide stories for presentation states; read-only/error specimens do not enforce authorization.
+
+## Read-only catalog browsers
+
+`src/features/catalog/browse` owns typed selectors, the shared responsive index/detail compositions, and the category spatial map. Thin file routes keep the existing navigation identities. The registry has eight mock destinations and 71 placeholders, including all 79 original destinations. Search, status, relationship, sort, view, and optional map selection live in validated URL search. Lists use bounded six-item cursor batches with Load more, never a page count or required server total. The category map/tree uses the complete small local hierarchy; future remote hierarchy expansion needs bounded relationship queries.
+
+The existing native Product transition lifecycle is reused only for list/detail journeys within a single catalog domain and store. List filters, loaded batches, scroll, and keyboard focus restore on return. Unsupported snapshots and reduced motion use normal navigation. The map uses HTML buttons and decorative SVG edges, with pointer panning, keyboard arrows, +/− zoom, fit, and focus-to-node centering. It does not change relationships. Grid cards reuse the demand-driven Home light field and CSS fallback; no new HTML-in-Canvas capture or rendering dependencies were added.
+
+Kyoto now seeds 18 resources (four Products, three Variants, four Categories, three Collections, two Files, Namespace and Repository) and 32 historical activities; Berlin remains empty. Category hierarchy is Homeware → Ceramics → Tableware, plus Lifestyle. Products initially retain their existing Homeware assignments. Product metadata labels remain separate from merchant tags. Collection snapshots contain label selectors instead of the old authored product-ID array. History, recovery previews, and Overview references use the updated representation; collection recovery restores authored rules, never observed membership. Recorded membership remains unchanged by Product edits/deletion until the existing Overview processing action updates it. The current matching preview excludes deleting Products and does not establish readiness or publication. Variant detail fixtures are separate from recoverable authored snapshots; existing Product deletion owner checks remain intact.
+
+P12/P13/P14 in GitStore Admin II are visual references. Drop their deployment, worker, publication, live stock, and invented schema claims. The main checkout currently disagrees about Collection targetRef membership: the schema suggests a single Product reference, while the Products resolver uses selectors only. This increment implements selector inspection and deterministic local label matching; explicit-reference membership remains deferred. Expression semantics follow Kubernetes label selectors: AND across rules, In/NotIn/Exists/DoesNotExist, and empty selectors match nothing in GitStore.
+
+Storybook includes loading, unavailable, earlier-snapshot, empty, filtered-empty, dark/mobile/reduced motion, long lists, missing parent, cycle, and missing member specimens. These presentation fixtures do not implement permission enforcement or network requests.

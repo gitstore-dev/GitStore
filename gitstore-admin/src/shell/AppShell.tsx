@@ -73,12 +73,22 @@ export function AppShell({ children }: { children?: ReactNode }) {
           : product.spec.title
         : 'Product unavailable'
 
+  const nestedCatalog =
+    ['catalog.variants', 'catalog.categories', 'catalog.collections'].includes(
+      active?.id ?? '',
+    ) && productSegments.length > 4
+  const catalogItemTitle =
+    product?.kind !== 'File' && product && 'spec' in product
+      ? product.spec.title
+      : productSession.variants[productSegments[4] ?? '']?.spec.title
   const pageTitle =
     routeNamespace && !isDemoNamespace(routeNamespace)
       ? 'Unknown demo workspace'
       : nestedProduct
         ? productPageTitle
-        : (active?.label ?? 'Not found')
+        : nestedCatalog
+          ? (catalogItemTitle ?? 'Item unavailable')
+          : (active?.label ?? 'Not found')
   useEffect(() => {
     document.title = `${pageTitle} · GitStore`
   }, [pageTitle])
@@ -339,7 +349,9 @@ export function AppShell({ children }: { children?: ReactNode }) {
                   <li aria-current="page">
                     {nestedProduct
                       ? productPageTitle
-                      : (active?.label ?? 'Not found')}
+                      : nestedCatalog
+                        ? (catalogItemTitle ?? 'Item unavailable')
+                        : (active?.label ?? 'Not found')}
                   </li>
                 </ol>
               </nav>

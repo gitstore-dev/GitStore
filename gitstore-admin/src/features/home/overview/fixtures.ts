@@ -180,6 +180,36 @@ const resources: readonly DemoResource[] = [
     path: 'repositories/atelier-catalog.md',
     references: [],
   },
+  ...[
+    ['ceramics', 'Ceramics', 'homeware'],
+    ['tableware', 'Tableware', 'ceramics'],
+    ['lifestyle', 'Lifestyle', ''],
+  ].map(([id, title, parent]): DemoResource => ({
+    id: id!,
+    kind: 'CategoryTaxonomy',
+    spec: { title: title! },
+    readiness: 'ready',
+    diagnostic: 'No issues in this demo snapshot.',
+    path: `catalog/taxonomies/${id}.md`,
+    references: parent
+      ? [
+          {
+            resourceId: parent,
+            label: parent === 'homeware' ? 'Homeware' : 'Ceramics',
+            detail: 'Parent category',
+          },
+        ]
+      : [],
+  })),
+  {
+    id: 'seasonal-selection',
+    kind: 'Collection',
+    spec: { title: 'Seasonal Selection' },
+    readiness: 'ready',
+    diagnostic: 'No product rules have been set in this demo.',
+    path: 'catalog/collections/seasonal-selection.md',
+    references: [],
+  },
 ]
 const atelier: OverviewFixture = {
   namespace: 'atelier-kyoto',

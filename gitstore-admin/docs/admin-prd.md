@@ -10,7 +10,7 @@
 
 **Brand reference:** [`gitstore-assets/branding/concept-v2`](../public/branding/)
 
-> Admin-only branch note: this PRD preserves the broader product plan. Backend source links point to the original GitStore checkout revision; backend services are intentionally absent here. The shell, navigation, layouts, Catalog / Products, and Home / Overview, My work, Recent activity, and Setup guide pages with shared per-store local demo sessions are implemented. The other 74 destinations remain placeholders; mock behavior does not establish backend capabilities.
+> Admin-only branch note: this PRD preserves the broader product plan. Backend source links point to the original GitStore checkout revision; backend services are intentionally absent here. The shell, navigation, layouts, Catalog / Products, Variants, Categories, Collections, and Home / Overview, My work, Recent activity, and Setup guide pages with shared per-store local demo sessions are implemented. The other 71 destinations remain placeholders; mock behavior does not establish backend capabilities.
 
 ## 1. Product direction
 
@@ -208,7 +208,7 @@ Visual reference: [P03 Home — Recent activity, GitStore Admin II](https://stit
 The implementation uses the timeline/inspector composition without its invented
 mesh, signing, deployment, broker, export, or live-polling claims.
 
-- Atelier Kyoto starts with 24 immutable dated events; Studio Berlin starts empty.
+- Atelier Kyoto starts with 32 immutable dated events; Studio Berlin starts empty.
   Show 10 matching entries initially and add 10 per Load more. Filter title/file
   name, actor, type, category, and UTC date; group newest-first by recorded date.
 - Inspect historical Before/After fields and distinguish historical outcomes from
@@ -650,8 +650,7 @@ heading, concise explanation, and optional relevant action. An empty catalog say
 history says “No activity yet”. These differ from empty tabs and filtered results.
 Hide search/sort/filters when the whole store has no corresponding data. Retain
 work tabs for navigation. Overview omits zero-only summary cards, and zero counts
-elsewhere receive no status halos. Existing setup/catalog links still lead to
-placeholders; no creation flows are introduced.
+elsewhere receive no status halos. Setup guide and the four implemented catalog destinations open working demo pages; unrelated destinations retain their placeholders.
 
 At mobile widths, omit the repeated store/Home trail and subtitle, use a compact
 heading, and keep demo identification visible. The Demo data disclosure contains
@@ -672,7 +671,7 @@ Enter/Space toggling. Narrow manager-canvas checks complement static build check
 
 ## Implemented Product catalog demo increment
 
-**Scope:** Catalog / Products is the fourth mock destination. The 79-destination registry now retains 74 placeholders; Home / Setup guide is the fifth mock destination. This is a local demo, not shipped backend authoring.
+**Scope:** Catalog / Products is the fourth mock destination. The 79-destination registry now retains 71 placeholders; Home / Setup guide is the fifth mock destination. This is a local demo, not shipped backend authoring.
 
 **Visual reference:** [Product Canvas (Focus Mode)](https://stitch.google.com/projects/13975495090411370806?node-id=42860fe6eac54d098d5041326457bbfb), in the original GitStore Admin project, supplements the latest GitStore Admin II designs. Reuse its narrow document composition, inline Title, restrained writing controls and lower media/variant sections with the current Split / Return identity. Do not copy its invented publication or telemetry controls.
 
@@ -706,4 +705,14 @@ Four ordered steps are independently available: Review store details, Review cat
 
 Progress lives in the shared per-store memory session, surviving routes/store switches and Focus Mode until reload or confirmed store reset. Reviews do not enter catalog history or My work and do not change resources, settings, categories, readiness, or publication. Completed copy says Checklist complete, not ready for commerce. Repository and future storefront topics remain informational outside progress.
 
-Optional `step` search values are `store-details`, `categories`, `first-product`, and `catalog-checks`; valid values open guidance in the shell inspector and invalid values are ignored. Closing removes the parameter with replacement navigation. Settings/Category links retain canonical placeholder destinations with Page not implemented disclosure; Product creation uses its existing route. Loading, unavailable, and read-only stories are presentation specimens, not network/authentication contracts. Five destinations are mock, 74 remain placeholders, and all 79 remain reachable.
+Optional `step` search values are `store-details`, `categories`, `first-product`, and `catalog-checks`; valid values open guidance in the shell inspector and invalid values are ignored. Closing removes the parameter with replacement navigation. Settings retains its canonical placeholder with Page not implemented disclosure; Categories opens its read-only browser, and Product creation uses its existing route. Loading, unavailable, and read-only stories are presentation specimens, not network/authentication contracts. Eight destinations are mock, 71 remain placeholders, and all 79 remain reachable.
+
+## Implemented read-only catalog browsers
+
+Visual references: [P12 Variants](https://stitch.withgoogle.com/projects/12282348560453912861?node-id=4f60d3d17f894b16829f551234c77dc9), [P13 Categories](https://stitch.withgoogle.com/projects/12282348560453912861?node-id=d652bfbe553d469e914b21c1e9478959), and [P14 Collections](https://stitch.withgoogle.com/projects/12282348560453912861?node-id=be47744aab824f55b569ca16a12bb208), adapted to the existing merchant shell. These three destinations bring the registry to eight mocks and 71 placeholders. Nested detail routes do not add registry destinations.
+
+All three offer Title search (also SKU for Variants), status and relationship filters, deterministic sorting, full detail URLs, shared demo controls, and honest empty/unavailable states. Variants and Collections offer grid/table views; Categories offers tree/table/spatial views. Reuse the Product list/detail transition and preserve list context, scroll, and focus. No create/update/delete actions are added. Variant options, SKU, parent Product, media, pricing, and inventory are declarations only; do not show a stock ledger or evaluated checkout price.
+
+Categories display parent/children, direct Product assignments, safe missing-parent/cycle diagnostics, and a pan/zoom map whose HTML controls remain keyboard accessible. Spatial navigation never reparents nodes. A bounded local fixture provides Homeware → Ceramics → Tableware and a Lifestyle root. Collections display readable AND label rules, the current saved-catalog demo preview, and separate recorded demo membership. Empty rules match nothing; merchant tags are not labels. Remove the old authored ordered product-ID array from collection snapshots/history/recovery. Manual/targetRef membership, remote query execution, stock-dependent rules, and storefront publication remain outside this increment.
+
+Products, Overview health columns, and Setup guide link into the new destinations. Opening Categories does not mark the setup step reviewed. The shared session has 18 Kyoto resources and 32 historical activities; Berlin remains first-use empty. Existing Product/Home actions and store reset update every browser consistently without browser-storage persistence. All file-backed titles use spec.title and technical paths remain .md. Error and read-only presentation states make no authorization claim.

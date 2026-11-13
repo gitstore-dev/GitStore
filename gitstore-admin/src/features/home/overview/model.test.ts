@@ -28,10 +28,10 @@ describe('Overview demo fixtures and selectors', () => {
   })
   it('derives coherent summaries and work counts from the same records', () => {
     expect(overviewSummary(fixture.resources)).toEqual({
-      total: 14,
+      total: 18,
       attention: 4,
       reconciling: 2,
-      ready: 8,
+      ready: 12,
     })
     expect(queueCounts(fixture.resources)).toEqual({
       all: 6,
@@ -41,7 +41,7 @@ describe('Overview demo fixtures and selectors', () => {
       reconciling: 2,
     })
     const matrix = healthMatrix(fixture.resources)
-    expect(matrix.reduce((sum, row) => sum + row.total, 0)).toBe(14)
+    expect(matrix.reduce((sum, row) => sum + row.total, 0)).toBe(18)
     for (const row of matrix)
       expect(row.total).toBe(row.ready + row.attention + row.reconciling)
   })
@@ -71,10 +71,10 @@ describe('Overview demo fixtures and selectors', () => {
       id: 'stone-basin',
     })
     expect(overviewSummary(changed.resources)).toEqual({
-      total: 14,
+      total: 18,
       attention: 3,
       reconciling: 2,
-      ready: 9,
+      ready: 13,
     })
     expect(
       workQueue(changed.resources, 'all', 'severity').some(

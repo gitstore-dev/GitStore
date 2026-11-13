@@ -2,7 +2,7 @@
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="gitstore-admin/public/branding/readme-dark.png"><img src="gitstore-admin/public/branding/readme-light.png" alt="GitStore — Change boldly. Keep a way back."></picture>
 
-An isolated, mock-first Admin foundation: React, strict TypeScript, Vite, TanStack Router, React Aria, and custom CSS Modules. All 79 PRD destinations are navigable: Catalog / Products and Home / Overview, My work, Recent activity, and Setup guide are interactive mock destinations; the other 74 remain placeholders. My work includes a limited, demo-only product Title/description editor and personal review workflow. There is no authentication, backend connection, or GraphQL runtime.
+An isolated, mock-first Admin foundation: React, strict TypeScript, Vite, TanStack Router, React Aria, and custom CSS Modules. All 79 PRD destinations are navigable: Catalog / Products, Variants, Categories, Collections, and Home / Overview, My work, Recent activity, and Setup guide are interactive mock destinations; the other 71 remain placeholders. My work includes a limited, demo-only product Title/description editor and personal review workflow. There is no authentication, backend connection, or GraphQL runtime.
 
 ## Start
 
@@ -61,3 +61,5 @@ Products supports URL-backed search/filter/sort, grid/table views, cursor-based 
 The document canvas follows [Product Canvas (Focus Mode)](https://stitch.google.com/projects/13975495090411370806?node-id=42860fe6eac54d098d5041326457bbfb). Milkdown Crepe provides slash blocks and formatting over Markdown, with Write / Markdown / safe Preview modes. The original body is preserved on no-op edits; unsupported rich conversions fall back to source. Product buffers survive navigation/store switches, stale saves are blocked, and explicit discard/reload requires confirmation. See the PRD for the ADR-0013 boundary.
 
 Home / Setup guide completes the four Home destinations. Its four-step checklist shares progress with Overview. Confirming a demo review records guidance read, not configuration or readiness. Product completion follows the saved, non-deleting catalog. Task links support `?step=store-details|categories|first-product|catalog-checks`; setup reviews reset with the shared per-store demo.
+
+Catalog / Variants, Categories, and Collections share the in-memory store session. Browse full detail URLs; variants show SKU/options and declared pricing/inventory. Categories offers tree, table, and spatial map views without relationship editing. Collections uses label selectors, a current demo preview, and separate recorded fixture membership. These pages do not create, edit, delete, or publish resources.

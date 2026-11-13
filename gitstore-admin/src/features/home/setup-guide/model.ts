@@ -26,11 +26,11 @@ export const setupDefinitions = [
     description: 'Plan how shoppers will find their way through your catalog.',
     instructions: [
       'Consider the categories that will help shoppers browse your products.',
-      'The Product editor can choose an existing demo category. Category editing is not implemented yet.',
+      'The Product editor can choose an existing demo category. Open Categories to explore its tree, table, and map. Category editing is not implemented yet.',
     ],
     destination: 'catalog.categories',
     linkLabel: 'Open categories',
-    planned: true,
+    planned: false,
   },
   {
     id: 'first-product',

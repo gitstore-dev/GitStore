@@ -29,7 +29,7 @@ test('Overview derives counts, filters and sorts resource work without backend r
   await expect(
     page.getByRole('heading', { name: 'Store setup', exact: true }),
   ).toBeVisible()
-  await expect(card(page, 'Total items')).toContainText('14')
+  await expect(card(page, 'Total items')).toContainText('18')
   await expect(card(page, 'Needs attention')).toContainText('4')
   await expect(
     page.getByRole('button', { name: /^View details for / }),
@@ -91,7 +91,7 @@ test('resource inspection, cancellation, demo resolution, activity, ready inspec
   ).toBeFocused()
   await expect(page.getByRole('status')).toContainText('Demo change applied')
   await expect(card(page, 'Needs attention')).toContainText('3')
-  await expect(card(page, 'Ready')).toContainText('9')
+  await expect(card(page, 'Ready')).toContainText('13')
   await expect(
     page.getByRole('button', { name: 'View details for Kanso Stone Basin' }),
   ).toHaveCount(0)

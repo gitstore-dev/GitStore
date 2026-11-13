@@ -264,7 +264,7 @@ test('My work persists across routes, namespaces and history; reload restores th
   await nav.getByRole('link', { name: 'Overview', exact: true }).click()
   await expect(
     page.getByRole('region', { name: 'Store summary' }),
-  ).toContainText('14')
+  ).toContainText('18')
   await expect(
     page.getByRole('button', { name: 'Edit demo draft', exact: true }),
   ).toHaveCount(0)

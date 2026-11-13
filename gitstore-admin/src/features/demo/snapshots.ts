@@ -1,8 +1,17 @@
 import type { DemoResource } from '../home/overview/model'
 import { resourceLabel } from '../home/overview/model'
+export interface LabelSelector {
+  matchLabels?: Readonly<Record<string, string>>
+  matchExpressions?: readonly {
+    key: string
+    operator: 'In' | 'NotIn' | 'Exists' | 'DoesNotExist'
+    values?: readonly string[]
+  }[]
+}
 export type ItemSnapshot =
   | {
       kind: 'Product'
+      metadata?: { labels: Readonly<Record<string, string>> }
       body: string
       spec: {
         title: string
@@ -27,7 +36,7 @@ export type ItemSnapshot =
       body: string
       spec: {
         title: string
-        productIds: readonly string[]
+        selector?: LabelSelector
       }
     }
   | { kind: 'File'; name: string; altText: string; caption: string }
@@ -65,6 +74,7 @@ export function snapshotFields(
         Category: value.spec.categoryId,
         'Product images': value.spec.mediaIds,
         Tags: value.spec.tags,
+        Labels: JSON.stringify(value.metadata?.labels ?? {}),
         Options: value.spec.options.map(
           (option) =>
             `Title ${JSON.stringify(option.title)} · Identifier ${JSON.stringify(option.name)} · Values ${JSON.stringify(option.values)}`,
@@ -81,7 +91,7 @@ export function snapshotFields(
       return {
         Title: value.spec.title,
         Description: value.body,
-        'Collection products': value.spec.productIds,
+        'Product rules': JSON.stringify(value.spec.selector ?? {}),
       }
     case 'File':
       return {
@@ -135,6 +145,14 @@ export function seedCatalog(
     if (resource.kind === 'Product')
       catalog[resource.id] = {
         kind: 'Product',
+        metadata: {
+          labels: {
+            assortment: ['stone-basin', 'tea-ritual'].includes(resource.id)
+              ? 'autumn'
+              : 'everyday',
+            material: resource.id === 'silk-tunic' ? 'silk' : 'ceramic',
+          },
+        },
         body: description,
         spec: {
           title,
@@ -160,7 +178,16 @@ export function seedCatalog(
       catalog[resource.id] = {
         kind: 'CategoryTaxonomy',
         body: description,
-        spec: { title, parentId: null },
+        spec: {
+          title,
+          parentId:
+            (
+              { ceramics: 'homeware', tableware: 'ceramics' } as Record<
+                string,
+                string
+              >
+            )[resource.id] ?? null,
+        },
       }
     if (resource.kind === 'Collection')
       catalog[resource.id] = {
@@ -168,10 +195,15 @@ export function seedCatalog(
         body: description,
         spec: {
           title,
-          productIds:
-            resource.id === 'autumn-objects'
-              ? ['stone-basin', 'tea-ritual']
-              : ['ceramic-cup', 'silk-tunic'],
+          selector:
+            resource.id === 'seasonal-selection'
+              ? undefined
+              : {
+                  matchLabels: {
+                    assortment:
+                      resource.id === 'autumn-objects' ? 'autumn' : 'everyday',
+                  },
+                },
         },
       }
     if (resource.kind === 'File')
@@ -204,11 +236,9 @@ export function recoveryProblem(
             : []),
           ...target.spec.mediaIds.map((ref) => [ref, 'File'] as const),
         ]
-      : target.kind === 'Collection'
-        ? target.spec.productIds.map((ref) => [ref, 'Product'] as const)
-        : target.kind === 'CategoryTaxonomy' && target.spec.parentId
-          ? [[target.spec.parentId, 'CategoryTaxonomy']]
-          : []
+      : target.kind === 'CategoryTaxonomy' && target.spec.parentId
+        ? [[target.spec.parentId, 'CategoryTaxonomy']]
+        : []
   if (refs.some(([ref, kind]) => catalog[ref]?.kind !== kind))
     return 'A related item is missing or has the wrong type. This version cannot be restored.'
   if (target.kind === 'CategoryTaxonomy') {

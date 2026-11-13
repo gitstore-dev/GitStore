@@ -93,10 +93,11 @@ export function HomeDemoProvider({
           Reset catalog and Home demo for {storeName}?
         </Heading>
         <p>
-          Restore the original Products, Overview, My work, Recent activity, and
-          Setup guide examples for {storeName}. This discards all saved demo
-          changes, recoveries, setup reviews, and unsaved draft text for this
-          store. Other stores are unchanged.
+          Restore the original catalog (Products, Variants, Categories, and
+          Collections), Overview, My work, Recent activity, and Setup guide
+          examples for {storeName}. This discards all saved demo changes,
+          recoveries, setup reviews, and unsaved draft text for this store.
+          Other stores are unchanged.
         </p>
         <div className={styles.actions}>
           <ActionButton autoFocus onPress={() => setResetting(null)}>

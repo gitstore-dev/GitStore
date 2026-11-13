@@ -102,7 +102,7 @@ test('task deep links, browser history, close replacement and inspector cleanup 
   ).toBeFocused()
   await expect(
     page.getByText('Page not implemented', { exact: true }),
-  ).toBeVisible()
+  ).toHaveCount(0)
   await page
     .getByRole('button', { name: 'Close inspector', exact: true })
     .click()
@@ -137,7 +137,7 @@ test('task deep links, browser history, close replacement and inspector cleanup 
   ).toBeFocused()
   await page.getByRole('link', { name: 'Open categories', exact: true }).click()
   await expect(
-    page.getByText('PAGE NOT IMPLEMENTED', { exact: true }),
+    page.getByRole('heading', { name: 'Categories', exact: true, level: 1 }),
   ).toBeVisible()
   await expect(
     page.getByRole('heading', { name: 'Review categories', exact: true }),

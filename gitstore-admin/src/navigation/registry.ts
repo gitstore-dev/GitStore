@@ -216,6 +216,9 @@ export const destinations: readonly NavigationDestination[] = groups
       'home.recent-activity',
       'home.setup-guide',
       'catalog.products',
+      'catalog.variants',
+      'catalog.categories',
+      'catalog.collections',
     ].includes(destination.id)
       ? 'mock'
       : 'placeholder',
@@ -242,8 +245,13 @@ export function destinationAtPath(pathname: string) {
   return destinations.find(
     (destination) =>
       destination.to === normalized ||
-      (destination.id === 'catalog.products' &&
-        normalized.startsWith('/w/$namespace/catalog/products/')),
+      ([
+        'catalog.products',
+        'catalog.variants',
+        'catalog.categories',
+        'catalog.collections',
+      ].includes(destination.id) &&
+        normalized.startsWith(`${destination.to}/`)),
   )
 }
 export function searchDestinations(query: string) {

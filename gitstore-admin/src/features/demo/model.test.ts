@@ -26,11 +26,11 @@ const older = (kind: ItemSnapshot['kind']) =>
         snapshotTitle(seed().catalog[event.itemId]!),
   )!
 describe('shared Home demo session', () => {
-  it('seeds coherent immutable histories, canonical titles, valid links and exactly 24 events', () => {
+  it('seeds coherent immutable histories, canonical titles, valid links and exactly 32 events', () => {
     const session = seed()
-    expect(session.events).toHaveLength(24)
+    expect(session.events).toHaveLength(32)
     expect(createSession('atelier-kyoto')).toEqual(session)
-    expect(new Set(session.events.map((event) => event.id)).size).toBe(24)
+    expect(new Set(session.events.map((event) => event.id)).size).toBe(32)
     expect(
       new Set(session.events.map((event) => event.timestamp.slice(0, 10))),
     ).toEqual(new Set(['2026-10-31', '2026-11-01', '2026-11-02']))
@@ -205,7 +205,7 @@ describe('shared Home demo session', () => {
       id: 'basin-draft',
       text,
     })
-    expect(session.events).toHaveLength(24)
+    expect(session.events).toHaveLength(32)
     const next = sessionReducer(session, {
       type: 'restore',
       eventId: older('Product').id,
