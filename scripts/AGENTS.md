@@ -12,6 +12,10 @@ container wiring and configuration.
 - Use the root Makefile as the public interface and `make help` for current
   commands. Extend existing selector families (`TARGET`, `PROFILE`,
   `DATASTORE`) and helpers, not feature-specific public targets or overlays.
+- `make check TARGET=licenses` uses `check-license-headers.sh` for all source
+  languages. Keep staged checks index-only, language-specific generated
+  exceptions and pinned upstream Apache attribution intact. Focused
+  regressions in `test-license-headers.sh` also run in the default test suite.
 - Keep command documentation in the relevant README and scoped instructions
   synchronized with supported behavior. Do not describe a proposed command
   as implemented.

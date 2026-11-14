@@ -602,6 +602,13 @@ Install local hooks once per clone:
 ./scripts/install-git-hooks.sh
 ```
 
+The pre-commit hook uses the unified license checker for Go, Rust and
+JavaScript/TypeScript. It reads staged blobs, not unstaged working-tree edits.
+`make check TARGET=licenses DIFF_BASE=origin/main` validates tracked headers
+and current-year copyright endpoints for changed sources. Generated sources
+and the pinned upstream Apache-licensed reader retain their existing exceptions;
+see [license checker rules](../scripts/README.md#check-license-headerssh).
+
 Use Conventional Commits.
 
 ## Configuration Highlights
