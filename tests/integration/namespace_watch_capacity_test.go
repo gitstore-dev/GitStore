@@ -1310,10 +1310,6 @@ func confirmCapacityNamespaceExistsContext(ctx context.Context, cfg capacityConf
 	return false
 }
 
-func createCapacityNamespace(client *http.Client, apiURL, token, name string) error {
-	return createCapacityNamespaceContext(context.Background(), client, apiURL, token, name)
-}
-
 func createCapacityNamespaceContext(ctx context.Context, client *http.Client, apiURL, token, name string) error {
 	body, err := json.Marshal(gqlRequest{
 		Query: `mutation($input: CreateNamespaceInput!) { createNamespace(input: $input) { namespace { metadata { name } } } }`,
@@ -1423,10 +1419,6 @@ func updateCapacityNamespaceContext(ctx context.Context, client *http.Client, ap
 		return fmt.Errorf("GraphQL mutation did not acknowledge Namespace %q transition %q", name, title)
 	}
 	return nil
-}
-
-func capacityNamespaceExists(client *http.Client, apiURL, token, name string) bool {
-	return capacityNamespaceExistsContext(context.Background(), client, apiURL, token, name)
 }
 
 func capacityNamespaceExistsContext(ctx context.Context, client *http.Client, apiURL, token, name string) bool {
