@@ -11,7 +11,9 @@
   actually exercises; local adapters do not establish deployed behavior.
 - `make test TARGET=datastore` runs backend-neutral contracts without external
   Scylla. Add `DATASTORE=scylla SCYLLA_TEST_ADDR=<host:port>` for tagged Scylla
-  contracts, using an isolated test-owned keyspace.
+  contracts, using an isolated test-owned keyspace. Tagged packages run
+  sequentially to avoid cross-package DDL/snapshot contention on the shared
+  fixture; concurrent-writer tests retain their internal concurrency.
 - `make test TARGET=secret-integration` is an explicit opt-in deployed suite.
   Set `SECRET_TEST_OWNED_DEPLOYMENT=1`, `SECRET_TEST_API_A=<base-url>`,
   `SECRET_TEST_API_B=<base-url>` and `SECRET_TEST_TOKEN_FILE=<private-file>`.

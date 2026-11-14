@@ -329,10 +329,14 @@ make down
 Run Scylla-backed API datastore tests after Scylla is reachable:
 
 ```bash
-cd gitstore-api
-GITSTORE_TEST_SCYLLA_ADDR=127.0.0.1:9042 \
-  go test -tags scylla -v -timeout 10m ./tests/contract/datastore/... ./internal/datastore/scylla/...
+make test TARGET=datastore DATASTORE=scylla SCYLLA_TEST_ADDR=127.0.0.1:9042
 ```
+
+The tagged packages run sequentially because their isolated keyspaces still
+share the same Scylla instance. This prevents one package's schema creation and
+snapshotting teardown from competing with the other's deadline-sensitive LWT
+tests on the single-shard fixture. Concurrent writers inside each test remain
+concurrent; assertions and deadlines are unchanged.
 
 ### Projection audit, repair, and capacity validation
 

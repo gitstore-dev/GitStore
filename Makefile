@@ -488,8 +488,9 @@ else ifeq ($(TEST_TARGET),datastore)
 ifeq ($(DATASTORE),memdb)
 	@cd "$(API_DIR)" && go test -tags memdb -count=1 ./internal/datastore/... ./tests/contract/datastore/...
 else ifeq ($(DATASTORE),scylla)
+	# Both packages share one Scylla instance; keep fixture DDL out of the other package's LWT races.
 	@cd "$(API_DIR)" && GITSTORE_TEST_SCYLLA_ADDR="$(SCYLLA_TEST_ADDR)" \
-		go test -tags scylla -count=1 -timeout 10m ./internal/datastore/scylla/... ./tests/contract/datastore/...
+		go test -p 1 -tags scylla -count=1 -timeout 10m ./internal/datastore/scylla/... ./tests/contract/datastore/...
 else
 	@echo "test TARGET=datastore requires DATASTORE=memdb or DATASTORE=scylla" >&2; exit 2
 endif

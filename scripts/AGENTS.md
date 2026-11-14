@@ -21,6 +21,9 @@ container wiring and configuration.
   as implemented.
 - Existing `make build`, `make test`, `make lint` and `make pr-ready` include
   the pinned `shared/scylla-cdc-go` reader patch alongside the other Go modules.
+- `make test TARGET=datastore DATASTORE=scylla` serializes tagged packages
+  sharing one Scylla fixture, not the concurrent writers within each test.
+  Preserve that scheduling in the command-dispatch regression.
 - `make git`, `make api` and `make controller` run native services in the
   foreground. `make dev` uses the existing native startup helper and shutdown
   trapping. Follow its current credential prerequisites rather than
