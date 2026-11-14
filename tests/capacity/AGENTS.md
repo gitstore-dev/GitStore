@@ -27,6 +27,9 @@ and evidence contracts; do not duplicate that catalogue in root instructions.
 - Reuse existing runners, stack helpers and observability wiring. Check the
   current README and implementation before prescribing flags; a proposed
   selector or an experiment-local tool is not a contributor prerequisite.
+- Preflight scripts share mode parsing and matching controller-topology
+  plumbing through `lib/preflight.sh`. Keep profile-specific scale, memory,
+  live-process and source-verification requirements in their own preflights.
 - Keep credentials, raw profiles, request content and private runtime data
   out of versioned artifacts and public evidence. Use the existing protected
   diagnostic endpoints, bounded captures and redaction checks.
