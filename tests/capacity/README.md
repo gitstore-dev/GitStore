@@ -51,11 +51,12 @@ revision and Ready state on both Admin APIs within sixty seconds; those oracle
 reads are measurement overhead in addition to the offered workload.
 Two additional measurement streams require the same UID/commit through the
 durable journal on both APIs and resume from their last cursor after disconnect.
-The Git fixtures use normal clones and `fetch.negotiationAlgorithm=noop`;
-the native service currently returns invalid responses to shallow and incremental
-have/ACK negotiation. This standard client setting fetches without have negotiation
-and can increase transferred pack data. These runs do not certify those unsupported
-negotiation paths. Existing command deadlines and output bounds still apply.
+The Git fixtures use normal clones and `fetch.negotiationAlgorithm=noop`.
+That client setting skips have/ACK negotiation and can increase transferred pack
+data; these runs therefore do not certify incremental negotiation. The native
+service implements have/ACK responses and incremental pack boundaries, with
+dedicated protocol tests. Shallow/depth handling is not implemented, so retain
+full-history clones. Existing command deadlines and output bounds still apply.
 Prepare an empty owned workload namespace separately from the preserved catalog
 baseline, and a separate native-push repository inside that namespace. This keeps
 baseline Git trees out of authoring measurements and avoids competing clients on
@@ -101,10 +102,14 @@ make capacity TARGET=api PROFILE=readiness MODE=diagnostic \
   CAPACITY_BASE_URL=http://localhost:4000
 ```
 
-Valid target/profile pairs are `api/readiness`, `api/endpoint-split`, `namespace/admission`,
+Valid target/profile pairs are `api/readiness`, `api/endpoint-split`,
+`api/authorization`, `namespace/admission`,
 `namespace/validation`, `namespace/watch`, `namespace/recovery`,
-`repository/lifecycle`, and `scylla/soak`. Admission is deployed k6 load; validation is the in-process
-two-replica soak. `CAPACITY_PROFILE` is now only an internal k6 dispatch detail.
+`repository/lifecycle`, `product/lifecycle`, `category/hierarchy` and
+`scylla/soak`. `api/authorization` is diagnostic-only until policy reload-soak
+and zero-I/O acceptance evidence are complete. Admission is deployed k6 load;
+validation is a two-helper-process soak, not a released API deployment.
+`CAPACITY_PROFILE` is now only an internal k6 dispatch detail.
 The dispatcher is the only public capacity entry point.
 
 Spec 063's `REPOSITORY_CAPACITY_SECRET_SCENARIO=1` selects the connected File-push,
@@ -558,6 +563,15 @@ a default.
 
 ## Included profiles
 
+- `namespace/validation` runs two independent CatalogService test-helper
+  processes and replaces one under load. It offers 10 requests/s with 20 workers,
+  500 files/request and at most 50 Namespace manifests for at least 30 minutes.
+  Hard bounds are p95 <=100ms, p99 <=250ms, internal errors <0.1%, zero incorrect
+  decisions, recovery <=30s, CPU <80%, retained-memory growth <10% and post-soak
+  goroutine drift <=5% per process. The five-second recovery window requires
+  sustained successful traffic, not one readiness request. This functional
+  validation boundary does not certify released API binaries, deployed
+  authentication or the full shared-datastore lifecycle.
 - `api-readiness` is a non-mutating runner smoke test.
 - With `CAPACITY_IDENTITY_READINESS=1`, the same selector runs the identity
   acceptance matrix instead of health-only traffic. It requires a private
@@ -658,17 +672,22 @@ a default.
     and pass the output as `CAPACITY_CATEGORY_AUDIT_FILE`; alpha/production
     require zero `findings`.
 
-Alpha and production modes refuse to run unless evidence
-declares at least two API replicas, three Scylla nodes with at least two shards
-each, and a release Git-service build. Use `MODE=diagnostic` only for
-short bottleneck discovery; diagnostic results can never be cited as a capacity
-pass.
+The Category hierarchy preflight requires at least two API and two controller
+replicas, three Scylla nodes with at least one shard each, and release API,
+controller and Git-service builds in both alpha and production. This permissive
+shard preflight does not establish the declared two-shard production target;
+retain that acceptance requirement in the deployment evidence. Namespace
+admission enforces two shards per node in alpha and production, while Namespace
+watch/recovery and Repository lifecycle enforce one in alpha and two in
+production. Use `MODE=diagnostic` only for short bottleneck discovery; diagnostic
+results can never be cited as a capacity pass.
 
 ## Namespace staged progression
 
 Keep topology, binaries, manifests, and application configuration fixed while
-progressing. Restart with a fresh keyspace and Git data directory after a
-failed stage.
+progressing. After a failed stage, use a newly named test-owned keyspace and Git
+data directory for a fresh attempt; preserve retained baselines, existing
+repositories and prior evidence rather than resetting shared state.
 
 1. Run 10 transitions/s for 10 minutes without subscribers using
    `TARGET=namespace PROFILE=admission MODE=diagnostic`.

@@ -24,7 +24,7 @@ A ProductVariant resource is a Markdown file with YAML frontmatter pushed to a G
 | Field                  | Type              | Required | Constraint                                                    |
 |------------------------|-------------------|----------|---------------------------------------------------------------|
 | `metadata.name`        | string            | yes      | DNS subdomain format                                          |
-| `metadata.namespace`   | string            | no       | Inferred from the repository's owning namespace at push time  |
+| `metadata.namespace`   | string            | yes      | Must match the repository's owning namespace                   |
 | `metadata.labels`      | map[string]string | no       | Key prefix ≤ 253 chars; key name ≤ 63 chars; value ≤ 63 chars |
 | `metadata.annotations` | map[string]string | no       |                                                               |
 

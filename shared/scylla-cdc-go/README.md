@@ -11,4 +11,5 @@ https://docs.scylladb.com/using-scylla/cdc/
 
 For an explanation how to use the library, please look at the [godoc documenation](https://godoc.org/github.com/scylladb/scylla-cdc-go).
 
-This repository also includes two [example programs](examples).
+This vendored module omits the upstream example programs. See [NOTICE.md](NOTICE.md)
+for its upstream provenance and repository-local changes.

@@ -56,7 +56,7 @@ tracks the number of *kinds*, not the number of *fields*.
 directive @authorize(permission: String) on OBJECT | INTERFACE | UNION | FIELD_DEFINITION
 ```
 
-This drops doc 022's separate `resource: String!` argument. [ADR 0010 §2](0010-authorization-model.md#2-canonical-action-grammar)
+This drops doc 022's separate `resource: String!` argument. [ADR 0010 §2](0010-authorization-model.md#2-canonical-grammar-and-finite-catalog)
 already guarantees the action grammar is unambiguous to parse without a vocabulary lookup
 (`<kind>[.<subresource>].<verb>`), so the policy kind is derived from `permission` itself rather than
 carried as a second, independently-driftable argument.
@@ -182,7 +182,7 @@ concrete field to design it against, not now.
 
 ### 7. ADR 0010 §8 visibility bands need no new mechanism for single-resource reads
 
-Private/internal/public visibility ([ADR 0010 §8](0010-authorization-model.md#8-visibility-bands-are-abac-conditions-fail-closed))
+Private/internal/public visibility ([ADR 0010 §8](0010-authorization-model.md#8-structured-conditions-and-denial-presentation))
 is an **input** to `Authorize` — `ResourceContext.Attrs["visibility"]`, read off the resource being
 checked — not an output the resolver needs to consume. A single `Query.repository(by)` read is fully
 covered by §4's existing `obj == nil` path with `mode: CHECK`: the per-kind builder (§5) for `Repository`
@@ -205,7 +205,7 @@ to design together at that point, against a real field, rather than a mechanism 
 
 ### 8. Forward compatibility with a ReBAC/OpenFGA provider
 
-Per [ADR 0010 §14](0010-authorization-model.md#14-ownership-assignment-and-transfer), a Zanzibar-style
+Per [ADR 0010 §14](0010-authorization-model.md#14-creator-owner-and-transfer), a Zanzibar-style
 provider evaluates `Authorize` against its own relation-tuple graph rather than reading
 `ResourceContext.OwnerSub`/`Attrs` as authority. The directive's `CHECK`-only call maps to a single
 `Check(user, relation, object)` — nothing provider-specific. A future scope-output mechanism (§7) would,
@@ -350,7 +350,7 @@ grants `product.create` without `product.read` will see the mutation succeed wit
 - [ADR 0009 — Credential and Secret Material Boundary](0009-credential-secret-boundary.md)
 - [Doc 020 — Pluggable AuthN/AuthZ Architecture](../implementation/020-pluggable_auth_architecture.md)
 - [Doc 022 — OPA Data-Aware Authorization](../implementation/022-opa-data-authorization.md)
-- [Publication Lifecycle](../products/publication-lifecycle.md)
+- [Proposed Publication Lifecycle](../implementation/proposed-publication-lifecycle.md)
 - Live GraphQL authorization module: `gitstore-api/internal/middleware/security/graphql.go`
 - gqlgen directive/type-directive propagation:
   `codegen/field.go` (`bindField`, `ImplDirectives`), `codegen/object.go` (`buildObject`) in

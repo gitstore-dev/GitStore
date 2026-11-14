@@ -116,7 +116,7 @@ docs/
 └── api-reference.md                                    # line 25's static-admin example updated
 ```
 
-**Explicitly out of scope for this plan** (research.md Decision 7): `gitstore-api/gen/gitstore/git/v1/*` (generated code — never hand-edited); `docs/implementation/021-controller_service_account_auth.md` (a separate, unimplemented spec's own premise — flagged, not edited); `docs/implementation/019-pluggable_auth_design.md` (superseded historical record).
+**Explicitly out of scope for this plan** (research.md Decision 7): `gitstore-api/gen/gitstore/git/v1/*` (generated code — never hand-edited); `docs/implementation/021-controller_service_account_auth.md` (a separate feature's historical premise — flagged, not edited); the earlier pluggable-auth design (subsequently removed as a superseded duplicate of `docs/implementation/020-pluggable_auth_architecture.md`).
 
 **Structure Decision**: A direct in-place replacement of one provider package by another, sibling to `rbac-local`; one additive read-only method on `rbac-local`; config-struct removal plus one conditional-validation fix on the same already-being-touched config surface; a test-harness migration confined to `tests/integration/` plus the handful of unit-test files that directly imported the removed package. No new service, no new datastore backend, no `AuthNProvider`/`UserDirProvider`/`AuthZProvider` interface change.
 

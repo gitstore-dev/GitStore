@@ -1,5 +1,11 @@
 # GitStore Implementation Roadmap
-**Status**: ⚠️ In Progress
+**Status**: Historical roadmap assessment, not a current issue inventory or implementation checklist.
+
+The issue counts, dependency ordering and current-state assessments below
+describe the original planning snapshot. For implemented behavior, use the
+[architecture overview](../architecture/README.md); for remaining decisions and
+acceptance gates, consult [ADR statuses](../ADRs/README.md) and the applicable
+feature specifications. This historical record does not close pending work.
 
 ## Executive summary
 

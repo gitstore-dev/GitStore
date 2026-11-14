@@ -66,7 +66,7 @@ Choose storage for the data represented, not for the parent endpoint's name.
 - [Datastore envelopes, query projections, pagination, and CDC](../architecture/datastore-resource-storage.md)
 - [Namespace](../namespace/namespace-spec.md)
 - [Product](../products/product-spec.md) and [ProductVariant](../products/product-variant-spec.md)
-- [Product and Variant Publication Lifecycle](../products/publication-lifecycle.md)
+- [Storefront boundary and current publication availability](../storefront.md)
 - [CategoryTaxonomy](../categories/category-taxonomy-spec.md)
 - [Collection](../collections/collection-spec.md)
 

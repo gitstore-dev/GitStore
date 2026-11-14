@@ -60,7 +60,8 @@ name-only enrollment and keeps the existing isolated key/UID mounts.
 
 ### Policy reload diagnostics
 
-Validate the replacement with `make check TARGET=config CONFIG_FILE=<path>`
+Validate the replacement with
+`make check TARGET=config CONFIG_FILE=<config-path> POLICY_FILE=<candidate-policy-path>`
 before installing it. Send SIGHUP to each intended API process to rebuild and
 atomically swap its complete authentication/authorization provider set. A local
 signal does not update another replica, and editing a mounted file alone does
@@ -121,9 +122,12 @@ capped at 30 seconds.
    ServiceAccount is enabled.
 4. For a file resolver, verify the mounted directory and logical
    `SecretRef` components, ownership, and read permission from the controller
-   container. Verify the file is exactly one supported PKCS#8 PEM key without
-   printing it. For an environment resolver, verify the expected variable is
-   present without displaying its value.
+   container. Verify it is a complete atomic JSON signing record containing
+   base64-encoded `privateKey` and `keyID` values, with one supported PKCS#8 PEM
+   key and the matching enrolled ID, without printing it. Raw PEM alone is not
+   accepted. For an environment resolver, verify the configured variable
+   contains the complete record without displaying its value. See
+   [signing-record format](secret-material-rotation.md#formats-and-canonical-configuration).
 5. If credential readiness is true but a watch still reconnects, diagnose the
    watch/replay layer with
    [controller-watch-status](controller-watch-status.md) and
@@ -146,12 +150,16 @@ work:
    `kid` immediately. Expect affected controllers to become unready until they
    are rolled to another enrolled key.
 
-API issuer signing-key rotation also requires an overlap: deploy the new
-signing `kid` while every API replica continues to verify the old key, let
-controllers renew and reconnect with newly signed tokens, then retire the old
-verifier only after the maximum old-token lifetime. Do not roll a single-key
-issuer configuration that invalidates still-live tokens; stage verification
-overlap first and validate every replica before promotion.
+API issuer signing-key rotation uses concatenated private PEM blocks in
+`api.auth.serviceaccount.signing_key`; the first block signs new tokens and all
+blocks supply verification keys. First install an old-then-new bundle on every
+API replica, preserving the old signer while adding the new verifier. Then
+install a new-then-old bundle on every replica and verify controller renewal
+and reconnects. Remove the old block only after the maximum old-token lifetime
+plus clock skew has elapsed since the last replica stopped signing with it.
+Use the deployment's secret provisioning and provider reload procedure; never
+paste the bundle into shell arguments or logs. Replacing an old-only bundle
+directly with a new-only bundle invalidates still-live tokens.
 
 ## Replay, revocation, and multiple replicas
 

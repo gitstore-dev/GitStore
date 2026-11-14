@@ -84,7 +84,7 @@ connection.
 | Terminal outcome | eligible for a release, rejected, or retired | delivered, cancelled, returned, refunded, or otherwise settled | audit trail links both sides                   |
 
 `Published`, `Retiring`, and `Retired` retain the target-specific meanings in
-[Product and Variant Publication Lifecycle](../products/publication-lifecycle.md).
+[Proposed Product and Variant Publication Lifecycle](proposed-publication-lifecycle.md).
 They are not seller-workflow states stored on every product, and a buyer's
 `DELIVERED` state does not cause a product to become retired.
 
@@ -606,4 +606,4 @@ Delivery should be phased:
 
 This starts with the workflows that GitStore itself can safely explain and
 operate, while retaining a controlled path to the category-specific models
-envisioned in [ideas.md](../ideas.md).
+envisioned in [product roadmap exploration](product-roadmap.md).

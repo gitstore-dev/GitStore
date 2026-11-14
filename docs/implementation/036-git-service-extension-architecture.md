@@ -6,7 +6,7 @@
 > `docs/implementation/020-pluggable_auth_architecture.md` / `021-controller_service_account_auth.md`
 > (provider registry conventions), and the existing `CatalogService.ValidateResources` /
 > `AdmitResources` gRPC contract implemented by `gitstore-git-service`. Raw inspiration for a
-> webhook-shaped config surface exists in `docs/ideas.md` (lines 133-181, "Git Service - Extend the
+> webhook-shaped config surface exists in [product roadmap exploration](product-roadmap.md) ("Git Service - Extend the
 > hooks"); no corresponding Rust code exists anywhere in the repository today, and this document
 > does not treat that sketch as a contract to preserve.
 
@@ -189,7 +189,7 @@ Ten mechanisms are evaluated. None is assumed to be the answer for every phase; 
 
 ### 5.1 HTTP webhooks
 
-Plain outbound HTTP(S) calls, signed per the GitHub/Stripe/Svix convention (HMAC-SHA256 over the raw body, timestamp embedded in the signed string, ~5-minute replay tolerance, versioned signature scheme, constant-time comparison — webhook-security research). Zero new server-side infrastructure to *receive* — any tenant's existing HTTP endpoint works. GitStore has zero webhook code today; `docs/ideas.md` L133-181 sketches a `[hooks.webhook]` TOML table (per-phase list of `{url, method, body, auth}`) but nothing beyond the sketch exists.
+Plain outbound HTTP(S) calls, signed per the GitHub/Stripe/Svix convention (HMAC-SHA256 over the raw body, timestamp embedded in the signed string, ~5-minute replay tolerance, versioned signature scheme, constant-time comparison — webhook-security research). Zero new server-side infrastructure to *receive* — any tenant's existing HTTP endpoint works. The [product roadmap exploration](product-roadmap.md) sketches a `[hooks.webhook]` TOML table (per-phase list of `{url, method, body, auth}`), not an implemented Git-hook webhook registry.
 
 ### 5.2 gRPC extension services
 
@@ -596,4 +596,4 @@ Containment must not depend on the extension behaving well:
 
 ---
 
-*This document makes no code changes. It does not modify `gitstore-git-service/src/git/hooks/mod.rs`, `config.rs`, `pack_server.rs`, `validation_handler.rs`, `admission_handler.rs`, `main.rs`, `shared/proto/gitstore/catalog/v1/catalog_service.proto`, `gitstore-api/internal/eventbus/eventbus.go`, `gitstore-api/internal/auth/*`, or `docs/ideas.md`. Every current-behavior claim above is either cited to the FACTS block's file:line references, or — for the two additional-context reads performed for this document (`docs/implementation/022-opa-data-authorization.md` and `gitstore-api/internal/eventbus/eventbus.go`/`gitstore-api/internal/auth/logging.go`) — cited to the specific file and line ranges read while producing this document. All other content is explicitly framed as design recommendation, research synthesis, or open question, not as a statement of current GitStore behavior.*
+*This document makes no runtime changes. Its FACTS block and source line references are historical investigation evidence, not a current-runtime contract. Design recommendations, research synthesis and open questions remain proposals. Use the current architecture and configuration references for supported behavior.*

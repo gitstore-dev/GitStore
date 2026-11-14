@@ -144,9 +144,14 @@ Use configuration management or a controlled per-host deployment procedure:
 
 Git smart HTTP goes through the API. On the identity host, exact bridge
 login/consent and Kratos UI/public-API prefix routes precede Hydra fallback.
-Current GitStore serves `/graphql`: two proxy aliases do not create separate
-Admin/Storefront schemas. Enable split endpoints only when supported by the
-application version. Use production email delivery and validate issuer,
+Route Admin requests to `/admin/graphql` on the API's Admin listener (default
+4000). The separate Storefront listener serves `/storefront/graphql` (default
+4001), but currently returns HTTP 503 with `Cache-Control: no-store`; publication
+and target binding are not implemented. The old `/graphql` route is unsupported.
+Keep Storefront unavailable rather than proxying it to Admin. The checked-in
+firewall permits cross-host Admin access on 4000, not Storefront on 4001;
+same-host ingress must reach any separately configured listener locally.
+Use production email delivery and validate issuer,
 redirect allowlists, secure cookies and CSRF.
 
 HTTPS terminates at the load balancer; proxy traffic uses HTTP over the VPC.
@@ -160,7 +165,7 @@ traffic. Database and RPC transport security are separate concerns.
 | --- | --- | --- |
 | All hosts, SSH | 22 | Explicit operator CIDRs |
 | Application ingress | 8080 | Public managed load balancer |
-| API GraphQL | 4000 | Application hosts |
+| API Admin GraphQL | 4000 | Application hosts |
 | API CatalogService | 6000 | Git host |
 | Kratos public/admin | 4433–4434 | Application hosts |
 | Hydra public/admin | 4444–4445 | Application hosts |

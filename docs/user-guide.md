@@ -28,6 +28,7 @@ The core stack exposes:
 |---|---|
 | GraphQL API | http://localhost:4000/admin/graphql |
 | GraphQL Playground | http://localhost:4000/admin/playground |
+| Storefront boundary (currently HTTP 503) | http://localhost:4100/storefront/graphql |
 | Git Smart HTTP | http://localhost:9000 |
 | Controller manager health | http://localhost:5001/health |
 
@@ -255,8 +256,8 @@ Featured laptop products.
 For the full resource formats, use the dedicated references:
 
 - [Product spec](products/product-spec.md)
-- [ProductVariant spec](products/product-variants.md)
-- [CategoryTaxonomy spec](categories/category-taxonomy.md)
+- [ProductVariant spec](products/product-variant-spec.md)
+- [CategoryTaxonomy spec](categories/category-taxonomy-spec.md)
 - [Collection spec](collections/collection-spec.md)
 - [Push validation](products/push-validation.md)
 
@@ -277,8 +278,10 @@ After an accepted push, query GraphQL to inspect the admitted state. Post-receiv
 GitStore tracks catalog resources by `apiVersion`, `kind`, namespace, and `metadata.name`, not by file path. 
 You can move a resource file to another directory without changing its `metadata.uid`. Editing the spec or Markdown body increments 
 `generation` and `resourceVersion`; moving the file with the same content only increments `resourceVersion`. 
-Deleting a resource file removes it from GraphQL reads after admission processes the commit. If you delete a resource and add 
-the same identity again later, it receives a new UID.
+Product and CategoryTaxonomy manifest deletion starts guarded foreground
+termination; those resources remain visible until controller completion.
+Collection, ProductVariant and File deletion removes the admitted identity.
+After completed removal, adding the same identity again creates a new UID.
 
 Admission conflicts that require datastore state, such as a duplicate `ProductVariant.spec.sku`, cannot reject a Git push after refs have already been accepted. In that case the existing variant remains unchanged and the conflicting incoming variant is skipped. Check API logs when a pushed resource does not appear after structural validation passed.
 
@@ -388,8 +391,12 @@ query ListCategories {
         spec {
           title
         }
-        path
-        depth
+        status {
+          resolved {
+            path
+            depth
+          }
+        }
         children {
           metadata {
             name
@@ -563,8 +570,8 @@ query Repository {
     }
   ) {
     id
-    name
-    defaultBranch
+    metadata { name }
+    spec { defaultBranch }
   }
 }
 ```
@@ -605,6 +612,7 @@ Catalogue manifests reference media; they do not make GitStore an image CDN. Hos
 ## Resources
 
 - [API Reference](api-reference.md)
+- [Documentation Index](README.md)
 - [Developer Guide](developer-guide.md)
 - [Configuration](configuration.md)
 - [Docker Troubleshooting](runbooks/docker-troubleshooting.md)
