@@ -113,19 +113,65 @@ func TestApply_ConflictExtensionMapsToErrConflict(t *testing.T) {
 	}
 }
 
-func TestApply_ConflictDiagnosticReportsCurrentResourceVersion(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":null,"errors":[{"message":"CategoryTaxonomy acme/electronics status update conflict","extensions":{"code":"CONFLICT","diagnostics":[{"reason":"RESOURCE_VERSION_CONFLICT","message":"current resourceVersion is 5","level":"FAILURE"}]}}]}`))
-	}))
-	defer srv.Close()
-
-	err := status.NewGraphQLStatusClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))).Apply(context.Background(), testKey(), testPatch())
-	if !errors.Is(err, types.ErrConflict) {
-		t.Fatalf("Apply err = %v, want errors.Is(..., types.ErrConflict)", err)
+func TestStatusClients_PreserveMutationErrors(t *testing.T) {
+	clients := []struct {
+		name      string
+		operation string
+		newClient func(*graphqlclient.Client) status.StatusClient
+	}{
+		{"graphqlStatusClient", "updateCategoryStatus", status.NewGraphQLStatusClient},
+		{"graphqlNamespaceStatusClient", "updateNamespaceStatus", status.NewGraphQLNamespaceStatusClient},
+		{"graphqlRepositoryStatusClient", "updateRepositoryStatus", status.NewGraphQLRepositoryStatusClient},
+		{"graphqlProductStatusClient", "updateProductStatus", status.NewGraphQLProductStatusClient},
+		{"graphqlResourceStatusClient", "updateResourceStatus", status.NewGraphQLResourceStatusClient},
 	}
-	if !strings.Contains(err.Error(), `current resourceVersion "5"`) {
-		t.Errorf("Apply error = %q, want current resourceVersion 5", err)
+	cases := []struct {
+		name       string
+		extensions string
+		sentinel   error
+		version    string
+	}{
+		{"diagnostic conflict", `{"code":"CONFLICT","diagnostics":[{"reason":"RESOURCE_VERSION_CONFLICT","message":"current resourceVersion is 5","level":"FAILURE"}]}`, types.ErrConflict, "5"},
+		{"extension conflict", `{"code":"RESOURCE_VERSION_CONFLICT","resourceVersion":"6"}`, types.ErrConflict, "6"},
+		{"unknown conflict version", `{"code":"CONFLICT","diagnostics":[null,{"reason":"OTHER","message":"current resourceVersion is 9"}]}`, types.ErrConflict, "<unknown>"},
+		{"not found", `{"code":"NOT_FOUND"}`, types.ErrNotFound, ""},
+		{"forbidden", `{"code":"FORBIDDEN"}`, nil, ""},
+	}
+	for _, client := range clients {
+		t.Run(client.name, func(t *testing.T) {
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = w.Write([]byte(`{"data":null,"errors":[{"message":"status mutation rejected","extensions":` + tc.extensions + `}]}`))
+					}))
+					defer srv.Close()
+
+					err := client.newClient(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))).Apply(context.Background(), testKey(), testPatch())
+					var gqlErr *graphqlclient.Error
+					if !errors.As(err, &gqlErr) || gqlErr.Message != "status mutation rejected" {
+						t.Fatalf("Apply error = %v, want preserved GraphQL cause", err)
+					}
+					if !strings.HasPrefix(err.Error(), client.name+": ") {
+						t.Errorf("Apply error = %q, want client context %q", err, client.name)
+					}
+					if tc.sentinel != nil && !errors.Is(err, tc.sentinel) {
+						t.Errorf("Apply error = %v, want sentinel %v", err, tc.sentinel)
+					}
+					if tc.version != "" && !strings.Contains(err.Error(), `current resourceVersion "`+tc.version+`"`) {
+						t.Errorf("Apply error = %q, want current resourceVersion %q", err, tc.version)
+					}
+					if tc.sentinel == nil {
+						if errors.Is(err, types.ErrConflict) || errors.Is(err, types.ErrNotFound) {
+							t.Errorf("authorization failure must not map to retry/absence sentinel: %v", err)
+						}
+						if !strings.Contains(err.Error(), client.operation+": ") {
+							t.Errorf("Apply error = %q, want operation context %q", err, client.operation)
+						}
+					}
+				})
+			}
+		})
 	}
 }
 
