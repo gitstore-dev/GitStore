@@ -23,6 +23,9 @@ version. CI and container builders use these compiler versions; when updating
 them, keep the workspace, module manifests, Rust toolchain file, Dockerfiles
 and CI setup steps aligned.
 
+`make lint` uses the formatter bundled with each selected Go toolchain,
+even when an older `gofmt` remains on `PATH`, and fails if formatting fails.
+
 This guide keeps implementation detail out of the user guide. It covers service topology, local development, datastore backends, hook/admission flow, controller-manager runtime, generated schema/proto workflow, and module responsibilities.
 
 Contributor procedures: [Make command reference](development/make-reference.md),

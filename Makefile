@@ -696,9 +696,11 @@ lint: ## Run Rust and Go lint checks, including shared secret material.
 	@cd "$(GIT_SERVICE_DIR)" && cargo fmt --all -- --check
 	@cd "$(GIT_SERVICE_DIR)" && cargo clippy --all-targets --all-features -- -D warnings
 	@for dir in $(GO_MODULE_DIRS); do \
-		if [ "$$(cd "$$dir" && gofmt -s -l . | wc -l | tr -d ' ')" != "0" ]; then \
+		goroot="$$(cd "$$dir" && go env GOROOT)" || exit 1; \
+		unformatted="$$(cd "$$dir" && "$$goroot/bin/gofmt" -s -l .)" || exit 1; \
+		if [ -n "$$unformatted" ]; then \
 			echo "The following files need formatting in $$dir:"; \
-			cd "$$dir" && gofmt -s -l .; \
+			printf '%s\n' "$$unformatted"; \
 			exit 1; \
 		fi; \
 	done
