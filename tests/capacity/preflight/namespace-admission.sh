@@ -3,9 +3,10 @@
 # Copyright (c) 2026 GitStore contributors
 
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/preflight.sh"
 
 evidence_dir="$1"
-mode="${MODE:-diagnostic}"
+mode="$(capacity_preflight_mode)"
 api_replicas="${CAPACITY_API_REPLICAS:-0}"
 api_build="${CAPACITY_API_BUILD:-unknown}"
 scylla_nodes="${CAPACITY_SCYLLA_NODES:-0}"
@@ -15,10 +16,6 @@ runtime_memory="${CAPACITY_RUNTIME_MEMORY_BYTES:-0}"
 scylla_memory="${CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE:-0}"
 scylla_auth="${CAPACITY_SCYLLA_AUTH_MODE:-unknown}"
 
-if [[ "${mode}" != "production" && "${mode}" != "alpha" && "${mode}" != "diagnostic" ]]; then
-  echo "MODE must be diagnostic, alpha, or production" >&2
-  exit 2
-fi
 if [[ "${mode}" != "diagnostic" ]]; then
   [[ -n "${CAPACITY_CONFIG_MANIFEST:-}" ]] || { echo "${mode} capacity evidence requires CAPACITY_CONFIG_MANIFEST" >&2; exit 2; }
   [[ -n "${CAPACITY_ENVIRONMENT_MANIFEST:-}" ]] || { echo "${mode} capacity evidence requires CAPACITY_ENVIRONMENT_MANIFEST" >&2; exit 2; }

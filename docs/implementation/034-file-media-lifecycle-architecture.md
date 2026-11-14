@@ -5,6 +5,12 @@
 **Audience**: GitStore API, controller-manager, and catalog authors.  
 **Feeds**: ADR-0008 (finalize), GH#79, GH#127, GH#192, GH#194, GH#195, GH#244, GH#283, GH#304, GH#316.
 
+The File manifest/datastore and durable-watch contracts now exist. This proposal
+does not establish implementation of reference-checked deletion, media
+processing, resolved delivery or every lifecycle step below. For current
+behavior, see the [File storage contract](../storage-groups/git-backed.md)
+and [catalogue lifecycle runbook](../runbooks/catalog-lifecycle.md).
+
 This document reconciles GH#79 (File resource shape), GH#127 (LFS/S3 storage
 initiative), GH#244 (CategoryTaxonomy controller's File-reference condition),
 GH#283 (storefront media resolution), GH#304 (admin media library), and

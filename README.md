@@ -35,7 +35,8 @@ for a guided, hands-on evaluation.
 
 ## Documentation
 
-For more detail, see the [user guide](docs/user-guide.md),
+Start with the [documentation index](docs/README.md) for user, operator and
+contributor guides. For more detail, see the [user guide](docs/user-guide.md),
 [architecture overview](docs/architecture/README.md), and
 [API reference](docs/api-reference.md).
 

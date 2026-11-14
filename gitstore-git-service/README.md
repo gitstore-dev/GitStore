@@ -95,6 +95,10 @@ Primary RPC groups:
 
 Repositories are stored as bare repositories below `GITSTORE_GIT_SERVICE__DATA_DIR`. The API resolves human-readable namespace/repository paths to stable repository IDs before calling this service.
 
+Exactly one active Git-service process is supported per deployment. Shared or
+separate repository volumes do not provide Git replication, sharding or HA.
+Retain storage and stop the old process before starting its replacement.
+
 ## Deeper Docs
 
 - [Developer Guide](../docs/developer-guide.md)

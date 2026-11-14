@@ -24,7 +24,7 @@ A CategoryTaxonomy resource is a Markdown file with YAML frontmatter pushed to a
 | Field                  | Type              | Required | Constraint                                                             |
 |------------------------|-------------------|----------|------------------------------------------------------------------------|
 | `metadata.name`        | string            | yes      | DNS subdomain format; unique within namespace                          |
-| `metadata.namespace`   | string            | no       | Optional. Inferred from the repository's owning namespace when omitted |
+| `metadata.namespace`   | string            | yes      | Must match the repository's owning namespace                           |
 | `metadata.labels`      | map[string]string | no       | Key prefix ≤ 253 chars; key name ≤ 63 chars; value ≤ 63 chars          |
 | `metadata.annotations` | map[string]string | no       | No length restriction                                                  |
 
@@ -33,7 +33,14 @@ A CategoryTaxonomy resource is a Markdown file with YAML frontmatter pushed to a
 
 ## Lifecycle
 
-GitStore identifies a category by `apiVersion`, `kind`, resolved namespace, and `metadata.name`; the file path is provenance only. Moving a category file preserves `metadata.uid`. Changing `spec` or the Markdown body increments `metadata.generation` and `metadata.resourceVersion`. Path-only moves and label/annotation-only edits preserve `generation` and increment `resourceVersion`. Deleting the file removes the category from GraphQL reads after post-receive admission; adding the same identity again later creates a new UID.
+GitStore identifies a category by `apiVersion`, `kind`, namespace, and
+`metadata.name`; the file path is provenance only. Moving a category file
+preserves `metadata.uid`. Changing `spec` or the Markdown body increments
+`metadata.generation` and `metadata.resourceVersion`. Path-only moves and
+label/annotation-only edits preserve `generation` and increment `resourceVersion`.
+Removing the manifest starts foreground termination, subject to child-category
+guards. The controller decouples products and completes deletion before the
+resource disappears from reads; only a later recreation receives a new UID.
 
 ---
 
@@ -61,7 +68,7 @@ All spec fields are individually optional unless noted otherwise. Constraints ap
 |-----------------------------|--------|----------|---------------------------------------------------|
 | `media[*].fileRef.name`     | string | yes      | Name of the `File` resource                       |
 | `media[*].fileRef.kind`     | string | no       | Defaults to `"File"`                              |
-| `media[*].fileRef.optional` | bool   | no       | When `true`, admission succeeds if absent        |
+| `media[*].fileRef.optional` | bool   | no       | `true` bypasses the unresolved required-media readiness gate |
 
 ---
 
@@ -135,7 +142,8 @@ The system writes a `status` blob to the datastore after each push. Conditions f
 | `ParentResolved`    | `spec.parentRef` was found                                      |
 | `Acyclic`           | No cycle detected involving this category                       |
 | `Terminating`       | Foreground deletion has started                                 |
-| `Ready`             | Controller has fully reconciled the resource (GH#244, deferred) |
+| `FileRefConfirmed`  | Required media remains `Unknown` with reason `FileNotQueryable`; the controller does not resolve File existence |
+| `Ready`             | Parent and cycle checks pass and no required media remains unconfirmed |
 
 ---
 
@@ -202,6 +210,11 @@ Category copy for laptops.
 
 ## File Existence Checks
 
-`spec.media[].fileRef` entries reference `File` resources. Push-time validation only checks that `fileRef.name` and `fileRef.kind` are present. Whether the referenced `File` resource exists is checked by the controller reconciler (GH#244, deferred from this spec).
-
-Set `fileRef.optional: true` to prevent the controller from blocking the `Ready` condition when the file is absent.
+`spec.media[].fileRef` entries reference `File` resources. Push-time validation
+checks the reference shape. Media existence and resolved-URL handling are not
+implemented by the current CategoryTaxonomy controller. Required references
+produce `FileRefConfirmed=Unknown` with reason `FileNotQueryable` and block
+`Ready`; this diagnostic describes the controller's missing integration, not
+the absence of File resources from the API. Optional references do not
+contribute that condition. Do not treat accepted media references as proof
+that an asset exists or can be delivered.

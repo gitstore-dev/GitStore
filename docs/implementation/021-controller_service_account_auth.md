@@ -1,5 +1,5 @@
 # Service-Account Authentication for GitStore Controllers
-**Status**: Historical research; superseded operationally by [controller authentication](../runbooks/controller-auth.md) and the [064 authorization baseline](../configuration.md#authorization-baseline-064).
+**Status**: Historical research; superseded operationally by [controller authentication](../runbooks/controller-auth.md) and the [authorization configuration](../configuration.md#authorization-and-user-directory).
 
 > **064 implementation update (2026-10-11):** Current ServiceAccounts are
 > cluster-scoped, named globally and bound to immutable UIDs. Subjects use

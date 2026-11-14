@@ -66,9 +66,9 @@ status:
 | `status.resolved`                                 | System                             | Derived from repository identity and storage configuration    |
 
 Zero maximum pack/file sizes retain the existing unlimited sentinel.
-Visibility and extended policy groups are deterministic placeholders until a
-future feature defines their write, persistence, validation, and inheritance
-semantics.
+Visibility records the admitted value and defaults to `Private` when omitted;
+it does not enable Storefront publication. Extended policy groups remain
+reserved rather than implemented hook/phase overrides.
 
 ## Version transitions
 
@@ -103,12 +103,12 @@ resourceVersion `"1"`, and
 and foreground-deletion finalizer. Authors cannot submit `status` or
 `metadata.ownerReferences`; admission rejects either attempt.
 
-## Legacy GraphQL fields
+## GraphQL fields
 
-The legacy `name`, `namespace`, `defaultBranch`, `storageClass`, `storagePath`,
-`createdAt`, `createdBy`, `updatedAt`, and `updatedBy` fields remain selectable
-with their existing values and explicit deprecation reasons. Relay `id` remains
-non-deprecated. Removal requires a future major GraphQL API release.
+Use `metadata` for identity and lifecycle fields, `spec.defaultBranch` for
+configuration, and `status.resolved` for storage information. The old flat
+Repository fields are not in the current schema. Relay `id` remains the
+transport identity; do not assume removed fields are compatibility aliases.
 
 ## Valid and invalid expectations
 

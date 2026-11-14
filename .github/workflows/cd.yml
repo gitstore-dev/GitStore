@@ -1,20 +1,13 @@
 name: CD
 
+# Publishes core images only. Deployment, smoke tests and rollback are
+# operator-managed and must not be reported as successful by this workflow.
 on:
   push:
     branches: [ main ]
     tags:
       - 'v*'
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Deployment environment'
-        required: true
-        default: 'staging'
-        type: choice
-        options:
-          - staging
-          - production
 permissions:
   contents: read
   packages: write
@@ -231,80 +224,3 @@ jobs:
         cache-to: type=gha,mode=max,scope=controller-manager
         outputs: >-
           type=image,name=target,"annotation-index.org.opencontainers.image.description=GitStore controller manager for reconciling core resources and CRD-defined kinds from watch events"
-
-  deploy-staging:
-    name: Deploy to Staging
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    needs: [build-git-service-image, build-api-image, build-controller-manager-image]
-    if: github.ref == 'refs/heads/main' || github.event.inputs.environment == 'staging'
-    environment:
-      name: staging
-      url: https://sandbox.gitstore.dev
-
-    steps:
-    - uses: actions/checkout@v6
-
-    - name: Deploy to staging
-      run: |
-        echo "Deploying to staging environment..."
-        # TODO: Add actual deployment commands
-        # Example: kubectl apply -f k8s/staging/ or similar
-        echo "Deployment placeholder - configure with your infrastructure"
-
-    - name: Run smoke tests
-      run: |
-        echo "Running smoke tests..."
-        # TODO: Add smoke test commands
-        # Example: curl health endpoints, basic API tests
-        echo "Smoke tests placeholder"
-
-  deploy-production:
-    name: Deploy to Production
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    needs: [build-git-service-image, build-api-image, build-controller-manager-image, deploy-staging]
-    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.environment == 'production'
-    environment:
-      name: production
-      url: https://cloud.gitstore.dev
-
-    steps:
-    - uses: actions/checkout@v6
-
-    - name: Deploy to production
-      run: |
-        echo "Deploying to production environment..."
-        # TODO: Add actual deployment commands
-        echo "Production deployment placeholder - configure with your infrastructure"
-
-    - name: Run smoke tests
-      run: |
-        echo "Running production smoke tests..."
-        # TODO: Add production smoke test commands
-        echo "Production smoke tests placeholder"
-
-    - name: Notify deployment
-      run: |
-        echo "Notifying team of production deployment..."
-        # TODO: Add notification logic (Slack, email, etc.)
-
-  rollback:
-    name: Rollback Deployment
-    runs-on: ubuntu-latest
-    if: failure() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: [deploy-staging, deploy-production]
-
-    steps:
-    - name: Rollback to previous version
-      run: |
-        echo "Rolling back deployment..."
-        # TODO: Add rollback commands
-        echo "Rollback placeholder"
-
-    - name: Notify rollback
-      run: |
-        echo "Notifying team of rollback..."
-        # TODO: Add notification logic

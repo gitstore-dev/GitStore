@@ -8,7 +8,7 @@ The core compose stack includes:
 
 | Service            | Container                     | Ports                                  |
 |--------------------|-------------------------------|----------------------------------------|
-| API                | `gitstore-api`                | `4000`, `9000` (Git HTTP host), `6000` |
+| API                | `gitstore-api`                | `4000` (Admin), `4100` (Storefront host), `9000` (Git HTTP host), `6000` |
 | Git service        | `gitstore-git-service`        | `50051`                                |
 | Controller manager | `gitstore-controller-manager` | `5001`                                 |
 
@@ -84,7 +84,8 @@ List repository data inside the Git service container:
 docker compose exec git-service ls -la /var/lib/gitstore/repos
 ```
 
-The exact repository storage path is generated from the repository identity and is exposed on the `Repository.storagePath` GraphQL field:
+The exact repository storage path is generated from the repository identity
+and published after reconciliation in `Repository.status.resolved.storagePath`:
 
 ```graphql
 query Repository {
@@ -97,7 +98,11 @@ query Repository {
     }
   ) {
     id
-    storagePath
+    status {
+      resolved {
+        storagePath
+      }
+    }
   }
 }
 ```
@@ -132,7 +137,7 @@ Confirm the namespace and repository exist:
 ```bash
 curl -s http://localhost:4000/admin/graphql \
   -H "Content-Type: application/json" \
-  -d '{"query":"query { repository(by: { namespacePath: { namespace: \"gitstore-test\", name: \"catalog\" } }) { id name } }"}' | jq .
+  -d '{"query":"query { repository(by: { namespacePath: { namespace: \"gitstore-test\", name: \"catalog\" } }) { id metadata { name } } }"}' | jq .
 ```
 
 Use the API-fronted clone URL with the `.git` suffix:

@@ -2,8 +2,15 @@
 
 **Status**: ⚠️ In Progress
 
+This is contributor design/research history. Its original source line numbers,
+provider inventory, phase checklist and proposed deployments are not a
+current-runtime reference. Use [authorization configuration](../configuration.md#authorization-and-user-directory)
+and [current architecture](../architecture/README.md) for implemented behavior;
+open design and acceptance work below remains open unless separately completed.
+
 > Generated 2026-06-20 via deep-research workflow (110 agents, 27 sources, 20 verified claims).
-> This document supersedes the open decisions in `019-pluggable_auth_design.md`.
+> This document incorporates the earlier pluggable-identity design's open
+> decisions; that superseded duplicate has been removed.
 > `022-opa-data-authorization.md` extends and supersedes this document's Phase 8 OPA
 > deployment/evaluation details, and defines GraphQL read scopes plus hybrid IAM data ownership.
 
