@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.1.0-alpha.11](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.10...v0.1.0-alpha.11) (2026-11-14)
+
+
+### Features
+
+* **authz:** add opt-in Git-backed RBAC and embedded OPA ([#455](https://github.com/gitstore-dev/GitStore/issues/455)) ([3da5101](https://github.com/gitstore-dev/GitStore/commit/3da5101acc13937d47df2f9e6b9bf6fa376ae40c))
+
+
+### Bug Fixes
+
+* **api:** normalize frontmatter enum boundaries ([#549](https://github.com/gitstore-dev/GitStore/issues/549)) ([260e73e](https://github.com/gitstore-dev/GitStore/commit/260e73e896af421dbb44d45e9d89e45e2acf2982))
+* **auth:** match USER namespace policy to authenticated subject ([#553](https://github.com/gitstore-dev/GitStore/issues/553)) ([1d9eb26](https://github.com/gitstore-dev/GitStore/commit/1d9eb26326be661e2b1ecbce3249bd2c59463053))
+* **cdc:** advance quiet streams after completed query windows ([#555](https://github.com/gitstore-dev/GitStore/issues/555)) ([777813b](https://github.com/gitstore-dev/GitStore/commit/777813bdbb2773e4788c14b690249ec30ba0bde8))
+* **config:** remove alpha legacy configuration mappings ([#552](https://github.com/gitstore-dev/GitStore/issues/552)) ([dca7cb2](https://github.com/gitstore-dev/GitStore/commit/dca7cb2b0658df942d13c7b94cb4bc45c8a48f0c))
+* **controller:** defer API outages without poisoning pending work ([#551](https://github.com/gitstore-dev/GitStore/issues/551)) ([9aeea3a](https://github.com/gitstore-dev/GitStore/commit/9aeea3a97c8ad3fbbd33f2eda6414fa020760a6d))
+* **controller:** treat empty checkpoint fanout as idle ([#554](https://github.com/gitstore-dev/GitStore/issues/554)) ([5d71e9b](https://github.com/gitstore-dev/GitStore/commit/5d71e9b05267f8371e8370f5a4639bd175bef9e2))
+
+
+### Documentation
+
+* align maintained guides with current runtime ([#556](https://github.com/gitstore-dev/GitStore/issues/556)) ([3d1e011](https://github.com/gitstore-dev/GitStore/commit/3d1e011a10f11d90f79be3502c8a27be6dcf5de0))
+
 ## [0.1.0-alpha.10](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.9...v0.1.0-alpha.10) (2026-11-09)
 
 
