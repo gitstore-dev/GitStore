@@ -4,8 +4,8 @@ name: CD Optional Images
 # and future ones like a storefront) — not part of the core
 # git-service/api/controller-manager stack built by cd.yml. Deliberately
 # decoupled: an optional service failing to build must never block or
-# gate the core release pipeline, and the core pipeline's deploy jobs
-# never depend on these images.
+# gate the core release pipeline. Operators manage deployment separately
+# from image publication.
 
 on:
   push:
