@@ -21,6 +21,19 @@ Select the patterns below according to the changed writers, readers, storage
 shape and trust boundaries. A small resource is not exempt merely because its
 implementation is short.
 
+### Local Git fixture execution
+
+The shared push/HTTP and native RBAC Git fixtures use cancellable subprocesses
+with a one-second inherited-pipe drain limit. Ordinary commands derive their
+deadline from `go test -timeout`, reserving two seconds for cleanup rather than
+imposing a fixed transfer timeout. Native RBAC retains its explicit 30-second
+operation bound. Keep a nonzero test timeout when running the ordinary fixtures.
+The legacy HTTP fixtures retain CI-provided Git authentication configuration;
+native RBAC instead strips inherited `GIT_*` values and injects its owned
+credential. Both paths redact credentials in returned output and errors.
+Local `TestPushHelper` regressions cover these mechanics, not deployed admission,
+replica recovery or capacity acceptance.
+
 ## 1. Multi-replica correctness
 
 Exercise independently constructed reconcilers or handlers against the same
