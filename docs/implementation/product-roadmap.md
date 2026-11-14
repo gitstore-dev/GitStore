@@ -1,6 +1,11 @@
-# Roadmap
+# Product Roadmap Exploration
 
-This document outlines GitStore's product strategy, architectural decisions, and technology roadmap.
+This contributor document preserves product and technology exploration, not a
+supported-feature or configuration reference. The phase ordering, provider
+options, sandbox description and hook configuration sketches below are proposals
+or historical assumptions; they do not establish current runtime behavior.
+Use the [architecture overview](../architecture/README.md) and
+[configuration reference](../configuration.md) for the implemented baseline.
 
 **Contents:**
 - Strategic Decisions
@@ -186,7 +191,7 @@ Platform ecosystem, AI-driven features, and deep customisation.
 
 - **CI/CD: GitStore Actions** — Workflow canvas for catalogue build/test/deploy
 - **Namespaces** — Define multiple stores for a single tenant (Kubernetes-style, Git-declared)
-- [**Custom Workflows**](implementation/037-custom-commerce-workflows.md) — Event-driven seller/release and buyer/order workflows, composed through immutable release and order snapshots
+- [**Custom Workflows**](037-custom-commerce-workflows.md) — Event-driven seller/release and buyer/order workflows, composed through immutable release and order snapshots
 
 ---
 

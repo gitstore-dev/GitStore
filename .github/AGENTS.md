@@ -7,7 +7,8 @@
   enforces them because squash-merge titles drive Release Please.
 - `workflows/cd.yml` publishes only the core API, controller manager and Git
   service. Put optional-service images in `workflows/cd-optional.yml`,
-  following admin and OIDC bridge. An optional-service build must never block
-  or gate the core release.
+  following the OIDC bridge. An optional-service build must never block
+  or gate the core release. Image publication is not application deployment,
+  smoke validation or rollback; those remain operator procedures.
 - Preserve shared-module standalone `GOWORK=off` checks and the full default
   `make pr-ready` suite. Capacity runs do not replace that suite.

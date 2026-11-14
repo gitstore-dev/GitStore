@@ -216,36 +216,19 @@ expected user rejections as server failures.
 
 ## Capacity and saturation
 
-The Repository lifecycle gate (`make capacity TARGET=repository PROFILE=lifecycle
-MODE=production`) includes a bounded mutation/push deletion probe against the two
-API replicas and active controllers. It fetches the authoring repository to prove
-manifest removal, waits for final resource deletion, recreates the same name with
-a new UID, and rejects completion carrying the old UID. It requires the existing
-`GIT_URL` and an identity authorized for deletion and controller completion.
-Local service tests do not replace this deployed evidence.
-
-Run the opt-in production harness:
-
-```bash
-make capacity TARGET=namespace PROFILE=validation MODE=production
-```
-
-It uses two independent API helper processes, replaces one replica during the
-run, and enforces:
-
-- 500 files/request with at most 50 Namespace manifests;
-- 10 requests/second at concurrency 20 for at least 30 minutes;
-- p95 at most 100 ms and p99 at most 250 ms;
-- internal errors below 0.1% and zero incorrect decisions;
-- replacement recovery within 30 seconds;
-- CPU below 80%, retained-memory growth below 10%, and post-soak goroutines
-  within 5% of baseline for each replica process.
-
 Treat p95 above 80 ms, p99 above 200 ms, CPU above 70%, retained-memory growth
 above 8%, goroutine drift above 4%, or recovery above 20 seconds as warning
-signals. The enforced limits are critical saturation thresholds. Do not raise
+signals in the declared validation workload. These are capacity-test warning
+levels, not runtime admission limits or guarantees for an arbitrary deployment.
+Do not raise
 concurrency or request-size limits to mask saturation; first inspect parse
 latency, policy datastore latency, CPU, garbage collection, and conflict rate.
+
+Contributor setup, hard acceptance bounds, helper-process scope and deployed
+deletion/recovery evidence are maintained in the
+[capacity guide](../../tests/capacity/README.md) and
+[readiness guide](../development/production-readiness-testing.md). Helper-process
+and local service tests do not replace deployed replica evidence.
 
 ## Structured logs
 
@@ -292,19 +275,20 @@ blockers.
 For a bootstrap Namespace containing repositories, both
 `BOOTSTRAP_NAMESPACE` and `NAMESPACE_NOT_EMPTY` are expected. Bootstrap
 Namespaces are system-managed and cannot be deleted. For a non-bootstrap
-Namespace, remove or transfer all repositories, then retry deletion.
+Namespace, delete all repositories through the supported lifecycle, then retry
+deletion. Repository transfer is not exposed by the current public API.
 
 ### Deletion remains terminating
 
 1. Query the Namespace and verify the foreground-deletion finalizer and
    deletion timestamp.
-2. Verify `HasRepositories` is false after repository transfer/deletion.
+2. Verify `HasRepositories` is false after Repository deletion completes.
 3. Check controller health and completion retries.
 4. Investigate resource-version conflicts; completion must reload and retry
    rather than remove the finalizer by hand.
 5. A repeated user deletion returning `ALREADY_TERMINATING` is healthy and must
    not advance `resourceVersion`.
-6. Ordinary repository create/transfer fence cleanup uses a bounded context
+6. Ordinary Repository-write fence cleanup uses a bounded context
    detached from request cancellation. Repair-required writes intentionally
    retain the fence until a quiesced `scylla-projection-repair --confirm` run
    completes projection repair, verifies a clean audit, and clears the retained

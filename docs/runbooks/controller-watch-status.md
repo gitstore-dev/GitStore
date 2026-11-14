@@ -67,7 +67,8 @@ readiness alone does not prove that a newly pushed hierarchy has reconciled.
   re-lists from a fresh journal bookmark and resumes automatically. Repeated
   `RETENTION_EXPIRED`/`REPLAY_LIMIT` expiries for a controller mean it is
   disconnected for longer than the retained window; fix the outage or raise
-  `journal_retention_seconds`/`max_replay_events` within their documented bounds.
+  `api.watch.journal.retention` and
+  `api.watch.journal.read.max_replay_events` within their documented bounds.
 - **Overflow**: the affected controller is not draining its watch fast enough.
   Check its queue-depth/worker-saturation signals (see
   [controller-recovery.md](controller-recovery.md#lag-and-stalled-work)) before reconnecting.
@@ -157,8 +158,8 @@ for a bookmark on the resumed watch, not merely a successful asynchronous
 WebSocket open. Cancellation does not reopen admission or discard the old
 checkpoint cursor while listing is incomplete.
 
-Product enumeration streams 250-row pages, honoring proposal 038 without a
-controller exemption: five million rows require 20,000 Product requests.
+Product enumeration streams 250-row pages without a controller exemption:
+five million rows require 20,000 Product requests.
 Successful enumeration pages report a
 high-water count; revisiting the same pages after a failed list does not reset
 the no-progress watchdog. The existing stall threshold still applies to a
@@ -166,30 +167,17 @@ recovery that stops making progress. Disk merge and retirement batches also
 advance recovery progress; the page counter is not exclusively an HTTP-request
 counter.
 
-The capacity dataset verifier also uses at most 250 rows per request. Its
-read-only page requests retry HTTP 429 with bounded exponential backoff,
-honoring `Retry-After` when supplied, without advancing the cursor. Each page
-gets at most eight attempts within the existing 30-minute verification deadline.
-Authentication, transport and other HTTP failures still fail the verification;
-mutations are not automatically retried. This accommodates the existing API
-quota rather than exempting capacity clients from it.
-
 `GET /health` distinguishes liveness from readiness: progressing recovery can
 return HTTP 200 with `ready:false`, `kinds.<Kind>.recovering:true` and recovery
 page/row/timestamp details. Consumers that require a reconciled controller
-must check `ready`, not just HTTP status. Capacity setup waits at most ten
-minutes for recovery before creating the authoring Namespace/Repository/File
-fixtures, not after the first Git clone; unhealthy or unauthenticated
-controllers still fail immediately. Readiness confirms recovery has completed,
+must check `ready`, not just HTTP status. Readiness confirms recovery has completed,
 not that the pending reconciliation backlog is empty; also inspect queue depth
-and its drain rate. Load and final acceptance require readiness.
+and its drain rate.
 No retry is counted as successful reconciliation.
 
-Managed alpha runs require boolean `ready:true`, `credentialReady:true` and
-registration of the exercised kind on both controllers before load and after
-it. Startup polls within the configured wait timeout; post-run checks also
-require distinct process identities. A failed post-run check makes the command
-fail and marks existing run metadata `passed:false`, even if load itself passed.
+After replacing a controller, require boolean `ready:true`,
+`credentialReady:true` and registration of every required kind. Compare its
+process identity with the predecessor and verify the peer remained healthy.
 
 Credential acquisition failures are shared dependency failures, not evidence
 that an individual resource is invalid. The HTTP/WebSocket client shares a
@@ -222,15 +210,12 @@ rate(gitstore_controller_conflict_requeues_total{kind="Product"}[1m])
 ```
 
 The conflict counter currently instruments Product status and deletion conflicts.
-Controller snapshots retain all per-kind health details before assertions.
-For historical metrics, enable the capacity scraper with both API and controller
-targets as described in `tests/capacity/README.md`; unscripted `/metrics` reads
-cannot recover counters after a process has exited.
+Retain per-kind health details while diagnosing recovery. Collect metrics
+continuously with process identity; an unscripted `/metrics` read cannot recover
+counters after a process has exited.
 
-This coordination is per process. The disk-backed rollout below introduces a
-new checkpoint format; old controllers still use the memory-backed path.
-The updated secret-capacity observer requires the new health shape on both
-replicas; do not use mixed-version results to claim bounded-memory recovery.
+This coordination is per process. The disk-backed stores below are private to
+each replica, not fleet-wide fencing or checkpoint coordination.
 
 The controller shares one outbound request budget across all reconciliation
 kinds, list/status requests and WebSocket upgrades. Defaults are
@@ -352,22 +337,10 @@ binary cannot read v2 and still has the original memory behavior; rolling back
 is not a supported way to recover a five-million-row controller. This changes
 no API datastore schema, authentication mechanism or Docker memory allocation.
 
-Storage sizing: a five-million-Product projection set, including one full
-snapshot replacement, has been exercised under a 512 MiB container memory limit
-without an OOM. Peak Go heap stayed below 60 MiB. On-disk allocation peaked near
-2 GiB during replacement, because the old and new generations coexist until
-retirement and LevelDB reclaims retired table space only on later compaction.
 Budget checkpoint storage for two simultaneous generations plus compaction
-headroom, not for one steady-state catalog.
-
-Separate contracts cover process-kill/reopen durability, incomplete-snapshot
-isolation, concurrent updates, stale acknowledgements, rejected oversized pages,
-membership reassignment and kind/replica isolation. Integration contracts cover
-streamed restart/expiry recovery, bounded dispatch, newer in-flight work,
-durable schedules, fan-out across generations and paginated poison reads.
-These are storage and dispatch bounds, not production capacity acceptance; use
-`make capacity` against a real deployment for throughput and rolling-recovery
-evidence.
+headroom, not for one steady-state catalog. Component buffer bounds do not
+establish a whole-process memory limit or sustainable throughput; verify the
+deployment's complete workload and replacement envelope separately.
 
 Historical measurements and their workload limitations are retained with the
 [capacity documentation](../../tests/capacity/README.md#historical-controller-observations-2026-10-05),

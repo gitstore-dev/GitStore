@@ -11,9 +11,25 @@ steps below.
 [Release Please](https://github.com/googleapis/release-please) watches every squash-merge to `main`. It maintains a standing **release PR** that accumulates a version bump and changelog from Conventional Commit PR titles since the last release. Merging that release PR is what actually cuts a release:
 
 1. Release Please pushes a tag (e.g. `v0.1.0-alpha.1`) and creates the GitHub Release with generated notes.
-2. `.github/workflows/cd.yml`'s existing `on.push.tags: ['v*']` trigger fires independently and builds+pushes the 3 core Docker images (`api`, `controller-manager`, `git-service`) to `ghcr.io`, tagged with that exact version. `.github/workflows/cd-optional.yml` fires on the same trigger, decoupled from the core pipeline, and builds+pushes images for optional services (`admin`, `oidc-bridge`) the same way — an optional service failing to build never blocks or gates the core release.
+2. `.github/workflows/cd.yml`'s `on.push.tags: ['v*']` trigger fires independently
+   and builds/publishes the three core Docker images (`api`,
+   `controller-manager`, `git-service`) to `ghcr.io`, tagged with that exact
+   version. `.github/workflows/cd-optional.yml` independently publishes the
+   optional `oidc-bridge` image. There is no Admin web-application image in
+   this repository's current image pipeline.
 
 All three workflows (`release-please.yml`, `cd.yml`, `cd-optional.yml`) are fully decoupled from each other — `release-please.yml` never invokes or waits on either CD workflow; it only pushes a tag, and each CD workflow's own trigger does the rest. `cd.yml` and `cd-optional.yml` are likewise independent of each other, by design: a build failure in the optional-images workflow must never block or gate the core release.
+
+Both image workflows also publish builds on pushes to `main`; those branch
+builds are not releases and are not eligible for `latest`. Core CD can be
+manually dispatched for the selected ref. Dispatch publishes images; it does
+not deploy a staging/production environment, run deployed smoke checks or roll
+back a running service. Image-build success is not deployment readiness.
+
+Deployment and rollback remain operator-managed. Select reviewed images,
+verify health and compatibility after deployment, retain persistent storage,
+and replace the singleton Git service without overlapping active processes.
+Use [upgrade procedures](../runbooks/upgrades.md) for that runtime handoff.
 
 ## Required One-Time Setup (manual, not in version control)
 
@@ -91,7 +107,11 @@ Use the same mechanism for:
 - **A stable tag** (no `-alpha`/`-beta`/`-rc` suffix) is always latest-eligible.
 - **A prerelease tag** is latest-eligible only if `gh release list` shows no stable (non-prerelease) release has ever been published to this repo.
 - **Before any stable release exists**: `latest` tracks whichever alpha/beta build was published most recently.
-- **After the first stable release** (e.g. `0.1.0`): `latest` permanently stops tracking prereleases. Any alpha/beta/rc published *after* that point will never become `latest` again — only a newer stable release can move it.
+- **After the first stable release** (e.g. `0.1.0`): prerelease builds are no
+  longer eligible for `latest`; stable-tag builds remain eligible. This is
+  eligibility logic, not a monotonic version check: republishing an older
+  stable tag can also move `latest`. Pin a reviewed version or image digest
+  for reproducible deployment.
 - **Practical implication for consumers**: once a stable release exists, anyone who wants "whatever's newest, prereleases included" must pin to the exact version tag (e.g. `:0.2.0-beta.1`), not `:latest`.
 
 ## Override Log
@@ -108,7 +128,10 @@ A running record of `Release-As:` overrides applied via the mechanism above, for
 Check that at least one merged PR title since the last release was a `feat:` or `fix:` (or `!`-breaking) Conventional Commit — `chore`/`docs`/etc.-only merges don't trigger a version bump, so Release Please has nothing to propose.
 
 **The release PR has a merge conflict.**
-Usually means one of the 4 `extra-files`-tracked files (`Cargo.toml`, `package.json`, or either version-marker line) was hand-edited in a separate, competing PR on `main`. Resolution: close the release PR and let Release Please recreate it on its next run, or manually rebase it.
+Usually means one of the three `extra-files` targets (`Cargo.toml` or either
+Go version-marker line) was hand-edited in a competing PR on `main`.
+Check `release-please-config.json` for the current targets. Resolve the
+conflict or close the release PR and let Release Please recreate it.
 
 **A PR won't merge because of the "PR Title Lint" check.**
 The title isn't a valid Conventional Commit. Retitle the PR to `type(scope): description` (see `.github/workflows/pr-title-lint.yml` for the allowed types) and the check re-runs automatically.
@@ -120,7 +143,7 @@ Adding the `PR Title Lint` workflow only makes the check run and report — it d
 
 - `.github/workflows/release-please.yml` — the release-PR/tag/release-creation workflow.
 - `.github/workflows/cd.yml` — the core Docker build/push pipeline (`api`, `controller-manager`, `git-service`), triggered independently by the tag Release Please pushes.
-- `.github/workflows/cd-optional.yml` — the optional-services Docker build/push pipeline (`admin`, `oidc-bridge`), same trigger, fully decoupled from `cd.yml`.
+- `.github/workflows/cd-optional.yml` — the optional `oidc-bridge` image build/push pipeline, fully decoupled from `cd.yml`.
 - `.github/workflows/pr-title-lint.yml` — Conventional Commits enforcement on PR titles.
 - `release-please-config.json` / `.release-please-manifest.json` — repo root, the source of truth for the current version and per-file sync targets.
 - [Upgrade compatibility](../runbooks/upgrades.md)

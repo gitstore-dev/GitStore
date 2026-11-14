@@ -40,6 +40,11 @@ item in it — is implemented and in force in the code on `main`. A superseding
 ADR updates both the superseded ADR's status line and this index; see
 `AGENTS.md` for the authoring rule.
 
+## Contributor planning references
+
+- [Feature specifications](../../specs/): contributor requirements, plans and
+  acceptance tasks; completed historical tasks do not supersede current code.
+
 ## Index
 
 | ADR | Title | Status | Notes / open items |

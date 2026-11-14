@@ -57,7 +57,8 @@ for identity, foreground deletion, and
 
 `CatalogRelease` and `Publication` are declarative release intent, not mutable
 storefront state. Their system-managed status and the immutable public snapshot
-are datastore records; see [Product and Variant Publication Lifecycle](../products/publication-lifecycle.md).
+are proposed datastore records, not implemented resources; see the
+[current Storefront boundary](../storefront.md).
 
 `WorkflowDefinition`, `WorkflowProfile`, `CategoryCluster`, `WorkflowBinding`,
 and `WorkflowBundle` are Git-backed configuration. Their executions, tasks,
@@ -504,5 +505,5 @@ entry emits ADDED, exit emits a payload-free DELETED, and bookmarks preserve
 progress across filtered events. Slow clients receive bounded backpressure
 failure rather than an unbounded queue. Disabled/unready journal readers fail
 closed, with no event-bus fallback. See the
-[File rollout procedure](../runbooks/controller-watch-status.md#file-durable-watch-rollout)
+[Durable-watch rollout procedure](../runbooks/controller-watch-status.md#durable-watch-journal-schema-rollout-and-recovery)
 before upgrading or rolling back a mixed-version fleet.

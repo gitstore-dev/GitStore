@@ -111,7 +111,7 @@ read     ─▶ Storefront returns the snapshot's resolved IR; per-request work 
   oversized documents are rejected at push time with source positions. Nothing new is persisted
   for the admitted row. The source remains the only stored form.
 - **Publication** evaluates interpolation against the same immutable dependency closure the
-  snapshot already captures ([Publication Lifecycle](../products/publication-lifecycle.md)). It
+  snapshot already captures ([Proposed Publication Lifecycle](../implementation/proposed-publication-lifecycle.md)). It
   drops raw-HTML nodes (§5) and strips source positions. It also collects the references, stores
   the resolved IR in the snapshot and includes it in the snapshot digest. A published body can't
   change without a new release.
@@ -233,7 +233,7 @@ This ADR fixes where interpolation runs, not its syntax:
 - **Follow-up edits:**
   - [ADR 0012 §2](0012-admin-storefront-graphql-endpoints.md#2-the-schemas-are-disjoint-types-are-not-shared-across-the-boundary):
     `Markdown` and `MarkdownDocument` are `common/` types.
-  - [Publication Lifecycle](../products/publication-lifecycle.md): the snapshot includes each
+  - [Proposed Publication Lifecycle](../implementation/proposed-publication-lifecycle.md): the snapshot includes each
     body's resolved IR, and the snapshot digest covers it.
   - `docs/products/*-spec.md`: the body is CommonMark + GFM per §2, and raw HTML isn't published.
 - **Deferred:**
@@ -247,7 +247,7 @@ This ADR fixes where interpolation runs, not its syntax:
 
 - [ADR 0012 — Separate Admin and Storefront GraphQL Endpoints](0012-admin-storefront-graphql-endpoints.md)
 - [Doc 038 — GraphQL Cost Analysis, Rate Limiting, and Request Limits](../implementation/038-graphql-cost-and-rate-limits.md)
-- [Publication Lifecycle](../products/publication-lifecycle.md)
+- [Proposed Publication Lifecycle](../implementation/proposed-publication-lifecycle.md)
 - [Product spec](../products/product-spec.md)
 - [CommonMark 0.31.2](https://spec.commonmark.org/0.31.2/), [GitHub Flavored Markdown](https://github.github.com/gfm/)
 - [mdast](https://github.com/syntax-tree/mdast) and [mdast-util-directive](https://github.com/syntax-tree/mdast-util-directive)

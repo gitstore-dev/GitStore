@@ -67,9 +67,11 @@ For `WATCH_UNAVAILABLE` or `MATERIALIZER_NOT_READY`, retain the cursor, back
 off, and restore materializer health. Do not use event-bus cursors as a
 multi-replica fallback.
 
-Before rolling back Product readers, stop consumers and let them drain, then
-disable the reader/materializer capability. Retain CDC and journal state while
-issued cursors may still be replayed.
+Before replacing Product readers, stop consumers and let them drain. The durable
+journal reader and CDC materializer are always on; there is no independent
+disable flag. If journal service must stop, drain watch ingress and stop every
+API replica. Retain CDC and journal state while issued cursors may still be
+replayed; do not substitute an unreplayable watch implementation.
 
 Category deletion enforcement requires coordinated API/controller versions and
 valid owner references; incompatible old/new deployments are unsupported.

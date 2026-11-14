@@ -19,3 +19,7 @@
   and in force, not merely a plan or proposed capability. Include the status
   change in the implementing PR; do not backdate acceptance before the ADR's
   own date. Superseding an ADR updates both its status and the index.
+- Keep [README.md](README.md) navigation aligned with current user, operator
+  and contributor guides. Put unimplemented workflows and roadmap exploration
+  under `implementation/`, clearly marked as proposals; do not present their
+  example commands or manifests as supported runtime procedures.
