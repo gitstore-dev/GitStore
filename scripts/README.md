@@ -109,7 +109,10 @@ they are also included in the default `make test` suite.
 
 ## install-git-hooks.sh
 
-Installs repository-local git hooks into the standard `.git/hooks` directory, enabling automatic staged-file licence checks and Conventional Commits validation.
+Installs the repository's `pre-commit` and `commit-msg` hooks, enabling
+staged-file licence checks and Conventional Commits validation. Git resolves
+the hooks directory, so installation works from a main checkout or linked
+worktree, including paths with spaces.
 
 ### Usage
 
@@ -117,7 +120,19 @@ Installs repository-local git hooks into the standard `.git/hooks` directory, en
 ./scripts/install-git-hooks.sh
 ```
 
-This installs the `pre-commit` and `commit-msg` hooks into `.git/hooks`.
+You may invoke the script from a subdirectory using its relative or absolute
+path. Hooks are clone-shared: installing from any worktree updates the hooks
+used by **all linked worktrees**. The installer prints this warning and does
+not change Git configuration or create per-worktree hook settings.
+
+Identical installed hooks may be reinstalled. A configured `core.hooksPath`,
+differing installed hook, or symlinked hook causes installation to stop without
+replacing hooks. Review ownership and preserve any existing integration before
+an explicitly approved replacement; do not remove another worktree's hooks
+merely to make installation succeed.
+
+`bash scripts/test-license-headers.sh` covers installation in fresh test-owned
+repositories and linked worktrees as well as the licence checks.
 
 ## update-env-secret.sh
 

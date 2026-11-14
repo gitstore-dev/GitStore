@@ -610,6 +610,11 @@ Install local hooks once per clone:
 ./scripts/install-git-hooks.sh
 ```
 
+The installer works from the main checkout or a linked worktree and updates
+clone-shared hooks for all linked worktrees. It never changes hook configuration.
+Custom hook paths and differing installed hooks are left untouched; review
+ownership before replacing an existing integration.
+
 The pre-commit hook uses the unified license checker for Go, Rust and
 JavaScript/TypeScript. It reads staged blobs, not unstaged working-tree edits.
 `make check TARGET=licenses DIFF_BASE=origin/main` validates tracked headers
