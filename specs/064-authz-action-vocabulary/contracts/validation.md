@@ -32,8 +32,9 @@ structural USER-namespace invariants.
 
 ### Shared fixture adapter
 
-`tests/fixtures/authorization/decision-table.json` is the promoted, byte-identical
-T003 fixture. A provider adapter loads the policy referenced by each case,
+[`tests/fixtures/authorization/decision-table.json`](../../../tests/fixtures/authorization/decision-table.json)
+is the sole authored neutral fixture, preserving the reviewed 55 decisions and
+28 validation expectations. A provider adapter loads the policy referenced by each case,
 converts its already-trusted principal/resource facts without inventing roles or
 groups, and compares the decision outcome plus a nonempty diagnostic reason.
 RBAC allows must identify the binding, role and rule (masters is the explicit
@@ -43,7 +44,8 @@ cases exercise the parser separately. Response expectations are boundary tests,
 not evaluator outcomes: US1 exercises all 55 decisions and 28 validation rows;
 US3 must exercise every response field against the real presentation mapper.
 Future providers consume this same fixture unchanged. New cases append rather
-than weakening expectations; a parity check protects the reviewed planning seed.
+than weakening expectations; review fixture changes directly rather than keeping
+a second planning copy or deriving expected outcomes from an evaluator.
 
 ### Initial observed baseline (T002)
 

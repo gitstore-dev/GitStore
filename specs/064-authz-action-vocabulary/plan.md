@@ -98,11 +98,13 @@ specs/064-authz-action-vocabulary/
   quickstart.md
   contracts/
     action-vocabulary.json        # machine-readable catalog seed
-    decision-table.json           # provider-neutral conformance seed
     rbac-policy.md                # grammar, evaluation, limits, tools
     service-boundaries.md         # signed context, storage and rollout
     validation.md                 # tests and deployed evidence
   tasks.md                        # generated later, not by this command
+
+tests/fixtures/authorization/
+  decision-table.json             # sole authored provider-neutral conformance fixture
 ```
 
 ### Source Code (implementation destinations)
