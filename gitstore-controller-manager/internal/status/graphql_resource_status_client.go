@@ -5,7 +5,6 @@ package status
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
@@ -36,7 +35,7 @@ func NewGraphQLResourceStatusClient(client *graphqlclient.Client) StatusClient {
 }
 
 func (c *graphqlResourceStatusClient) Apply(ctx context.Context, key types.WorkItemKey, patch *StatusPatch) error {
-	input, err := toUpdateCategoryStatusInput(key, patch)
+	input, err := toStatusInput(key, patch)
 	if err != nil {
 		return fmt.Errorf("graphqlResourceStatusClient: build input: %w", err)
 	}
@@ -44,16 +43,7 @@ func (c *graphqlResourceStatusClient) Apply(ctx context.Context, key types.WorkI
 
 	var response updateResourceStatusResponse
 	if err := c.client.Mutate(ctx, updateResourceStatusMutation, map[string]any{"input": input}, &response); err != nil {
-		var gqlErr *graphqlclient.Error
-		if errors.As(err, &gqlErr) {
-			switch {
-			case gqlErr.Extensions["code"] == "NOT_FOUND":
-				return fmt.Errorf("graphqlResourceStatusClient: %w: %w", types.ErrNotFound, err)
-			case graphqlclient.IsConflictCode(gqlErr.Extensions["code"]):
-				return fmt.Errorf("graphqlResourceStatusClient: %w: current resourceVersion %q: %w", types.ErrConflict, conflictResourceVersion(gqlErr.Extensions), err)
-			}
-		}
-		return fmt.Errorf("graphqlResourceStatusClient: updateResourceStatus: %w", err)
+		return statusMutationError("graphqlResourceStatusClient", "updateResourceStatus", err)
 	}
 	return nil
 }

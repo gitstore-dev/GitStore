@@ -5,7 +5,6 @@ package status
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
@@ -42,28 +41,14 @@ func NewGraphQLProductStatusClient(client *graphqlclient.Client) StatusClient {
 }
 
 func (c *graphqlProductStatusClient) Apply(ctx context.Context, key types.WorkItemKey, patch *StatusPatch) error {
-	// toUpdateCategoryStatusInput's shape (name/namespace/resourceVersion/
-	// observedGeneration/lastAppliedRevision/conditions/resolved) is generic
-	// across every per-kind status mutation in this codebase, not
-	// CategoryTaxonomy-specific despite its name — already reused by
-	// graphqlRepositoryStatusClient, and reused here rather than duplicated.
-	input, err := toUpdateCategoryStatusInput(key, patch)
+	input, err := toStatusInput(key, patch)
 	if err != nil {
 		return fmt.Errorf("graphqlProductStatusClient: build input: %w", err)
 	}
 
 	var resp updateProductStatusResponse
 	if err := c.client.Mutate(ctx, updateProductStatusMutation, map[string]any{"input": input}, &resp); err != nil {
-		var gqlErr *graphqlclient.Error
-		if errors.As(err, &gqlErr) {
-			switch {
-			case gqlErr.Extensions["code"] == "NOT_FOUND":
-				return fmt.Errorf("graphqlProductStatusClient: %w: %w", types.ErrNotFound, err)
-			case graphqlclient.IsConflictCode(gqlErr.Extensions["code"]):
-				return fmt.Errorf("graphqlProductStatusClient: %w: current resourceVersion %q: %w", types.ErrConflict, conflictResourceVersion(gqlErr.Extensions), err)
-			}
-		}
-		return fmt.Errorf("graphqlProductStatusClient: updateProductStatus: %w", err)
+		return statusMutationError("graphqlProductStatusClient", "updateProductStatus", err)
 	}
 	return nil
 }

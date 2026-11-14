@@ -49,28 +49,32 @@ func NewGraphQLStatusClient(client *graphqlclient.Client) StatusClient {
 // error maps to types.ErrNotFound. Any other GraphQL error (including
 // FORBIDDEN) is returned wrapped, without a sentinel.
 func (c *graphqlStatusClient) Apply(ctx context.Context, key types.WorkItemKey, patch *StatusPatch) error {
-	input, err := toUpdateCategoryStatusInput(key, patch)
+	input, err := toStatusInput(key, patch)
 	if err != nil {
 		return fmt.Errorf("graphqlStatusClient: build input: %w", err)
 	}
 
 	var resp updateCategoryStatusResponse
 	if err := c.client.Mutate(ctx, updateCategoryStatusMutation, map[string]any{"input": input}, &resp); err != nil {
-		var gqlErr *graphqlclient.Error
-		if errors.As(err, &gqlErr) {
-			switch {
-			case gqlErr.Extensions["code"] == "NOT_FOUND":
-				return fmt.Errorf("graphqlStatusClient: %w: %w", types.ErrNotFound, err)
-			case graphqlclient.IsConflictCode(gqlErr.Extensions["code"]):
-				return fmt.Errorf("graphqlStatusClient: %w: current resourceVersion %q: %w", types.ErrConflict, conflictResourceVersion(gqlErr.Extensions), err)
-			}
-		}
-		return fmt.Errorf("graphqlStatusClient: updateCategoryStatus: %w", err)
+		return statusMutationError("graphqlStatusClient", "updateCategoryStatus", err)
 	}
 	return nil
 }
 
-func toUpdateCategoryStatusInput(key types.WorkItemKey, patch *StatusPatch) (map[string]any, error) {
+func statusMutationError(clientName, operation string, err error) error {
+	var gqlErr *graphqlclient.Error
+	if errors.As(err, &gqlErr) {
+		switch {
+		case gqlErr.Extensions["code"] == "NOT_FOUND":
+			return fmt.Errorf("%s: %w: %w", clientName, types.ErrNotFound, err)
+		case graphqlclient.IsConflictCode(gqlErr.Extensions["code"]):
+			return fmt.Errorf("%s: %w: current resourceVersion %q: %w", clientName, types.ErrConflict, conflictResourceVersion(gqlErr.Extensions), err)
+		}
+	}
+	return fmt.Errorf("%s: %s: %w", clientName, operation, err)
+}
+
+func toStatusInput(key types.WorkItemKey, patch *StatusPatch) (map[string]any, error) {
 	input := map[string]any{
 		"name":            key.Name,
 		"namespace":       key.Namespace,
