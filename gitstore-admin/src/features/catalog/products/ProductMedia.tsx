@@ -14,10 +14,12 @@ export function ProductMedia({
   id,
   compact = false,
   priority = false,
+  emptyLabel = 'No product image',
 }: {
   id?: string
   compact?: boolean
   priority?: boolean
+  emptyLabel?: string
 }) {
   const image = id ? demoMedia[id] : undefined
   return (
@@ -36,7 +38,7 @@ export function ProductMedia({
       ) : (
         <span>
           <ImageOff size={compact ? 18 : 28} aria-hidden="true" />
-          {!compact && 'No product image'}
+          {!compact && emptyLabel}
         </span>
       )}
     </div>

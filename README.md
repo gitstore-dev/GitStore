@@ -1,6 +1,6 @@
 # GitStore Admin
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="gitstore-admin/public/branding/readme-dark.png"><img src="gitstore-admin/public/branding/readme-light.png" alt="GitStore — Change boldly. Keep a way back."></picture>
+![GitStore Admin — browse category images and hierarchy in Columns view](gitstore-admin/docs/images/categories-overview.png)
 
 An isolated, mock-first Admin foundation: React, strict TypeScript, Vite, TanStack Router, React Aria, and custom CSS Modules. All 79 PRD destinations are navigable: Catalog / Products, Variants, Categories, Collections, and Home / Overview, My work, Recent activity, and Setup guide are interactive mock destinations; the other 71 remain placeholders. My work includes a limited, demo-only product Title/description editor and personal review workflow. There is no authentication, backend connection, or GraphQL runtime.
 
@@ -62,4 +62,4 @@ The document canvas follows [Product Canvas (Focus Mode)](https://stitch.google.
 
 Home / Setup guide completes the four Home destinations. Its four-step checklist shares progress with Overview. Confirming a demo review records guidance read, not configuration or readiness. Product completion follows the saved, non-deleting catalog. Task links support `?step=store-details|categories|first-product|catalog-checks`; setup reviews reset with the shared per-store demo.
 
-Catalog / Variants, Categories, and Collections share the in-memory store session. Browse full detail URLs; variants show SKU/options and declared pricing/inventory. Categories offers tree, table, and spatial map views without relationship editing. Collections uses label selectors, a current demo preview, and separate recorded fixture membership. These pages do not create, edit, delete, or publish resources.
+Catalog / Variants, Categories, and Collections share the in-memory store session. Browse full detail URLs; variants show SKU/options and declared pricing/inventory. Categories offers Columns, Tree, and Cards without relationship editing. Category images resolve from their own media references; Cards share the catalog’s full-card image-pan interaction. Collections uses label selectors, a current demo preview, and separate recorded fixture membership. These pages do not create, edit, delete, or publish resources.

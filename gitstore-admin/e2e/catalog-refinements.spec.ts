@@ -43,11 +43,11 @@ test('catalog display preferences survive navigation, reload and store switches 
     ).toHaveAttribute('aria-pressed', 'true')
   }
   await page.goto(`${root}/catalog/categories`)
-  await page.getByRole('button', { name: 'Spatial view', exact: true }).click()
+  await page.getByRole('button', { name: 'Columns view', exact: true }).click()
   await page.goto('/w/studio-berlin/catalog/categories')
   await page.goto(`${root}/catalog/categories`)
   await expect(
-    page.getByRole('button', { name: 'Spatial view', exact: true }),
+    page.getByRole('button', { name: 'Columns view', exact: true }),
   ).toHaveAttribute('aria-pressed', 'true')
   expect(
     await page.evaluate(() =>
@@ -69,7 +69,7 @@ for (const width of [1508, 912, 375])
     ]) {
       await page.goto(`${root}/catalog/${domain}?status=ready`)
       const button = page.getByRole('button', {
-        name: 'Table view',
+        name: domain === 'categories' ? 'Tree view' : 'Table view',
         exact: true,
       })
       await expect(button).toBeVisible()
@@ -221,42 +221,35 @@ test('category breadcrumbs start at the root; Product details share the wider ca
     page.getByRole('textbox', { name: 'Title', exact: true }),
   ).toBeVisible()
 })
-test('category branches unfold, highlight ancestry and Products, and simplify at overview zoom', async ({
+test('category columns preserve their path through view switches and reduced motion', async ({
   page,
 }, testInfo) => {
   await page.goto(`${root}/catalog/categories?view=spatial`)
-  const map = page.getByRole('region', { name: 'Category map', exact: true })
   await expect(
-    map.getByRole('button', { name: /^Tableware View/ }),
-  ).toHaveCount(0)
-  await map
-    .getByRole('button', { name: 'Unfold Ceramics branch', exact: true })
-    .click()
-  await expect(
-    map.getByRole('button', { name: /^Tableware View/ }),
-  ).toBeVisible()
-  await map.getByRole('button', { name: /^Homeware View/ }).click()
-  await expect(map.locator('[data-path]')).toHaveCount(1)
-  await expect(map.getByRole('link')).toHaveCount(4)
-  await expect(map.locator('path[data-active]')).toHaveCount(4)
+    page.getByRole('button', { name: 'Columns view' }),
+  ).toHaveAttribute('aria-pressed', 'true')
   await page
-    .getByRole('button', { name: 'Close inspector', exact: true })
+    .getByRole('button', { name: 'Explore Homeware', exact: true })
     .click()
-  await map.getByRole('button', { name: /^Ceramics View/ }).click()
-  await expect(map.locator('[data-path]')).toHaveCount(2)
-  await expect(map.locator('path[data-active]')).toHaveCount(1)
+  await page
+    .getByRole('button', { name: 'Explore Ceramics', exact: true })
+    .click()
+  await page
+    .getByRole('button', { name: 'Explore Tableware', exact: true })
+    .click()
+  await expect(
+    page.getByRole('region', { name: 'Selected category' }),
+  ).toBeVisible()
   await page.screenshot({
     path: testInfo.outputPath('category-selected-path.png'),
   })
-  for (let i = 0; i < 4; i++)
-    await map.getByRole('button', { name: 'Zoom out', exact: true }).click()
-  await expect(map.locator('[data-detail]')).toHaveAttribute(
-    'data-detail',
-    'compact',
-  )
+  await page.getByRole('button', { name: 'Tree view' }).click()
+  await expect(page).toHaveURL(/selected=tableware/)
+  await expect(page.locator('[data-resource-id="tableware"]')).toBeVisible()
+  await page.getByRole('button', { name: 'Columns view' }).click()
   expect(
-    await map
-      .locator('[data-path]')
+    await page
+      .locator('[data-category-columns] section')
       .first()
       .evaluate((el) => getComputedStyle(el).animationName),
   ).toBe('none')

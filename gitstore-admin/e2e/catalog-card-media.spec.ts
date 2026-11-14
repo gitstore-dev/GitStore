@@ -4,7 +4,12 @@ for (const theme of ['light', 'dark'] as const)
     page,
   }, testInfo) => {
     await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' })
-    for (const domain of ['products', 'variants', 'collections']) {
+    for (const domain of [
+      'products',
+      'variants',
+      'collections',
+      'categories',
+    ]) {
       await page.goto(`/w/atelier-kyoto/catalog/${domain}?view=grid`)
       const cards = page.locator('[data-catalog-card]')
       await expect(cards.first()).toBeVisible()
@@ -110,6 +115,9 @@ for (const width of [1508, 892, 375])
     await page.goto('/w/atelier-kyoto/catalog/categories?view=table')
     await expect(page.locator('a[data-product-surface]').first()).toBeVisible()
     await expect(
-      page.locator('a[data-product-surface] [data-product-image]'),
-    ).toHaveCount(0)
+      page
+        .locator('a[data-product-surface]')
+        .first()
+        .locator('[data-product-image]'),
+    ).toBeVisible()
   })

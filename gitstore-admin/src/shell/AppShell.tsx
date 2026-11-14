@@ -402,6 +402,11 @@ export function AppShell({ children }: { children?: ReactNode }) {
                 <LayoutPicker
                   value={mode}
                   onChange={(next) => {
+                    if (next === 'inspector')
+                      inspectorTrigger.current =
+                        document.activeElement instanceof HTMLElement
+                          ? document.activeElement
+                          : null
                     if (mode === 'inspector' && next === 'standard')
                       closeInspector()
                     else changeMode(next)

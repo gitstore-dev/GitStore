@@ -11,6 +11,8 @@ export type CatalogScenario =
   | 'missing-parent'
   | 'cycle'
   | 'missing-member'
+  | 'deep'
+  | 'missing-media'
 export const catalogKinds = {
   variants: 'ProductVariant',
   categories: 'CategoryTaxonomy',
@@ -121,7 +123,7 @@ export interface CatalogSearch {
   status: string
   related: string
   sort: 'title' | 'updated'
-  view: 'table' | 'grid' | 'tree' | 'spatial'
+  view: 'table' | 'grid' | 'tree' | 'columns' | 'cards'
   selected?: string
 }
 export function catalogSearch(
@@ -129,7 +131,16 @@ export function catalogSearch(
   domain: CatalogDomain,
 ): CatalogSearch {
   const allowed =
-    domain === 'categories' ? ['table', 'tree', 'spatial'] : ['table', 'grid']
+    domain === 'categories' ? ['columns', 'tree', 'cards'] : ['table', 'grid']
+  const view =
+    domain === 'categories'
+      ? ((
+          { spatial: 'columns', table: 'tree', grid: 'cards' } as Record<
+            string,
+            string
+          >
+        )[String(raw.view)] ?? raw.view)
+      : raw.view
   return {
     q: typeof raw.q === 'string' ? raw.q : '',
     status: [
@@ -144,10 +155,10 @@ export function catalogSearch(
       : 'all',
     related: typeof raw.related === 'string' ? raw.related : 'all',
     sort: raw.sort === 'title' ? 'title' : 'updated',
-    view: allowed.includes(String(raw.view))
-      ? (raw.view as CatalogSearch['view'])
+    view: allowed.includes(String(view))
+      ? (view as CatalogSearch['view'])
       : domain === 'categories'
-        ? 'tree'
+        ? 'columns'
         : 'table',
     ...(domain === 'categories' && typeof raw.selected === 'string'
       ? { selected: raw.selected }

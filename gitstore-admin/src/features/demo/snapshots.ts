@@ -29,7 +29,13 @@ export type ItemSnapshot =
   | {
       kind: 'CategoryTaxonomy'
       body: string
-      spec: { title: string; parentId: string | null }
+      spec: {
+        title: string
+        parentId: string | null
+        media?: readonly {
+          fileRef: { name: string; kind?: 'File'; optional?: boolean }
+        }[]
+      }
     }
   | {
       kind: 'Collection'
@@ -86,6 +92,9 @@ export function snapshotFields(
         Title: value.spec.title,
         Description: value.body,
         'Parent category': value.spec.parentId,
+        'Category images': (value.spec.media ?? []).map(
+          (media) => media.fileRef.name,
+        ),
       }
     case 'Collection':
       return {
@@ -180,6 +189,18 @@ export function seedCatalog(
         body: description,
         spec: {
           title,
+          media:
+            resource.id === 'lifestyle'
+              ? []
+              : [
+                  {
+                    fileRef: {
+                      name:
+                        resource.id === 'ceramics' ? 'basin-image' : 'lookbook',
+                      kind: 'File',
+                    },
+                  },
+                ],
           parentId:
             (
               { ceramics: 'homeware', tableware: 'ceramics' } as Record<
@@ -236,8 +257,18 @@ export function recoveryProblem(
             : []),
           ...target.spec.mediaIds.map((ref) => [ref, 'File'] as const),
         ]
-      : target.kind === 'CategoryTaxonomy' && target.spec.parentId
-        ? [[target.spec.parentId, 'CategoryTaxonomy']]
+      : target.kind === 'CategoryTaxonomy'
+        ? [
+            ...(target.spec.parentId
+              ? [[target.spec.parentId, 'CategoryTaxonomy'] as const]
+              : []),
+            ...(target.spec.media ?? [])
+              .filter(
+                (media) =>
+                  !media.fileRef.optional || !!catalog[media.fileRef.name],
+              )
+              .map((media) => [media.fileRef.name, 'File'] as const),
+          ]
         : []
   if (refs.some(([ref, kind]) => catalog[ref]?.kind !== kind))
     return 'A related item is missing or has the wrong type. This version cannot be restored.'

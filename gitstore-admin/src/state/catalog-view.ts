@@ -4,7 +4,7 @@ export function readCatalogView(domain: Domain) {
   try {
     const view = localStorage.getItem(`gitstore.view.${domain}`)
     return (domain === 'categories'
-      ? ['tree', 'table', 'spatial']
+      ? ['columns', 'tree', 'cards', 'table', 'spatial', 'grid']
       : ['table', 'grid']
     ).includes(view ?? '')
       ? view

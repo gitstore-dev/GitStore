@@ -5,8 +5,7 @@
 .inline,
 .top,
 .listHeading,
-.cardFooter,
-.mapToolbar {
+.cardFooter {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -98,41 +97,6 @@
   display: flex;
   justify-content: center;
 }
-.tree {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-}
-.treeRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: calc(var(--depth, 0) * 26px);
-  min-width: 0;
-}
-.treeRow > button {
-  padding: 8px;
-  width: 34px;
-  flex: none;
-}
-.treeRow > .row {
-  flex: 1;
-}
-.treeRow .rowContents {
-  grid-template-columns: minmax(0, 1fr) 110px;
-}
-.treeRow .identity strong {
-  font-size: 22px;
-}
-.treeRow .secondary {
-  display: none;
-}
-.treeSpacer {
-  width: 34px;
-  flex: none;
-}
 .detail {
   margin-top: 24px;
   background: var(--surface);
@@ -223,75 +187,7 @@
   font-size: 13px;
   line-height: 1.7;
 }
-.map {
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  overflow: hidden;
-  background: var(--surface);
-}
-.mapToolbar {
-  padding: 14px;
-  border-bottom: 1px solid var(--line);
-  font-size: 13px;
-}
-.mapToolbar > div {
-  display: flex;
-  gap: 8px;
-}
-.mapToolbar small {
-  font: 10px var(--mono);
-  color: var(--muted);
-  margin-left: 8px;
-}
-.map > p {
-  padding: 0 14px;
-}
-.mapViewport {
-  height: 460px;
-  position: relative;
-  overflow: hidden;
-  touch-action: none;
-  background: radial-gradient(var(--line) 1px, transparent 1px) 0 0 / 20px 20px;
-}
-.mapScene {
-  position: absolute;
-  transform-origin: 0 0;
-}
-.edges {
-  position: absolute;
-  pointer-events: none;
-  overflow: visible;
-}
-.edges path {
-  fill: none;
-  stroke: var(--muted);
-  stroke-width: 1;
-}
-.mapNode {
-  position: absolute;
-  width: 245px;
-  min-height: 80px;
-  display: flex !important;
-  align-items: flex-start !important;
-  flex-direction: column;
-  justify-content: center;
-  background: var(--surface) !important;
-  text-align: left;
-  box-shadow: 0 4px 12px #00000012;
-}
-.mapNode strong {
-  font: 500 22px/1.2 var(--display);
-}
-.mapNode small {
-  color: var(--muted);
-  font-size: 10px;
-  white-space: normal;
-}
-.mapNode[aria-pressed='true'] {
-  border-color: var(--accent);
-}
 .row:focus-visible,
-.mapViewport:focus-visible,
 .detail h1:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
@@ -342,12 +238,6 @@
   }
   .members {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .mapViewport {
-    height: 360px;
-  }
-  .mapToolbar {
-    flex-wrap: wrap;
   }
 }
 .search > div {
@@ -481,164 +371,6 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
-.mapNode {
-  padding: 0 !important;
-  overflow: visible;
-  transition:
-    left 240ms ease,
-    top 240ms ease,
-    border-color 180ms ease,
-    box-shadow 180ms ease;
-  animation: category-arrive 240ms ease both;
-}
-.mapSelect {
-  width: 100%;
-  min-height: 80px;
-  padding: 12px 32px 12px 16px !important;
-  display: flex !important;
-  flex-direction: column;
-  align-items: flex-start !important;
-  text-align: left;
-  border: 0 !important;
-  background: transparent !important;
-  white-space: normal;
-}
-.mapNode[data-path] {
-  border-color: var(--accent);
-  box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 15%, transparent);
-}
-.mapNode[data-selected] {
-  box-shadow:
-    0 0 0 1px var(--ink),
-    0 0 20px color-mix(in srgb, var(--accent) 20%, transparent);
-}
-.branchToggle {
-  position: absolute;
-  right: 2px;
-  bottom: 2px;
-  padding: 4px !important;
-  min-height: 24px !important;
-}
-.edges path {
-  stroke-dasharray: 1;
-  stroke-dashoffset: 0;
-  animation: category-connection 320ms ease-out both;
-  transition: stroke 180ms ease;
-}
-.edges path[data-active] {
-  stroke: var(--accent);
-  stroke-width: 2;
-}
-.mapProduct {
-  position: absolute;
-  width: 245px;
-  min-height: 90px;
-  padding: 16px;
-  background: var(--hover);
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  color: var(--ink);
-  text-decoration: none;
-  display: grid;
-  gap: 8px;
-  animation: category-arrive 260ms ease both;
-}
-.mapProduct strong {
-  font: 500 20px/1.2 var(--display);
-}
-.mapProduct small {
-  font: 10px var(--mono);
-  color: var(--muted);
-}
-.mapProduct svg {
-  position: absolute;
-  right: 10px;
-  top: 12px;
-}
-.mapScene {
-  transition: transform 220ms ease;
-}
-.mapViewport[data-panning] .mapScene {
-  transition: none;
-}
-.mapSelection {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  padding: 14px;
-  font-size: 11px;
-  color: var(--muted);
-}
-.mapScene[data-detail='compact'] .mapSelect small {
-  display: none;
-}
-@keyframes category-arrive {
-  from {
-    opacity: 0;
-    transform: translate(-10px, 8px) scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-@keyframes category-connection {
-  from {
-    stroke-dashoffset: 1;
-  }
-  to {
-    stroke-dashoffset: 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .mapNode,
-  .mapProduct,
-  .edges path,
-  .mapScene {
-    animation: none;
-    transition: none;
-  }
-}
-:global([data-motion='reduced']) .mapNode,
-:global([data-motion='reduced']) .mapProduct,
-:global([data-motion='reduced']) .edges path,
-:global([data-motion='reduced']) .mapScene {
-  animation: none;
-  transition: none;
-}
-.mobileProducts {
-  padding: 14px;
-  border-top: 1px solid var(--line);
-  font-size: 12px;
-}
-.mobileProducts h3 {
-  font: 500 22px var(--display);
-  margin: 0 0 12px;
-}
-.mobileProducts ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-}
-.mobileProducts a {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  color: var(--ink);
-  text-decoration: none;
-  background: var(--hover);
-}
-.mapNode {
-  border: 1px solid var(--line);
-  border-radius: 5px;
-}
-
 .top > a {
   text-decoration: none;
 }
@@ -649,4 +381,24 @@
 .rowMedia {
   display: block;
   flex: none;
+}
+
+.row[data-selected] {
+  outline: 1px solid var(--muted);
+  outline-offset: 1px;
+}
+.categoryGallery {
+  display: grid;
+  grid-template-columns: minmax(0, 420px);
+  gap: 16px;
+}
+
+.viewTooltip {
+  z-index: 250;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 11px;
 }

@@ -1,20 +1,11 @@
 import { CardMediaBackdrop } from '../products/CardMediaBackdrop'
-import { useMediaQuery } from '../../../state/preferences'
 import { ActiveFilters } from '../../../components/ActiveFilters'
 import {
   useCatalogView,
   rememberCatalogView,
 } from '../../../state/catalog-view'
 import { ProductMedia } from '../products/ProductMedia'
-import {
-  useContext,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
-import type { CSSProperties } from 'react'
+import { useLayoutEffect, useState } from 'react'
 import {
   Link,
   useLocation,
@@ -22,18 +13,14 @@ import {
   useRouter,
   useSearch,
 } from '@tanstack/react-router'
-import { Input, Label, SearchField } from 'react-aria-components'
 import {
-  ArrowUpRight,
-  ChevronDown,
-  ChevronRight,
-  FolderTree,
-  LayoutGrid,
-  List,
-  Network,
-  Package,
-  Search,
-} from 'lucide-react'
+  Input,
+  Label,
+  SearchField,
+  Tooltip,
+  TooltipTrigger,
+} from 'react-aria-components'
+import { FolderTree, Columns3, LayoutGrid, List, Search } from 'lucide-react'
 import type { NamespaceId } from '../../../data/demo'
 import { namespaces } from '../../../data/demo'
 import { snapshotTitle } from '../../demo/snapshots'
@@ -46,10 +33,6 @@ import { FilterResults } from '../../../components/FilterResults'
 import { FilterSheet } from '../../../components/FilterSheet'
 import { ChoiceSelect } from '../../../components/ChoiceSelect'
 import { ActionButton } from '../../../components/controls'
-import {
-  usePageInspector,
-  PageInspectorContext,
-} from '../../../shell/PageInspector'
 import { useGridMotion } from '../../home/shared/motion/useGridMotion'
 import { useResourceLighting } from '../../home/shared/motion/useResourceLighting'
 import {
@@ -60,11 +43,11 @@ import {
   catalogSearch,
   filteredEntries,
   catalogConnection,
-  categoryHierarchy,
   relatedProductTitle,
 } from './model'
 import type { CatalogDomain, CatalogEntry, CatalogSearch } from './model'
-import { CategorySpatial } from './CategorySpatial'
+import { CategoryBrowser } from './CategoryBrowser'
+import { categoryMediaId } from './category-navigation'
 import styles from './catalog.module.css'
 const statusOptions = [
   { id: 'all', label: 'All statuses' },
@@ -86,13 +69,12 @@ export function CatalogListPage({
   const router = useRouter(),
     location = useLocation(),
     navigate = useNavigate()
-  const tablet = useMediaQuery('(max-width: 1100px)')
   const scenario = router.options.context.catalogScenario
   const search = catalogSearch(useSearch({ strict: false }), domain)
   useCatalogView(domain, search.view)
   const { stage: stageRef, capture } = useGridMotion()
   const lightingRef = useResourceLighting(
-    search.view === 'grid' ? 'auto' : 'css',
+    search.view === 'grid' || search.view === 'cards' ? 'auto' : 'css',
   )
   const motion = router.options.context.productNavigation
   const filterKey = JSON.stringify([
@@ -135,94 +117,8 @@ export function CatalogListPage({
   })
   const [filtersOpen, setFiltersOpen] = useState(false),
     [draft, setDraft] = useState(search)
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
-  const trigger = useRef<HTMLElement | undefined>(undefined)
   const available = scenario !== 'loading' && scenario !== 'unavailable'
-  const selectedId = search.selected
-  const selected = useMemo(
-    () =>
-      catalogEntries(session, domain).find((item) => item.id === selectedId),
-    [session, domain, selectedId],
-  )
-  const inspectorContext = useContext(PageInspectorContext)
-  const content = useMemo(
-    () =>
-      selected ? (
-        <div className={styles.inspector}>
-          <h2 id="category-map-heading" tabIndex={-1}>
-            {selected.title}
-          </h2>
-          <StatusBadge state={selected.status} />
-          <p>{selected.resource.diagnostic}</p>
-          <p>
-            Inspect this category and its related products. Browsing the map
-            does not change category relationships.
-          </p>
-          <Link
-            to={catalogDetailPaths[domain]}
-            params={{ namespace, itemId: selected.id }}
-            search={(previous) => ({
-              ...catalogSearch(previous, domain),
-              selected: undefined,
-            })}
-            onClick={() => {
-              if (inspectorContext) {
-                inspectorContext.registerCloseGuard(
-                  inspectorContext.owner,
-                  null,
-                )
-                inspectorContext.close()
-              }
-            }}
-          >
-            Open category <ArrowUpRight size={13} />
-          </Link>
-        </div>
-      ) : null,
-    [selected, domain, namespace, inspectorContext],
-  )
-  const { owner, open, close, registerCloseGuard } = usePageInspector(content)
-  useEffect(() => {
-    registerCloseGuard(owner, (proceed) => {
-      proceed()
-      void navigate({
-        to: catalogPaths[domain],
-        params: { namespace },
-        search: { ...search, selected: undefined },
-        replace: true,
-        resetScroll: false,
-      })
-    })
-    return () => registerCloseGuard(owner, null)
-  }, [owner, registerCloseGuard, navigate, namespace, domain, search])
-  const previousSelection = useRef<string | undefined>(undefined)
-  useEffect(() => {
-    if (
-      location.pathname.replace(/\/$/, '') !==
-      `/w/${namespace}/catalog/${domain}`
-    )
-      return
-    if (selected && available) {
-      if (!tablet) {
-        open(trigger.current)
-        requestAnimationFrame(() =>
-          document
-            .getElementById('category-map-heading')
-            ?.focus({ preventScroll: true }),
-        )
-      }
-    } else if (previousSelection.current) close()
-    previousSelection.current = selected?.id
-  }, [
-    selected,
-    available,
-    open,
-    close,
-    location.pathname,
-    namespace,
-    domain,
-    tablet,
-  ])
+  const isGrid = search.view === 'grid' || search.view === 'cards'
   function update(patch: Partial<CatalogSearch>) {
     if (patch.view) rememberCatalogView(domain, patch.view)
     capture()
@@ -233,6 +129,13 @@ export function CatalogListPage({
       resetScroll: false,
       replace: 'q' in patch,
     })
+  }
+  function loadMore() {
+    const cursor = connection.pageInfo.endCursor
+    if (!cursor || !connection.pageInfo.hasNextPage) return
+    capture()
+    setLoaded({ key: filterKey, cursors: [...cursors, cursor] })
+    announce(`More ${domain} loaded.`)
   }
   const activeCount =
     Number(search.status !== 'all') +
@@ -302,6 +205,10 @@ export function CatalogListPage({
   function row(item: CatalogEntry) {
     const variant = session.variants[item.id]
     const category = session.catalog[item.id]
+    const mediaId =
+      domain === 'categories'
+        ? categoryMediaId(session, item.id)
+        : variant?.spec.mediaIds[0]
     return (
       <Link
         key={item.id}
@@ -312,32 +219,43 @@ export function CatalogListPage({
         data-product-surface={item.id}
         data-resource-id={item.id}
         data-readiness={item.status}
-        data-catalog-card={search.view === 'grid' ? '' : undefined}
-        data-halo-card={search.view === 'grid' ? '' : undefined}
+        data-catalog-card={isGrid ? '' : undefined}
+        data-selected={
+          (domain === 'categories' && search.selected === item.id) || undefined
+        }
+        data-halo-card={isGrid ? '' : undefined}
       >
-        {search.view === 'grid' && (
-          <CardMediaBackdrop id={variant?.spec.mediaIds[0]} />
+        {isGrid && (
+          <CardMediaBackdrop
+            id={mediaId}
+            emptyLabel={
+              domain === 'categories' ? 'No category image' : undefined
+            }
+          />
         )}
         <div className={styles.rowContents} data-product-content="row">
           <div className={styles.identity}>
-            {search.view === 'grid' ? (
+            {isGrid ? (
               <span
                 className={styles.cardMedia}
                 aria-hidden="true"
                 data-product-image=""
               >
-                <ProductMedia id={variant?.spec.mediaIds[0]} />
+                <ProductMedia
+                  id={mediaId}
+                  emptyLabel={
+                    domain === 'categories' ? 'No category image' : undefined
+                  }
+                />
               </span>
-            ) : domain !== 'categories' ? (
+            ) : (
               <span
                 className={styles.rowMedia}
                 aria-hidden="true"
                 data-product-image=""
               >
-                <ProductMedia id={variant?.spec.mediaIds[0]} compact />
+                <ProductMedia id={mediaId} compact />
               </span>
-            ) : (
-              <Package size={23} aria-hidden="true" />
             )}
             <div>
               <strong data-product-title="">{item.title}</strong>
@@ -370,26 +288,12 @@ export function CatalogListPage({
       </Link>
     )
   }
-  const hierarchy = categoryHierarchy(session, entries)
-  const isHidden = (id: string) => {
-    if (search.q || search.related !== 'all' || search.status !== 'all')
-      return false
-    let current = session.catalog[id]
-    const visited = new Set<string>()
-    while (current?.kind === 'CategoryTaxonomy' && current.spec.parentId) {
-      if (visited.has(current.spec.parentId)) return false
-      visited.add(current.spec.parentId)
-      if (collapsed.has(current.spec.parentId)) return true
-      current = session.catalog[current.spec.parentId]
-    }
-    return false
-  }
   const views =
     domain === 'categories'
       ? [
+          { id: 'columns', label: 'Columns view', Icon: Columns3 },
           { id: 'tree', label: 'Tree view', Icon: FolderTree },
-          { id: 'table', label: 'Table view', Icon: List },
-          { id: 'spatial', label: 'Spatial view', Icon: Network },
+          { id: 'cards', label: 'Cards view', Icon: LayoutGrid },
         ]
       : [
           { id: 'table', label: 'Table view', Icon: List },
@@ -470,19 +374,20 @@ export function CatalogListPage({
             tools={
               <div className={styles.tools}>
                 {views.map(({ id, label, Icon }) => (
-                  <ActionButton
-                    key={id}
-                    aria-label={label}
-                    aria-pressed={search.view === id}
-                    onPress={() =>
-                      update({
-                        view: id as CatalogSearch['view'],
-                        selected: undefined,
-                      })
-                    }
-                  >
-                    <Icon size={16} aria-hidden="true" />
-                  </ActionButton>
+                  <TooltipTrigger key={id} delay={500}>
+                    <ActionButton
+                      aria-label={label}
+                      aria-pressed={search.view === id}
+                      onPress={() =>
+                        update({
+                          view: id as CatalogSearch['view'],
+                        })
+                      }
+                    >
+                      <Icon size={16} aria-hidden="true" />
+                    </ActionButton>
+                    <Tooltip className={styles.viewTooltip}>{label}</Tooltip>
+                  </TooltipTrigger>
                 ))}
               </div>
             }
@@ -522,22 +427,8 @@ export function CatalogListPage({
               })
             }
           >
-            {selected && tablet && (
-              <ActionButton
-                onPress={() => {
-                  open(trigger.current)
-                  requestAnimationFrame(() =>
-                    document
-                      .getElementById('category-map-heading')
-                      ?.focus({ preventScroll: true }),
-                  )
-                }}
-              >
-                Inspect selected category
-              </ActionButton>
-            )}
             <p role="status" className={styles.summary}>
-              {search.view === 'tree' || search.view === 'spatial'
+              {domain === 'categories' && search.view !== 'cards'
                 ? entries.length
                 : visible.length}{' '}
               {domain} shown
@@ -550,68 +441,21 @@ export function CatalogListPage({
             </EmptyState>
           ) : (
             <div ref={stageRef} data-product-epoch={session.epoch}>
-              {search.view === 'spatial' ? (
-                <CategorySpatial
+              {domain === 'categories' ? (
+                <CategoryBrowser
+                  key={filterKey}
                   session={session}
-                  entries={entries}
-                  selected={search.selected}
-                  onSelect={(selected, element) => {
-                    trigger.current = element
-                    if (selected === selectedId) {
-                      open(element)
-                      requestAnimationFrame(() =>
-                        document
-                          .getElementById('category-map-heading')
-                          ?.focus({ preventScroll: true }),
-                      )
-                    } else update({ selected })
-                  }}
+                  namespace={namespace}
+                  search={search}
+                  matches={entries}
+                  renderRow={row}
+                  cardEntries={visible}
+                  cardsHasMore={connection.pageInfo.hasNextPage}
+                  onLoadMore={loadMore}
+                  onBeforeChange={capture}
+                  gridClassName={styles.list}
+                  onSelect={(selected) => update({ selected })}
                 />
-              ) : search.view === 'tree' ? (
-                <ul className={styles.tree} aria-label="Category hierarchy">
-                  {hierarchy
-                    .filter(({ item }) => !isHidden(item.id))
-                    .map(({ item, depth, problem }) => (
-                      <li key={item.id}>
-                        <div
-                          className={styles.treeRow}
-                          style={{ '--depth': depth } as CSSProperties}
-                        >
-                          {!problem?.includes('cycle') &&
-                          entries.some((child) => {
-                            const value = session.catalog[child.id]
-                            return (
-                              value?.kind === 'CategoryTaxonomy' &&
-                              value.spec.parentId === item.id
-                            )
-                          }) ? (
-                            <ActionButton
-                              aria-label={`${collapsed.has(item.id) ? 'Expand' : 'Collapse'} ${item.title}`}
-                              aria-expanded={!collapsed.has(item.id)}
-                              onPress={() =>
-                                setCollapsed((current) => {
-                                  const next = new Set(current)
-                                  if (next.has(item.id)) next.delete(item.id)
-                                  else next.add(item.id)
-                                  return next
-                                })
-                              }
-                            >
-                              {collapsed.has(item.id) ? (
-                                <ChevronRight size={15} />
-                              ) : (
-                                <ChevronDown size={15} />
-                              )}
-                            </ActionButton>
-                          ) : (
-                            <span className={styles.treeSpacer} />
-                          )}
-                          {row(item)}
-                        </div>
-                        {problem && <p className={styles.warning}>{problem}</p>}
-                      </li>
-                    ))}
-                </ul>
               ) : (
                 <div className={styles.list} data-view={search.view}>
                   {visible.map(row)}
@@ -619,22 +463,11 @@ export function CatalogListPage({
               )}
             </div>
           )}
-          {search.view !== 'tree' &&
-            search.view !== 'spatial' &&
-            connection.pageInfo.hasNextPage && (
-              <div className={styles.load}>
-                <ActionButton
-                  onPress={() => {
-                    const cursor = connection.pageInfo.endCursor!
-                    capture()
-                    setLoaded({ key: filterKey, cursors: [...cursors, cursor] })
-                    announce(`More ${domain} loaded.`)
-                  }}
-                >
-                  Load more
-                </ActionButton>
-              </div>
-            )}
+          {domain !== 'categories' && connection.pageInfo.hasNextPage && (
+            <div className={styles.load}>
+              <ActionButton onPress={loadMore}>Load more</ActionButton>
+            </div>
+          )}
           <FilterSheet
             title={`Filter ${domain}`}
             open={filtersOpen}

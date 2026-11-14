@@ -112,10 +112,10 @@ for (const domain of ['variants', 'categories', 'collections'] as const) {
     await expect(page.locator('[data-resource-id]')).toHaveCount(12)
   })
 }
-test('category tree, spatial selection, keyboard pan/zoom, Focus and inspector dismissal preserve state', async ({
+test('category tree, column selection, Focus and deliberate inspection preserve state', async ({
   page,
 }) => {
-  await page.goto(`${root}/categories`)
+  await page.goto(`${root}/categories?view=tree`)
   await page
     .getByRole('button', { name: 'Collapse Homeware', exact: true })
     .click()
@@ -124,32 +124,30 @@ test('category tree, spatial selection, keyboard pan/zoom, Focus and inspector d
     .getByRole('button', { name: 'Expand Homeware', exact: true })
     .click()
   await expect(page.locator('[data-resource-id="tableware"]')).toBeVisible()
-  await page.getByRole('button', { name: 'Spatial view', exact: true }).click()
-  const map = page.getByRole('region', { name: 'Pan and zoom categories' })
-  await map.focus()
-  await page.keyboard.press('+')
-  await expect(page.getByText('115%', { exact: true })).toBeVisible()
-  await page.keyboard.press('ArrowRight')
-  await page.keyboard.press('0')
+  await page.getByRole('button', { name: 'Columns view', exact: true }).click()
   await page
-    .getByRole('button', { name: /^Ceramics View category guidance/ })
+    .getByRole('button', { name: 'Explore Homeware', exact: true })
+    .click()
+  await page
+    .getByRole('button', { name: 'Explore Ceramics', exact: true })
     .click()
   await expect(page).toHaveURL(/selected=ceramics/)
-  await expect(page.locator('#category-map-heading')).toBeFocused()
+  const columns = page.locator('[data-category-columns]')
+  await expect(columns).toBeVisible()
   await page.getByRole('button', { name: 'Focus mode', exact: true }).click()
-  await expect(map).toBeVisible()
+  await expect(columns).toBeVisible()
   await page
     .getByRole('button', { name: 'Exit Focus Mode', exact: true })
     .click()
   await expect(page).toHaveURL(/selected=ceramics/)
   await page.getByRole('button', { name: 'Inspector', exact: true }).click()
-  await expect(page.locator('#category-map-heading')).toBeVisible()
+  await expect(
+    page.getByRole('heading', { name: 'Ceramics', exact: true }).last(),
+  ).toBeVisible()
   await page
     .getByRole('button', { name: 'Close inspector', exact: true })
     .click()
-  await expect(page).not.toHaveURL(/selected=/)
-  await page.goBack()
-  await expect(page).toHaveURL(/view=/)
+  await expect(page).toHaveURL(/selected=ceramics/)
 })
 test('collection rules follow shared saved Products while recorded membership remains separate', async ({
   page,
@@ -225,13 +223,11 @@ for (const width of [1440, 900, 375])
           fullPage: true,
         })
       }
-      await page.goto(`${root}/categories?view=spatial`)
-      await expect(
-        page.getByRole('region', { name: 'Category map', exact: true }),
-      ).toBeVisible()
+      await page.goto(`${root}/categories?view=columns&selected=tableware`)
+      await expect(page.locator('[data-category-columns]')).toBeVisible()
       expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([])
       await page.screenshot({
-        path: testInfo.outputPath(`category-map-${width}-${theme}.png`),
+        path: testInfo.outputPath(`category-columns-${width}-${theme}.png`),
       })
       for (const [domain, id] of [
         ['variants', 'tunic-natural-m'],
@@ -343,12 +339,12 @@ for (const [domain, id] of [
   })
 }
 for (const width of [1440, 981])
-  test(`spatial keyboard Storybook interaction completes at ${width}px`, async ({
+  test(`column exploration Storybook interaction completes at ${width}px`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 900 })
     await page.goto(
-      `${storybookURL}/?path=/story/pages-catalog-categories--spatial-keyboard`,
+      `${storybookURL}/?path=/story/pages-catalog-categories--columns-interaction`,
     )
     await page.getByRole('tab', { name: /^Interactions/ }).click()
     await expect(
@@ -359,34 +355,26 @@ for (const width of [1440, 981])
   })
 
 for (const width of [900, 375])
-  test(`map inspector opens full details and restores focus on dismissal at ${width}px`, async ({
+  test(`selected category inspection is deliberate and retains selection at ${width}px`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 900 })
-    await page.goto(`${root}/categories?view=spatial`)
-    const node = page.getByRole('button', {
-      name: /^Homeware View category guidance/,
+    await page.goto(`${root}/categories?view=columns&selected=homeware`)
+    const inspectorButton = page.getByRole('button', {
+      name: 'Inspector',
+      exact: true,
     })
-    await node.click()
-    await page
-      .getByRole('button', { name: 'Inspect selected category', exact: true })
-      .click()
+    await inspectorButton.click()
     const inspector = page.getByRole('dialog', { name: 'Page context' })
     await expect(
       inspector.getByRole('heading', { name: 'Homeware', exact: true }),
-    ).toBeFocused()
+    ).toBeVisible()
     await inspector
       .getByRole('button', { name: 'Close inspector', exact: true })
       .click()
-    await expect(node).toBeFocused()
-    await expect(page).not.toHaveURL(/selected=/)
-    await node.click()
-    await page
-      .getByRole('button', { name: 'Inspect selected category', exact: true })
-      .click()
-    await inspector
-      .getByRole('link', { name: 'Open category', exact: false })
-      .click()
+    await expect(inspectorButton).toBeFocused()
+    await expect(page).toHaveURL(/selected=homeware/)
+    await page.getByRole('link', { name: /View category/ }).click()
     await expect(page.locator('main h1')).toHaveText('Homeware')
     await expect(inspector).toHaveCount(0)
   })

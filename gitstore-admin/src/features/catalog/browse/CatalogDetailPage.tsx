@@ -1,3 +1,5 @@
+import { categoryMediaId } from './category-navigation'
+import { ProductMedia } from '../products/ProductMedia'
 import { CategoryBreadcrumb } from './CategoryBreadcrumb'
 import { useLayoutEffect, useMemo, useRef } from 'react'
 import {
@@ -180,6 +182,19 @@ export function CatalogDetailPage({
               Read-only demo. Changes can be explored through Products and Home;
               this page does not edit or publish catalog data.
             </p>
+            {domain === 'categories' && (
+              <section>
+                <h2>Category images</h2>
+                <div className={styles.categoryGallery}>
+                  <span data-product-image="">
+                    <ProductMedia
+                      id={categoryMediaId(session, itemId)}
+                      emptyLabel="No category image"
+                    />
+                  </span>
+                </div>
+              </section>
+            )}
             {domain === 'variants' && variant && (
               <>
                 <section>

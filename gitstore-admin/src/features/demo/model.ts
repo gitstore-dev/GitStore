@@ -323,6 +323,61 @@ export function createSession(
       ]),
     ),
   }
+  if (seed.catalogScenario === 'deep') {
+    const category = session.catalog.tableware
+    const resource = session.resources.find((item) => item.id === 'tableware')
+    if (
+      category?.kind === 'CategoryTaxonomy' &&
+      resource?.kind === 'CategoryTaxonomy'
+    ) {
+      let parentId = 'tableware'
+      for (let depth = 4; depth <= 12; depth++) {
+        const id = `category-level-${depth}`
+        const title = `Category level ${depth}`
+        session = {
+          ...session,
+          catalog: {
+            ...session.catalog,
+            [id]: { ...category, spec: { ...category.spec, title, parentId } },
+          },
+          resources: [
+            ...session.resources,
+            { ...resource, id, spec: { title } },
+          ],
+          productUpdated: {
+            ...session.productUpdated,
+            [id]: '2026-11-02T11:00:00.000Z',
+          },
+        }
+        parentId = id
+      }
+    }
+  }
+  if (
+    seed.catalogScenario === 'missing-media' &&
+    catalog.ceramics?.kind === 'CategoryTaxonomy'
+  )
+    session = {
+      ...session,
+      catalog: {
+        ...session.catalog,
+        ceramics: {
+          ...catalog.ceramics,
+          spec: {
+            ...catalog.ceramics.spec,
+            media: [
+              {
+                fileRef: {
+                  name: 'missing-category-photo',
+                  kind: 'File',
+                  optional: true,
+                },
+              },
+            ],
+          },
+        },
+      },
+    }
   if (
     seed.catalogScenario === 'missing-parent' &&
     catalog.ceramics?.kind === 'CategoryTaxonomy'
@@ -441,9 +496,14 @@ export function projectedResources(
         ...snapshot.spec.mediaIds.map((id) => ref(id, 'Product image')),
       ]
     else if (snapshot?.kind === 'CategoryTaxonomy')
-      references = snapshot.spec.parentId
-        ? [ref(snapshot.spec.parentId, 'Parent category')]
-        : []
+      references = [
+        ...(snapshot.spec.parentId
+          ? [ref(snapshot.spec.parentId, 'Parent category')]
+          : []),
+        ...(snapshot.spec.media ?? []).map((media) =>
+          ref(media.fileRef.name, 'Category image'),
+        ),
+      ]
     else if (snapshot?.kind === 'Collection')
       references = (session.collectionMembers[resource.id] ?? []).map((id) =>
         ref(id, 'Collection product'),
@@ -452,7 +512,12 @@ export function projectedResources(
       references = Object.entries(session.catalog).flatMap(([id, item]) =>
         item.kind === 'Product' && item.spec.mediaIds.includes(resource.id)
           ? [ref(id, 'Used by this product')]
-          : [],
+          : item.kind === 'CategoryTaxonomy' &&
+              item.spec.media?.some(
+                (media) => media.fileRef.name === resource.id,
+              )
+            ? [ref(id, 'Used by this category')]
+            : [],
       )
     else
       references = references.map((reference) =>

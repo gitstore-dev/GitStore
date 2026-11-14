@@ -24,41 +24,54 @@ export const Mobile: Story = {
   globals: { viewport: { value: 'mobile1', isRotated: false } },
 }
 export const ReducedMotion: Story = { args: { motion: 'reduced' } }
-export const Spatial: Story = { args: { query: 'view=spatial' } }
+export const Columns: Story = {
+  args: { query: 'view=columns&selected=tableware' },
+}
+export const Tree: Story = { args: { query: 'view=tree' } }
+export const Cards: Story = { args: { query: 'view=cards' } }
+export const DeepColumns: Story = {
+  args: { scenario: 'deep', query: 'view=columns&selected=category-level-12' },
+}
+export const MissingMedia: Story = {
+  args: { scenario: 'missing-media', query: 'view=cards&q=Ceramics' },
+}
+export const FilteredTree: Story = { args: { query: 'view=tree&q=Tableware' } }
 export const MissingParent: Story = {
   args: { scenario: 'missing-parent', itemId: 'ceramics' },
 }
-export const Cycle: Story = { args: { scenario: 'cycle' } }
-export const MapInspector: Story = {
-  args: { query: 'view=spatial&selected=ceramics' },
+export const Cycle: Story = { args: { scenario: 'cycle', query: 'view=tree' } }
+export const SelectedColumns: Story = {
+  args: { query: 'view=columns&selected=ceramics' },
 }
 
 export const MoreResults: Story = {
-  args: { scenario: 'many', query: 'view=table' },
+  args: { scenario: 'many', query: 'view=cards' },
 }
 
-export const SpatialKeyboard: Story = {
-  args: { query: 'view=spatial' },
+export const ColumnsInteraction: Story = {
+  args: { query: 'view=columns' },
   play: async ({ canvasElement }) => {
     const screen = within(canvasElement)
-    const map = await screen.findByRole('region', {
-      name: 'Pan and zoom categories',
-    })
-    map.focus()
-    await userEvent.keyboard('{ArrowRight}+')
-    await expect(screen.getByText('115%', { exact: true })).toBeVisible()
-    await userEvent.keyboard('0')
     await userEvent.click(
-      screen.getByRole('button', { name: /^Ceramics View category guidance/ }),
-    )
-    const inspect = screen.queryByRole('button', {
-      name: 'Inspect selected category',
-    })
-    if (inspect) await userEvent.click(inspect)
-    await expect(
-      await within(canvasElement.ownerDocument.body).findByRole('heading', {
-        name: /^Ceramics$/,
+      await screen.findByRole('button', {
+        name: 'Explore Homeware',
       }),
+    )
+    await userEvent.click(
+      await screen.findByRole('button', {
+        name: 'Explore Ceramics',
+      }),
+    )
+    await userEvent.click(
+      await screen.findByRole('button', {
+        name: 'Explore Tableware',
+      }),
+    )
+    await expect(
+      await screen.findByRole('region', { name: 'Selected category' }),
+    ).toBeVisible()
+    await expect(
+      screen.getByRole('link', { name: /View category/ }),
     ).toBeVisible()
   },
 }
