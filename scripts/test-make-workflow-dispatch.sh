@@ -67,6 +67,64 @@ output="$(make --no-print-directory -C "${repo_root}" -n compose)"
 bootstrap_output="$(env -u NAMESPACE_TIER make --no-print-directory -C "${repo_root}" -np bootstrap TARGET=namespace | sed -n '/^NAMESPACE_TIER /p')"
 [[ "${bootstrap_output}" == "NAMESPACE_TIER = ORGANIZATION" ]]
 
+format_root="${test_dir}/format-toolchains"
+mkdir -p "${format_root}/bin" "${format_root}/module-a" "${format_root}/module-b" \
+  "${format_root}/selected-a/bin" "${format_root}/selected b/bin"
+printf '%s\n' "${format_root}/selected-a" >"${format_root}/module-a/.goroot"
+printf '%s\n' "${format_root}/selected b" >"${format_root}/module-b/.goroot"
+cat >"${format_root}/bin/go" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "env GOROOT") cat .goroot ;;
+  "env GOPATH") printf '%s\n' "${FORMAT_TEST_ROOT}" ;;
+  "vet ./..."|"install honnef.co/go/tools/cmd/staticcheck@latest") ;;
+  *) echo "unexpected Go invocation in formatter regression" >&2; exit 1 ;;
+esac
+MOCK
+cat >"${format_root}/bin/gofmt" <<'MOCK'
+#!/usr/bin/env bash
+echo "unexpected PATH formatter invocation" >&2
+exit 1
+MOCK
+cat >"${format_root}/selected-a/bin/gofmt" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "${PWD}" >>"${FORMAT_TEST_ROOT}/formatter.log"
+case "${FORMAT_TEST_MODE}" in
+  clean) ;;
+  unformatted) printf './needs-formatting.go\n' ;;
+  failed) echo "selected formatter failed" >&2; exit 23 ;;
+esac
+MOCK
+cp "${format_root}/selected-a/bin/gofmt" "${format_root}/selected b/bin/gofmt"
+printf '#!/usr/bin/env bash\nexit 0\n' >"${format_root}/bin/cargo"
+cp "${format_root}/bin/cargo" "${format_root}/bin/staticcheck"
+chmod +x "${format_root}/bin/go" "${format_root}/bin/gofmt" \
+  "${format_root}/bin/cargo" "${format_root}/bin/staticcheck" \
+  "${format_root}/selected-a/bin/gofmt" "${format_root}/selected b/bin/gofmt"
+run_format_lint() {
+  PATH="${format_root}/bin:${PATH}" FORMAT_TEST_ROOT="${format_root}" FORMAT_TEST_MODE="$1" \
+    make --no-print-directory -C "${repo_root}" lint \
+    GO_MODULE_DIRS="${format_root}/module-a ${format_root}/module-b" \
+    API_DIR="${format_root}/module-a" GIT_SERVICE_DIR="${format_root}/module-a" \
+    >"${format_root}/lint.log" 2>&1
+}
+run_format_lint clean
+if grep -q 'unexpected PATH formatter invocation' "${format_root}/lint.log"; then
+  echo "lint used PATH gofmt instead of the selected Go toolchain" >&2; exit 1
+fi
+printf '%s\n' "${format_root}/module-a" "${format_root}/module-b" >"${format_root}/expected.log"
+cmp "${format_root}/expected.log" "${format_root}/formatter.log"
+if run_format_lint unformatted; then
+  echo "lint accepted an unformatted Go source file" >&2; exit 1
+fi
+grep -q 'needs-formatting.go' "${format_root}/lint.log"
+if run_format_lint failed; then
+  echo "lint masked a selected formatter failure" >&2; exit 1
+fi
+grep -q 'selected formatter failed' "${format_root}/lint.log"
+
 # CI's shared gitci namespace is not the admin user's personal namespace.
 ci_bootstrap_count=0
 ci_git_auth_count=0

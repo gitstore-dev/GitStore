@@ -24,6 +24,8 @@ container wiring and configuration.
 - `make test TARGET=datastore DATASTORE=scylla` serializes tagged packages
   sharing one Scylla fixture, not the concurrent writers within each test.
   Preserve that scheduling in the command-dispatch regression.
+- Go formatting checks use each module's selected `go env GOROOT` formatter,
+  not an unrelated `gofmt` on `PATH`; formatter errors must fail lint.
 - `make git`, `make api` and `make controller` run native services in the
   foreground. `make dev` uses the existing native startup helper and shutdown
   trapping. Follow its current credential prerequisites rather than
