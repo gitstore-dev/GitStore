@@ -496,6 +496,7 @@ endif
 else ifeq ($(TEST_TARGET),all)
 	@$(MAKE) --no-print-directory _check-generated
 	@bash ./scripts/test-secret-config.sh
+	@bash ./scripts/test-license-headers.sh
 	@bash ./scripts/test-secret-capacity-evidence.sh
 	@cd "$(ROOT)/tests/integration" && GOWORK=off go test -count=1 -race -run '^TestSecretCapacity|^Test(CapacityPush|CapacityPreflight|PushHelper|EndpointSplit|EndpointLoad|RepositoryController)' .
 	@./scripts/test-make-workflow-dispatch.sh
@@ -715,12 +716,8 @@ _check-infrastructure:
 	@PROFILE="$(if $(filter single,$(PROFILE)),digitalocean,$(PROFILE))" ./scripts/run-infrastructure.sh check
 
 _check-licenses:
-	@./scripts/check-go-license-headers.sh --all
-	@./scripts/check-go-license-headers.sh --diff-base "$(DIFF_BASE)"
-	@./scripts/check-rust-license-headers.sh --all
-	@./scripts/check-rust-license-headers.sh --diff-base "$(DIFF_BASE)"
-	@./scripts/check-js-license-headers.sh --all
-	@./scripts/check-js-license-headers.sh --diff-base "$(DIFF_BASE)"
+	@./scripts/check-license-headers.sh --all
+	@./scripts/check-license-headers.sh --diff-base "$(DIFF_BASE)"
 
 _check-credential-output:
 	@./scripts/check-enroll-serviceaccount-output.sh
