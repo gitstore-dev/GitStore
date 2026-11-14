@@ -235,6 +235,9 @@ datastore_tests="$(make --no-print-directory -C "${repo_root}" -n test TARGET=da
 [[ "${datastore_tests}" == *"-tags memdb"* && "${datastore_tests}" != *"-tags scylla"* ]]
 scylla_tests="$(make --no-print-directory -C "${repo_root}" -n test TARGET=datastore DATASTORE=scylla SCYLLA_TEST_ADDR=127.0.0.1:9142)"
 [[ "${scylla_tests}" == *"-tags scylla"* && "${scylla_tests}" == *"127.0.0.1:9142"* ]]
+[[ "${scylla_tests}" == *"go test -p 1 "* && "${scylla_tests}" == *"-count=1 -timeout 10m"* ]]
+[[ "${scylla_tests}" == *"./internal/datastore/scylla/... ./tests/contract/datastore/..."* ]]
+[[ "${datastore_tests}" != *"-p 1"* ]]
 secret_tests="$(make --no-print-directory -C "${repo_root}" -n test TARGET=secret-integration)"
 [[ "${secret_tests}" == *"SECRET_TEST_OWNED_DEPLOYMENT=1 is required"* &&
    "${secret_tests}" == *"TestSecretBootstrapRotationDeployed"* ]]
