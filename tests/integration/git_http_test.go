@@ -6,7 +6,6 @@ package integration
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,16 +17,13 @@ func TestGitClone(t *testing.T) {
 	repository := getEnv("REPOSITORY", "catalog")
 	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitURL, namespace, repository)
 
-	// Lightweight reachability check — skip rather than fail if stack is down.
-	check := exec.Command("git", "ls-remote", remoteURL)
-	if err := check.Run(); err != nil {
-		t.Fatalf("PREREQUISITE: git smart HTTP unreachable at %s: %v — is the stack up?", remoteURL, err)
+	workDir := t.TempDir()
+	// Fail promptly when the stack is unavailable.
+	if out, err := gitFixtureCommand(t, workDir, "ls-remote", remoteURL); err != nil {
+		t.Fatalf("PREREQUISITE: git smart HTTP unreachable: %v\n%s — is the stack up?", err, out)
 	}
 
-	workDir := t.TempDir()
-	cmd := exec.Command("git", "clone", remoteURL, workDir)
-	cmd.Dir = os.TempDir()
-	if out, err := cmd.CombinedOutput(); err != nil {
+	if out, err := gitFixtureCommand(t, filepath.Dir(workDir), "clone", remoteURL, workDir); err != nil {
 		t.Fatalf("git clone failed: %v\n%s", err, out)
 	}
 
@@ -38,9 +34,7 @@ func TestGitClone(t *testing.T) {
 	}
 
 	// Confirm at least one commit is present.
-	logCmd := exec.Command("git", "log", "--oneline", "-1")
-	logCmd.Dir = workDir
-	out, err := logCmd.CombinedOutput()
+	out, err := gitFixtureCommand(t, workDir, "log", "--oneline", "-1")
 	if err != nil {
 		t.Fatalf("git log failed in cloned repo: %v\n%s", err, out)
 	}
@@ -65,22 +59,16 @@ func TestGitFetch(t *testing.T) {
 	repository := getEnv("REPOSITORY", "catalog")
 	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitURL, namespace, repository)
 
-	cloneCmd := exec.Command("git", "clone", remoteURL, fetchDir)
-	cloneCmd.Dir = os.TempDir()
-	if out, err := cloneCmd.CombinedOutput(); err != nil {
+	if out, err := gitFixtureCommand(t, filepath.Dir(fetchDir), "clone", remoteURL, fetchDir); err != nil {
 		t.Fatalf("second clone failed: %v\n%s", err, out)
 	}
 
-	fetchCmd := exec.Command("git", "fetch", "origin")
-	fetchCmd.Dir = fetchDir
-	if out, err := fetchCmd.CombinedOutput(); err != nil {
+	if out, err := gitFixtureCommand(t, fetchDir, "fetch", "origin"); err != nil {
 		t.Fatalf("git fetch failed: %v\n%s", err, out)
 	}
 
 	// Verify the pushed commit is present in the fetch result.
-	logCmd := exec.Command("git", "log", "--oneline", "origin/main")
-	logCmd.Dir = fetchDir
-	out, err := logCmd.CombinedOutput()
+	out, err := gitFixtureCommand(t, fetchDir, "log", "--oneline", "origin/main")
 	if err != nil {
 		t.Fatalf("git log origin/main failed: %v\n%s", err, out)
 	}
@@ -94,9 +82,7 @@ func TestGitPush(t *testing.T) {
 	h := newPushHelper(t)
 
 	// Record the current HEAD before push.
-	preCmd := exec.Command("git", "rev-parse", "HEAD")
-	preCmd.Dir = h.workDir
-	preSHA, err := preCmd.Output()
+	preSHA, err := gitFixtureStdout(t, h.workDir, "rev-parse", "HEAD")
 	if err != nil {
 		t.Fatalf("rev-parse HEAD before push: %v", err)
 	}
@@ -108,9 +94,7 @@ func TestGitPush(t *testing.T) {
 	}
 
 	// HEAD after push must differ from HEAD before.
-	postCmd := exec.Command("git", "rev-parse", "HEAD")
-	postCmd.Dir = h.workDir
-	postSHA, err := postCmd.Output()
+	postSHA, err := gitFixtureStdout(t, h.workDir, "rev-parse", "HEAD")
 	if err != nil {
 		t.Fatalf("rev-parse HEAD after push: %v", err)
 	}
@@ -122,8 +106,7 @@ func TestGitPush(t *testing.T) {
 	namespace := getEnv("NAMESPACE", "gitstore-test")
 	repository := getEnv("REPOSITORY", "catalog")
 	remoteURL := fmt.Sprintf("%s/%s/%s.git", gitURL, namespace, repository)
-	lsCmd := exec.Command("git", "ls-remote", remoteURL, "refs/heads/main")
-	lsOut, err := lsCmd.CombinedOutput()
+	lsOut, err := gitFixtureCommand(t, h.workDir, "ls-remote", remoteURL, "refs/heads/main")
 	if err != nil {
 		t.Fatalf("git ls-remote failed: %v\n%s", err, lsOut)
 	}

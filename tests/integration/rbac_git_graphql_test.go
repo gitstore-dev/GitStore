@@ -4,7 +4,6 @@
 package integration
 
 import (
-	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -15,7 +14,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -348,23 +346,22 @@ func (f rbacNativeFixture) clone(t *testing.T, kind string) rbacNativeGit {
 
 func (g rbacNativeGit) command(t *testing.T, args ...string) ([]byte, error) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	ctx, cancel := fixtureCommandContext(t, 30*time.Second)
 	defer cancel()
 	prefix := []string{"-c", "fetch.negotiationAlgorithm=noop", "-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=10",
 		"-c", "user.name=Native RBAC acceptance", "-c", "user.email=rbac-fixture@example.invalid"}
 	if _, err := os.Stat(g.dir); err == nil {
 		prefix = append(prefix, "-C", g.dir)
 	}
-	command := exec.CommandContext(ctx, "git", append(prefix, args...)...)
-	command.WaitDelay = time.Second
+	var env []string
 	for _, entry := range os.Environ() {
 		if !strings.HasPrefix(entry, "GIT_") {
-			command.Env = append(command.Env, entry)
+			env = append(env, entry)
 		}
 	}
-	command.Env = append(command.Env, "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull,
+	env = append(env, "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull,
 		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader", "GIT_CONFIG_VALUE_0=Authorization: Bearer "+g.fixture.token)
-	return command.CombinedOutput()
+	return fixtureCommandOutput(ctx, "", env, []string{g.fixture.token}, append([]string{"git"}, append(prefix, args...)...)...)
 }
 
 func (g rbacNativeGit) write(t *testing.T, path string, manifest map[string]any) {
