@@ -3,9 +3,10 @@
 # Copyright (c) 2026 GitStore contributors
 
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/../lib/preflight.sh"
 
 evidence_dir="${1:?evidence directory is required}"
-mode="${MODE:-diagnostic}"
+mode="$(capacity_preflight_mode)"
 output="${evidence_dir}/preflight-environment.json"
 
 if [[ "${mode}" == "diagnostic" ]]; then

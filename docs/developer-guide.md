@@ -13,8 +13,6 @@ sessions are separate. Configure endpoint CORS for cross-origin use. Storefront
 currently returns a fixed unavailable response until publication/target support
 exists. See [configuration](configuration.md) for policies and resource bounds.
 
-**Date**: 2026-06-17
-
 **Audience**: Contributors, operators, and integration engineers
 **Prerequisites**: Docker, Git, Go 1.27.2, Rust 1.99.1, Make, curl, jq
 
@@ -60,6 +58,7 @@ graph TD
 | Service                       |    Port | Purpose                                                |
 |-------------------------------|--------:|--------------------------------------------------------|
 | `gitstore-api`                |  `4000` | GraphQL, Playground, `/health`, `/ready`, login helper |
+| `gitstore-api`                |  `4001` | Storefront boundary; Compose host port is `4100`       |
 | `gitstore-api`                |  `9000` | Git Smart HTTP front door (host port)                  |
 | `gitstore-api`                |  `6000` | CatalogService gRPC called by the Git service          |
 | `gitstore-git-service`        | `50051` | GitService gRPC storage and transport                  |
@@ -85,10 +84,10 @@ Production paths must also define:
 - sustained Git push load and downstream backpressure behavior;
 - repeatable replica, failover, load, soak, and recovery validation.
 
-Future controllers and multi-controller deployments must also follow
-[ADR 0018 — Controller Ownership, Concurrency and Fencing](ADRs/0018-controller-ownership-concurrency-and-fencing.md).
-It separates logical ownership and conditional writes, which provide safety, from per-key leases,
-which only provide liveness. It also separates CDC materializer leases from controller fencing.
+Future controllers must distinguish conditional-write safety from work
+coordination and external side-effect fencing. General controller leases and
+external side-effect fencing are proposed, not implemented. CDC materializer
+leases do not provide controller fencing.
 
 Repository-wide capacity and fault tooling is exposed through the root
 Makefile. Use `make capacity TARGET=<target> PROFILE=<scenario>
@@ -419,11 +418,16 @@ Runtime pieces:
 - Panic capture with stack traces.
 - Per-kind health statistics.
 - Collector-routed OTLP metrics, operational logs and traces when enabled.
-  See [telemetry configuration](configuration.md#collector-routed-telemetry).
+  See [telemetry configuration](configuration.md#telemetry-export).
   Metrics originate from SDK instruments, including runtime and gRPC sources;
   compatibility scrapes use SDK collection. See the contributor
   [metrics inventory](implementation/041-sdk-native-metrics.md) for signal contracts.
-- List-then-watch bootstrap and `resourceVersion` checkpointing per registered kind (`internal/checkpoint`, `internal/listwatch`) — populates the informer cache on first start, resumes a watch stream from a persisted checkpoint after a restart, and recovers from a compacted watch cursor by re-listing (the `Runner[T]`/`ListWatcher[T]` wiring pattern); no concrete transport ships yet.
+- Paged GraphQL lists and `graphql-transport-ws` watches per registered kind
+  (`internal/checkpoint`, `internal/listwatch`). Production runners persist
+  projections, replay cursors, work, retry deadlines and quarantine in
+  `<Kind>.disk-v2` stores. They resume after replacement or relist after cursor
+  expiry; legacy JSON snapshots are not loaded. Keep a separate checkpoint
+  root for each concurrent process.
 
 HTTP surface on port `5001`:
 
@@ -641,7 +645,7 @@ environment variables, defaults, and bootstrap requirements.
 - [User Guide](user-guide.md)
 - [API Reference](api-reference.md)
 - [Architecture](architecture/README.md)
-- [Admin](admin/README.md)
+- [Documentation Index](README.md)
 - [Push Validation](products/push-validation.md)
 - [CategoryTaxonomy Spec](categories/category-taxonomy-spec.md)
 - [Collection Spec](collections/collection-spec.md)

@@ -31,7 +31,7 @@ Under that assumption, the public/management distinction has to be decided **per
 - [ADR 0011 §9](0011-graphql-authorization-directive.md#9-mode-scope-is-declared-per-field-never-at-objectinterfaceunion-level)
   confines `mode: SCOPE` to explicit field declarations, so mutation payloads don't deny a caller
   their own unpublished resource.
-- [Publication Lifecycle](../products/publication-lifecycle.md) requires the scope-specific query
+- [Proposed Publication Lifecycle](../implementation/proposed-publication-lifecycle.md) requires the scope-specific query
   plan on *every* Product/ProductVariant access path: direct lookup, Relay list, `node`, variants,
   Category/Collection relationships, counts and watches. "It is not sufficient to protect a new root
   alone."
@@ -328,7 +328,7 @@ union SearchResultItem = StorefrontProduct | StorefrontCollection | StorefrontCa
     API and the buyer plane is the Storefront API.
   - **[Doc 038](../implementation/038-graphql-cost-and-rate-limits.md):** limits become per-endpoint
     profiles (§6). The current design is the admin profile, and the storefront profile is added.
-  - **[Publication Lifecycle](../products/publication-lifecycle.md):** the Storefront API roots are
+  - **[Proposed Publication Lifecycle](../implementation/proposed-publication-lifecycle.md):** the Storefront API roots are
     `products(query:)` and `search(query:)` (§2), replacing `storefrontCatalog(target:)`. The
     "every access path" requirement applies within each endpoint's single plan.
 - **Not addressed here (deferred):**
@@ -347,7 +347,7 @@ union SearchResultItem = StorefrontProduct | StorefrontCollection | StorefrontCa
 - [Doc 022 — OPA Data-Aware Authorization](../implementation/022-opa-data-authorization.md)
 - [Doc 037 — Custom Seller and Buyer Workflows](../implementation/037-custom-commerce-workflows.md)
 - [Doc 038 — GraphQL Cost Analysis, Rate Limiting, and Request Limits](../implementation/038-graphql-cost-and-rate-limits.md)
-- [Publication Lifecycle](../products/publication-lifecycle.md)
+- [Proposed Publication Lifecycle](../implementation/proposed-publication-lifecycle.md)
 - Shopify, [Storefront API rate limits](https://shopify.dev/docs/api/storefront#rate_limits) and
   [API limits](https://shopify.dev/docs/api/usage/limits)
 - Saleor, single GraphQL API for dashboard and storefront (permission- and channel-filtered querysets)

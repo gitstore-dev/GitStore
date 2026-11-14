@@ -14,7 +14,7 @@ A Product resource is a Markdown file with YAML frontmatter pushed to a GitStore
 | `apiVersion` | string | yes           | Must be `catalog.gitstore.dev/v1beta1`     |
 | `kind`       | string | yes           | Must be `Product` (case-sensitive)         |
 | `metadata`   | object | yes           | See Metadata Fields                        |
-| `spec`       | object | yes           | May be empty (`spec: {}`); see Spec Fields |
+| `spec`       | object | yes           | Must include `title`; see Spec Fields      |
 | `status`     | —      | **forbidden** | System-managed; presence causes rejection  |
 
 ---
@@ -24,7 +24,7 @@ A Product resource is a Markdown file with YAML frontmatter pushed to a GitStore
 | Field                  | Type              | Required | Constraint                                                                                                  |
 |------------------------|-------------------|----------|-------------------------------------------------------------------------------------------------------------|
 | `metadata.name`        | string            | yes      | DNS subdomain format                                                                                        |
-| `metadata.namespace`   | string            | no       | Optional. Inferred from the repository's owning namespace at push time; raw repository UUID is never stored |
+| `metadata.namespace`   | string            | yes      | Must match the repository's owning namespace; raw repository UUID is never stored                             |
 | `metadata.labels`      | map[string]string | no       | Key prefix ≤ 253 chars; key name ≤ 63 chars; value ≤ 63 chars                                               |
 | `metadata.annotations` | map[string]string | no       |                                                                                                             |
 
@@ -76,7 +76,7 @@ accepted admission clears that condition.
 | `spec.tags`            | []string                  | No per-tag length constraint                                                                                 |
 | `spec.media`           | []MediaDefinition         | Each entry: `fileRef.name` and `fileRef.kind` required                                                       |
 | `spec.options`         | []ProductOptionDefinition | Each entry: `name` required and unique within the list                                                       |
-| `spec.lifecycle.state` | `Active` or `Retired`     | Defaults to `Active`; `Retired` remains private desired state and is excluded from future release candidates. Legacy `ACTIVE`/`RETIRED` remain accepted; GraphQL uses those uppercase values. |
+| `spec.lifecycle.state` | `Active` or `Retired`     | Defaults to `Active`; records private desired state. GraphQL uses `ACTIVE`/`RETIRED`. Publication and release eligibility are not implemented. |
 
 ### MediaDefinition
 

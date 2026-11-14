@@ -20,28 +20,6 @@ spec:
   repositoryDefaults:
     visibility: Private
     defaultBranch: main
-  pushPolicyDefaults:
-    maxPackSizeBytes: 52428800
-    maxFileSizeBytes: 10485760
-    receivePackHooks:
-      preReceive:
-        enabled: true
-      update:
-        enabled: false
-      postReceive:
-        enabled: true
-      procReceive:
-        enabled: false
-      postUpdate:
-        enabled: false
-      referenceTransaction:
-        enabled: false
-    schemaValidation:
-      phase: pre-receive
-      timeoutSeconds: 10
-    admissionControl:
-      phase: post-receive
-      branchPattern: ^refs/heads/main$
 ---
 ```
 
@@ -61,15 +39,14 @@ spec:
   repositoryDefaults:
     visibility: Internal
     defaultBranch: trunk
-  pushPolicyDefaults:
-    maxPackSizeBytes: 41943040
-    admissionControl:
-      phase: post-receive
-      branchPattern: ^refs/heads/trunk$
 ---
 ```
 
-Omitted nested defaults mean that the Namespace supplies no override. Authors must omit `metadata.uid`, `metadata.resourceVersion`, `metadata.generation`,
+Namespace stores authored default fields, but their presence is not proof of
+implemented Repository override merging. In particular, stored hook/phase
+fields do not disable mandatory pre-receive validation or post-receive
+admission. Configure actual service limits through the
+[configuration reference](../configuration.md). Authors must omit `metadata.uid`, `metadata.resourceVersion`, `metadata.generation`,
 `metadata.creationTimestamp`, `metadata.revision`, `metadata.ownerReferences`,
 `metadata.finalizers`, and `status`. Status is controller/system-owned and is
 written only through the status path.
@@ -94,10 +71,11 @@ revision) advance only `resourceVersion`. Exact re-admission advances neither.
 Admission refreshes its accepted revision and `AdmissionAccepted` condition
 without discarding controller-owned status observations or conditions.
 
-Validation, immutable-field enforcement, policy ceilings, phase validation, and
-admission are defined by GH#173. Watch and resume behavior is defined by
-GH#174. Repository override merging and effective policy resolution are
-defined by GH#249.
+Validation and admission enforce the current resource contract and immutable
+identity. Watch and resume behavior is documented in the
+[Namespace watch contract](namespace-watch.md). Repository override merging
+and effective-policy resolution are separate work; do not treat persisted
+default fields as an operational policy engine.
 
 ## Generation-semantics rollout
 
@@ -143,10 +121,9 @@ status:
     message: Namespace manifest admitted successfully.
 ```
 
-Existing flat Namespace GraphQL fields remain available with deprecation
-reasons during the additive migration. New consumers should use
-`metadata.name`, `spec.title`, `spec.tier`, and `status`. Deprecated fields may
-be removed only in a future major GraphQL API release.
+Use `metadata.name`, `spec.title`, `spec.tier`, and `status`. The old flat
+Namespace GraphQL fields are not in the current schema and are not
+compatibility aliases.
 
 ## Condition vocabulary
 

@@ -5,9 +5,10 @@ The `rbac-local` authorization provider reads a YAML policy from
 `GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE`). See
 [configuration](configuration.md#authorization-and-user-directory) for provider
 settings and [the example policy](../gitstore-api/policy.yaml.example) for the
-development baseline and commented examples you can adapt. Review the baseline
-before production use, including its administrator and anonymous public-read
-grants.
+development baseline and commented examples you can adapt. `rbac-local` is
+development/evaluation-only; reviewing its administrator and anonymous read
+grants does not establish production readiness. Git-backed RBAC/embedded OPA
+production acceptance remains pending.
 
 ## Identity provider boundaries
 

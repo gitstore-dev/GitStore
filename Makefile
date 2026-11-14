@@ -498,7 +498,7 @@ else ifeq ($(TEST_TARGET),all)
 	@$(MAKE) --no-print-directory _check-generated
 	@bash ./scripts/test-secret-config.sh
 	@bash ./scripts/test-secret-capacity-evidence.sh
-	@cd "$(ROOT)/tests/integration" && GOWORK=off go test -count=1 -race -run '^TestSecretCapacity|^Test(CapacityPush|EndpointSplit|EndpointLoad|RepositoryController)' .
+	@cd "$(ROOT)/tests/integration" && GOWORK=off go test -count=1 -race -run '^TestSecretCapacity|^Test(CapacityPush|CapacityPreflight|PushHelper|EndpointSplit|EndpointLoad|RepositoryController)' .
 	@./scripts/test-make-workflow-dispatch.sh
 	@./scripts/test-capacity-dispatch.sh
 	@./scripts/test-capacity-prometheus-export.sh

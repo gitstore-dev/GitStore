@@ -7,7 +7,7 @@
 **Audience**: catalog authors; Git service, API, and controller-manager maintainers.
 
 **Supersedes**: the proposal previously held in
-[Product and Variant Publication Lifecycle](../products/publication-lifecycle.md), which is now an
+[Proposed Product and Variant Publication Lifecycle](../implementation/proposed-publication-lifecycle.md), which is now an
 author-facing reference for this ADR. Follow-up design for
 [#314](https://github.com/gitstore-dev/GitStore/issues/314).
 
@@ -322,7 +322,7 @@ a workflow transition that a Git edit could undo.
 
 GitStore does not introduce a `Published` condition on Product, ProductVariant, or any other
 source resource. Publication state is derived per target from the relations above
-(`Draft`…`Expired` in the [author reference](../products/publication-lifecycle.md)), not stored
+(`Draft`…`Expired` in the [proposed author reference](../implementation/proposed-publication-lifecycle.md)), not stored
 on source rows. `AdmissionAccepted`, `Ready` and the reference conditions remain source-health
 signals only. The earlier design documents that list `Published` as a condition type are
 superseded on this point. The implementation spec removes it from their enumerations, and from

@@ -154,6 +154,10 @@ mutation Logout {
 | `deleteNamespace(input: DeleteNamespaceInput!)`               | Delete an empty namespace                                                                                                                                                            |
 | `createRepository(input: CreateRepositoryInput!)`             | Create a repository in a namespace                                                                                                                                                   |
 | `deleteRepository(input: DeleteRepositoryInput!)`             | Delete a repository and its storage                                                                                                                                                  |
+| `createProduct(input: CreateProductInput!)`                   | Commit a new Product manifest to the namespace's `gitstore-system` repository |
+| `updateProduct(input: UpdateProductInput!)`                   | Commit a Product update at its admitted source repository/path |
+| `deleteProduct(input: DeleteProductInput!)`                   | Start guarded foreground Product termination |
+| `completeProductDeletion(input: CompleteProductDeletionInput!)` | Controller-only completion of Product termination |
 | `createCategory(input: CreateCategoryInput!)`                 | Create a category by committing its manifest to the namespace's `gitstore-system` repository                                                                                         |
 | `updateCategory(input: UpdateCategoryInput!)`                 | Update a category by committing to the repository and path it was admitted from                                                                                                      |
 | `deleteCategory(input: DeleteCategoryInput!)`                 | Start foreground deletion of a category by removing its manifest from Git                                                                                                            |
@@ -162,14 +166,18 @@ mutation Logout {
 | `updateNamespaceStatus(input: UpdateNamespaceStatusInput!)`   | Controller-only partial-merge write to a Namespace's `.status` sub-resource                                                                                                          |
 | `updateProductStatus(input: UpdateProductStatusInput!)`       | Controller-only partial-merge write to a Product's `.status` sub-resource, including `resolved.category` (`{name, uid}`) and its declarative `CategoryTaxonomy` owner-reference sync |
 | `updateRepositoryStatus(input: UpdateRepositoryStatusInput!)` | Controller-only partial-merge write to a Repository's `.status` sub-resource                                                                                                         |
-| `updateResourceStatus(input: UpdateResourceStatusInput!)`     | Generic, kind-parameterized counterpart of the per-kind status mutations for CRD-defined kinds                                                                                       |
+| `updateResourceStatus(input: UpdateResourceStatusInput!)`     | Generic status write for registered supported kinds; not a dynamic custom-resource runtime |
 
 ### Subscriptions
 
 | Operation                                                                                                 | Purpose                                                                            |
 |-----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------|
 | `watchCategories(namespace: String, selector: LabelSelectorInput, resourceVersion: String)`               | List-then-watch stream of `CategoryTaxonomy` changes                               |
-| `watchResources(kind: String!, namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Generic, kind-parameterized counterpart of `watchCategories` for CRD-defined kinds |
+| `watchNamespaces(resourceVersion: String, selector: LabelSelectorInput)` | Cluster-scoped durable Namespace watch |
+| `watchRepositories(namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Durable Repository watch |
+| `watchProducts(namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Durable Product watch |
+| `watchFiles(namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Durable File watch |
+| `watchResources(kind: String!, namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Generic durable watch for registered kinds; unsupported kinds fail closed |
 
 ## Relay IDs
 
@@ -1016,7 +1024,11 @@ A resource that no longer exists returns a GraphQL error with `extensions.code =
 
 ### updateResourceStatus
 
-Generic, kind-parameterized counterpart of `updateCategoryStatus` for CRD-defined kinds that have no compile-time-known `resolved` shape. Same partial-merge/precondition/authorization semantics; the resource payload and `resolved` field are JSON-boxed instead of strongly typed.
+Generic, kind-parameterized status mutation for supported registered kinds.
+The resource payload and `resolved` field are JSON-boxed instead of strongly
+typed. This endpoint does not provide a custom-resource definition runtime;
+unsupported kinds fail closed. Dedicated per-kind mutations retain their
+typed partial-merge, precondition and authorization contracts.
 
 ```graphql
 mutation UpdateResourceStatus($input: UpdateResourceStatusInput!) {
@@ -1057,7 +1069,10 @@ subscription WatchCategories($namespace: String, $resourceVersion: String) {
 
 ### watchResources
 
-Generic, kind-parameterized counterpart of `watchCategories` for CRD-defined kinds. Same list-then-watch/resume/expiry semantics; the resource payload is JSON-boxed via `object`.
+Generic durable watch for supported registered kinds, with list/watch,
+resume and expiry semantics. The resource payload is JSON-boxed via `object`;
+a kind without a durable source returns `UNSUPPORTED_KIND`. This is not
+runtime discovery or implementation of custom-resource definitions.
 
 ```graphql
 subscription WatchResources($kind: String!, $resourceVersion: String) {
@@ -1081,9 +1096,52 @@ git commit -m "Update catalogue"
 git push origin main
 ```
 
-The API reference intentionally omits catalogue CRUD mutation docs. Some schema fields may remain for compatibility or transitional UI work, but they are not the supported write path for catalogue resources.
+Product and CategoryTaxonomy also have supported Git-backed GraphQL mutations.
+These are not compatibility-only schema stubs: they commit canonical manifests
+and await the same admission path as Git pushes. ProductVariant, Collection and
+File do not expose equivalent catalogue CRUD mutations.
 
-Git-backed catalogue resources are projected into GraphQL after post-receive admission. Resource identity is `apiVersion`, `kind`, namespace, and `metadata.name`; the source file path is provenance only. File moves preserve `metadata.uid`. Spec or Markdown body edits increment `metadata.generation` and `metadata.resourceVersion`; path-only moves and metadata-only edits preserve `generation` and increment `resourceVersion`. Admission deletes Product, Collection, ProductVariant, and File records only when the persisted `resourceVersion` still matches the version observed during ownership validation; a concurrent update rejects the push instead of deleting the newer record. Deleted files disappear from GraphQL reads after admission deletes the stored identity. A later delete/re-add receives a new UID and starts again at `generation=1`.
+### Product mutations
+
+`createProduct` writes into the namespace's implicit `gitstore-system`
+repository. `updateProduct` writes at the admitted Product's stored provenance;
+omitting `body` preserves the current body. Both accept the versioned resource
+envelope with `metadata` and `spec`:
+
+```graphql
+mutation CreateProduct {
+  createProduct(input: {
+    metadata: { name: "winter-coat", namespace: "gitstore-test" }
+    spec: { title: "Winter Coat" }
+  }) {
+    product {
+      id
+      metadata { name uid generation resourceVersion }
+      spec { title }
+    }
+  }
+}
+```
+
+`deleteProduct(input: { id })` requires the opaque Product node ID and returns
+the current Product plus a termination outcome. Blocking ProductVariant
+references prevent termination; controller-only `completeProductDeletion`
+finishes removal. See the [Product contract](products/product-spec.md#mutation-admission)
+for admission errors, retry semantics and lifecycle guards, and
+[Category mutations](#createcategory) for the equivalent category write path.
+
+Git-backed catalogue resources are projected into GraphQL after post-receive
+admission. Identity is `apiVersion`, `kind`, namespace, and `metadata.name`;
+the file path is provenance only. Path-only moves preserve UID and generation
+while incrementing resource version. Spec/body edits increment both generation
+and resource version.
+
+Product and CategoryTaxonomy manifest removal starts guarded foreground
+termination rather than immediate disappearance. Collection, ProductVariant
+and File removal deletes the stored identity only with matching ownership and
+resource-version preconditions. A concurrent update prevents stale deletion;
+a post-receive conflict does not retroactively reject the accepted Git push.
+Recreation after completed removal receives a new UID and starts at generation 1.
 
 Post-receive admission is asynchronous and cannot reject an already accepted Git push. DB-backed conflicts such as duplicate variant SKUs leave the existing stored resource unchanged and skip the conflicting incoming resource.
 
@@ -1324,7 +1382,8 @@ type ResolvedRepositoryDefinition {
 
 `apiVersion` is always `gitstore.dev/v1beta1`; `kind` is always `Repository`.
 Legacy rows normalize to generation/resourceVersion `1` and an initial non-null
-status. `spec.visibility` currently projects `PRIVATE`; extended push-policy
+status. `spec.visibility` reflects the stored admitted value and defaults to
+`PRIVATE` when omitted; it does not publish a Storefront catalogue. Extended push-policy
 groups project null until Repository write/persistence semantics are added.
 Existing maximum-size fields, including explicit zero values, project through
 `spec.pushPolicy`. See

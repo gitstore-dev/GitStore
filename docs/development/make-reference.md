@@ -84,8 +84,10 @@ for API/Git environment prerequisites, enrollment credentials, and consistent
 `CONTROLLER_*` overrides. `make dev` and `make compose` automate their own
 credential generation/enrollment. Shipped local credentials are development-only.
 
-Admin GraphQL uses `http://localhost:4000/admin/graphql`; Storefront uses
-`http://localhost:4001/storefront/graphql`. Operational endpoints such as
+Admin GraphQL uses `http://localhost:4000/admin/graphql`; native Storefront uses
+`http://localhost:4001/storefront/graphql` (Compose publishes it on host port
+4100). Storefront currently returns HTTP 503 with `Cache-Control: no-store`,
+not a published catalog. Operational endpoints such as
 `/health` and `/ready` stay at the Admin root. The old `/graphql` endpoint is
 not supported.
 

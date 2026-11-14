@@ -1,13 +1,16 @@
-# Product and Variant Publication Lifecycle
+# Proposed Product and Variant Publication Lifecycle
 
 **Status:** 🟡 Proposed. The decision is recorded in
 [ADR 0014 — Catalog Release and Publication](../ADRs/0014-catalog-release-and-publication.md).  
-**Scope:** an author-facing reference for publishing, scheduling and unpublishing Products and
+**Scope:** a proposed author workflow for publishing, scheduling and unpublishing Products and
 ProductVariants  
-**Audience:** catalog authors and release managers
+**Audience:** contributors designing publication and release management
 
-> This page explains how to use the model. ADR 0014 is authoritative for trust rules, service
-> responsibilities, fencing and alternatives. Where the two disagree, the ADR wins.
+> This is design provenance, not instructions for a running deployment.
+> `CatalogRelease`, `Publication`, scheduling, suppression and checkout behavior
+> below are not implemented. The current Storefront endpoint returns HTTP 503;
+> see the [Storefront reference](../storefront.md). ADR 0014 records the proposed
+> trust rules, service responsibilities, fencing and alternatives.
 
 ## In one paragraph
 

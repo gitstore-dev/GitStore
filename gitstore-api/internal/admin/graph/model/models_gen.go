@@ -1643,8 +1643,8 @@ type RepositoryResolvedStatusInput struct {
 	StorageClass string `json:"storageClass"`
 }
 
-// Declarative desired-state projection for a Repository. In this feature,
-// visibility is reserved and projects PRIVATE until write semantics are added.
+// Declarative desired-state projection for a Repository. Visibility reflects the
+// admitted stored value and defaults to PRIVATE when omitted.
 type RepositorySpec struct {
 	DefaultBranch string                `json:"defaultBranch"`
 	Visibility    RepositoryVisibility  `json:"visibility"`

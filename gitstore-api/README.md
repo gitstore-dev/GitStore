@@ -13,7 +13,10 @@ Go API service for GitStore. It is the public front door for GraphQL and Git Sma
 - Datastore access through the `memdb` and ScyllaDB backends.
 - Authentication, request middleware, health checks, and generated gqlgen wiring.
 
-Catalogue writes are Git-driven today. GraphQL catalogue CRUD is not the documented write path while Git-backed catalogue writes over GraphQL are being finalized.
+Catalogue writes are primarily Git-driven. Product and CategoryTaxonomy also expose
+Git-backed GraphQL create/update/delete operations; consult the
+[API reference](../docs/api-reference.md#catalogue-writes) for the supported
+per-kind write surface rather than assuming all catalogue kinds expose CRUD.
 
 Post-receive admission is operation-aware for current Git-backed catalog resources: `Product`, `ProductVariant`, `CategoryTaxonomy`, and `Collection`. The API compares old/new commit state, treats `apiVersion` + `kind` + namespace + `metadata.name` as identity, stores file path as provenance, deletes removed identities, preserves UID on path moves, and skips stale admissions when the ref has already advanced.
 
@@ -38,9 +41,9 @@ listener on host port 4100; native defaults use 4001 directly.
 | `4000` | `/ready`                                   | Readiness check                     |
 | `4001` | `/storefront/graphql` | Public boundary (503 until publication is implemented) |
 | `4001` | `/storefront/playground` | Public API explorer |
-| `5000` | `/{namespace}/{repo}.git/info/refs`        | Git Smart HTTP ref advertisement    |
-| `5000` | `/{namespace}/{repo}.git/git-upload-pack`  | Git fetch/clone                     |
-| `5000` | `/{namespace}/{repo}.git/git-receive-pack` | Git push                            |
+| `9000` | `/{namespace}/{repo}.git/info/refs`        | Git Smart HTTP ref advertisement    |
+| `9000` | `/{namespace}/{repo}.git/git-upload-pack`  | Git fetch/clone                     |
+| `9000` | `/{namespace}/{repo}.git/git-receive-pack` | Git push                            |
 | `6000` | gRPC                                       | CatalogService validation/admission |
 
 ## Project Structure
@@ -106,7 +109,7 @@ Required for local API startup unless provided by `.env`:
 | `GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE`  | `users.yaml`             | Local users YAML         |
 | `GITSTORE_API__AUTH__JWT__SECRET`               | unset                    | JWT signing secret       |
 | `GITSTORE_API__ADMIN_PORT`                            | `4000`                   | GraphQL HTTP port        |
-| `GITSTORE_API__GIT_PORT`                        | `5000`                   | Git Smart HTTP port      |
+| `GITSTORE_API__GIT_PORT`                        | `9000`                   | Git Smart HTTP port      |
 | `GITSTORE_API__GRPC_PORT`                       | `6000`                   | CatalogService gRPC port |
 | `GITSTORE_API__GIT_SERVICE__URI`                | `dns:///localhost:50051` | GitService gRPC target   |
 | `GITSTORE_API__DATASTORE__BACKEND`              | `memdb`                  | `memdb` or `scylla`      |

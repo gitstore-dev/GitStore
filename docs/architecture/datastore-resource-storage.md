@@ -20,8 +20,9 @@ Canonical datastore naming is consistent across resource kinds:
 
 Namespace omits parent `namespace` and `repository_id`. Direct lookups and
 connection reads return the same Namespace and Repository body unchanged.
-Changes to their author metadata, spec, or body advance `generation`;
-status-only changes do not.
+Desired-state changes advance `generation` according to each resource's
+contract; status-only changes do not. Repository labels, annotations and
+provenance updates advance only `resourceVersion`.
 
 ## Query projections and pagination
 

@@ -132,7 +132,7 @@ logs. Preserve the audit and plan as incident evidence.
 
 ## 4. Apply
 
-Quiesce repository creates, renames, transfers, and Namespace deletion before
+Quiesce Repository creates, updates and deletions, and Namespace deletion before
 applying a repair plan. This is required because successful Repository repair
 also clears retained Namespace/repository fence reservations after the
 post-repair audit is clean. Then run:
@@ -146,7 +146,7 @@ Apply is confirmation-gated. It checks the authoritative resource version (or
 continued absence for dangling owners), uses identity-conditional deletes and
 updates, and uses `IF NOT EXISTS` inserts. A conditional miss or concurrent
 writer is an error; it is never silently skipped. Re-audit and generate a fresh
-plan rather than replaying a stale plan. Repository creates/transfers that
+plan rather than replaying a stale plan. Repository writes that
 return `ErrRepairRequired` intentionally retain their Namespace fence
 reservation until this verified repair completion step.
 
@@ -182,17 +182,20 @@ inverse plan. If apply stops:
 
 ## 7. Capacity and compaction follow-up
 
-Run the gated capacity suite in a dedicated, preloaded environment:
-
-```bash
-SCYLLA_TEST_ADDR=127.0.0.1:9042 \
-GITSTORE_SCYLLA_CAPACITY_RUN=1 \
-GITSTORE_SCYLLA_CAPACITY_PRODUCTS=5000000 \
-go test -tags scylla -run 'TestScyllaCapacity' -count=1 -timeout 30m \
-  ./internal/datastore/scylla
-```
-
-Set `GITSTORE_SCYLLA_CAPACITY_SOAK_DURATION=2h` only for an intentional soak.
 Review partition size, tombstones, pending compactions, and read/write latency
 before changing compaction. Prefer measured table-specific changes; never adopt
 TWCS for update/delete-heavy projection tables.
+
+Run diagnostic capacity checks only in a dedicated, preloaded fixture from the
+repository root:
+
+```bash
+make capacity TARGET=scylla PROFILE=soak MODE=diagnostic \
+  SCYLLA_TEST_ADDR=127.0.0.1:9042
+```
+
+The current test does not verify its observed preloaded Product count, so the
+dispatcher refuses alpha/production evidence. Projection audit verifies
+consistency, not dataset size. See the
+[capacity guide](../../tests/capacity/README.md) for setup and
+[the open scale-verification gate](../development/production-readiness-testing.md#scylla-diagnostic-pattern-and-open-scale-verification-gate).

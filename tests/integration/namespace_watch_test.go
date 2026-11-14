@@ -97,16 +97,6 @@ func readNamespaceWatchEvent(t *testing.T, conn *websocket.Conn) namespaceWatchW
 	return message.Payload.Data.Watch
 }
 
-func readNamespaceWatchTransition(t *testing.T, conn *websocket.Conn) namespaceWatchWireEvent {
-	t.Helper()
-	for {
-		event := readNamespaceWatchEvent(t, conn)
-		if event.Type != "BOOKMARK" {
-			return event
-		}
-	}
-}
-
 // A resumed journal can legitimately replay status updates for an earlier
 // fixture. Keep reading until this probe's acknowledged creation is observed.
 func readNamespaceWatchTransitionForName(t *testing.T, conn *websocket.Conn, name string) namespaceWatchWireEvent {

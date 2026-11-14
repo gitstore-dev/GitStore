@@ -685,7 +685,7 @@ new scope.
 Authorization answers **which catalog view the principal may request**. Publication answers **which
 resources belong in the public view**. These decisions must remain separate.
 
-[Product and Variant Publication Lifecycle](../products/publication-lifecycle.md)
+[Proposed Product and Variant Publication Lifecycle](proposed-publication-lifecycle.md)
 implements the GH#314 release/publication contract: protected tags, admitted
 commit evidence, schedules, retirement, immutable snapshots, and target-specific
 public projections. OPA does not recreate those rules. It selects `PUBLIC` or

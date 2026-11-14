@@ -3,9 +3,11 @@
 # Copyright (c) 2026 GitStore contributors
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+. "${root}/tests/capacity/lib/preflight.sh"
+mode="$(capacity_preflight_mode)"
 evidence="${1:?evidence directory required}"
 [[ -n "${CAPACITY_ADMIN_URLS:-}" && -n "${CAPACITY_STOREFRONT_URLS:-}" ]] || { echo 'complete Admin and Storefront URLs are required' >&2; exit 2; }
-if [[ "${MODE:-diagnostic}" == diagnostic ]]; then
+if [[ "${mode}" == diagnostic ]]; then
   jq -n '{schemaVersion:1,passed:true,evidenceClass:"diagnostic",productionTopology:"unverified"}' >"${evidence}/preflight-environment.json"
   exit 0
 fi
