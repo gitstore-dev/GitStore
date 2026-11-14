@@ -121,9 +121,9 @@ pub mod catalog_service_client {
         }
         pub async fn validate_rbac_receive(
             &mut self,
-            request: impl tonic::IntoRequest<super::ValidateResourcesRequest>,
+            request: impl tonic::IntoRequest<super::ValidateRbacReceiveRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::ValidateResourcesResponse>,
+            tonic::Response<super::ValidateRbacReceiveResponse>,
             tonic::Status,
         > {
             self.inner
@@ -230,9 +230,9 @@ pub mod catalog_service_server {
         >;
         async fn validate_rbac_receive(
             &self,
-            request: tonic::Request<super::ValidateResourcesRequest>,
+            request: tonic::Request<super::ValidateRbacReceiveRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::ValidateResourcesResponse>,
+            tonic::Response<super::ValidateRbacReceiveResponse>,
             tonic::Status,
         >;
         async fn validate_resource_deletions(
@@ -377,16 +377,16 @@ pub mod catalog_service_server {
                     struct ValidateRBACReceiveSvc<T: CatalogService>(pub Arc<T>);
                     impl<
                         T: CatalogService,
-                    > tonic::server::UnaryService<super::ValidateResourcesRequest>
+                    > tonic::server::UnaryService<super::ValidateRbacReceiveRequest>
                     for ValidateRBACReceiveSvc<T> {
-                        type Response = super::ValidateResourcesResponse;
+                        type Response = super::ValidateRbacReceiveResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,
                         >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::ValidateResourcesRequest>,
+                            request: tonic::Request<super::ValidateRbacReceiveRequest>,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {

@@ -342,7 +342,7 @@ pub mod git_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::CommitFileAtRevisionRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::CommitFileResponse>,
+            tonic::Response<super::CommitFileAtRevisionResponse>,
             tonic::Status,
         > {
             self.inner
@@ -555,7 +555,7 @@ pub mod git_service_server {
             &self,
             request: tonic::Request<super::CommitFileAtRevisionRequest>,
         ) -> std::result::Result<
-            tonic::Response<super::CommitFileResponse>,
+            tonic::Response<super::CommitFileAtRevisionResponse>,
             tonic::Status,
         >;
         async fn delete_file(
@@ -1125,7 +1125,7 @@ pub mod git_service_server {
                         T: GitService,
                     > tonic::server::UnaryService<super::CommitFileAtRevisionRequest>
                     for CommitFileAtRevisionSvc<T> {
-                        type Response = super::CommitFileResponse;
+                        type Response = super::CommitFileAtRevisionResponse;
                         type Future = BoxFuture<
                             tonic::Response<Self::Response>,
                             tonic::Status,

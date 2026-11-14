@@ -169,7 +169,7 @@ func assertManagedReceiveRejected(t *testing.T, server *cataloggrpc.Server, secr
 	if !revert {
 		tree.ProposedBlobs = []*catalogv1.ResourceBlob{{Path: "README.md", Content: []byte("unrelated change\n")}}
 	}
-	request := &catalogv1.ValidateResourcesRequest{RepositoryId: origin.RepositoryID, Trees: []*catalogv1.ResourceValidationTree{tree},
+	request := &catalogv1.ValidateRBACReceiveRequest{RepositoryId: origin.RepositoryID, Trees: []*catalogv1.ResourceValidationTree{tree},
 		Authorization: &catalogv1.CallbackAuthorization{RepositoryId: origin.RepositoryID, ReceiveId: uuid.NewString(),
 			Refs: []*catalogv1.ReceiveRef{ref}, Actor: &catalogv1.CallbackActor{
 				Subject: actor.Subject, AuthMethod: actor.AuthMethod, Groups: actor.Groups, ServiceAccountUid: actor.ServiceAccountUID,

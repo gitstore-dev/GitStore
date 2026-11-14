@@ -132,7 +132,7 @@ service GitService {
   rpc CommitFile(CommitFileRequest) returns (CommitFileResponse);
   // Commits only if the explicit branch still points to the admitted revision.
   // Older servers return UNIMPLEMENTED rather than ignoring the precondition.
-  rpc CommitFileAtRevision(CommitFileAtRevisionRequest) returns (CommitFileResponse);
+  rpc CommitFileAtRevision(CommitFileAtRevisionRequest) returns (CommitFileAtRevisionResponse);
 
   // DeleteFile removes a file and commits the deletion to the default branch.
   rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
@@ -346,6 +346,11 @@ message CommitFileAtRevisionRequest {
   // Inspect proven publication without creating or resuming a write.
   // Requires retain_receipt; an absent receipt returns NOT_FOUND.
   bool receipt_only = 5;
+}
+
+message CommitFileAtRevisionResponse {
+  string commit_sha = 1;
+  string branch = 2;
 }
 
 message DeleteFileRequest {

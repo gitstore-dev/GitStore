@@ -76,14 +76,19 @@ func (s *catalogTestServer) ValidateResources(ctx context.Context, request *cata
 	return s.Server.ValidateResources(s.fixtureContext(ctx, req), req)
 }
 func (s *catalogTestServer) ValidateRBACReceive(ctx context.Context, request *catalogv1.ValidateResourcesRequest) (*catalogv1.ValidateResourcesResponse, error) {
-	req := proto.Clone(request).(*catalogv1.ValidateResourcesRequest)
-	req.Authorization = fixtureValidationEnvelope(req.RepositoryId, req.Trees)
+	cloned := proto.Clone(request).(*catalogv1.ValidateResourcesRequest)
+	req := &catalogv1.ValidateRBACReceiveRequest{RepositoryId: cloned.RepositoryId, Trees: cloned.Trees,
+		Authorization: fixtureValidationEnvelope(cloned.RepositoryId, cloned.Trees)}
 	signature, err := auth.SignRPC(s.serviceSecret, "gitstore-api", catalogv1.CatalogService_ValidateRBACReceive_FullMethodName, req)
 	if err != nil {
 		return nil, err
 	}
 	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(auth.RPCSignatureMetadata, signature))
-	return s.Server.ValidateRBACReceive(ctx, req)
+	response, err := s.Server.ValidateRBACReceive(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return &catalogv1.ValidateResourcesResponse{Accepted: response.Accepted, Errors: response.Errors}, nil
 }
 func (s *catalogTestServer) ValidateResourceDeletions(ctx context.Context, request *catalogv1.ValidateResourceDeletionsRequest) (*catalogv1.ValidateResourceDeletionsResponse, error) {
 	req := proto.Clone(request).(*catalogv1.ValidateResourceDeletionsRequest)

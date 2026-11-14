@@ -53,12 +53,12 @@ func (r *recoveryRPC) GetFile(ctx context.Context, request *gitv1.GetFileRequest
 	return &gitv1.GetFileResponse{Content: r.file}, nil
 }
 
-func (r *recoveryRPC) CommitFileAtRevision(ctx context.Context, request *gitv1.CommitFileAtRevisionRequest, _ ...grpc.CallOption) (*gitv1.CommitFileResponse, error) {
+func (r *recoveryRPC) CommitFileAtRevision(ctx context.Context, request *gitv1.CommitFileAtRevisionRequest, _ ...grpc.CallOption) (*gitv1.CommitFileAtRevisionResponse, error) {
 	r.check(ctx, request.File.Authorization, "repository.contents.write")
 	if !request.RetainReceipt {
 		panic("bootstrap publication must retain its durable receipt")
 	}
-	return &gitv1.CommitFileResponse{CommitSha: strings.Repeat("b", 40)}, nil
+	return &gitv1.CommitFileAtRevisionResponse{CommitSha: strings.Repeat("b", 40)}, nil
 }
 
 type unbornRecoveryRPC struct {
@@ -81,7 +81,7 @@ func (r *unbornRecoveryRPC) ListFiles(ctx context.Context, request *gitv1.ListFi
 	return r.recoveryRPC.ListFiles(ctx, request, options...)
 }
 
-func (r *unbornRecoveryRPC) CommitFileAtRevision(ctx context.Context, request *gitv1.CommitFileAtRevisionRequest, _ ...grpc.CallOption) (*gitv1.CommitFileResponse, error) {
+func (r *unbornRecoveryRPC) CommitFileAtRevision(ctx context.Context, request *gitv1.CommitFileAtRevisionRequest, _ ...grpc.CallOption) (*gitv1.CommitFileAtRevisionResponse, error) {
 	r.check(ctx, request.File.Authorization, "repository.contents.write")
 	if request.File.Path != ".gitkeep" || len(request.File.Content) != 0 ||
 		request.File.AuthorName != bootstrapActor || request.File.AuthorEmail != "" ||
@@ -95,7 +95,7 @@ func (r *unbornRecoveryRPC) CommitFileAtRevision(ctx context.Context, request *g
 	if r.conflict {
 		return nil, grpcstatus.Error(codes.Aborted, "another initializer won")
 	}
-	return &gitv1.CommitFileResponse{CommitSha: strings.Repeat("a", 40)}, nil
+	return &gitv1.CommitFileAtRevisionResponse{CommitSha: strings.Repeat("a", 40)}, nil
 }
 
 func TestRBACRecoveryInitializesOnlyUnpublishedCanonicalBranches(t *testing.T) {

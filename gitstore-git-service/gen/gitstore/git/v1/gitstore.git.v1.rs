@@ -334,6 +334,13 @@ pub struct CommitFileAtRevisionRequest {
     pub receipt_only: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CommitFileAtRevisionResponse {
+    #[prost(string, tag="1")]
+    pub commit_sha: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub branch: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteFileRequest {
     #[prost(string, tag="15")]
     pub repository_id: ::prost::alloc::string::String,

@@ -220,7 +220,7 @@ func (s *Server) ValidateResources(
 	return s.validateResources(ctx, req)
 }
 
-func (s *Server) ValidateRBACReceive(ctx context.Context, req *catalogv1.ValidateResourcesRequest) (*catalogv1.ValidateResourcesResponse, error) {
+func (s *Server) ValidateRBACReceive(ctx context.Context, req *catalogv1.ValidateRBACReceiveRequest) (*catalogv1.ValidateRBACReceiveResponse, error) {
 	ctx, err := s.authenticateCallback(ctx, catalogv1.CatalogService_ValidateRBACReceive_FullMethodName, req,
 		req.GetRepositoryId(), req.GetAuthorization(), validationRefs(req.GetTrees()))
 	if err != nil {
@@ -229,7 +229,13 @@ func (s *Server) ValidateRBACReceive(ctx context.Context, req *catalogv1.Validat
 	if len(req.GetTrees()) != 1 || req.Trees[0].GetRbacTree() == nil {
 		return nil, grpcstatus.Error(codes.InvalidArgument, "a complete RBAC receive tree is required")
 	}
-	return s.validateResources(ctx, req)
+	response, err := s.validateResources(ctx, &catalogv1.ValidateResourcesRequest{
+		RepositoryId: req.RepositoryId, Trees: req.Trees, Authorization: req.Authorization,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &catalogv1.ValidateRBACReceiveResponse{Accepted: response.Accepted, Errors: response.Errors}, nil
 }
 
 // validateResources is shared by authenticated callbacks and in-process

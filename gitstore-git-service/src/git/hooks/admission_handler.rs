@@ -329,8 +329,8 @@ mod tests {
     impl CatalogService for MockCatalogService {
         async fn validate_rbac_receive(
             &self,
-            _req: Request<ValidateResourcesRequest>,
-        ) -> Result<Response<ValidateResourcesResponse>, Status> {
+            _req: Request<catalog_proto::ValidateRbacReceiveRequest>,
+        ) -> Result<Response<catalog_proto::ValidateRbacReceiveResponse>, Status> {
             Err(Status::unimplemented("RBAC receives are unavailable"))
         }
 

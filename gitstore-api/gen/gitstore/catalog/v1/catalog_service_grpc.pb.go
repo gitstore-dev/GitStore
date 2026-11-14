@@ -51,7 +51,7 @@ type CatalogServiceClient interface {
 	ValidateResources(ctx context.Context, in *ValidateResourcesRequest, opts ...grpc.CallOption) (*ValidateResourcesResponse, error)
 	// RBAC receives require a complete proposed tree. A distinct method makes
 	// older API binaries fail closed rather than ignore that security input.
-	ValidateRBACReceive(ctx context.Context, in *ValidateResourcesRequest, opts ...grpc.CallOption) (*ValidateResourcesResponse, error)
+	ValidateRBACReceive(ctx context.Context, in *ValidateRBACReceiveRequest, opts ...grpc.CallOption) (*ValidateRBACReceiveResponse, error)
 	// ValidateResourceDeletions validates all supported resource deletions
 	// against proposed trees before refs are updated. It is read-only and is
 	// invoked only when a push derives one or more OperationDelete transitions.
@@ -80,9 +80,9 @@ func (c *catalogServiceClient) ValidateResources(ctx context.Context, in *Valida
 	return out, nil
 }
 
-func (c *catalogServiceClient) ValidateRBACReceive(ctx context.Context, in *ValidateResourcesRequest, opts ...grpc.CallOption) (*ValidateResourcesResponse, error) {
+func (c *catalogServiceClient) ValidateRBACReceive(ctx context.Context, in *ValidateRBACReceiveRequest, opts ...grpc.CallOption) (*ValidateRBACReceiveResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ValidateResourcesResponse)
+	out := new(ValidateRBACReceiveResponse)
 	err := c.cc.Invoke(ctx, CatalogService_ValidateRBACReceive_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -120,7 +120,7 @@ type CatalogServiceServer interface {
 	ValidateResources(context.Context, *ValidateResourcesRequest) (*ValidateResourcesResponse, error)
 	// RBAC receives require a complete proposed tree. A distinct method makes
 	// older API binaries fail closed rather than ignore that security input.
-	ValidateRBACReceive(context.Context, *ValidateResourcesRequest) (*ValidateResourcesResponse, error)
+	ValidateRBACReceive(context.Context, *ValidateRBACReceiveRequest) (*ValidateRBACReceiveResponse, error)
 	// ValidateResourceDeletions validates all supported resource deletions
 	// against proposed trees before refs are updated. It is read-only and is
 	// invoked only when a push derives one or more OperationDelete transitions.
@@ -142,7 +142,7 @@ type UnimplementedCatalogServiceServer struct{}
 func (UnimplementedCatalogServiceServer) ValidateResources(context.Context, *ValidateResourcesRequest) (*ValidateResourcesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ValidateResources not implemented")
 }
-func (UnimplementedCatalogServiceServer) ValidateRBACReceive(context.Context, *ValidateResourcesRequest) (*ValidateResourcesResponse, error) {
+func (UnimplementedCatalogServiceServer) ValidateRBACReceive(context.Context, *ValidateRBACReceiveRequest) (*ValidateRBACReceiveResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ValidateRBACReceive not implemented")
 }
 func (UnimplementedCatalogServiceServer) ValidateResourceDeletions(context.Context, *ValidateResourceDeletionsRequest) (*ValidateResourceDeletionsResponse, error) {
@@ -191,7 +191,7 @@ func _CatalogService_ValidateResources_Handler(srv interface{}, ctx context.Cont
 }
 
 func _CatalogService_ValidateRBACReceive_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ValidateResourcesRequest)
+	in := new(ValidateRBACReceiveRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -203,7 +203,7 @@ func _CatalogService_ValidateRBACReceive_Handler(srv interface{}, ctx context.Co
 		FullMethod: CatalogService_ValidateRBACReceive_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CatalogServiceServer).ValidateRBACReceive(ctx, req.(*ValidateResourcesRequest))
+		return srv.(CatalogServiceServer).ValidateRBACReceive(ctx, req.(*ValidateRBACReceiveRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }

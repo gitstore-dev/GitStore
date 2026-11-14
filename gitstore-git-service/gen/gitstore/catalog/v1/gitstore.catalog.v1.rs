@@ -112,6 +112,23 @@ pub struct ValidateResourcesResponse {
     #[prost(message, repeated, tag="2")]
     pub errors: ::prost::alloc::vec::Vec<ValidationError>,
 }
+/// Dedicated RPC messages retain the validation callback's wire field numbers.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidateRbacReceiveRequest {
+    #[prost(string, tag="15")]
+    pub repository_id: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="2")]
+    pub trees: ::prost::alloc::vec::Vec<ResourceValidationTree>,
+    #[prost(message, optional, tag="3")]
+    pub authorization: ::core::option::Option<CallbackAuthorization>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidateRbacReceiveResponse {
+    #[prost(bool, tag="1")]
+    pub accepted: bool,
+    #[prost(message, repeated, tag="2")]
+    pub errors: ::prost::alloc::vec::Vec<ValidationError>,
+}
 /// ValidateResourceDeletionsRequest carries every changed ref tree in one
 /// atomic receive-pack operation. ResourceValidationTree is deliberately shared
 /// with schema validation so every Git-backed kind receives identical

@@ -28,7 +28,7 @@ service CatalogService {
 
   // RBAC receives require a complete proposed tree. A distinct method makes
   // older API binaries fail closed rather than ignore that security input.
-  rpc ValidateRBACReceive(ValidateResourcesRequest) returns (ValidateResourcesResponse);
+  rpc ValidateRBACReceive(ValidateRBACReceiveRequest) returns (ValidateRBACReceiveResponse);
 
   // ValidateResourceDeletions validates all supported resource deletions
   // against proposed trees before refs are updated. It is read-only and is
@@ -131,6 +131,20 @@ message ValidateResourcesResponse {
   // errors contains all field-level violations across all blobs.
   // Non-empty only when accepted=false.
   // All violations across all files are collected before returning (no fail-fast).
+  repeated ValidationError errors = 2;
+}
+
+// Dedicated RPC messages retain the validation callback's wire field numbers.
+message ValidateRBACReceiveRequest {
+  string repository_id = 15;
+  reserved 1;
+  reserved "blobs";
+  repeated ResourceValidationTree trees = 2;
+  CallbackAuthorization authorization = 3;
+}
+
+message ValidateRBACReceiveResponse {
+  bool accepted = 1;
   repeated ValidationError errors = 2;
 }
 

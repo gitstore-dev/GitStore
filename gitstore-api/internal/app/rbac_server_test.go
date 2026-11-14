@@ -162,7 +162,7 @@ func (s *bootstrapRPCServer) GetFile(ctx context.Context, request *gitv1.GetFile
 	return &gitv1.GetFileResponse{Content: content}, err
 }
 
-func (s *bootstrapRPCServer) CommitFileAtRevision(ctx context.Context, request *gitv1.CommitFileAtRevisionRequest) (*gitv1.CommitFileResponse, error) {
+func (s *bootstrapRPCServer) CommitFileAtRevision(ctx context.Context, request *gitv1.CommitFileAtRevisionRequest) (*gitv1.CommitFileAtRevisionResponse, error) {
 	git, err := s.repository(request.File.RepositoryId)
 	if err != nil {
 		return nil, err
@@ -173,7 +173,7 @@ func (s *bootstrapRPCServer) CommitFileAtRevision(ctx context.Context, request *
 		RefName: request.RefName, ExpectedCommitSHA: request.ExpectedCommitSha,
 		RetainReceipt: request.RetainReceipt, ReceiptOnly: request.ReceiptOnly,
 	})
-	return &gitv1.CommitFileResponse{CommitSha: commit}, err
+	return &gitv1.CommitFileAtRevisionResponse{CommitSha: commit}, err
 }
 
 func TestRBACServerCompositionRecoversBeforeOpeningTrafficAndReusesProviderOnReload(t *testing.T) {

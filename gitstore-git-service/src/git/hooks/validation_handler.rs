@@ -326,20 +326,35 @@ impl SchemaValidationHandler {
     ) -> anyhow::Result<AdmissionDecision> {
         let mut client = self.client.clone();
         let rbac_receive = req.trees.iter().any(|tree| tree.rbac_tree.is_some());
-        let method = if rbac_receive {
-            "/gitstore.catalog.v1.CatalogService/ValidateRBACReceive"
+        let result = if rbac_receive {
+            let request = crate::auth::interceptor::callback_request(
+                catalog_proto::ValidateRbacReceiveRequest {
+                    repository_id: req.repository_id,
+                    trees: req.trees,
+                    authorization: req.authorization,
+                },
+                &self.service_token,
+                "/gitstore.catalog.v1.CatalogService/ValidateRBACReceive",
+            )?;
+            tokio::time::timeout(self.timeout, client.validate_rbac_receive(request))
+                .await
+                .map(|result| {
+                    result.map(|response| {
+                        let response = response.into_inner();
+                        tonic::Response::new(catalog_proto::ValidateResourcesResponse {
+                            accepted: response.accepted,
+                            errors: response.errors,
+                        })
+                    })
+                })
         } else {
-            "/gitstore.catalog.v1.CatalogService/ValidateResources"
+            let request = crate::auth::interceptor::callback_request(
+                req,
+                &self.service_token,
+                "/gitstore.catalog.v1.CatalogService/ValidateResources",
+            )?;
+            tokio::time::timeout(self.timeout, client.validate_resources(request)).await
         };
-        let request = crate::auth::interceptor::callback_request(req, &self.service_token, method)?;
-        let result = tokio::time::timeout(self.timeout, async {
-            if rbac_receive {
-                client.validate_rbac_receive(request).await
-            } else {
-                client.validate_resources(request).await
-            }
-        })
-        .await;
         let duration_ms = start.elapsed().as_millis() as u64;
         match result {
             Err(_) => {
@@ -442,12 +457,23 @@ mod tests {
     impl CatalogService for MockCatalogService {
         async fn validate_rbac_receive(
             &self,
-            req: Request<ValidateResourcesRequest>,
-        ) -> Result<Response<ValidateResourcesResponse>, Status> {
+            req: Request<catalog_proto::ValidateRbacReceiveRequest>,
+        ) -> Result<Response<catalog_proto::ValidateRbacReceiveResponse>, Status> {
             if !self.supports_rbac {
                 return Err(Status::unimplemented("older API binary"));
             }
-            (self.validate_fn)(req.into_inner()).map(Response::new)
+            let req = req.into_inner();
+            (self.validate_fn)(ValidateResourcesRequest {
+                repository_id: req.repository_id,
+                trees: req.trees,
+                authorization: req.authorization,
+            })
+            .map(|response| {
+                Response::new(catalog_proto::ValidateRbacReceiveResponse {
+                    accepted: response.accepted,
+                    errors: response.errors,
+                })
+            })
         }
 
         async fn validate_resources(

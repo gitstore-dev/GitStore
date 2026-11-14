@@ -1505,7 +1505,7 @@ impl GitService for GitServiceImpl {
     async fn commit_file_at_revision(
         &self,
         request: Request<CommitFileAtRevisionRequest>,
-    ) -> Result<Response<CommitFileResponse>, Status> {
+    ) -> Result<Response<CommitFileAtRevisionResponse>, Status> {
         self.rpc_auth
             .verify(
                 request.metadata(),
@@ -1607,7 +1607,7 @@ impl GitService for GitServiceImpl {
                     expected,
                     tip,
                 )?;
-                return Ok(Response::new(CommitFileResponse {
+                return Ok(Response::new(CommitFileAtRevisionResponse {
                     commit_sha: id.to_string(),
                     branch: guarded
                         .ref_name
@@ -1689,7 +1689,7 @@ impl GitService for GitServiceImpl {
             if receipt_ref.is_some() {
                 sync_git_file(repo.path(), &repo.path().join(&guarded.ref_name))?;
             }
-            Ok(Response::new(CommitFileResponse {
+            Ok(Response::new(CommitFileAtRevisionResponse {
                 commit_sha: id.to_string(),
                 branch: guarded
                     .ref_name

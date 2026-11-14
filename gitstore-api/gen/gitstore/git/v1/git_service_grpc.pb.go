@@ -103,7 +103,7 @@ type GitServiceClient interface {
 	CommitFile(ctx context.Context, in *CommitFileRequest, opts ...grpc.CallOption) (*CommitFileResponse, error)
 	// Commits only if the explicit branch still points to the admitted revision.
 	// Older servers return UNIMPLEMENTED rather than ignoring the precondition.
-	CommitFileAtRevision(ctx context.Context, in *CommitFileAtRevisionRequest, opts ...grpc.CallOption) (*CommitFileResponse, error)
+	CommitFileAtRevision(ctx context.Context, in *CommitFileAtRevisionRequest, opts ...grpc.CallOption) (*CommitFileAtRevisionResponse, error)
 	// DeleteFile removes a file and commits the deletion to the default branch.
 	DeleteFile(ctx context.Context, in *DeleteFileRequest, opts ...grpc.CallOption) (*DeleteFileResponse, error)
 	// CreateTag creates an annotated tag on HEAD (or the specified commit).
@@ -243,9 +243,9 @@ func (c *gitServiceClient) CommitFile(ctx context.Context, in *CommitFileRequest
 	return out, nil
 }
 
-func (c *gitServiceClient) CommitFileAtRevision(ctx context.Context, in *CommitFileAtRevisionRequest, opts ...grpc.CallOption) (*CommitFileResponse, error) {
+func (c *gitServiceClient) CommitFileAtRevision(ctx context.Context, in *CommitFileAtRevisionRequest, opts ...grpc.CallOption) (*CommitFileAtRevisionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CommitFileResponse)
+	out := new(CommitFileAtRevisionResponse)
 	err := c.cc.Invoke(ctx, GitService_CommitFileAtRevision_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -330,7 +330,7 @@ type GitServiceServer interface {
 	CommitFile(context.Context, *CommitFileRequest) (*CommitFileResponse, error)
 	// Commits only if the explicit branch still points to the admitted revision.
 	// Older servers return UNIMPLEMENTED rather than ignoring the precondition.
-	CommitFileAtRevision(context.Context, *CommitFileAtRevisionRequest) (*CommitFileResponse, error)
+	CommitFileAtRevision(context.Context, *CommitFileAtRevisionRequest) (*CommitFileAtRevisionResponse, error)
 	// DeleteFile removes a file and commits the deletion to the default branch.
 	DeleteFile(context.Context, *DeleteFileRequest) (*DeleteFileResponse, error)
 	// CreateTag creates an annotated tag on HEAD (or the specified commit).
@@ -379,7 +379,7 @@ func (UnimplementedGitServiceServer) GetFileProvenance(context.Context, *GetFile
 func (UnimplementedGitServiceServer) CommitFile(context.Context, *CommitFileRequest) (*CommitFileResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CommitFile not implemented")
 }
-func (UnimplementedGitServiceServer) CommitFileAtRevision(context.Context, *CommitFileAtRevisionRequest) (*CommitFileResponse, error) {
+func (UnimplementedGitServiceServer) CommitFileAtRevision(context.Context, *CommitFileAtRevisionRequest) (*CommitFileAtRevisionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CommitFileAtRevision not implemented")
 }
 func (UnimplementedGitServiceServer) DeleteFile(context.Context, *DeleteFileRequest) (*DeleteFileResponse, error) {

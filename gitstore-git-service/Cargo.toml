@@ -5,8 +5,8 @@ edition = "2021"
 rust-version = "1.99.1"
 
 [dependencies]
-gix = { version = "0.89.0", features = ["max-performance-safe", "blocking-network-client", "worktree-mutation"] }
-gix-pack = "0.76.0"
+gix = { version = "0.90.0", features = ["max-performance", "blocking-network-client", "worktree-mutation"] }
+gix-pack = "0.77.0"
 dashmap = "6"
 tokio = { version = "1.35", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
