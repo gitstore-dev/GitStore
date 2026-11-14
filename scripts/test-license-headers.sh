@@ -202,3 +202,83 @@ git add shared/scylla-cdc-go/application.rs
 expect 1 "current year ($year)" --staged
 
 printf 'License checker regressions passed (%s assertions).\n' "$assertions"
+
+test_hook_installation() (
+  export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+  new_repo 'hook install/main checkout'
+  local main="$PWD" linked="$test_dir/hook install/linked checkout" output status
+  mkdir .githooks
+  cp "$repo_root"/.githooks/{pre-commit,commit-msg} .githooks/
+  cp "$repo_root/scripts/install-git-hooks.sh" scripts/
+  git add scripts .githooks
+  git commit -qm 'test: prepare hook fixtures'
+  git config --unset core.hooksPath
+  local config_before
+  config_before="$(git config --local --list)"
+
+  expect_install() {
+    local expected="$1" needle="$2"
+    status=0
+    output="$(bash "$PWD/scripts/install-git-hooks.sh" 2>&1)" || status=$?
+    if [[ "$status" != "$expected" || "$output" != *"$needle"* ]]; then
+      printf 'FAIL (hook installer): expected status=%s, message=%s\n%s\n' "$expected" "$needle" "$output" >&2
+      exit 1
+    fi
+  }
+
+  expect_install 0 'updates all linked worktrees'
+  for hook in pre-commit commit-msg; do
+    [[ -x ".git/hooks/$hook" ]]
+    cmp ".githooks/$hook" ".git/hooks/$hook"
+  done
+  (
+    cd scripts
+    bash ./install-git-hooks.sh >/dev/null 2>&1
+  )
+  [[ "$(git config --local --list)" == "$config_before" ]]
+  status=0
+  output="$(git commit -qm 'invalid commit subject' --allow-empty 2>&1)" || status=$?
+  [[ "$status" == 1 && "$output" == *'must follow Conventional Commits'* ]]
+  header invalid.go "$previous"
+  git add invalid.go
+  status=0
+  output="$(git commit -qm 'test: outdated header' 2>&1)" || status=$?
+  [[ "$status" == 1 && "$output" == *"current year ($year)"* ]]
+  git rm -q -f invalid.go
+
+  git worktree add -q -b linked "$linked"
+  cd "$linked"
+  expect_install 0 'updates all linked worktrees'
+  (
+    cd scripts
+    bash ./install-git-hooks.sh >/dev/null 2>&1
+  )
+  [[ -f .git && "$(git rev-parse --git-path hooks)" == "$main/.git/hooks" ]]
+  [[ ! -e "$(git rev-parse --git-path config.worktree)" ]]
+  [[ "$(git config --local --list)" == "$config_before" ]]
+  for hook in pre-commit commit-msg; do
+    cmp ".githooks/$hook" "$main/.git/hooks/$hook"
+  done
+
+  git config core.hooksPath 'custom hooks'
+  mkdir 'custom hooks'
+  printf 'custom hook\n' > 'custom hooks/pre-commit'
+  config_before="$(git config --local --list)"
+  expect_install 1 'core.hooksPath is configured'
+  [[ "$(cat 'custom hooks/pre-commit')" == 'custom hook' ]]
+  [[ "$(git config --local --list)" == "$config_before" ]]
+  git config --unset core.hooksPath
+
+  rm "$main/.git/hooks/pre-commit"
+  printf 'custom installed hook\n' > "$main/.git/hooks/commit-msg"
+  expect_install 1 'refusing to replace existing hook'
+  [[ ! -e "$main/.git/hooks/pre-commit" ]]
+  [[ "$(cat "$main/.git/hooks/commit-msg")" == 'custom installed hook' ]]
+  cp .githooks/commit-msg "$main/.git/hooks/commit-msg"
+  ln -s "$linked/.githooks/pre-commit" "$main/.git/hooks/pre-commit"
+  expect_install 1 'refusing to replace existing hook'
+  [[ -L "$main/.git/hooks/pre-commit" ]]
+  printf 'Hook installer regressions passed (main/linked roots and subdirectories, active checks, configuration and ownership preservation).\n'
+)
+
+test_hook_installation

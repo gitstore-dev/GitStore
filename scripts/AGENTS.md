@@ -16,6 +16,10 @@ container wiring and configuration.
   languages. Keep staged checks index-only, language-specific generated
   exceptions and pinned upstream Apache attribution intact. Focused
   regressions in `test-license-headers.sh` also run in the default test suite.
+- `install-git-hooks.sh` resolves Git's clone-shared hook directory from either
+  checkout type. Installation affects every linked worktree, never changes
+  hook configuration and refuses custom hook paths or differing existing
+  hooks. Test installation only in fresh test-owned repositories/worktrees.
 - Keep command documentation in the relevant README and scoped instructions
   synchronized with supported behavior. Do not describe a proposed command
   as implemented.
