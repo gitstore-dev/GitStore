@@ -6,7 +6,10 @@ package integration
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -144,8 +147,8 @@ type variantQueryResult struct {
 }
 
 // queryVariant fetches a ProductVariant by namespace + name via GraphQL.
-// It retries up to 5s while the variant is null (async admission lag, especially on ScyllaDB).
-// Any GraphQL error is immediately fatal.
+// It retries null or structured variant absence for up to 5s while asynchronous
+// post-receive admission completes. Other GraphQL errors are immediately fatal.
 func queryVariant(t *testing.T, namespace, name string) *variantQueryResult {
 	t.Helper()
 	const (
@@ -172,6 +175,10 @@ func queryVariant(t *testing.T, namespace, name string) *variantQueryResult {
 			}
 		`, map[string]any{"ns": namespace, "name": name})
 		if len(resp.Errors) > 0 {
+			if resourceQueryNotFound(resp, "productVariant", "PRODUCT_VARIANT_NOT_FOUND") && time.Now().Before(deadline) {
+				time.Sleep(min(interval, time.Until(deadline)))
+				continue
+			}
 			t.Fatalf("graphql errors querying variant %q: %s", name, resp.Errors)
 		}
 		type data struct {
@@ -186,6 +193,33 @@ func queryVariant(t *testing.T, namespace, name string) *variantQueryResult {
 			continue
 		}
 		return d.ProductVariant
+	}
+}
+
+func TestPushHelperVariantQueryRetriesAdmissionLag(t *testing.T) {
+	var attempts atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if attempts.Add(1) == 1 {
+			fmt.Fprint(w, `{"data":{"productVariant":null},"errors":[{"message":"productVariant not found","path":["productVariant"],"extensions":{"code":"NOT_FOUND","diagnostics":[{"reason":"PRODUCT_VARIANT_NOT_FOUND","level":"FAILURE"}]}}]}`)
+			return
+		}
+		fmt.Fprint(w, `{"data":{"productVariant":{"metadata":{"name":"variant"},"spec":{"sku":"SKU","productRef":{"name":"parent"}},"status":{"conditions":[{"type":"AdmissionAccepted","status":"TRUE"}]}}}}`)
+	}))
+	t.Cleanup(server.Close)
+	previousURL := apiURL
+	apiURL = server.URL
+	integrationAdminTokens.Store(server.URL, "fixture-token")
+	t.Cleanup(func() {
+		apiURL = previousURL
+		integrationAdminTokens.Delete(server.URL)
+	})
+	variant := queryVariant(t, "fixture", "variant")
+	if variant == nil || variant.Spec.SKU != "SKU" || variant.Spec.ProductRef.Name != "parent" || attempts.Load() != 2 {
+		t.Fatalf("variant read did not recover after admission: variant=%+v attempts=%d", variant, attempts.Load())
+	}
+	if variant.Status == nil || findVariantCondition(variant.Status.Conditions, "AdmissionAccepted") == nil {
+		t.Fatalf("admission status missing after retry: %+v", variant)
 	}
 }
 
@@ -310,6 +344,9 @@ func TestProductVariant_CoPushWithProductAccepted(t *testing.T) {
 	v := queryVariant(t, ns, variantName)
 	if v == nil {
 		t.Fatalf("variant %q not found after co-push", variantName)
+	}
+	if v.Spec.SKU != sku || v.Spec.ProductRef.Name != productName {
+		t.Errorf("co-pushed variant spec: got %+v, want sku=%q productRef=%q", v.Spec, sku, productName)
 	}
 	if v.Status == nil {
 		t.Fatal("status is nil after co-push admission")

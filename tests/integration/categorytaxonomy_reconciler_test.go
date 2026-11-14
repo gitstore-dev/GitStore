@@ -77,12 +77,16 @@ type categoryWithStatusResult struct {
 }
 
 func categoryQueryNotFound(resp gqlResponse) bool {
+	return resourceQueryNotFound(resp, "category", "CATEGORY_NOT_FOUND")
+}
+
+func resourceQueryNotFound(resp gqlResponse, field, reason string) bool {
 	if resp.Status != http.StatusOK || len(resp.Errors) != 1 {
 		return false
 	}
 	var data map[string]json.RawMessage
 	if json.Unmarshal(resp.Data, &data) != nil || len(data) != 1 ||
-		!bytes.Equal(bytes.TrimSpace(data["category"]), []byte("null")) {
+		!bytes.Equal(bytes.TrimSpace(data[field]), []byte("null")) {
 		return false
 	}
 	var graphError struct {
@@ -101,9 +105,9 @@ func categoryQueryNotFound(resp gqlResponse) bool {
 		return false
 	}
 	ext := graphError.Extensions
-	return len(graphError.Path) == 1 && graphError.Path[0] == "category" &&
+	return len(graphError.Path) == 1 && graphError.Path[0] == field &&
 		ext.Code == "NOT_FOUND" && len(ext.Phase) == 0 && len(ext.Commit) == 0 &&
-		len(ext.Diagnostics) == 1 && ext.Diagnostics[0].Reason == "CATEGORY_NOT_FOUND" &&
+		len(ext.Diagnostics) == 1 && ext.Diagnostics[0].Reason == reason &&
 		ext.Diagnostics[0].Level == "FAILURE"
 }
 
