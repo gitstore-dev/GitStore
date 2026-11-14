@@ -41,8 +41,8 @@ proposed designs and historical plans are not supported-feature references.
 - [Architecture decisions and open implementation items](ADRs/README.md)
 - [Implementation designs](implementation/): proposals and historical context,
   not deployment instructions
-- [Feature specifications](../specs/): contributor requirements, plans and
-  acceptance tasks; completed historical tasks do not supersede current code
+- [Contributor planning references](ADRs/README.md#contributor-planning-references):
+  requirements, plans and acceptance history
 
 Publication, custom resources, lifecycle extensions and future commerce
 workflows remain design work where their records say Proposed. Retain their
