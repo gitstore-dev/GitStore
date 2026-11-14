@@ -141,9 +141,6 @@ func loadNeutralFixture(t *testing.T) neutralAuthorizationFixture {
 	t.Helper()
 	data, err := os.ReadFile("../../../../../tests/fixtures/authorization/decision-table.json")
 	require.NoError(t, err)
-	seed, err := os.ReadFile("../../../../../specs/064-authz-action-vocabulary/contracts/decision-table.json")
-	require.NoError(t, err)
-	require.Equal(t, seed, data, "neutral fixture expectations must remain unchanged")
 	var fixture neutralAuthorizationFixture
 	require.NoError(t, json.Unmarshal(data, &fixture))
 	return fixture

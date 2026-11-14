@@ -208,6 +208,7 @@ input set. Identical bindings are byte-for-byte no-ops. Preserve existing YAML
 comments where possible using policyfile.go, and validate the full candidate
 before atomic replace. Failure leaves the original file untouched.
 
-The neutral `decision-table.json` is consumed unchanged by provider adapters.
+The neutral [`tests/fixtures/authorization/decision-table.json`](../../../tests/fixtures/authorization/decision-table.json)
+is the sole authored decision table and is consumed unchanged by provider adapters.
 Its validation, decision, and response sections are distinct so malformed policy
 is never mistaken for a valid policy that denies a request.

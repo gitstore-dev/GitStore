@@ -39,6 +39,13 @@ establish deployed replica/rolling, load/fault, memory/RSS or large-catalog
 acceptance. ADR 0010 section 16 records the current boundary; ADR 0018 remains
 Proposed because platform-wide leases and side-effect fencing are not added.
 
+Provider conformance reads the sole authored
+[`tests/fixtures/authorization/decision-table.json`](../../tests/fixtures/authorization/decision-table.json).
+The OPA and local RBAC adapters exercise the same 55 independent decision
+expectations, including nonempty reasons and binding/role/rule diagnostics for
+ordinary allows. Local RBAC also exercises all 28 policy-validation expectations.
+Expected outcomes are reviewed fixture data, not generated from either provider.
+
 The sections below retain the broader proposal for historical/design context.
 Their configured-bundle, deny-precedence, hybrid IAM and catalog-scope
 descriptions are not the implemented embedded RBAC contract. Declarative

@@ -6,15 +6,10 @@ package integration
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
-
-// uniqueValidProductFixture is an alias for validProductFixture used in variant tests.
-func uniqueValidProductFixture(name, ns string) string { return validProductFixture(name, ns) }
 
 // ── ProductVariant fixtures ───────────────────────────────────────────────────
 
@@ -207,16 +202,7 @@ func findVariantCondition(conditions []variantCondition, condType string) *varia
 // commitVariant writes a ProductVariant markdown file and commits it.
 func (h *pushHelper) commitVariant(filename, content string) {
 	h.t.Helper()
-	dir := filepath.Join(h.workDir, "variants")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		h.t.Fatalf("mkdir variants: %v", err)
-	}
-	path := filepath.Join(dir, filename)
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		h.t.Fatalf("write variant file: %v", err)
-	}
-	run(h.t, h.workDir, "git", "add", path)
-	run(h.t, h.workDir, "git", "commit", "-m", "add "+filename)
+	h.commitFile("variants", filename, content, "add")
 }
 
 // ── US1: Push a valid ProductVariant file ────────────────────────────────────
@@ -231,7 +217,7 @@ func TestProductVariant_ValidPushAccepted(t *testing.T) {
 	sku := fmt.Sprintf("SKU-%d", ts)
 
 	h := newPushHelper(t)
-	h.commitProduct(productName+".md", uniqueValidProductFixture(productName, ns))
+	h.commitProduct(productName+".md", validProductFixture(productName, ns))
 	h.commitVariant(variantName+".md", minimalVariantFixture(variantName, ns, sku, productName))
 	out, err := h.push()
 	if err != nil {
@@ -312,7 +298,7 @@ func TestProductVariant_CoPushWithProductAccepted(t *testing.T) {
 
 	h := newPushHelper(t)
 	// Both product and variant in the same commit.
-	h.commitProduct(productName+".md", uniqueValidProductFixture(productName, ns))
+	h.commitProduct(productName+".md", validProductFixture(productName, ns))
 	h.commitVariant(variantName+".md", minimalVariantFixture(variantName, ns, sku, productName))
 	out, err := h.push()
 	if err != nil {
@@ -435,7 +421,7 @@ func TestProductVariant_ProductRefNotFound(t *testing.T) {
 
 	// Now push the parent product.
 	h2 := newPushHelper(t)
-	h2.commitProduct(parentName+".md", uniqueValidProductFixture(parentName, ns))
+	h2.commitProduct(parentName+".md", validProductFixture(parentName, ns))
 	if out, err := h2.push(); err != nil {
 		t.Fatalf("push parent product failed:\n%s", out)
 	}
@@ -538,7 +524,7 @@ func TestProductVariant_CoPushProductResolvedFalse(t *testing.T) {
 	sku := fmt.Sprintf("SKU-US3-COPUSH-%d", ts)
 
 	h := newPushHelper(t)
-	h.commitProduct(parentName+".md", uniqueValidProductFixture(parentName, ns))
+	h.commitProduct(parentName+".md", validProductFixture(parentName, ns))
 	h.commitVariant(variantName+".md", minimalVariantFixture(variantName, ns, sku, parentName))
 	if out, err := h.push(); err != nil {
 		t.Fatalf("co-push of product+variant failed:\n%s", out)
@@ -655,7 +641,7 @@ func TestProductVariant_QueryByNamespacePath(t *testing.T) {
 	sku := fmt.Sprintf("SKU-Q-%d", ts)
 
 	h := newPushHelper(t)
-	h.commitProduct(productName+".md", uniqueValidProductFixture(productName, ns))
+	h.commitProduct(productName+".md", validProductFixture(productName, ns))
 	h.commitVariant(variantName+".md", minimalVariantFixture(variantName, ns, sku, productName))
 	if out, err := h.push(); err != nil {
 		t.Fatalf("push failed: %s", out)
@@ -693,7 +679,7 @@ func TestProductVariant_QueryByRelayID(t *testing.T) {
 	sku := fmt.Sprintf("SKU-ID-%d", ts)
 
 	h := newPushHelper(t)
-	h.commitProduct(productName+".md", uniqueValidProductFixture(productName, ns))
+	h.commitProduct(productName+".md", validProductFixture(productName, ns))
 	h.commitVariant(variantName+".md", minimalVariantFixture(variantName, ns, sku, productName))
 	if out, err := h.push(); err != nil {
 		t.Fatalf("push failed: %s", out)
@@ -731,7 +717,7 @@ func TestProductVariant_ListByNamespace(t *testing.T) {
 
 	// Push two variants.
 	h := newPushHelper(t)
-	h.commitProduct(productName+".md", uniqueValidProductFixture(productName, ns))
+	h.commitProduct(productName+".md", validProductFixture(productName, ns))
 	variantNames := []string{
 		fmt.Sprintf("pv-list-a-%d", ts),
 		fmt.Sprintf("pv-list-b-%d", ts),
@@ -797,7 +783,7 @@ func TestProductVariant_ProductVariantsConnection(t *testing.T) {
 	sku := fmt.Sprintf("SKU-CONN-%d", ts)
 
 	h := newPushHelper(t)
-	h.commitProduct(productName+".md", uniqueValidProductFixture(productName, ns))
+	h.commitProduct(productName+".md", validProductFixture(productName, ns))
 	h.commitVariant(variantName+".md", minimalVariantFixture(variantName, ns, sku, productName))
 	if out, err := h.push(); err != nil {
 		t.Fatalf("push failed: %s", out)
@@ -1125,7 +1111,7 @@ func TestProductVariant_InvalidCELAdmittedWithPricingFalse(t *testing.T) {
 	sku := fmt.Sprintf("SKU-US4-CEL-%d", ts)
 
 	h := newPushHelper(t)
-	h.commitProduct(productName+".md", uniqueValidProductFixture(productName, ns))
+	h.commitProduct(productName+".md", validProductFixture(productName, ns))
 	h.commitVariant(variantName+".md", variantWithInvalidCEL(variantName, ns, sku, productName))
 	if out, err := h.push(); err != nil {
 		t.Fatalf("push with invalid CEL should succeed at pre-receive, got error:\n%s", out)
@@ -1191,7 +1177,7 @@ func TestProductVariant_ValidPriceSetPopulatesResolved(t *testing.T) {
 	sku := fmt.Sprintf("SKU-US4-PS-%d", ts)
 
 	h := newPushHelper(t)
-	h.commitProduct(productName+".md", uniqueValidProductFixture(productName, ns))
+	h.commitProduct(productName+".md", validProductFixture(productName, ns))
 	h.commitVariant(variantName+".md", variantWithValidPriceSet(variantName, ns, sku, productName))
 	if out, err := h.push(); err != nil {
 		t.Fatalf("push with valid price set failed:\n%s", out)
@@ -1231,7 +1217,7 @@ func TestProductVariant_UpdatePricingReflectsResolved(t *testing.T) {
 
 	// Push variant with one USD price.
 	h := newPushHelper(t)
-	h.commitProduct(productName+".md", uniqueValidProductFixture(productName, ns))
+	h.commitProduct(productName+".md", validProductFixture(productName, ns))
 	h.commitVariant(variantName+".md", variantWithPricing(variantName, ns, sku, productName, "USD", "9.99"))
 	if out, err := h.push(); err != nil {
 		t.Fatalf("initial push failed:\n%s", out)
@@ -1397,7 +1383,7 @@ func TestProductVariant_SKUConflictDetected(t *testing.T) {
 
 	// Push the parent product and variant A.
 	h1 := newPushHelper(t)
-	h1.commitProduct(productName+".md", uniqueValidProductFixture(productName, ns))
+	h1.commitProduct(productName+".md", validProductFixture(productName, ns))
 	h1.commitVariant(variantA+".md", minimalVariantFixture(variantA, ns, sharedSKU, productName))
 	if out, err := h1.push(); err != nil {
 		t.Fatalf("first push (variant A) should succeed: %s", out)
@@ -1464,7 +1450,7 @@ func TestProductVariant_ProductVariantsPageInfo(t *testing.T) {
 
 	// Push 3 variants for the same product.
 	h := newPushHelper(t)
-	h.commitProduct(productName+".md", uniqueValidProductFixture(productName, ns))
+	h.commitProduct(productName+".md", validProductFixture(productName, ns))
 	for i := range 3 {
 		vName := fmt.Sprintf("pv-pageinfo-%d-%d", ts, i)
 		sku := fmt.Sprintf("SKU-PI-%d-%d", ts, i)

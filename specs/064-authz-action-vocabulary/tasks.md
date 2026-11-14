@@ -30,7 +30,7 @@ as fully accepted before the deferred gates pass. Existing thresholds are unchan
 
 - [X] T001 Record a protected-operation-to-action/Kind/fact/source/test matrix in `specs/064-authz-action-vocabulary/contracts/service-boundaries.md`, covering GraphQL root and nested fields, node/nodes, typed/generic watches, four existing purge mutations, Git HTTP/gRPC, catalog preflight/admission, controller operations and trusted internal backing work; use this as the completeness checklist.
 - [X] T002 Capture current admin/controller/internal/anonymous outcomes and explicitly new USER self-service grants in `tests/integration/authz_repository_contract_test.go` and `tests/integration/serviceaccount_auth_test.go`; distinguish absent visibility from synthetic public/private cases and preserve existing purge regressions.
-- [X] T003 Promote `specs/064-authz-action-vocabulary/contracts/decision-table.json` into new `tests/fixtures/authorization/decision-table.json`, retaining all 55 decisions and 28 validation cases unchanged; document its provider-neutral adapter contract in `specs/064-authz-action-vocabulary/contracts/validation.md`.
+- [X] T003 Maintain `tests/fixtures/authorization/decision-table.json` as the sole authored neutral fixture, retaining all 55 decisions and 28 validation cases unchanged; document its provider-neutral adapter contract in `specs/064-authz-action-vocabulary/contracts/validation.md`. The promoted planning copy has been removed; providers consume the canonical fixture directly.
 
 ## Phase 2: Foundational — catalog and reusable test contracts
 

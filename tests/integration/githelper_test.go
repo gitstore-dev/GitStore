@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,7 +38,7 @@ type pushHelper struct {
 }
 
 // newPushHelper creates a temp git working directory and clones the catalog repo.
-// Skips the test if the git server is unreachable.
+// Fails the test if the git server is unreachable.
 func newPushHelper(t *testing.T) *pushHelper {
 	t.Helper()
 
@@ -76,45 +77,18 @@ func newPushHelperForRepo(t *testing.T, namespace, repository string) *pushHelpe
 // commitProduct writes a product markdown file and commits it.
 func (h *pushHelper) commitProduct(filename, content string) {
 	h.t.Helper()
-	dir := filepath.Join(h.workDir, "products")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		h.t.Fatalf("mkdir products: %v", err)
-	}
-	path := filepath.Join(dir, filename)
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		h.t.Fatalf("write product file: %v", err)
-	}
-	run(h.t, h.workDir, "git", "add", path)
-	run(h.t, h.workDir, "git", "commit", "-m", fmt.Sprintf("add %s", filename))
+	h.commitFile("products", filename, content, "add")
 }
 
 // commitCollection writes a Collection markdown file and commits it.
 func (h *pushHelper) commitCollection(filename, content string) {
 	h.t.Helper()
-	dir := filepath.Join(h.workDir, "collections")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		h.t.Fatalf("mkdir collections: %v", err)
-	}
-	path := filepath.Join(dir, filename)
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		h.t.Fatalf("write collection file: %v", err)
-	}
-	run(h.t, h.workDir, "git", "add", path)
-	run(h.t, h.workDir, "git", "commit", "-m", fmt.Sprintf("add %s", filename))
+	h.commitFile("collections", filename, content, "add")
 }
 
 func (h *pushHelper) commitNamespace(filename, content string) {
 	h.t.Helper()
-	dir := filepath.Join(h.workDir, "namespaces")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		h.t.Fatalf("mkdir namespaces: %v", err)
-	}
-	path := filepath.Join(dir, filename)
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		h.t.Fatalf("write namespace file: %v", err)
-	}
-	run(h.t, h.workDir, "git", "add", path)
-	run(h.t, h.workDir, "git", "commit", "-m", fmt.Sprintf("update %s", filename))
+	h.commitFile("namespaces", filename, content, "update")
 }
 
 // commitRepository writes a declarative Repository manifest and commits it.
@@ -122,16 +96,21 @@ func (h *pushHelper) commitNamespace(filename, content string) {
 // repositories/ directory, just like the post-receive hook supplies them.
 func (h *pushHelper) commitRepository(filename, content string) {
 	h.t.Helper()
-	dir := filepath.Join(h.workDir, "repositories")
+	h.commitFile("repositories", filename, content, "add")
+}
+
+func (h *pushHelper) commitFile(directory, filename, content, verb string) {
+	h.t.Helper()
+	dir := filepath.Join(h.workDir, directory)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		h.t.Fatalf("mkdir repositories: %v", err)
+		h.t.Fatalf("mkdir %s: %v", directory, err)
 	}
 	path := filepath.Join(dir, filename)
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		h.t.Fatalf("write repository file: %v", err)
+		h.t.Fatalf("write %s: %v", path, err)
 	}
 	run(h.t, h.workDir, "git", "add", path)
-	run(h.t, h.workDir, "git", "commit", "-m", fmt.Sprintf("add %s", filename))
+	run(h.t, h.workDir, "git", "commit", "-m", fmt.Sprintf("%s %s", verb, filename))
 }
 
 // push executes git push and returns (stdout+stderr, error).
@@ -160,5 +139,61 @@ func run(t *testing.T, dir string, args ...string) {
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("command %v failed: %v\n%s", args, err, out)
+	}
+}
+
+func TestPushHelperCommitsResources(t *testing.T) {
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_AUTHOR_NAME", "Integration Test")
+	t.Setenv("GIT_AUTHOR_EMAIL", "inttest@gitstore.dev")
+	t.Setenv("GIT_COMMITTER_NAME", "Integration Test")
+	t.Setenv("GIT_COMMITTER_EMAIL", "inttest@gitstore.dev")
+
+	for _, test := range []struct {
+		directory, verb string
+		commit          func(*pushHelper, string, string)
+	}{
+		{"products", "add", (*pushHelper).commitProduct},
+		{"collections", "add", (*pushHelper).commitCollection},
+		{"namespaces", "update", (*pushHelper).commitNamespace},
+		{"repositories", "add", (*pushHelper).commitRepository},
+		{"variants", "add", (*pushHelper).commitVariant},
+	} {
+		t.Run(test.directory, func(t *testing.T) {
+			dir := t.TempDir()
+			run(t, dir, "git", "init", "--initial-branch=main")
+			h := &pushHelper{t: t, workDir: dir}
+			filename := "scenario fixture.md"
+			path := filepath.ToSlash(filepath.Join(test.directory, filename))
+			for _, content := range []string{"original scenario\n", "updated scenario\n"} {
+				test.commit(h, filename, content)
+				cmd := exec.Command("git", "show", "HEAD:"+path)
+				cmd.Dir = dir
+				got, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("read committed fixture: %v\n%s", err, got)
+				}
+				if string(got) != content {
+					t.Fatalf("committed %s = %q, want %q", path, got, content)
+				}
+			}
+			cmd := exec.Command("git", "log", "--format=%s")
+			cmd.Dir = dir
+			got, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("read fixture commits: %v\n%s", err, got)
+			}
+			want := strings.Repeat(test.verb+" "+filename+"\n", 2)
+			if string(got) != want {
+				t.Fatalf("commit messages = %q, want %q", got, want)
+			}
+			cmd = exec.Command("git", "status", "--porcelain")
+			cmd.Dir = dir
+			got, err = cmd.CombinedOutput()
+			if err != nil || len(got) != 0 {
+				t.Fatalf("fixture worktree not clean: %v\n%s", err, got)
+			}
+		})
 	}
 }

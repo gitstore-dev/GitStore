@@ -84,7 +84,8 @@ files still require a follow-up update outside this repository.
   tests passed; their custom test authorizer is explicitly not shipped-policy
   proof. The observed outcomes remain in contracts/validation.md; v1 positive
   provider tests have been replaced with v1-rejection tests and the neutral suite.
-- T003 promoted fixture is byte-identical to the reviewed seed.
+- T003 retained the reviewed fixture bytes in `tests/fixtures/authorization/decision-table.json`,
+  now the sole authored decision table; the duplicate planning copy was removed.
 - T004–T008 generator and recorder tests failed first (missing generate command
   and missing history), then passed with the race detector. Make dispatch tests
   passed after their expected missing-selector failure. Generated Rust passes
@@ -138,8 +139,9 @@ layout. No feature implementation or tasks.md is created by `/speckit-plan`.
 
 ## 2. Establish the action and policy baseline
 
-Promote `contracts/action-vocabulary.json` to the shared schema catalog and
-`contracts/decision-table.json` to the existing test fixtures. Add tests that
+Promote `contracts/action-vocabulary.json` to the shared schema catalog and use
+the canonical [neutral decision table](../../tests/fixtures/authorization/decision-table.json).
+Add tests that
 fail against old loading/actions before implementation. Once generation is
 wired through gitctl and the root Makefile:
 
