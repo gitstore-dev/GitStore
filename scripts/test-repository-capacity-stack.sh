@@ -5,17 +5,15 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-test_dir="$(mktemp -d)"
-trap 'rm -rf "${test_dir}"' EXIT
-mkdir -p "${test_dir}/bin"
+source "${repo_root}/scripts/test-fixtures/shell.sh"
+shell_test_setup repository-capacity-stack
 
-cat >"${test_dir}/bin/docker" <<'EOF'
+write_mock "${test_dir}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${REPOSITORY_CAPACITY_DOCKER_LOG}"
 EOF
-chmod +x "${test_dir}/bin/docker"
 
-cat >"${test_dir}/bin/curl" <<'EOF'
+write_mock "${test_dir}/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 case "${*: -1}" in
   */health)
@@ -55,16 +53,13 @@ case "${*: -1}" in
   *) printf '\n' ;;
 esac
 EOF
-chmod +x "${test_dir}/bin/curl"
 
 export REPOSITORY_CAPACITY_DOCKER_LOG="${test_dir}/docker.log"
 : >"${REPOSITORY_CAPACITY_DOCKER_LOG}"
 for flag in 1 true 2 -1; do
-  if PATH="${test_dir}/bin:${PATH}" CHAOS_CONFIRM=0 REPOSITORY_CAPACITY_SECRET_SCENARIO="${flag}" \
-    "${repo_root}/scripts/repository-capacity-stack.sh" local-alpha >"${test_dir}/secret-preflight.log" 2>&1; then
-    echo "managed stack accepted unavailable or invalid secret scenario" >&2
-    exit 1
-  fi
+  assert_rejected "managed stack accepted unavailable or invalid secret scenario" "${test_dir}/secret-preflight.log" \
+    env PATH="${test_dir}/bin:${PATH}" CHAOS_CONFIRM=0 REPOSITORY_CAPACITY_SECRET_SCENARIO="${flag}" \
+    "${repo_root}/scripts/repository-capacity-stack.sh" local-alpha
 done
 [[ ! -s "${REPOSITORY_CAPACITY_DOCKER_LOG}" ]] || {
   echo "secret scenario guard ran Docker before rejecting the request" >&2
@@ -173,20 +168,18 @@ fi
 
 # A verifier failure before the replacement trigger must reap the watcher and
 # must not reference a function-local PID after run_alpha returns.
-cat >"${test_dir}/bin/capacity-runner" <<'EOF'
+write_mock "${test_dir}/bin/capacity-runner" <<'EOF'
 #!/usr/bin/env bash
 until [[ -r "${REPOSITORY_CAPACITY_WATCHER_READY_FILE}" ]]; do sleep 0.01; done
 exit 17
 EOF
-chmod +x "${test_dir}/bin/capacity-runner"
-cat >"${test_dir}/bin/replacement-watcher" <<'EOF'
+write_mock "${test_dir}/bin/replacement-watcher" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$$" >"${REPOSITORY_CAPACITY_WATCHER_PID_FILE}"
 trap 'printf "%s\n" stopped >"${REPOSITORY_CAPACITY_WATCHER_STOP_FILE}"; exit 0' TERM INT
 printf '%s\n' ready >"${REPOSITORY_CAPACITY_WATCHER_READY_FILE}"
 while :; do sleep 1; done
 EOF
-chmod +x "${test_dir}/bin/replacement-watcher"
 mkdir -p "${test_dir}/failed-state"
 printf 'token\n' >"${test_dir}/failed-state/token"
 : >"${REPOSITORY_CAPACITY_DOCKER_LOG}"
@@ -218,7 +211,7 @@ grep -q -- 'down -v --remove-orphans$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 [[ -f "${test_dir}/failed-state/compose-failure-ps.log" ]]
 [[ -f "${test_dir}/failed-state/compose-failure.log" ]]
 
-cat >"${test_dir}/bin/healthy-capacity-runner" <<'EOF'
+write_mock "${test_dir}/bin/healthy-capacity-runner" <<'EOF'
 #!/usr/bin/env bash
 until [[ -r "${REPOSITORY_CAPACITY_WATCHER_READY_FILE}" ]]; do sleep 0.01; done
 metadata_dir="${CAPACITY_EVIDENCE_DIR}/repository/lifecycle/alpha/${CAPACITY_RUN_ID}"
@@ -226,10 +219,34 @@ mkdir -p "${metadata_dir}"
 printf '%s\n' '{"passed":true,"fixture":"preserved"}' >"${metadata_dir}/metadata.json"
 touch "${TEST_CAPACITY_HEALTH_DIR}/after"
 EOF
-chmod +x "${test_dir}/bin/healthy-capacity-runner"
 mkdir -p "${test_dir}/watcher-state"
 printf 'token\n' >"${test_dir}/watcher-state/token"
 healthy='{"ready":true,"credentialReady":true,"kinds":{"Repository":{"registered":true}}}'
+prepare_controller_health() {
+  local controller_port
+  mkdir -p "${health_dir}"
+  for controller_port in 5001 5002; do
+    printf '%s\n' "${healthy}" >"${health_dir}/before-${controller_port}.json"
+    printf '%s\n' "${healthy}" >"${health_dir}/after-${controller_port}.json"
+  done
+}
+
+run_managed_stack() (
+  local action="$1"
+  shift
+  env PATH="${test_dir}/bin:${PATH}" CAPACITY_RUN_ID=owned-run \
+    CAPACITY_GIT_REVISION=0123456789abcdef0123456789abcdef01234567 \
+    REPOSITORY_CAPACITY_HOST_MEMORY_BYTES=17179869184 REPOSITORY_CAPACITY_WAIT_SECONDS=0 \
+    REPOSITORY_CAPACITY_STATE_DIR="${test_dir}/watcher-state" REPOSITORY_CAPACITY_PROJECT=capacity-test \
+    REPOSITORY_CAPACITY_RUNNER="${test_dir}/bin/healthy-capacity-runner" \
+    REPOSITORY_CAPACITY_REPLACEMENT_WATCHER="${test_dir}/bin/replacement-watcher" \
+    REPOSITORY_CAPACITY_WATCHER_PID_FILE="${health_dir}/watcher.pid" \
+    REPOSITORY_CAPACITY_WATCHER_READY_FILE="${health_dir}/watcher.ready" \
+    REPOSITORY_CAPACITY_WATCHER_STOP_FILE="${health_dir}/watcher.stopped" \
+    CAPACITY_EVIDENCE_DIR="${health_dir}/evidence" TEST_CAPACITY_HEALTH_DIR="${health_dir}" \
+    "$@" "${repo_root}/scripts/repository-capacity-stack.sh" "${action}"
+)
+
 for port in 5001 5002; do
   for readiness in false missing string credential registration malformed empty http-error metrics-error identity-missing identity-same; do
     case "${readiness}" in
@@ -247,11 +264,7 @@ for port in 5001 5002; do
         metrics-error/before|identity-missing/before|identity-same/before) continue ;;
       esac
       health_dir="${test_dir}/health-${port}-${readiness}-${phase}"
-      mkdir -p "${health_dir}"
-      for controller_port in 5001 5002; do
-        printf '%s\n' "${healthy}" >"${health_dir}/before-${controller_port}.json"
-        printf '%s\n' "${healthy}" >"${health_dir}/after-${controller_port}.json"
-      done
+      prepare_controller_health
       printf '%s\n' "${unhealthy}" >"${health_dir}/${phase}-${port}.json"
       [[ "${readiness}" != http-error ]] || touch "${health_dir}/http-error-${phase}-${port}"
       case "${readiness}" in
@@ -262,20 +275,7 @@ for port in 5001 5002; do
       esac
       action=wait
       [[ "${phase}" != after ]] || action=alpha
-      if PATH="${test_dir}/bin:${PATH}" CAPACITY_RUN_ID=owned-run \
-        CAPACITY_GIT_REVISION=0123456789abcdef0123456789abcdef01234567 \
-        REPOSITORY_CAPACITY_HOST_MEMORY_BYTES=17179869184 \
-        REPOSITORY_CAPACITY_WAIT_SECONDS=0 \
-        REPOSITORY_CAPACITY_STATE_DIR="${test_dir}/watcher-state" \
-        REPOSITORY_CAPACITY_PROJECT=capacity-test \
-        REPOSITORY_CAPACITY_RUNNER="${test_dir}/bin/healthy-capacity-runner" \
-        REPOSITORY_CAPACITY_REPLACEMENT_WATCHER="${test_dir}/bin/replacement-watcher" \
-        REPOSITORY_CAPACITY_WATCHER_PID_FILE="${health_dir}/watcher.pid" \
-        REPOSITORY_CAPACITY_WATCHER_READY_FILE="${health_dir}/watcher.ready" \
-        REPOSITORY_CAPACITY_WATCHER_STOP_FILE="${health_dir}/watcher.stopped" \
-        CAPACITY_EVIDENCE_DIR="${health_dir}/evidence" \
-        TEST_CAPACITY_HEALTH_DIR="${health_dir}" \
-        "${repo_root}/scripts/repository-capacity-stack.sh" "${action}" >"${health_dir}/result.log" 2>&1; then
+      if run_managed_stack "${action}" >"${health_dir}/result.log" 2>&1; then
         echo "managed stack accepted ${readiness} readiness on controller port ${port} ${phase} load" >&2
         exit 1
       fi
@@ -294,26 +294,11 @@ for port in 5001 5002; do
 done
 
 health_dir="${test_dir}/health-recovered"
-mkdir -p "${health_dir}"
+prepare_controller_health
 for controller_port in 5001 5002; do
-  printf '%s\n' "${healthy}" >"${health_dir}/before-${controller_port}.json"
-  printf '%s\n' "${healthy}" >"${health_dir}/after-${controller_port}.json"
   touch "${health_dir}/recover-${controller_port}"
 done
-PATH="${test_dir}/bin:${PATH}" CAPACITY_RUN_ID=owned-run \
-  CAPACITY_GIT_REVISION=0123456789abcdef0123456789abcdef01234567 \
-  REPOSITORY_CAPACITY_HOST_MEMORY_BYTES=17179869184 \
-  REPOSITORY_CAPACITY_WAIT_SECONDS=5 \
-  REPOSITORY_CAPACITY_STATE_DIR="${test_dir}/watcher-state" \
-  REPOSITORY_CAPACITY_PROJECT=capacity-test \
-  REPOSITORY_CAPACITY_RUNNER="${test_dir}/bin/healthy-capacity-runner" \
-  REPOSITORY_CAPACITY_REPLACEMENT_WATCHER="${test_dir}/bin/replacement-watcher" \
-  REPOSITORY_CAPACITY_WATCHER_PID_FILE="${health_dir}/watcher.pid" \
-  REPOSITORY_CAPACITY_WATCHER_READY_FILE="${health_dir}/watcher.ready" \
-  REPOSITORY_CAPACITY_WATCHER_STOP_FILE="${health_dir}/watcher.stopped" \
-  CAPACITY_EVIDENCE_DIR="${health_dir}/evidence" \
-  TEST_CAPACITY_HEALTH_DIR="${health_dir}" \
-  "${repo_root}/scripts/repository-capacity-stack.sh" alpha >"${health_dir}/result.log" 2>&1
+run_managed_stack alpha REPOSITORY_CAPACITY_WAIT_SECONDS=5 >"${health_dir}/result.log" 2>&1
 [[ -f "${health_dir}/seen-5001" && -f "${health_dir}/seen-5002" &&
    -f "${health_dir}/after" && -f "${health_dir}/watcher.stopped" ]]
 jq -e '.passed == true and .fixture == "preserved"' \
