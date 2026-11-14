@@ -28,6 +28,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
+	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/google/cel-go/cel"
@@ -38,11 +39,7 @@ import (
 
 // GitReader is the read subset of gitclient.Client used by AdmitResources.
 // Abstracted here so it can be mocked in tests.
-type GitReader interface {
-	ListFiles(ctx context.Context, repositoryID, prefix, ref string) ([]string, error)
-	ReadFile(ctx context.Context, repositoryID, path, ref string) ([]byte, error)
-	ResolveRef(ctx context.Context, repositoryID, ref string) (string, error)
-}
+type GitReader = rbac.OriginGitReader
 
 // ResourceParser is the parser behavior required by the CatalogService server.
 type ResourceParser interface {
@@ -93,6 +90,8 @@ type Server struct {
 
 	namespacePolicy  namespaceadmission.PolicyEvaluator
 	namespaceMetrics *namespaceadmission.Metrics
+	rbacValidator    *admission.RBACValidator
+	rbacGit          rbac.OriginGitReader
 }
 
 // ServerDeps contains dependencies for the CatalogService gRPC server.
@@ -111,6 +110,8 @@ type ServerDeps struct {
 	ExtraValidatingPolicies  []admission.ValidatingAdmissionPolicy
 	NamespacePolicyEvaluator namespaceadmission.PolicyEvaluator
 	NamespaceMetrics         *namespaceadmission.Metrics
+	RBACValidator            *admission.RBACValidator
+	RBACGitReader            rbac.OriginGitReader
 }
 
 // newCELEnv constructs a CEL environment for syntax-checking price eligibility expressions.
@@ -131,9 +132,16 @@ func NewServer(deps ServerDeps) (*Server, error) {
 	if deps.Logger == nil {
 		return nil, fmt.Errorf("cataloggrpc: logger is required")
 	}
+	if deps.RBACValidator != nil && deps.RBACValidator.Capture.Registry != deps.Registry {
+		return nil, fmt.Errorf("cataloggrpc: RBAC validator must use the selected provider registry")
+	}
 	git := deps.GitReader
 	if git == nil && deps.GitClient != nil {
 		git = &gitClientReader{c: deps.GitClient}
+	}
+	rbacGit := deps.RBACGitReader
+	if rbacGit == nil {
+		rbacGit = git
 	}
 	parser := deps.Parser
 	if parser == nil {
@@ -181,6 +189,8 @@ func NewServer(deps ServerDeps) (*Server, error) {
 		chain:                 chain,
 		namespacePolicy:       namespacePolicy,
 		namespaceMetrics:      namespaceMetrics,
+		rbacValidator:         deps.RBACValidator,
+		rbacGit:               rbacGit,
 	}, nil
 }
 
@@ -210,9 +220,29 @@ func (s *Server) ValidateResources(
 	return s.validateResources(ctx, req)
 }
 
+func (s *Server) ValidateRBACReceive(ctx context.Context, req *catalogv1.ValidateResourcesRequest) (*catalogv1.ValidateResourcesResponse, error) {
+	ctx, err := s.authenticateCallback(ctx, catalogv1.CatalogService_ValidateRBACReceive_FullMethodName, req,
+		req.GetRepositoryId(), req.GetAuthorization(), validationRefs(req.GetTrees()))
+	if err != nil {
+		return nil, err
+	}
+	if len(req.GetTrees()) != 1 || req.Trees[0].GetRbacTree() == nil {
+		return nil, grpcstatus.Error(codes.InvalidArgument, "a complete RBAC receive tree is required")
+	}
+	return s.validateResources(ctx, req)
+}
+
 // validateResources is shared by authenticated callbacks and in-process
 // GraphQL preflight. Both require live semantic authorization below.
 func (s *Server) validateResources(ctx context.Context, req *catalogv1.ValidateResourcesRequest) (*catalogv1.ValidateResourcesResponse, error) {
+	filtered, rbacErrors, err := s.validateRBACChanges(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if len(rbacErrors) != 0 {
+		return &catalogv1.ValidateResourcesResponse{Accepted: false, Errors: rbacErrors}, nil
+	}
+	req = filtered
 	structuralStarted := time.Now()
 	var allErrors []*catalogv1.ValidationError
 	if len(req.GetTrees()) == 0 {
@@ -1158,6 +1188,15 @@ func (s *Server) currentAdmissionCommit(ctx context.Context, repositoryID, refNa
 		return commitSHA, true
 	}
 	current, err := s.git.ResolveRef(ctx, repositoryID, refName)
+	for errors.Is(err, auth.ErrAuthorizationUnavailable) &&
+		auth.ServingAuthorizationCaptureFromContext(ctx) != nil && ctx.Err() == nil {
+		select {
+		case <-ctx.Done():
+			return "", false
+		case <-time.After(200 * time.Millisecond):
+		}
+		current, err = s.git.ResolveRef(ctx, repositoryID, refName)
+	}
 	if err != nil {
 		if isRefNotFound(err) {
 			if !isZeroOID(commitSHA) {
@@ -1191,6 +1230,23 @@ func (s *Server) AdmitResources(
 	if authErr != nil {
 		return nil, authErr
 	}
+	if err := s.projectRBACReceive(ctx, req); err != nil {
+		return nil, grpcstatus.Errorf(codes.Unavailable, "committed RBAC projection pending at %s: %v", req.NewCommitSha, err)
+	}
+	rbacOnly := s.rbacValidator != nil && len(req.GetChangedPaths()) > 0
+	for _, path := range req.GetChangedPaths() {
+		rbacOnly = rbacOnly && isRBACPath(path)
+	}
+	if rbacOnly {
+		return &catalogv1.AdmitResourcesResponse{}, nil
+	}
+	principal, authErr := s.authenticateLiveCallbackActor(ctx, auth.PrincipalFromContext(ctx))
+	if authErr != nil {
+		return nil, authErr
+	}
+	ctx = auth.ContextWithPrincipal(ctx, principal)
+	ctx, closeCapture := auth.ContextWithServingAuthorizationCapture(ctx)
+	defer closeCapture()
 	if s.git == nil || s.store == nil {
 		return &catalogv1.AdmitResourcesResponse{}, nil
 	}
@@ -2320,7 +2376,13 @@ func (s *Server) admitNamespace(
 			s.recordNamespaceAdmissionRejection(name, op, namespaceadmission.ReasonInvalidEnvelope, existing != nil, err)
 			return
 		}
-		if decision := namespaceadmission.ValidateIdentity(namespaceadmission.PolicyCheck{Name: name, Tier: tier, Actor: admCtx.ActorSubject, Annotations: resource.Metadata.Annotations}, existing); decision != nil {
+		check := namespaceadmission.PolicyCheck{Name: name, Tier: tier, Actor: admCtx.ActorSubject, Principal: auth.PrincipalFromContext(ctx), Annotations: resource.Metadata.Annotations}
+		if decision := namespaceadmission.ValidateIdentity(check, existing); decision != nil {
+			s.recordNamespaceAdmissionRejection(name, op, decision.Reason, existing != nil, decision)
+			return
+		}
+		annotations, decision := namespaceadmission.OwnerIdentityAnnotations(check, existing)
+		if decision != nil {
 			s.recordNamespaceAdmissionRejection(name, op, decision.Reason, existing != nil, decision)
 			return
 		}
@@ -2338,7 +2400,7 @@ func (s *Server) admitNamespace(
 				UpdateTimestamp:   admCtx.Now,
 				UpdateActor:       admCtx.ActorSubject,
 				Labels:            cloneStringMap(resource.Metadata.Labels),
-				Annotations:       cloneStringMap(resource.Metadata.Annotations),
+				Annotations:       annotations,
 				OwnerReferences:   ownerReferences,
 				Finalizers:        append([]string(nil), resource.Metadata.Finalizers...),
 				SourcePath:        sourcePath,
@@ -2361,7 +2423,7 @@ func (s *Server) admitNamespace(
 				existing.Kind != resource.Kind ||
 				specBodyChanged(existing.Spec, existing.Body, specJSON, body)
 			metadataChanged := !stringMapsEqual(existing.Labels, resource.Metadata.Labels) ||
-				!stringMapsEqual(existing.Annotations, resource.Metadata.Annotations)
+				!stringMapsEqual(existing.Annotations, annotations)
 			// Namespace owner references are system-owned and authored manifests
 			// are rejected when they contain them. Retain any existing system
 			// projection unless a future admission path supplies one explicitly.
@@ -2380,7 +2442,7 @@ func (s *Server) admitNamespace(
 			existing.UpdateTimestamp = admCtx.Now
 			existing.UpdateActor = admCtx.ActorSubject
 			existing.Labels = cloneStringMap(resource.Metadata.Labels)
-			existing.Annotations = cloneStringMap(resource.Metadata.Annotations)
+			existing.Annotations = annotations
 			if ownerReferencesChanged {
 				existing.OwnerReferences = ownerReferences
 			}

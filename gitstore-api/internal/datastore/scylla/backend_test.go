@@ -1514,6 +1514,45 @@ func TestScylla_DeletionIntentAndGuardedCompletionAcrossReplicas(t *testing.T) {
 	require.NoError(t, storeB.DeleteNamespaceWithResourceVersion(ctx, ns.UID, ns.ResourceVersion))
 }
 
+func TestScylla_ConcurrentNamespaceFinalizationDoesNotRestoreDeletedIndexes(t *testing.T) {
+	storeA, storeB := newTestStores(t)
+	raw := newRawSession(t)
+	defer raw.Close()
+	ctx := t.Context()
+	for range 8 {
+		now := time.Now().UTC().Truncate(time.Millisecond)
+		namespace := &datastore.Namespace{
+			UID: newID(), Name: "finalization-" + newID()[:8], CreationTimestamp: now,
+		}
+		require.NoError(t, storeA.CreateNamespace(ctx, namespace))
+		expected := namespace.ResourceVersion
+		namespace.DeletionTimestamp = &now
+		datastore.AdvanceNamespaceSystemVersion(namespace)
+		require.NoError(t, storeA.MarkNamespaceDeletion(ctx, namespace, expected))
+		start, results := make(chan struct{}), make(chan error, 2)
+		for _, store := range []datastore.Datastore{storeA, storeB} {
+			go func() {
+				<-start
+				results <- store.DeleteNamespaceWithResourceVersion(ctx, namespace.UID, namespace.ResourceVersion)
+			}()
+		}
+		close(start)
+		for range 2 {
+			err := <-results
+			require.True(t, err == nil || errors.Is(err, datastore.ErrConflict) || errors.Is(err, datastore.ErrNotFound), "%v", err)
+		}
+		_, err := storeA.GetNamespace(ctx, namespace.UID)
+		require.ErrorIs(t, err, datastore.ErrNotFound)
+		var found gocql.UUID
+		require.ErrorIs(t, raw.Query("SELECT uid FROM namespaces_by_name WHERE name=?", namespace.Name).Scan(&found), gocql.ErrNotFound)
+		uid, err := gocql.ParseUUID(namespace.UID)
+		require.NoError(t, err)
+		require.ErrorIs(t, raw.Query(
+			"SELECT uid FROM namespaces_by_bucket WHERE bucket=? AND creation_timestamp=? AND uid=?",
+			now.Format("2006-01"), now, uid).Scan(&found), gocql.ErrNotFound)
+	}
+}
+
 func TestScylla_NamespaceRepositoryLifecycleCoordinationAcrossReplicas(t *testing.T) {
 	storeA, storeB := newTestStores(t)
 	ctx := context.Background()

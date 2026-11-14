@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
@@ -15,7 +16,8 @@ import (
 )
 
 const namespaceFields = `
-  metadata { uid name resourceVersion generation revision finalizers }
+  metadata { uid name resourceVersion generation revision finalizers deletionTimestamp owner { kind name } }
+  spec { tier }
   status {
     observedGeneration
     lastAppliedRevision
@@ -48,12 +50,14 @@ subscription($resourceVersion: String) {
 }`
 
 type namespaceMetadataJSON struct {
-	UID             string   `json:"uid"`
-	Name            string   `json:"name"`
-	ResourceVersion string   `json:"resourceVersion"`
-	Revision        string   `json:"revision"`
-	Generation      int64    `json:"generation"`
-	Finalizers      []string `json:"finalizers"`
+	DeletionTimestamp *time.Time                  `json:"deletionTimestamp"`
+	Owner             struct{ Kind, Name string } `json:"owner"`
+	UID               string                      `json:"uid"`
+	Name              string                      `json:"name"`
+	ResourceVersion   string                      `json:"resourceVersion"`
+	Revision          string                      `json:"revision"`
+	Generation        int64                       `json:"generation"`
+	Finalizers        []string                    `json:"finalizers"`
 }
 
 type namespaceStatusJSON struct {
@@ -63,18 +67,23 @@ type namespaceStatusJSON struct {
 }
 
 type namespaceNodeJSON struct {
+	Spec     struct{ Tier string } `json:"spec"`
 	Metadata namespaceMetadataJSON `json:"metadata"`
 	Status   *namespaceStatusJSON  `json:"status"`
 }
 
 func (n namespaceNodeJSON) toNamespace() namespacecontroller.Namespace {
 	out := namespacecontroller.Namespace{
-		UID:             n.Metadata.UID,
-		Name:            n.Metadata.Name,
-		Generation:      n.Metadata.Generation,
-		ResourceVersion: n.Metadata.ResourceVersion,
-		Revision:        n.Metadata.Revision,
-		Finalizers:      n.Metadata.Finalizers,
+		Tier:              n.Spec.Tier,
+		OwnerKind:         n.Metadata.Owner.Kind,
+		OwnerSubject:      n.Metadata.Owner.Name,
+		DeletionTimestamp: n.Metadata.DeletionTimestamp,
+		UID:               n.Metadata.UID,
+		Name:              n.Metadata.Name,
+		Generation:        n.Metadata.Generation,
+		ResourceVersion:   n.Metadata.ResourceVersion,
+		Revision:          n.Metadata.Revision,
+		Finalizers:        n.Metadata.Finalizers,
 	}
 	if n.Status == nil {
 		return out

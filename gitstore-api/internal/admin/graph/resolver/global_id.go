@@ -15,32 +15,40 @@ import (
 )
 
 const (
-	nodeKindProduct        = "Product"
-	nodeKindCategory       = "Category"
-	nodeKindCollection     = "Collection"
-	nodeKindNamespace      = "Namespace"
-	nodeKindRepository     = "Repository"
-	nodeKindProductVariant = "ProductVariant"
-	nodeKindFile           = "File"
-	nodeKindStaff          = "Staff"
-	nodeKindCustomer       = "Customer"
-	nodeKindServiceAccount = "ServiceAccount"
+	nodeKindProduct            = "Product"
+	nodeKindCategory           = "Category"
+	nodeKindCollection         = "Collection"
+	nodeKindNamespace          = "Namespace"
+	nodeKindRepository         = "Repository"
+	nodeKindProductVariant     = "ProductVariant"
+	nodeKindFile               = "File"
+	nodeKindStaff              = "Staff"
+	nodeKindCustomer           = "Customer"
+	nodeKindServiceAccount     = "ServiceAccount"
+	nodeKindRole               = "Role"
+	nodeKindClusterRole        = "ClusterRole"
+	nodeKindRoleBinding        = "RoleBinding"
+	nodeKindClusterRoleBinding = "ClusterRoleBinding"
 
 	globalIDScheme = "gid"
 	globalIDHost   = "GitStore"
 )
 
 var supportedNodeKinds = map[string]struct{}{
-	nodeKindProduct:        {},
-	nodeKindCategory:       {},
-	nodeKindCollection:     {},
-	nodeKindNamespace:      {},
-	nodeKindRepository:     {},
-	nodeKindProductVariant: {},
-	nodeKindFile:           {},
-	nodeKindStaff:          {},
-	nodeKindCustomer:       {},
-	nodeKindServiceAccount: {},
+	nodeKindProduct:            {},
+	nodeKindCategory:           {},
+	nodeKindCollection:         {},
+	nodeKindNamespace:          {},
+	nodeKindRepository:         {},
+	nodeKindProductVariant:     {},
+	nodeKindFile:               {},
+	nodeKindStaff:              {},
+	nodeKindCustomer:           {},
+	nodeKindServiceAccount:     {},
+	nodeKindRole:               {},
+	nodeKindClusterRole:        {},
+	nodeKindRoleBinding:        {},
+	nodeKindClusterRoleBinding: {},
 }
 
 // EncodeNodeID returns an opaque Relay-style global ID for a GraphQL Node.

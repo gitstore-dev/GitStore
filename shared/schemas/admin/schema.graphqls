@@ -206,6 +206,12 @@ input UpdateResourceStatusInput {
   exists for an arbitrary CRD kind (mirrors WatchEvent.object).
   """
   resolved: JSON
+
+  """
+  RBAC lifecycle finalizers. Only the authorization lifecycle controller may
+  change its own finalizer; other resource kinds reject this field.
+  """
+  finalizers: [String!]
 }
 
 type UpdateResourceStatusPayload {

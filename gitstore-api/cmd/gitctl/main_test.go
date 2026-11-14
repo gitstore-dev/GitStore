@@ -142,6 +142,14 @@ func TestCommittedAuthorizationCatalogParity(t *testing.T) {
 	additions := map[string]bool{
 		"user.create": true, "user.read": true, "user.list": true,
 		"user.update": true, "user.delete": true, "user.group.update": true,
+		"role.escalate": true, "clusterRole.escalate": true,
+		"roleBinding.bind": true, "clusterRoleBinding.bind": true,
+		"role.access-review.create": true, "clusterRole.access-review.create": true,
+	}
+	for _, kind := range []string{"role", "roleBinding", "clusterRole", "clusterRoleBinding"} {
+		for _, verb := range []string{"create", "read", "list", "watch", "update", "delete", "purge", "status.write"} {
+			additions[kind+"."+verb] = true
+		}
 	}
 	if len(catalog.Actions) != len(baseline.Actions)+len(additions) {
 		t.Fatalf("unexpected catalog size %d", len(catalog.Actions))

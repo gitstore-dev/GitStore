@@ -21,6 +21,25 @@ const (
 	ActionCategoryTaxonomyTransfer           = "categoryTaxonomy.transfer"
 	ActionCategoryTaxonomyUpdate             = "categoryTaxonomy.update"
 	ActionCategoryTaxonomyWatch              = "categoryTaxonomy.watch"
+	ActionClusterRoleAccessReviewCreate      = "clusterRole.access-review.create"
+	ActionClusterRoleCreate                  = "clusterRole.create"
+	ActionClusterRoleDelete                  = "clusterRole.delete"
+	ActionClusterRoleEscalate                = "clusterRole.escalate"
+	ActionClusterRoleList                    = "clusterRole.list"
+	ActionClusterRolePurge                   = "clusterRole.purge"
+	ActionClusterRoleRead                    = "clusterRole.read"
+	ActionClusterRoleStatusWrite             = "clusterRole.status.write"
+	ActionClusterRoleUpdate                  = "clusterRole.update"
+	ActionClusterRoleWatch                   = "clusterRole.watch"
+	ActionClusterRoleBindingBind             = "clusterRoleBinding.bind"
+	ActionClusterRoleBindingCreate           = "clusterRoleBinding.create"
+	ActionClusterRoleBindingDelete           = "clusterRoleBinding.delete"
+	ActionClusterRoleBindingList             = "clusterRoleBinding.list"
+	ActionClusterRoleBindingPurge            = "clusterRoleBinding.purge"
+	ActionClusterRoleBindingRead             = "clusterRoleBinding.read"
+	ActionClusterRoleBindingStatusWrite      = "clusterRoleBinding.status.write"
+	ActionClusterRoleBindingUpdate           = "clusterRoleBinding.update"
+	ActionClusterRoleBindingWatch            = "clusterRoleBinding.watch"
 	ActionCollectionCreate                   = "collection.create"
 	ActionCollectionDelete                   = "collection.delete"
 	ActionCollectionList                     = "collection.list"
@@ -82,6 +101,25 @@ const (
 	ActionRepositoryTransfer                 = "repository.transfer"
 	ActionRepositoryUpdate                   = "repository.update"
 	ActionRepositoryWatch                    = "repository.watch"
+	ActionRoleAccessReviewCreate             = "role.access-review.create"
+	ActionRoleCreate                         = "role.create"
+	ActionRoleDelete                         = "role.delete"
+	ActionRoleEscalate                       = "role.escalate"
+	ActionRoleList                           = "role.list"
+	ActionRolePurge                          = "role.purge"
+	ActionRoleRead                           = "role.read"
+	ActionRoleStatusWrite                    = "role.status.write"
+	ActionRoleUpdate                         = "role.update"
+	ActionRoleWatch                          = "role.watch"
+	ActionRoleBindingBind                    = "roleBinding.bind"
+	ActionRoleBindingCreate                  = "roleBinding.create"
+	ActionRoleBindingDelete                  = "roleBinding.delete"
+	ActionRoleBindingList                    = "roleBinding.list"
+	ActionRoleBindingPurge                   = "roleBinding.purge"
+	ActionRoleBindingRead                    = "roleBinding.read"
+	ActionRoleBindingStatusWrite             = "roleBinding.status.write"
+	ActionRoleBindingUpdate                  = "roleBinding.update"
+	ActionRoleBindingWatch                   = "roleBinding.watch"
 	ActionServiceAccountCreate               = "serviceAccount.create"
 	ActionServiceAccountDelete               = "serviceAccount.delete"
 	ActionServiceAccountKeyRotate            = "serviceAccount.key.rotate"
@@ -112,6 +150,25 @@ var authorizationActions = [...]ActionDefinition{
 	{"categoryTaxonomy.transfer", "categoryTaxonomy", "namespace", "categoryTaxonomy", "transfer", false},
 	{"categoryTaxonomy.update", "categoryTaxonomy", "namespace", "categoryTaxonomy", "update", false},
 	{"categoryTaxonomy.watch", "categoryTaxonomy", "namespace", "categoryTaxonomy", "watch", false},
+	{"clusterRole.access-review.create", "clusterRole", "cluster", "clusterRole/access-review", "create", false},
+	{"clusterRole.create", "clusterRole", "cluster", "clusterRole", "create", false},
+	{"clusterRole.delete", "clusterRole", "cluster", "clusterRole", "delete", false},
+	{"clusterRole.escalate", "clusterRole", "cluster", "clusterRole", "escalate", false},
+	{"clusterRole.list", "clusterRole", "cluster", "clusterRole", "list", false},
+	{"clusterRole.purge", "clusterRole", "cluster", "clusterRole", "purge", false},
+	{"clusterRole.read", "clusterRole", "cluster", "clusterRole", "read", false},
+	{"clusterRole.status.write", "clusterRole", "cluster", "clusterRole/status", "write", false},
+	{"clusterRole.update", "clusterRole", "cluster", "clusterRole", "update", false},
+	{"clusterRole.watch", "clusterRole", "cluster", "clusterRole", "watch", false},
+	{"clusterRoleBinding.bind", "clusterRoleBinding", "cluster", "clusterRoleBinding", "bind", false},
+	{"clusterRoleBinding.create", "clusterRoleBinding", "cluster", "clusterRoleBinding", "create", false},
+	{"clusterRoleBinding.delete", "clusterRoleBinding", "cluster", "clusterRoleBinding", "delete", false},
+	{"clusterRoleBinding.list", "clusterRoleBinding", "cluster", "clusterRoleBinding", "list", false},
+	{"clusterRoleBinding.purge", "clusterRoleBinding", "cluster", "clusterRoleBinding", "purge", false},
+	{"clusterRoleBinding.read", "clusterRoleBinding", "cluster", "clusterRoleBinding", "read", false},
+	{"clusterRoleBinding.status.write", "clusterRoleBinding", "cluster", "clusterRoleBinding/status", "write", false},
+	{"clusterRoleBinding.update", "clusterRoleBinding", "cluster", "clusterRoleBinding", "update", false},
+	{"clusterRoleBinding.watch", "clusterRoleBinding", "cluster", "clusterRoleBinding", "watch", false},
 	{"collection.create", "collection", "namespace", "collection", "create", false},
 	{"collection.delete", "collection", "namespace", "collection", "delete", false},
 	{"collection.list", "collection", "namespace", "collection", "list", false},
@@ -173,6 +230,25 @@ var authorizationActions = [...]ActionDefinition{
 	{"repository.transfer", "repository", "namespace", "repository", "transfer", false},
 	{"repository.update", "repository", "namespace", "repository", "update", false},
 	{"repository.watch", "repository", "namespace", "repository", "watch", false},
+	{"role.access-review.create", "role", "namespace", "role/access-review", "create", false},
+	{"role.create", "role", "namespace", "role", "create", false},
+	{"role.delete", "role", "namespace", "role", "delete", false},
+	{"role.escalate", "role", "namespace", "role", "escalate", false},
+	{"role.list", "role", "namespace", "role", "list", false},
+	{"role.purge", "role", "namespace", "role", "purge", false},
+	{"role.read", "role", "namespace", "role", "read", false},
+	{"role.status.write", "role", "namespace", "role/status", "write", false},
+	{"role.update", "role", "namespace", "role", "update", false},
+	{"role.watch", "role", "namespace", "role", "watch", false},
+	{"roleBinding.bind", "roleBinding", "namespace", "roleBinding", "bind", false},
+	{"roleBinding.create", "roleBinding", "namespace", "roleBinding", "create", false},
+	{"roleBinding.delete", "roleBinding", "namespace", "roleBinding", "delete", false},
+	{"roleBinding.list", "roleBinding", "namespace", "roleBinding", "list", false},
+	{"roleBinding.purge", "roleBinding", "namespace", "roleBinding", "purge", false},
+	{"roleBinding.read", "roleBinding", "namespace", "roleBinding", "read", false},
+	{"roleBinding.status.write", "roleBinding", "namespace", "roleBinding/status", "write", false},
+	{"roleBinding.update", "roleBinding", "namespace", "roleBinding", "update", false},
+	{"roleBinding.watch", "roleBinding", "namespace", "roleBinding", "watch", false},
 	{"serviceAccount.create", "serviceAccount", "cluster", "serviceAccount", "create", false},
 	{"serviceAccount.delete", "serviceAccount", "cluster", "serviceAccount", "delete", false},
 	{"serviceAccount.key.rotate", "serviceAccount", "cluster", "serviceAccount/key", "rotate", false},

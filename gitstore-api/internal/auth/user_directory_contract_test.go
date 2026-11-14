@@ -87,6 +87,29 @@ func TestAnonymousDirectoryBypassAndInactiveHumanAdmission(t *testing.T) {
 	require.ErrorIs(t, err, ErrProfileInactive)
 }
 
+func TestHumanDirectoryEnrichmentPreservesWinningAuthentication(t *testing.T) {
+	for _, method := range []string{"oidc-jwt", "static-users"} {
+		t.Run(method, func(t *testing.T) {
+			directory := &contractDirectory{profile: &UserProfile{
+				Subject: "directory-uid", Username: "directory-name",
+				Kind: ProfileStaff, Lifecycle: ActorActive, Active: true,
+			}}
+			original := &Principal{Subject: "authenticated-name", AuthMethod: method,
+				Issuer: "selected-issuer", Claims: map[string]any{"sub": "raw-token-subject"}}
+			enriched, err := EnrichPrincipal(t.Context(), directory, original)
+			require.NoError(t, err)
+			require.Equal(t, original.Subject, enriched.Subject)
+			require.Equal(t, original.AuthMethod, enriched.AuthMethod)
+			require.Equal(t, original.Issuer, enriched.Issuer)
+			require.Equal(t, original.Claims, enriched.Claims)
+			require.Equal(t, "directory-name", enriched.Username)
+			require.Equal(t, ProfileStaff, enriched.ProfileKind)
+			require.Contains(t, enriched.Groups, "system:staff")
+			require.Empty(t, original.Username)
+		})
+	}
+}
+
 func TestWorkloadEnrichmentRequiresCurrentUIDAndPreservesAuthority(t *testing.T) {
 	for _, scenario := range []string{"linked", "inactive mirror", "old UID", "missing mirror"} {
 		t.Run(scenario, func(t *testing.T) {

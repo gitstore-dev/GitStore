@@ -35,3 +35,13 @@ An existing upstream `nolint:unused` annotation also has an equivalent
 
 Remove the replacement and local copy when an upstream release includes the
 same fixes, after rerunning these regressions and live replacement tests.
+
+The opt-in `MaxEmptyQueryTimeWindowSize` setting accelerates historical
+catch-up without widening change-delivery windows. After successful empty
+queries, the reader doubles its probe width up to that limit, bounded by the
+confidence window and any known generation end. A probe that finds a row is
+closed and reread at `QueryTimeWindowSize` before any change is delivered.
+Failed queries or iterator closure never acknowledge the probed interval.
+The API enables probes up to one hour for its existing journal sources;
+probing is disabled by default. `stream_batch_test.go`
+covers empty-range continuity, the cap, nonempty fallback and probe failures.

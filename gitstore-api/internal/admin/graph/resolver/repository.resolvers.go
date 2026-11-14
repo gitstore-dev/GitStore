@@ -358,5 +358,5 @@ func (r *subscriptionResolver) WatchRepositories(ctx context.Context, namespace 
 			}
 		}
 	}()
-	return out, nil
+	return guardWatch(ctx, r.Resolver, "Repository", namespace, out, cancel), nil
 }

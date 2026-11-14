@@ -38,6 +38,50 @@ type namespaceWatchBatchAppender interface {
 	AppendBatch(context.Context, datastore.NamespaceWatchLease, []datastore.NamespaceWatchEvent, time.Duration) ([]datastore.NamespaceWatchEvent, error)
 }
 
+func TestCDCCheckpointBatchPreservesProgressAndLeaseFencing(t *testing.T) {
+	store := newTestStore(t)
+	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+	ctx := t.Context()
+	lease, acquired, err := journal.AcquireLease(ctx, "checkpoint-batch", time.Now().UTC(), time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	t.Cleanup(func() { require.NoError(t, journal.ReleaseLease(context.Background(), lease)) })
+
+	for _, source := range []string{"Namespace", "RBAC"} {
+		t.Run(source, func(t *testing.T) {
+			progress := make(map[string]gocql.UUID, 65)
+			for index := range 65 {
+				progress[fmt.Sprintf("checkpoint-batch-%03d", index)] = gocql.TimeUUID()
+			}
+			require.NoError(t, scylla.SaveCDCProgressBatchForTest(ctx, store, lease, source, progress))
+			prefix := ""
+			if source != "Namespace" {
+				prefix = source + ":"
+			}
+			for key, point := range progress {
+				got, err := journal.LoadProgress(ctx, prefix+key)
+				require.NoError(t, err)
+				require.Equal(t, point.Bytes(), got.Position)
+			}
+			stale := lease
+			stale.FencingToken++
+			attempt := make(map[string]gocql.UUID, len(progress)+1)
+			for key := range progress {
+				attempt[key] = gocql.TimeUUID()
+			}
+			attempt["checkpoint-batch-new"] = gocql.TimeUUID()
+			require.ErrorIs(t, scylla.SaveCDCProgressBatchForTest(ctx, store, stale, source, attempt), datastore.ErrStaleWatchLease)
+			for key, point := range progress {
+				got, err := journal.LoadProgress(ctx, prefix+key)
+				require.NoError(t, err)
+				require.Equal(t, point.Bytes(), got.Position, "stale lease must not overwrite checkpoints")
+			}
+			_, err := journal.LoadProgress(ctx, prefix+"checkpoint-batch-new")
+			require.ErrorIs(t, err, datastore.ErrNotFound)
+		})
+	}
+}
+
 func TestNamespaceWatchBatchAppendPublishesContiguousRangesAcrossBuckets(t *testing.T) {
 	raw := newRawSession(t)
 	require.NoError(t, raw.Query("TRUNCATE resource_watch_events").Exec())
@@ -392,6 +436,73 @@ func TestNamespaceAuthoritativeCommitsProduceCDCButRejectedWritesDoNot(t *testin
 	afterMark := waitForNamespaceCDCRows(t, afterUpdate)
 	require.NoError(t, store.DeleteNamespaceWithResourceVersion(ctx, current.UID, current.ResourceVersion))
 	assert.Greater(t, waitForNamespaceCDCRows(t, afterMark), afterMark)
+}
+
+func TestNamespaceCDCDeletionRepairsOrphanedProjectionsWithoutRemovingReplacement(t *testing.T) {
+	for _, scenario := range []string{"orphaned name", "replacement name", "authoritative row remains"} {
+		t.Run(scenario, func(t *testing.T) {
+			store := newTestStore(t)
+			raw := newRawSession(t)
+			defer raw.Close()
+			ctx := t.Context()
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			namespace := &datastore.Namespace{
+				APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace", UID: newID(),
+				Name: "cdc-repair-" + newID()[:8], Tier: datastore.NamespaceTierUser,
+				ResourceVersion: "1", Generation: 1, CreationTimestamp: now, UpdateTimestamp: now,
+			}
+			require.NoError(t, store.CreateNamespace(ctx, namespace))
+			if scenario != "authoritative row remains" {
+				require.NoError(t, store.DeleteNamespace(ctx, namespace.UID))
+			} else {
+				t.Cleanup(func() { require.NoError(t, store.DeleteNamespace(context.Background(), namespace.UID)) })
+			}
+			var replacement *datastore.Namespace
+			if scenario == "replacement name" {
+				copy := *namespace
+				copy.UID = newID()
+				copy.CreationTimestamp = now.Add(time.Millisecond)
+				replacement = &copy
+				require.NoError(t, store.CreateNamespace(ctx, replacement))
+				t.Cleanup(func() { require.NoError(t, store.DeleteNamespace(context.Background(), replacement.UID)) })
+			}
+			uid, err := gocql.ParseUUID(namespace.UID)
+			require.NoError(t, err)
+			bucket := now.Format("2006-01")
+			require.NoError(t, raw.Query(
+				"INSERT INTO namespaces_by_bucket (bucket,creation_timestamp,uid) VALUES (?,?,?)",
+				bucket, now, uid).Exec())
+			if scenario == "orphaned name" {
+				require.NoError(t, raw.Query("INSERT INTO namespaces_by_name (name,uid) VALUES (?,?)", namespace.Name, uid).Exec())
+			}
+			ready, err := scylla.NamespaceCDCDeletionReadyForTest(ctx, store, namespace, false)
+			require.NoError(t, err)
+			require.False(t, ready, "uncommitted deletion must not repair projections")
+			ready, err = scylla.NamespaceCDCDeletionReadyForTest(ctx, store, namespace, true)
+			if scenario == "authoritative row remains" {
+				require.Error(t, err)
+				require.False(t, ready)
+				current, err := store.GetNamespaceByName(ctx, namespace.Name)
+				require.NoError(t, err)
+				require.Equal(t, namespace.UID, current.UID)
+				return
+			}
+			require.NoError(t, err)
+			require.True(t, ready)
+			var found gocql.UUID
+			require.ErrorIs(t, raw.Query(
+				"SELECT uid FROM namespaces_by_bucket WHERE bucket=? AND creation_timestamp=? AND uid=?",
+				bucket, now, uid).Scan(&found), gocql.ErrNotFound)
+			current, err := store.GetNamespaceByName(ctx, namespace.Name)
+			if replacement == nil {
+				require.ErrorIs(t, err, datastore.ErrNotFound)
+				require.ErrorIs(t, raw.Query("SELECT uid FROM namespaces_by_name WHERE name=?", namespace.Name).Scan(&found), gocql.ErrNotFound)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, replacement.UID, current.UID)
+			}
+		})
+	}
 }
 
 func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {

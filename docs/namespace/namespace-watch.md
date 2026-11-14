@@ -103,6 +103,18 @@ while other streams remain active. Failed queries or errors while consuming
 changes do not acknowledge a completed window. Window progress does not create
 public resource events or change the resume contract.
 
+A resource's last change or another source's bookmark is not proof of read
+progress. Source freshness depends on completed query windows. Durable stream
+checkpoints use bounded, lease-fenced batches; failed queries and stale leaders cannot advance
+their completed-read frontier.
+
+Historical catch-up can probe progressively wider empty ranges, up to one hour,
+without skipping unqueried history. Probes remain behind the confidence window
+and stop at known CDC generation boundaries. A nonempty probe is reread using
+the ordinary query window before delivering changes, so catch-up does not enlarge
+change-delivery batches. Query or iterator-close failures never acknowledge a
+probed interval; readiness still requires fresh source progress.
+
 ## Event payloads
 
 | Type | `name` | `resourceVersion` | `namespace` |
@@ -113,7 +125,7 @@ public resource events or change the resume contract.
 | `BOOKMARK` | empty | advanced journal cursor | `null` |
 
 Status, generation, resourceVersion, and finalizers in data-event postimages are
-the authoritative spec-047 state. There is no `deletionTimestamp` field.
+the authoritative lifecycle state. There is no `deletionTimestamp` field.
 Entering or leaving Terminating is a `MODIFIED` event and is derived from the
 foreground-deletion finalizer/status state. Final removal alone is `DELETED`.
 
@@ -145,7 +157,7 @@ terminates with the documented `WATCH_EXPIRED` reason.
 
 ## Non-goals
 
-This contract does not change Namespace mutation/admission semantics from spec
-047, introduce cascade deletion or auto-drain, add a `deletionTimestamp`
+This contract does not change Namespace mutation/admission semantics,
+introduce cascade deletion or auto-drain, add a `deletionTimestamp`
 equivalent, promise ordering relative to other resource kinds, or provide
 exactly-once delivery.

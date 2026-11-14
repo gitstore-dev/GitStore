@@ -70,6 +70,46 @@ type staticAuthZProvider struct {
 	err      error
 }
 
+type decisionSnapshotProvider struct{ *staticAuthZProvider }
+
+func (decisionSnapshotProvider) AuthorizationSnapshot() (authpkg.AuthorizationSnapshot, bool) {
+	panic("logging must use the evaluated identity, never the current publication")
+}
+
+func TestDecisionLoggerUsesOnlyBoundedEvaluatedTierIdentity(t *testing.T) {
+	for _, malformed := range []bool{false, true} {
+		t.Run(fmt.Sprint(malformed), func(t *testing.T) {
+			core, logs := observer.New(zapcore.InfoLevel)
+			snapshot := &authpkg.AuthorizationSnapshot{
+				Loaded: true, ModelVersion: "model-v1", CatalogDigest: strings.Repeat("a", 64),
+				BuiltinDigest: strings.Repeat("b", 64),
+				Tiers: []authpkg.AuthorizationTierIdentity{{TierID: "cluster", Revision: 7,
+					GitRevision: "main@sha1:" + strings.Repeat("c", 40), ContentDigest: strings.Repeat("d", 64)}},
+			}
+			if malformed {
+				snapshot.Tiers[0].GitRevision = strings.Repeat("private-facts", 1024)
+			}
+			original := authpkg.Allow("opa", "allowed")
+			original.AuthorizationSnapshot = snapshot
+			provider := authpkg.NewDecisionLogger(decisionSnapshotProvider{&staticAuthZProvider{name: "opa", decision: original}}, zap.New(core))
+			decision, err := provider.Authorize(t.Context(), nil, "namespace.read", authpkg.ResourceContext{})
+			require.NoError(t, err)
+			require.Equal(t, original, decision)
+			require.Len(t, logs.All(), 1)
+			fields := logs.All()[0].ContextMap()
+			require.NotContains(t, fmt.Sprint(fields), "private-facts")
+			if malformed {
+				require.Equal(t, true, fields["invalid_authorization_snapshot"])
+				require.NotContains(t, fields, "authorization_tiers")
+			} else {
+				require.Equal(t, snapshot.CatalogDigest, fields["catalog_digest"])
+				require.Equal(t, snapshot.BuiltinDigest, fields["builtin_digest"])
+				require.Equal(t, snapshot.Tiers, fields["authorization_tiers"])
+			}
+		})
+	}
+}
+
 func (s *staticAuthZProvider) Name() string { return s.name }
 
 func (s *staticAuthZProvider) Authorize(_ context.Context, _ *authpkg.Principal, _ string, _ authpkg.ResourceContext) (authpkg.Decision, error) {
@@ -85,14 +125,16 @@ func TestDecisionLoggerBoundsFieldsWithoutChangingDecision(t *testing.T) {
 		Subject: strings.Repeat("s", 4096),
 	}, strings.Repeat("a", 4096), authpkg.ResourceContext{
 		Kind: strings.Repeat("k", 4096), Name: strings.Repeat("n", 4096),
+		Attrs: map[string]any{"namespace": strings.Repeat("namespace", 512), "credential": "must-not-log"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, original, decision)
 	require.Len(t, logs.All(), 1)
 	fields := logs.All()[0].ContextMap()
-	for _, field := range []string{"provider", "subject", "action", "resource_kind", "resource_name", "request_id"} {
+	for _, field := range []string{"provider", "subject", "action", "resource_kind", "resource_name", "resource_namespace", "request_id"} {
 		require.LessOrEqual(t, len(fields[field].(string)), 256, field)
 	}
+	require.NotContains(t, fmt.Sprint(fields), "must-not-log")
 	require.LessOrEqual(t, len(fields["reason"].(string)), 2048)
 	require.Equal(t, true, fields["fields_truncated"])
 }

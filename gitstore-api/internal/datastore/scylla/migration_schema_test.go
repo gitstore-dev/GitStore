@@ -67,6 +67,7 @@ func TestWatchedKindsEnableAuthoritativeFullImageCDC(t *testing.T) {
 		{"004_category_taxonomy.cql", "category_taxonomies_by_namespace"},
 		{"005_product.cql", "products_by_key"},
 		{"008_file.cql", "files_by_namespace"},
+		{"014_rbac.cql", "rbac_resources_by_scope"},
 	} {
 		assert.Containsf(t, createStatement(t, tc.file, tc.table), fullImageCDC, "%s CDC", tc.table)
 	}
@@ -81,7 +82,24 @@ func TestOnlyWatchedAuthoritativeTablesEnableCDC(t *testing.T) {
 		require.NoError(t, err)
 		count += strings.Count(strings.ToLower(string(raw)), "cdc = {")
 	}
-	assert.Equal(t, 6, count, "only authoritative watched tables and the internal ServiceAccount source enable CDC")
+	assert.Equal(t, 7, count, "only authoritative watched tables and the internal ServiceAccount source enable CDC")
+}
+
+func TestRBACMigrationKeepsTransactionsWithinOnePartition(t *testing.T) {
+	authority := strings.Join(strings.Fields(createStatement(t, "014_rbac.cql", "rbac_resources_by_scope")), " ")
+	assert.Contains(t, authority, "primary key ((tier), entry)")
+	assert.Contains(t, authority, "namespace_retired boolean")
+	for _, column := range []string{"creation_timestamp timestamp", "creation_actor text", "update_timestamp timestamp", "update_actor text"} {
+		assert.Contains(t, authority, column)
+	}
+	cleanup := createStatement(t, "014_rbac.cql", "rbac_namespace_cleanups_by_bucket")
+	assert.Contains(t, strings.Join(strings.Fields(cleanup), " "), "primary key ((bucket), namespace_uid)")
+	assert.NotContains(t, cleanup, "cdc")
+	guard := strings.Join(strings.Fields(createStatement(t, "014_rbac.cql", "rbac_role_guards_by_id")), " ")
+	assert.Contains(t, guard, "primary key ((role_uid), entry)")
+	for _, table := range []string{"rbac_resources_by_id", "rbac_bindings_by_role", "rbac_role_guards_by_id"} {
+		assert.NotContains(t, createStatement(t, "014_rbac.cql", table), "cdc")
+	}
 }
 
 func TestProductPartitionsSeparateEnvelopesNamesAndListings(t *testing.T) {

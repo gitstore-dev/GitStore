@@ -478,7 +478,8 @@ notification provider, and the message reaches the local mail catcher.
   condition MUST still require a valid directory username and a trusted Staff
   or Customer profile; the reference binding restricts this grant to Staff.
   Existing immutable USER namespace ownership remains unchanged.
-  Customer and ServiceAccount profiles MUST NOT receive the
+  When AuthN providers are chained, the provider that authenticates the request
+  selects the subject. Customer and ServiceAccount profiles MUST NOT receive the
   synthesized `system:staff` group. RBAC policy remains the authorization
   authority; this feature MUST NOT add a separate hard-coded Namespace-create
   denial path.

@@ -152,6 +152,30 @@ func TestClassifyResourceSuppressesNoopRepositoryCDCWrite(t *testing.T) {
 	assert.Empty(t, event.Type)
 }
 
+func TestRBACEnvelopeClassificationAndTierProgress(t *testing.T) {
+	for _, kind := range []string{"Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding"} {
+		t.Run(kind, func(t *testing.T) {
+			materializer := NewMaterializer(&orderedMaterializerStore{}, MaterializerConfig{})
+			event, err := materializer.Materialize(t.Context(), datastore.ResourceWatchLease{}, Change{
+				Kind: kind, Name: "readers", Namespace: "shop",
+				Before: json.RawMessage(`{"metadata":{"labels":{"team":"old"}}}`),
+				After:  json.RawMessage(`{"metadata":{"labels":{"team":"new"}}}`),
+			})
+			require.NoError(t, err)
+			require.Equal(t, "old", event.PreviousSelectorLabels["team"])
+			require.Equal(t, "new", event.SelectorLabels["team"])
+		})
+	}
+	progress := &datastore.RBACTierProgress{TierID: "cluster", Revision: 7}
+	event, ok := ClassifyResource(Change{TierProgress: progress}, namespaceLabels)
+	require.True(t, ok)
+	require.Equal(t, datastore.ResourceWatchProgress, event.Type)
+	require.Equal(t, "RBACTier", event.Kind)
+	require.Empty(t, event.Name)
+	require.Empty(t, event.Namespace)
+	require.JSONEq(t, `{"tierID":"cluster","revision":7}`, string(event.Payload))
+}
+
 func TestMaterializerAppendsBeforeSavingProgress(t *testing.T) {
 	store := &orderedMaterializerStore{}
 	m := NewMaterializer(store, MaterializerConfig{EventTTL: 7 * 24 * time.Hour})

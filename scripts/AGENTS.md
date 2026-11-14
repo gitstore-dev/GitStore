@@ -34,10 +34,6 @@ container wiring and configuration.
 - `make compose IDENTITY=oidc` includes the optional reference provider;
   `make oidc` runs OIDC alone. Keep the same selector for lifecycle actions.
   See [../config/oidc/oidc.env.example](../config/oidc/oidc.env.example).
-- Preserve compatibility with `gitstore-dev/quickstart`, which hand-copies
-  Compose base/overlay wiring, ports, dependencies, health checks, networks,
-  volumes, image names/tags, config schema/defaults, user/policy formats and
-  OIDC reference configuration. Flag affected PRs for a quickstart follow-up.
 - Use the existing identity/bootstrap helpers for user records, role
   bindings, authentication material and resources. Preserve private material
   and never put credentials in versioned files, logs or diagnostic evidence.

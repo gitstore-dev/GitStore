@@ -40,19 +40,21 @@ import (
 
 // GraphQLHandlerDeps are the dependencies for NewGraphQLHandler.
 type GraphQLHandlerDeps struct {
-	RegisterCleanup           func(func())
-	Endpoint                  config.EndpointConfig
-	TrustedProxies            []string
-	Store                     datastore.Datastore
-	GitWriter                 resolver.GitWriter
-	Logger                    *zap.Logger
-	Registry                  *auth.ProviderRegistry
-	Clock                     apiruntime.Clock
-	IDs                       apiruntime.IDGenerator
-	CommittedManifestAdmitter admission.CommittedManifestAdmitter
-	ResourceJournal           datastore.ResourceWatchJournal
-	NamespaceWatch            config.WatchJournalConfig
-	NamespaceMetrics          *watchjournal.Metrics
+	ProvisionNamespaceRepository func(context.Context, string) error
+	RegisterCleanup              func(func())
+	Endpoint                     config.EndpointConfig
+	TrustedProxies               []string
+	Store                        datastore.Datastore
+	GitWriter                    resolver.GitWriter
+	Logger                       *zap.Logger
+	Registry                     *auth.ProviderRegistry
+	Clock                        apiruntime.Clock
+	IDs                          apiruntime.IDGenerator
+	CommittedManifestAdmitter    admission.CommittedManifestAdmitter
+	RBACValidator                *admission.RBACValidator
+	ResourceJournal              datastore.ResourceWatchJournal
+	NamespaceWatch               config.WatchJournalConfig
+	NamespaceMetrics             *watchjournal.Metrics
 	// PushLimits is the shared static platform push-size ceiling; see
 	// config.PushLimitsConfig.
 	PushLimits config.PushLimitsConfig
@@ -91,19 +93,21 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 		connectionRegistry = wsregistry.New()
 	}
 	rootResolver, err := resolver.NewResolver(resolver.ResolverDeps{
-		Store:                     deps.Store,
-		GitWriter:                 deps.GitWriter,
-		Registry:                  deps.Registry,
-		Logger:                    deps.Logger,
-		Clock:                     deps.Clock,
-		IDGenerator:               deps.IDs,
-		CommittedManifestAdmitter: deps.CommittedManifestAdmitter,
-		ResourceJournal:           deps.ResourceJournal,
-		NamespaceWatch:            deps.NamespaceWatch,
-		NamespaceMetrics:          deps.NamespaceMetrics,
-		PushLimits:                deps.PushLimits,
-		ServiceAccountAudience:    deps.ServiceAccountAudience,
-		ConnectionRegistry:        connectionRegistry,
+		ProvisionNamespaceRepository: deps.ProvisionNamespaceRepository,
+		Store:                        deps.Store,
+		GitWriter:                    deps.GitWriter,
+		Registry:                     deps.Registry,
+		Logger:                       deps.Logger,
+		Clock:                        deps.Clock,
+		IDGenerator:                  deps.IDs,
+		CommittedManifestAdmitter:    deps.CommittedManifestAdmitter,
+		RBACValidator:                deps.RBACValidator,
+		ResourceJournal:              deps.ResourceJournal,
+		NamespaceWatch:               deps.NamespaceWatch,
+		NamespaceMetrics:             deps.NamespaceMetrics,
+		PushLimits:                   deps.PushLimits,
+		ServiceAccountAudience:       deps.ServiceAccountAudience,
+		ConnectionRegistry:           connectionRegistry,
 	})
 	if err != nil {
 		return nil, err
@@ -139,6 +143,7 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 
 	gqlServer.Use(extension.Introspection{})
 	gqlServer.Use(admissionreport.Extension{})
+	gqlServer.Use(rootResolver.ProvenanceExtension())
 	gqlServer.Use(extension.AutomaticPersistedQuery{
 		Cache: lru.New[string](100),
 	})

@@ -104,6 +104,17 @@ func (c *Client) listFilesForRepo(ctx context.Context, repositoryID, prefix, ref
 	})
 }
 
+// ReadFileProvenanceForRepo reads bounded first-parent history at an exact commit.
+func (c *Client) ReadFileProvenanceForRepo(ctx context.Context, repositoryID, path, sha string) (*gitv1.GetFileProvenanceResponse, error) {
+	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.contents.read", repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	return c.Git.GetFileProvenance(ctx, &gitv1.GetFileProvenanceRequest{
+		RepositoryId: repositoryID, Path: path, CommitSha: sha, Authorization: authorization,
+	})
+}
+
 // GetLatestTag returns the latest semver release tag.
 // Returns an error (wrapping codes.NotFound) if no tags exist.
 func (c *Client) GetLatestTag(ctx context.Context) (*gitv1.TagEntry, error) {

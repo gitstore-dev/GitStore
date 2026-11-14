@@ -29,6 +29,32 @@ type CommitFileParams struct {
 	AuthorEmail   string
 }
 
+type CommitFileAtRevisionParams struct {
+	CommitFileParams
+	RefName           string
+	ExpectedCommitSHA string
+	RetainReceipt     bool
+	ReceiptOnly       bool
+}
+
+func (c *Client) CommitFileAtRevisionForRepo(ctx context.Context, repositoryID string, p CommitFileAtRevisionParams) (string, error) {
+	authorization, err := c.authorizeRequest(ContextForBackingWork(ctx), "repository.contents.write", repositoryID)
+	if err != nil {
+		return "", err
+	}
+	response, err := c.Git.CommitFileAtRevision(ctx, &gitv1.CommitFileAtRevisionRequest{
+		File: &gitv1.CommitFileRequest{
+			RepositoryId: repositoryID, Path: p.Path, Content: p.Content, CommitMessage: p.CommitMessage,
+			AuthorName: p.AuthorName, AuthorEmail: p.AuthorEmail, Authorization: authorization,
+		},
+		RefName: p.RefName, ExpectedCommitSha: p.ExpectedCommitSHA, RetainReceipt: p.RetainReceipt, ReceiptOnly: p.ReceiptOnly,
+	})
+	if err != nil {
+		return "", err
+	}
+	return response.CommitSha, nil
+}
+
 // DeleteFileParams holds parameters for a DeleteFile RPC call.
 type DeleteFileParams struct {
 	Path              string

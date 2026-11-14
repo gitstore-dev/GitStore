@@ -141,7 +141,7 @@ func (r *Resolver) watchProductResources(ctx context.Context, namespace *string,
 			}
 		}
 	}()
-	return out, nil
+	return guardWatch(ctx, r, "Product", namespace, out, cancel), nil
 }
 
 func (r *Resolver) watchProductGenericResources(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.WatchEvent, error) {
@@ -208,5 +208,5 @@ func (r *Resolver) watchProductGenericResources(ctx context.Context, namespace *
 			}
 		}
 	}()
-	return out, nil
+	return guardWatch(ctx, r, "Product", namespace, out, cancel), nil
 }

@@ -120,6 +120,7 @@ func TestMetadataScopeServiceEntryPointsRejectBeforeEffects(t *testing.T) {
 			require.IsType(t, &admission.Error{}, err)
 			require.Equal(t, admission.ReasonNamespaceRequired, err.(*admission.Error).Reason())
 		}
+
 	}
 	for _, value := range []string{"", " \t", "acme"} {
 		metadata := &model.ObjectMetaInput{Name: "test", Namespace: &value}
@@ -138,4 +139,31 @@ func TestMetadataScopeServiceEntryPointsRejectBeforeEffects(t *testing.T) {
 		_, err = resolver.IssueServiceAccountToken(ctx, &model.IssueServiceAccountTokenInput{Metadata: metadata, Spec: &model.TokenRequestSpecInput{}})
 		require.ErrorContains(t, err, "cluster-scoped")
 	}
+}
+
+func TestMetadataResourceVersionRejectsUnsupportedOperationsBeforeEffects(t *testing.T) {
+	ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "admin"})
+	service, resolver := &Service{}, &Resolver{}
+	metadata := &model.ObjectMetaInput{Name: "test", Namespace: new("shop"), ResourceVersion: new("supplied")}
+	for _, create := range []bool{true, false} {
+		_, err := service.CommitProductManifest(ctx, "", "", metadata, nil, nil, "admin", create)
+		require.ErrorContains(t, err, "metadata.resourceVersion")
+		_, err = service.CommitRepositoryManifest(ctx, "", "", metadata, nil, "admin", create)
+		require.ErrorContains(t, err, "metadata.resourceVersion")
+		_, _, err = service.commitCategoryManifest(ctx, CategoryManifestInput{Metadata: metadata}, "admin", create)
+		require.ErrorContains(t, err, "metadata.resourceVersion")
+	}
+	metadata.Namespace = nil
+	_, err := service.CreateNamespace(ctx, model.CreateNamespaceInput{Metadata: metadata}, "admin")
+	require.ErrorContains(t, err, "metadata.resourceVersion")
+	_, err = service.UpdateNamespace(ctx, model.UpdateNamespaceInput{Metadata: metadata}, "admin")
+	require.ErrorContains(t, err, "metadata.resourceVersion")
+	_, err = resolver.CreateServiceAccount(ctx, &model.CreateServiceAccountInput{Metadata: metadata, PublicKeys: []*model.ServiceAccountPublicKeyInput{{}}})
+	require.ErrorContains(t, err, "metadata.resourceVersion")
+	_, err = resolver.RotateServiceAccountKey(ctx, &model.RotateServiceAccountKeyInput{Metadata: metadata})
+	require.ErrorContains(t, err, "metadata.resourceVersion")
+	_, err = resolver.DeleteServiceAccount(ctx, &model.DeleteServiceAccountInput{Metadata: metadata})
+	require.ErrorContains(t, err, "metadata.resourceVersion")
+	_, err = resolver.IssueServiceAccountToken(ctx, &model.IssueServiceAccountTokenInput{Metadata: metadata, Spec: &model.TokenRequestSpecInput{}})
+	require.ErrorContains(t, err, "metadata.resourceVersion")
 }

@@ -313,30 +313,70 @@ func validatePolicy(p *Policy) error {
 				return errors.New("binding requires 1..64 subjects")
 			}
 			for _, s := range b.Subjects {
-				if !validIdentifier(s.Name) {
-					return errors.New("subject name required and bounded")
-				}
-				switch s.Kind {
-				case "User":
-					if strings.HasPrefix(s.Name, "system:") && s.Name != "system:api" {
-						return errors.New("reserved User subject; only in-process system:api may be bound")
-					}
-					if strings.HasPrefix(s.Name, "serviceaccount:") {
-						return errors.New("legacy ServiceAccount subject; use kind ServiceAccount with bare name")
-					}
-				case "ServiceAccount":
-					if strings.ContainsAny(s.Name, ":/") {
-						return errors.New("ServiceAccount subjects use bare cluster name, no namespace or prefix")
-					}
-				case "Group":
-				default:
-					return errors.New("subject kind must be User, Group or ServiceAccount")
+				if err := ValidateSubject(s); err != nil {
+					return err
 				}
 			}
 		}
 	}
 	return nil
 }
+
+func ValidateSubject(subject SubjectRef) error {
+	if !validIdentifier(subject.Name) {
+		return errors.New("subject name required and bounded")
+	}
+	switch subject.Kind {
+	case "User":
+		if strings.HasPrefix(subject.Name, "system:") && subject.Name != "system:api" {
+			return errors.New("reserved User subject; only in-process system:api may be bound")
+		}
+		if strings.HasPrefix(subject.Name, "serviceaccount:") {
+			return errors.New("legacy ServiceAccount subject; use kind ServiceAccount with bare name")
+		}
+	case "ServiceAccount":
+		if strings.ContainsAny(subject.Name, ":/") {
+			return errors.New("ServiceAccount subjects use bare cluster name, no namespace or prefix")
+		}
+	case "Group":
+	default:
+		return errors.New("subject kind must be User, Group or ServiceAccount")
+	}
+	return nil
+}
+
+func ParseRoleDefinition(data []byte, cluster bool) (RoleDefinition, error) {
+	if len(data) > MaxPolicyBytes {
+		return RoleDefinition{}, errors.New("role definition exceeds policy byte bound")
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return RoleDefinition{}, err
+	}
+	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
+		return RoleDefinition{}, errors.New("role definition must be an object")
+	}
+	key := "roles"
+	if cluster {
+		key = "clusterRoles"
+	}
+	wrapped, err := yaml.Marshal(map[string]any{
+		"apiVersion": PolicyAPIVersion, "kind": "RbacLocalConfiguration",
+		key: map[string]any{"validation": document.Content[0]},
+	})
+	if err != nil {
+		return RoleDefinition{}, err
+	}
+	policy, err := parsePolicy("RBAC resource rules", wrapped)
+	if err != nil {
+		return RoleDefinition{}, err
+	}
+	if cluster {
+		return policy.ClusterRoles["validation"], nil
+	}
+	return policy.Roles["validation"], nil
+}
+
 func validIdentifier(s string) bool {
 	return strings.TrimSpace(s) != "" && len(s) <= 256 && utf8.ValidString(s)
 }

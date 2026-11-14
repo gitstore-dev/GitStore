@@ -39,3 +39,10 @@
   protected binding lifecycle, trusted bootstrap authority, per-replica access
   readiness, retry/UID safety, existing-namespace cutover, and acceptance
   scenarios in User Story 6. Removed the obsolete rule `effect` field.
+
+- Clarified 2026-11-09: Staff-only namespace creation, complete-snapshot/watch
+  startup readiness, conservative coverage with explicit bind/escalate for
+  unprovable grants, and authoritative validation-start snapshots. Concurrent
+  cross-repository revocation does not cancel an already-authorized write;
+  no global commit-time authorization fence is claimed. Planning artifacts
+  and acceptance contracts do not constitute implemented feature acceptance.

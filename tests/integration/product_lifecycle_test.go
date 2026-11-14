@@ -94,9 +94,10 @@ type gqlRequest struct {
 }
 
 type gqlResponse struct {
-	Status int               `json:"-"`
-	Data   json.RawMessage   `json:"data"`
-	Errors []json.RawMessage `json:"errors,omitempty"`
+	Status     int                        `json:"-"`
+	Data       json.RawMessage            `json:"data"`
+	Errors     []json.RawMessage          `json:"errors,omitempty"`
+	Extensions map[string]json.RawMessage `json:"extensions,omitempty"`
 }
 
 var integrationAdminTokens sync.Map // map[string]string, keyed by GraphQL base URL

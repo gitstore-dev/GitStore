@@ -1,11 +1,55 @@
 # OPA Data-Aware Authorization for GraphQL Catalog Reads
 
 > **Endpoint boundary update (2026-11-04):** Admin uses the fixed `/admin/graphql` path on `api.admin_port`; Storefront uses `/storefront/graphql` on `api.storefront_port`. The coordinated pre-GA cutover removes the generic port and legacy route in one release. The identity-only Storefront schema currently returns a fixed unavailable response before authentication or data execution. Publication/target readers, buyer workflows and declarative authorization directives described below remain separate work; no enablement or compatibility layer is introduced.
-**Status**: 🟡 Proposed (architecture only; implementation requires a separate feature specification)
+**Status**: Partially implemented; embedded RBAC remains production-gated, while the broader catalog authorization design remains proposed.
+
+## Implemented boundary
+
+The Git-backed RBAC implementation prepares one compiled-in OPA decision
+module and translates immutable model-v1 tiers for Role, ClusterRole,
+RoleBinding and ClusterRoleBinding. It preserves the existing provider
+contract, finite allow-only catalog, trusted identity rules and bounded
+in-memory evaluation. It does not load local/remote operator bundles or
+perform request-time datastore/UserDir reads. Git is authoritative; durable
+projections, watch continuity and complete snapshot readiness precede serving.
+
+Snapshot recovery repairs a proven mismatch between the canonical Git
+identity and its durable projection, or finishes pending index repair for a
+verified current committed snapshot before publication. Source outages, terminating namespaces
+and unstable reads remain unavailable without launching a repair write.
+Immutable manifest reads overlap in batches of at most two files; aggregate
+payload limits and the final live Namespace/Git identity check still apply.
+
+Authoring and SubjectAccessReview use authoritative validation-start captures,
+not an atomic global authorization fence. Already-authorized writes may
+finish after concurrent revocation. Failed containment proofs require explicit
+bind/escalate. Virtual release built-ins, once-only removable initial-admin
+bootstrap, UID-bound role claims and protected Staff owner templates share the
+provider-neutral model. Authorized opt-in source inspection follows bounded
+signed Git history rather than adding history I/O to decisions.
+
+An existing ordinary owner-binding collision can be deleted under normal RBAC
+authorization only when its persisted UID and absence of managed provenance
+prove it is not the managed binding. Managed and unknown-identity bindings,
+and bindings with copied provenance, remain protected. This cleanup exception does not allow
+reserved-name creation, replacement or silent adoption.
+
+Production construction is still gated. Local contract/race evidence does not
+establish deployed replica/rolling, load/fault, memory/RSS or large-catalog
+acceptance. ADR 0010 section 16 records the current boundary; ADR 0018 remains
+Proposed because platform-wide leases and side-effect fencing are not added.
+
+The sections below retain the broader proposal for historical/design context.
+Their configured-bundle, deny-precedence, hybrid IAM and catalog-scope
+descriptions are not the implemented embedded RBAC contract. Declarative
+GraphQL directives, published Product/ProductVariant readers and semantic
+Storefront query plans remain separate work; this implementation does not
+accept or activate that broader proposal.
 
 > Extends `020-pluggable_auth_architecture.md` and `021-controller_service_account_auth.md`.
-> This document is authoritative for the embedded OPA provider, GraphQL read authorization,
-> semantic catalog scopes, hybrid IAM data, and authorization-aware Product/ProductVariant reads.
+> The implemented boundary above takes precedence for embedded RBAC. The remaining sections
+> describe proposed GraphQL read authorization, semantic catalog scopes, hybrid IAM data,
+> and authorization-aware Product/ProductVariant reads.
 
 > **Amended by [ADR 0012](../ADRs/0012-admin-storefront-graphql-endpoints.md)** (separate Admin and
 > Storefront GraphQL endpoints). Where this document and ADR 0012 disagree, ADR 0012 wins:
@@ -43,8 +87,9 @@ reads (Storefront API) use public Product/ProductVariant projections; management
 use the complete catalog projections. GitStore never fetches a page and removes unauthorized nodes afterward, and it
 never relies on CQL `ALLOW FILTERING` for authorization.
 
-OPA remains opt-in. This design does not change the default provider or implement any runtime
-code, GraphQL schema, IAM mutation, or ScyllaDB migration.
+The broader catalog design remains opt-in/proposed and does not change the
+default provider. The gated RBAC runtime, schemas and migrations described
+above do not implement these proposed catalog query plans.
 
 ## 2. Goals and Non-Goals
 
@@ -72,9 +117,10 @@ code, GraphQL schema, IAM mutation, or ScyllaDB migration.
 - Replacing gqlgen's parsing, validation, complexity limiting, or persisted-query handling.
 - Changing current production defaults before a later rollout explicitly approves that change.
 
-## 3. Verified Current-State Constraints
+## 3. Historical Proposal Baseline
 
-The design extends these existing contracts rather than creating a parallel security path:
+The original design used the following baseline; it is not a current-state
+inventory after the gated RBAC implementation:
 
 - `gitstore-api/internal/auth/types.go` defines `Principal`, `Decision`, `ResourceContext`, and
   `AuthZProvider.Authorize(ctx, principal, action, resource)`.

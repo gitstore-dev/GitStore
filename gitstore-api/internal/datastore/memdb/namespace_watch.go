@@ -163,6 +163,9 @@ func (m *memdbDatastore) SaveProgress(_ context.Context, lease datastore.Namespa
 	if progress.StreamID == "" {
 		return fmt.Errorf("%w: CDC stream id is required", datastore.ErrInvalidArgument)
 	}
+	if progress.Source != "" && progress.Source != "Namespace" {
+		progress.StreamID = progress.Source + ":" + progress.StreamID
+	}
 	progress.Position = append([]byte(nil), progress.Position...)
 	m.namespaceWatchProgress[progress.StreamID] = progress
 	return nil

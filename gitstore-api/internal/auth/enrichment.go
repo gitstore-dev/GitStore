@@ -19,6 +19,17 @@ func directoryGroup(group string) bool {
 
 // EnrichPrincipal preserves authenticated identity and replaces directory facts.
 func EnrichPrincipal(ctx context.Context, directory UserDirProvider, principal *Principal) (*Principal, error) {
+	return enrichPrincipal(ctx, directory, principal, false)
+}
+
+// EnrichReviewPrincipal requires a complete trusted target profile and groups.
+// Authentication may tolerate missing directory support; a review must not
+// silently substitute an empty membership set for a failed lookup.
+func EnrichReviewPrincipal(ctx context.Context, directory UserDirProvider, principal *Principal) (*Principal, error) {
+	return enrichPrincipal(ctx, directory, principal, true)
+}
+
+func enrichPrincipal(ctx context.Context, directory UserDirProvider, principal *Principal, requireProfile bool) (*Principal, error) {
 	if !ValidTrustedPrincipal(principal) {
 		return nil, ErrInvalidToken
 	}
@@ -32,6 +43,9 @@ func EnrichPrincipal(ctx context.Context, directory UserDirProvider, principal *
 		}
 	}
 	if principal.AuthMethod == "none" || directory == nil {
+		if requireProfile {
+			return nil, ErrDirectoryUnavailable
+		}
 		return &enriched, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -50,11 +64,17 @@ func EnrichPrincipal(ctx context.Context, directory UserDirProvider, principal *
 		if err == nil && profile != nil {
 			groups, err = directory.ListGroups(ctx, profile.Subject)
 			if errors.Is(err, ErrNotSupported) {
+				if requireProfile {
+					return nil, ErrDirectoryUnavailable
+				}
 				groups, err, groupCapable = nil, nil, false
 			}
 		}
 	}
 	if errors.Is(err, ErrProfileNotFound) || errors.Is(err, ErrNotSupported) {
+		if requireProfile {
+			return nil, ErrDirectoryUnavailable
+		}
 		return &enriched, nil
 	}
 	if err != nil {
@@ -77,7 +97,13 @@ func EnrichPrincipal(ctx context.Context, directory UserDirProvider, principal *
 	}
 	if profile.Kind == ProfileServiceAccount && (principal.ServiceAccountUID == "" ||
 		profile.ServiceAccountUID != principal.ServiceAccountUID) {
+		if requireProfile {
+			return nil, ErrDirectoryUnavailable
+		}
 		return &enriched, nil
+	}
+	if requireProfile && principal.ServiceAccountUID != "" && profile.Kind != ProfileServiceAccount {
+		return nil, ErrDirectoryUnavailable
 	}
 	enriched.Username, enriched.ProfileKind = profile.Username, profile.Kind
 	enriched.ProfileExpiresAt = profile.FreshUntil

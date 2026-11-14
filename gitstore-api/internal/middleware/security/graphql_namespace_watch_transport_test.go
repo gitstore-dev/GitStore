@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/resolver"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
@@ -29,6 +31,60 @@ import (
 type transportWatchJournal struct {
 	bounds datastore.NamespaceWatchBounds
 	read   func(datastore.NamespaceWatchCursor, int) ([]datastore.NamespaceWatchEvent, error)
+}
+
+type transportDynamicWatchProvider struct {
+	calls   atomic.Uint64
+	revoked atomic.Bool
+}
+
+func (*transportDynamicWatchProvider) Name() string { return "opa" }
+func (p *transportDynamicWatchProvider) Authorize(context.Context, *auth.Principal, string, auth.ResourceContext) (auth.Decision, error) {
+	p.calls.Add(1)
+	if p.revoked.Load() {
+		return auth.Deny("opa", "revoked"), nil
+	}
+	return auth.Allow("opa", "allowed"), nil
+}
+
+func TestDynamicWatchRevocationSurvivesWebSocketTransport(t *testing.T) {
+	provider := &transportDynamicWatchProvider{}
+	journal := &transportWatchJournal{
+		bounds: datastore.NamespaceWatchBounds{Epoch: uuid.NewString(), ProgressAt: time.Now().UTC()},
+		read:   func(datastore.NamespaceWatchCursor, int) ([]datastore.NamespaceWatchEvent, error) { return nil, nil },
+	}
+	root, err := resolver.NewResolver(resolver.ResolverDeps{
+		Store: &testutil.StubStore{}, Logger: zap.NewNop(), ResourceJournal: journal,
+		NamespaceWatch: namespaceWatchConfig(), Registry: auth.NewProviderRegistry(nil, provider, nil),
+	})
+	require.NoError(t, err)
+	server := gqlhandler.New(generated.NewExecutableSchema(generated.Config{Resolvers: root}))
+	server.AddTransport(transport.Websocket{})
+	httpServer := httptest.NewServer(server)
+	t.Cleanup(httpServer.Close)
+	dialer := websocket.Dialer{Subprotocols: []string{"graphql-transport-ws"}}
+	conn, _, err := dialer.Dial(strings.Replace(httpServer.URL, "http", "ws", 1), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(4*time.Second)))
+	require.NoError(t, conn.WriteJSON(map[string]any{"type": "connection_init"}))
+	var ack map[string]any
+	require.NoError(t, conn.ReadJSON(&ack))
+	require.Equal(t, "connection_ack", ack["type"])
+	require.NoError(t, conn.WriteJSON(map[string]any{
+		"id": "dynamic-watch", "type": "subscribe",
+		"payload": map[string]any{"query": `subscription { watchNamespaces { type resourceVersion } }`},
+	}))
+	require.Eventually(t, func() bool { return provider.calls.Load() > 0 }, 2*time.Second, time.Millisecond)
+	provider.revoked.Store(true)
+	var message map[string]any
+	require.NoError(t, conn.ReadJSON(&message))
+	require.Equal(t, "error", message["type"])
+	list := message["payload"].([]any)
+	require.Len(t, list, 1)
+	first := list[0].(map[string]any)
+	require.Equal(t, "FORBIDDEN", first["extensions"].(map[string]any)["code"])
+	require.NotEmpty(t, first["message"])
 }
 
 type blockingWriteListener struct {

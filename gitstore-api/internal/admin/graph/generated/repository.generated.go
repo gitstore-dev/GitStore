@@ -1195,7 +1195,7 @@ func (ec *executionContext) unmarshalInputObjectMetaInput(ctx context.Context, o
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "namespace", "labels", "annotations"}
+	fieldsInOrder := [...]string{"name", "namespace", "labels", "annotations", "resourceVersion"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -1230,6 +1230,13 @@ func (ec *executionContext) unmarshalInputObjectMetaInput(ctx context.Context, o
 				return it, err
 			}
 			it.Annotations = data
+		case "resourceVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("resourceVersion"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ResourceVersion = data
 		}
 	}
 	return it, nil

@@ -923,7 +923,7 @@ dependencies = [
 
 [[package]]
 name = "git-service"
-version = "0.1.0-alpha.9"
+version = "0.1.0-alpha.10"
 dependencies = [
  "anyhow",
  "async-trait",

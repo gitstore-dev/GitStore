@@ -16,14 +16,18 @@ import (
 
 func TestCompletionDeletionIdentitySchemaContract(t *testing.T) {
 	schema := productContractSchema(t)
-	kinds := []string{"Namespace", "Repository", "Product", "Category"}
+	kinds := []string{"Namespace", "Repository", "Product", "Category", "Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding"}
 	var completions []string
 	for _, field := range schema.Mutation.Fields {
 		if strings.HasPrefix(field.Name, "complete") && strings.HasSuffix(field.Name, "Deletion") {
 			completions = append(completions, field.Name)
 		}
 	}
-	require.ElementsMatch(t, []string{"completeNamespaceDeletion", "completeRepositoryDeletion", "completeProductDeletion", "completeCategoryDeletion"}, completions,
+	var expected []string
+	for _, kind := range kinds {
+		expected = append(expected, "complete"+kind+"Deletion")
+	}
+	require.ElementsMatch(t, expected, completions,
 		"all implemented deletion completion endpoints must enforce the same identity contract")
 	for _, kind := range kinds {
 		t.Run(kind, func(t *testing.T) {
@@ -33,7 +37,7 @@ func TestCompletionDeletionIdentitySchemaContract(t *testing.T) {
 			requireGraphQLField(t, schema, input, "resourceVersion", "String!")
 			require.Nil(t, schema.Types[input].Fields.ForName("uid"), "completion inputs use Node id, not metadata.uid")
 			route := `name: "item", resourceVersion: "1"`
-			if kind != "Namespace" {
+			if kind != "Namespace" && !strings.HasPrefix(kind, "Cluster") {
 				requireGraphQLField(t, schema, input, "namespace", "String!")
 				route += `, namespace: "acme"`
 			}

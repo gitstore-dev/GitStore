@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/kratos"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/opa"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -162,6 +164,63 @@ func TestBuildProviderRegistry_UnknownProvider_Errors(t *testing.T) {
 
 	_, _, _, err := buildProviderRegistry(cfg, stubServiceAccountLookup{}, zap.NewNop(), nil)
 	require.Error(t, err)
+}
+
+func TestBuildProviderRegistry_OPAUnavailableDoesNotFallBack(t *testing.T) {
+	for name, writesEnabled := range map[string]bool{"writes disabled": false, "writes enabled": true} {
+		t.Run(name, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Api.Auth.AuthN.Chain = []string{"anonymous"}
+			cfg.Api.Auth.AuthZ.Provider = "opa"
+			cfg.Api.Auth.OPA.WritesEnabled = writesEnabled
+
+			registry, runtime, shutdowns, err := buildProviderRegistry(cfg, stubServiceAccountLookup{}, zap.NewNop(), nil)
+			require.ErrorContains(t, err, "opa authz provider is unavailable")
+			require.Nil(t, registry)
+			require.Nil(t, runtime)
+			require.Empty(t, shutdowns)
+		})
+	}
+}
+
+func TestBuildProviderRegistry_StaticProviderRejectsDynamicWrites(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Api.Auth.AuthN.Chain = []string{"anonymous"}
+	cfg.Api.Auth.AuthZ.Provider = "allow-all"
+	cfg.Api.Auth.OPA.WritesEnabled = true
+	registry, runtime, shutdowns, err := buildProviderRegistry(cfg, stubServiceAccountLookup{}, zap.NewNop(), nil)
+	require.ErrorContains(t, err, "api.auth.opa.writes_enabled requires the opa authz provider")
+	require.Nil(t, registry)
+	require.Nil(t, runtime)
+	require.Empty(t, shutdowns)
+}
+
+func TestProviderReloadRequiresRestartForDynamicProviderChanges(t *testing.T) {
+	for _, outgoing := range []bool{false, true} {
+		t.Run(fmt.Sprint(outgoing), func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Api.Auth.AuthN.Chain = []string{"anonymous"}
+			cfg.Api.Auth.AuthZ.Provider = "allow-all"
+			registry, reloader, shutdowns, err := buildProviderRegistry(cfg, stubServiceAccountLookup{}, zap.NewNop(), nil)
+			require.NoError(t, err)
+			for _, shutdown := range shutdowns {
+				t.Cleanup(shutdown.Shutdown)
+			}
+			if outgoing {
+				provider, err := opa.NewProvider(t.Context())
+				require.NoError(t, err)
+				t.Cleanup(provider.Close)
+				registry.Swap(registry.AuthN(), auth.NewDecisionLogger(provider, zap.NewNop()), registry.UserDir())
+			} else {
+				cfg.Api.Auth.AuthZ.Provider = "opa"
+			}
+			previous := registry.AuthZ()
+			directory := registry.UserDir()
+			require.ErrorContains(t, reloader.Reload(), "requires a controlled restart")
+			require.Same(t, previous, registry.AuthZ())
+			require.Same(t, directory, registry.UserDir())
+		})
+	}
 }
 
 func TestStaticDirectoryDoesNotRequireStaticAuthenticationOrSigningKey(t *testing.T) {

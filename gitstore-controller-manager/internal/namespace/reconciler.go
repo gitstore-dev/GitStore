@@ -46,13 +46,17 @@ var bootstrapNamespaces = map[string]struct{}{
 
 // Namespace is the cache entity populated by NamespaceListWatcher.
 type Namespace struct {
-	UID             string
-	Name            string
-	Generation      int64
-	ResourceVersion string
-	Revision        string
-	Finalizers      []string
-	Status          status.ResourceStatus
+	Tier              string
+	OwnerKind         string
+	OwnerSubject      string
+	DeletionTimestamp *time.Time
+	UID               string
+	Name              string
+	Generation        int64
+	ResourceVersion   string
+	Revision          string
+	Finalizers        []string
+	Status            status.ResourceStatus
 }
 
 // RepositoryClient provisions the namespace's system repository and checks
@@ -68,12 +72,17 @@ type DeletionClient interface {
 	CompleteDeletion(ctx context.Context, namespace, resourceVersion, uid string) error
 }
 
+type OwnerAccessClient interface {
+	EnsureOwnerAccess(context.Context, Namespace) (string, error)
+}
+
 // Reconciler implements types.Reconciler for Namespace resources.
 type Reconciler struct {
 	lookup         cache.LookupFunc[Namespace]
 	statusClient   status.StatusClient
 	repositories   RepositoryClient
 	deletionClient DeletionClient
+	ownerAccess    OwnerAccessClient
 }
 
 // NewReconciler returns a Namespace reconciler.
@@ -91,6 +100,11 @@ func NewReconcilerWithLookup(lookup cache.LookupFunc[Namespace], statusClient st
 }
 
 // Reconcile provisions active admitted namespaces and drains terminating ones.
+func (r *Reconciler) WithOwnerAccess(client OwnerAccessClient) *Reconciler {
+	r.ownerAccess = client
+	return r
+}
+
 func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
 	current, ok, err := r.lookup(ctx, key)
 	if err != nil {
@@ -121,7 +135,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 	if _, bootstrap := bootstrapNamespaces[current.Name]; bootstrap {
 		return types.ResultOK()
 	}
-	if slices.Contains(current.Finalizers, ForegroundDeletionFinalizer) || conditionTrue(current.Status.Conditions, "DeletionPending") {
+	if current.DeletionTimestamp != nil || slices.Contains(current.Finalizers, ForegroundDeletionFinalizer) || conditionTrue(current.Status.Conditions, "DeletionPending") {
 		return r.reconcileDeletion(ctx, current)
 	}
 	return r.reconcileActive(ctx, key, current)
@@ -136,8 +150,29 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 
 	systemReady := admitted && provisionErr == nil
 	conditions := mergeControllerConditions(current, admitted, systemReady, provisionErr)
+	var ownerErr error
+	if r.ownerAccess != nil && current.Tier == "USER" {
+		ownerCondition := &status.Condition{Type: "OwnerAccessReady", Status: statusFalse, ObservedGeneration: current.Generation,
+			LastTransitionTime: time.Now().UTC(), Reason: "Pending", Message: "owner access waits for namespace admission and system storage"}
+		if systemReady {
+			var revision string
+			revision, ownerErr = r.ownerAccess.EnsureOwnerAccess(ctx, current)
+			if ownerErr != nil {
+				ownerCondition.Reason, ownerCondition.Message = "Failed", "owner binding admission is pending; inspect controller diagnostics"
+			} else {
+				ownerCondition.Status, ownerCondition.Reason = statusTrue, "BindingAdmitted"
+				ownerCondition.Message = "binding admitted at " + revision + "; per-API authorization readiness is independent"
+			}
+		}
+		preserveTransitionTime(ownerCondition, current.Status.Conditions)
+		conditions = slices.DeleteFunc(conditions, func(condition *status.Condition) bool {
+			return condition != nil && condition.Type == ownerCondition.Type
+		})
+		conditions = append(conditions, ownerCondition)
+	}
 	generation := current.Generation
 	patch := &status.StatusPatch{
+		UID:                current.UID,
 		ResourceVersion:    current.ResourceVersion,
 		ObservedGeneration: &generation,
 		Conditions:         conditions,
@@ -153,6 +188,9 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 	}
 	if provisionErr != nil {
 		return types.ResultTransient(fmt.Errorf("namespace: provision system repository: %w", provisionErr))
+	}
+	if ownerErr != nil {
+		return types.ResultTransient(fmt.Errorf("namespace: provision owner access: %w", ownerErr))
 	}
 	return types.ResultOK()
 }

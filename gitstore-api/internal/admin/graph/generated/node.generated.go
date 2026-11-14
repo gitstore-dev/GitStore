@@ -63,6 +63,20 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 			return graphql.Null
 		}
 		return ec._ServiceAccount(ctx, sel, obj)
+	case model.RoleBinding:
+		return ec._RoleBinding(ctx, sel, &obj)
+	case *model.RoleBinding:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._RoleBinding(ctx, sel, obj)
+	case model.Role:
+		return ec._Role(ctx, sel, &obj)
+	case *model.Role:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._Role(ctx, sel, obj)
 	case model.Repository:
 		return ec._Repository(ctx, sel, &obj)
 	case *model.Repository:
@@ -105,6 +119,20 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 			return graphql.Null
 		}
 		return ec._Collection(ctx, sel, obj)
+	case model.ClusterRoleBinding:
+		return ec._ClusterRoleBinding(ctx, sel, &obj)
+	case *model.ClusterRoleBinding:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ClusterRoleBinding(ctx, sel, obj)
+	case model.ClusterRole:
+		return ec._ClusterRole(ctx, sel, &obj)
+	case *model.ClusterRole:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._ClusterRole(ctx, sel, obj)
 	case model.Category:
 		return ec._Category(ctx, sel, &obj)
 	case *model.Category:

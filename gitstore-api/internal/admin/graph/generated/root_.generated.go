@@ -35,6 +35,10 @@ type DirectiveRoot struct {
 }
 
 type ComplexityRoot struct {
+	AccessReviewPayload struct {
+		SubjectAccessReview func(childComplexity int) int
+	}
+
 	ActorConnection struct {
 		Edges    func(childComplexity int) int
 		PageInfo func(childComplexity int) int
@@ -112,6 +116,67 @@ type ComplexityRoot struct {
 		Type            func(childComplexity int) int
 	}
 
+	ClusterRole struct {
+		APIVersion func(childComplexity int) int
+		ID         func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Spec       func(childComplexity int) int
+		Status     func(childComplexity int) int
+	}
+
+	ClusterRoleBinding struct {
+		APIVersion func(childComplexity int) int
+		ID         func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Spec       func(childComplexity int) int
+		Status     func(childComplexity int) int
+	}
+
+	ClusterRoleBindingConnection struct {
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
+	}
+
+	ClusterRoleBindingEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
+	}
+
+	ClusterRoleBindingSpec struct {
+		RoleRef  func(childComplexity int) int
+		Subjects func(childComplexity int) int
+	}
+
+	ClusterRoleBindingWatchEvent struct {
+		ClusterRoleBinding func(childComplexity int) int
+		Name               func(childComplexity int) int
+		ResourceVersion    func(childComplexity int) int
+		Type               func(childComplexity int) int
+	}
+
+	ClusterRoleConnection struct {
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
+	}
+
+	ClusterRoleEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
+	}
+
+	ClusterRoleSpec struct {
+		Rules func(childComplexity int) int
+	}
+
+	ClusterRoleWatchEvent struct {
+		ClusterRole     func(childComplexity int) int
+		Name            func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		Type            func(childComplexity int) int
+	}
+
 	Collection struct {
 		APIVersion func(childComplexity int) int
 		Body       func(childComplexity int) int
@@ -150,6 +215,14 @@ type ComplexityRoot struct {
 		ID func(childComplexity int) int
 	}
 
+	CompleteClusterRoleBindingDeletionPayload struct {
+		ID func(childComplexity int) int
+	}
+
+	CompleteClusterRoleDeletionPayload struct {
+		ID func(childComplexity int) int
+	}
+
 	CompleteNamespaceDeletionPayload struct {
 		ID func(childComplexity int) int
 	}
@@ -159,6 +232,14 @@ type ComplexityRoot struct {
 	}
 
 	CompleteRepositoryDeletionPayload struct {
+		ID func(childComplexity int) int
+	}
+
+	CompleteRoleBindingDeletionPayload struct {
+		ID func(childComplexity int) int
+	}
+
+	CompleteRoleDeletionPayload struct {
 		ID func(childComplexity int) int
 	}
 
@@ -180,6 +261,14 @@ type ComplexityRoot struct {
 		Category func(childComplexity int) int
 	}
 
+	CreateClusterRoleBindingPayload struct {
+		ClusterRoleBinding func(childComplexity int) int
+	}
+
+	CreateClusterRolePayload struct {
+		ClusterRole func(childComplexity int) int
+	}
+
 	CreateNamespacePayload struct {
 		Namespace func(childComplexity int) int
 	}
@@ -190,6 +279,14 @@ type ComplexityRoot struct {
 
 	CreateRepositoryPayload struct {
 		Repository func(childComplexity int) int
+	}
+
+	CreateRoleBindingPayload struct {
+		RoleBinding func(childComplexity int) int
+	}
+
+	CreateRolePayload struct {
+		Role func(childComplexity int) int
 	}
 
 	CreateServiceAccountPayload struct {
@@ -230,6 +327,16 @@ type ComplexityRoot struct {
 		Outcome  func(childComplexity int) int
 	}
 
+	DeleteClusterRoleBindingPayload struct {
+		ClusterRoleBinding func(childComplexity int) int
+		Outcome            func(childComplexity int) int
+	}
+
+	DeleteClusterRolePayload struct {
+		ClusterRole func(childComplexity int) int
+		Outcome     func(childComplexity int) int
+	}
+
 	DeleteNamespacePayload struct {
 		Namespace func(childComplexity int) int
 		Outcome   func(childComplexity int) int
@@ -243,6 +350,16 @@ type ComplexityRoot struct {
 	DeleteRepositoryPayload struct {
 		Outcome    func(childComplexity int) int
 		Repository func(childComplexity int) int
+	}
+
+	DeleteRoleBindingPayload struct {
+		Outcome     func(childComplexity int) int
+		RoleBinding func(childComplexity int) int
+	}
+
+	DeleteRolePayload struct {
+		Outcome func(childComplexity int) int
+		Role    func(childComplexity int) int
 	}
 
 	DeleteServiceAccountPayload struct {
@@ -360,20 +477,32 @@ type ComplexityRoot struct {
 	Mutation struct {
 		AssignUserGroup                    func(childComplexity int, input model.AssignUserGroupInput) int
 		CompleteCategoryDeletion           func(childComplexity int, input model.CompleteCategoryDeletionInput) int
+		CompleteClusterRoleBindingDeletion func(childComplexity int, input model.CompleteClusterRoleBindingDeletionInput) int
+		CompleteClusterRoleDeletion        func(childComplexity int, input model.CompleteClusterRoleDeletionInput) int
 		CompleteNamespaceDeletion          func(childComplexity int, input model.CompleteNamespaceDeletionInput) int
 		CompleteProductDeletion            func(childComplexity int, input model.CompleteProductDeletionInput) int
 		CompleteRepositoryDeletion         func(childComplexity int, input model.CompleteRepositoryDeletionInput) int
+		CompleteRoleBindingDeletion        func(childComplexity int, input model.CompleteRoleBindingDeletionInput) int
+		CompleteRoleDeletion               func(childComplexity int, input model.CompleteRoleDeletionInput) int
 		CreateCategory                     func(childComplexity int, input model.CreateCategoryInput) int
+		CreateClusterRole                  func(childComplexity int, input model.CreateClusterRoleInput) int
+		CreateClusterRoleBinding           func(childComplexity int, input model.CreateClusterRoleBindingInput) int
 		CreateNamespace                    func(childComplexity int, input model.CreateNamespaceInput) int
 		CreateProduct                      func(childComplexity int, input model.CreateProductInput) int
 		CreateRepository                   func(childComplexity int, input model.CreateRepositoryInput) int
+		CreateRole                         func(childComplexity int, input model.CreateRoleInput) int
+		CreateRoleBinding                  func(childComplexity int, input model.CreateRoleBindingInput) int
 		CreateServiceAccount               func(childComplexity int, input model.CreateServiceAccountInput) int
 		CreateStaff                        func(childComplexity int, input model.CreateStaffInput) int
 		DeactivateUser                     func(childComplexity int, input model.DeactivateUserInput) int
 		DeleteCategory                     func(childComplexity int, input model.DeleteCategoryInput) int
+		DeleteClusterRole                  func(childComplexity int, input model.DeleteClusterRoleInput) int
+		DeleteClusterRoleBinding           func(childComplexity int, input model.DeleteClusterRoleBindingInput) int
 		DeleteNamespace                    func(childComplexity int, input model.DeleteNamespaceInput) int
 		DeleteProduct                      func(childComplexity int, input model.DeleteProductInput) int
 		DeleteRepository                   func(childComplexity int, input model.DeleteRepositoryInput) int
+		DeleteRole                         func(childComplexity int, input model.DeleteRoleInput) int
+		DeleteRoleBinding                  func(childComplexity int, input model.DeleteRoleBindingInput) int
 		DeleteServiceAccount               func(childComplexity int, input model.DeleteServiceAccountInput) int
 		DeleteUser                         func(childComplexity int, input model.DeleteUserInput) int
 		IssueServiceAccountToken           func(childComplexity int, input model.IssueServiceAccountTokenInput) int
@@ -382,6 +511,7 @@ type ComplexityRoot struct {
 		ProvisionNamespaceSystemRepository func(childComplexity int, input model.ProvisionNamespaceSystemRepositoryInput) int
 		ProvisionRepositoryStorage         func(childComplexity int, input model.ProvisionRepositoryStorageInput) int
 		ReactivateUser                     func(childComplexity int, input model.ReactivateUserInput) int
+		ReconcileRBACNamespaceCleanups     func(childComplexity int, input model.ReconcileRBACNamespaceCleanupsInput) int
 		RefreshToken                       func(childComplexity int, input model.RefreshTokenInput) int
 		RemoveUserGroup                    func(childComplexity int, input model.RemoveUserGroupInput) int
 		ResendStaffInvitation              func(childComplexity int, input model.ResendStaffInvitationInput) int
@@ -391,6 +521,8 @@ type ComplexityRoot struct {
 		TransferNamespaceOwner             func(childComplexity int, input model.TransferNamespaceOwnerInput) int
 		UpdateCategory                     func(childComplexity int, input model.UpdateCategoryInput) int
 		UpdateCategoryStatus               func(childComplexity int, input model.UpdateCategoryStatusInput) int
+		UpdateClusterRole                  func(childComplexity int, input model.UpdateClusterRoleInput) int
+		UpdateClusterRoleBinding           func(childComplexity int, input model.UpdateClusterRoleBindingInput) int
 		UpdateNamespace                    func(childComplexity int, input model.UpdateNamespaceInput) int
 		UpdateNamespaceStatus              func(childComplexity int, input model.UpdateNamespaceStatusInput) int
 		UpdateProduct                      func(childComplexity int, input model.UpdateProductInput) int
@@ -398,6 +530,8 @@ type ComplexityRoot struct {
 		UpdateRepository                   func(childComplexity int, input model.UpdateRepositoryInput) int
 		UpdateRepositoryStatus             func(childComplexity int, input model.UpdateRepositoryStatusInput) int
 		UpdateResourceStatus               func(childComplexity int, input model.UpdateResourceStatusInput) int
+		UpdateRole                         func(childComplexity int, input model.UpdateRoleInput) int
+		UpdateRoleBinding                  func(childComplexity int, input model.UpdateRoleBindingInput) int
 		UpdateUser                         func(childComplexity int, input model.UpdateUserInput) int
 	}
 
@@ -623,24 +757,74 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		Actor           func(childComplexity int, by model.ActorBy) int
-		Actors          func(childComplexity int, first *int32, after *string, last *int32, before *string) int
-		Categories      func(childComplexity int, namespace string, filter *model.CategoryFilterInput, first *int32, after *string, last *int32, before *string) int
-		Category        func(childComplexity int, by model.CategoryBy) int
-		Collection      func(childComplexity int, by model.CollectionBy) int
-		Collections     func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
-		File            func(childComplexity int, by model.FileBy) int
-		Namespace       func(childComplexity int, by model.NamespaceBy) int
-		Namespaces      func(childComplexity int, first *int32, after *string, last *int32, before *string) int
-		Node            func(childComplexity int, id string) int
-		Nodes           func(childComplexity int, ids []string) int
-		Product         func(childComplexity int, by model.ProductBy) int
-		ProductVariant  func(childComplexity int, by model.ProductVariantBy) int
-		ProductVariants func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
-		Products        func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
-		Repositories    func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
-		Repository      func(childComplexity int, by model.RepositoryBy) int
-		ServiceAccounts func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+		AccessReview        func(childComplexity int, input model.AccessReviewInput) int
+		Actor               func(childComplexity int, by model.ActorBy) int
+		Actors              func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+		Categories          func(childComplexity int, namespace string, filter *model.CategoryFilterInput, first *int32, after *string, last *int32, before *string) int
+		Category            func(childComplexity int, by model.CategoryBy) int
+		ClusterRole         func(childComplexity int, by model.ClusterRoleBy) int
+		ClusterRoleBinding  func(childComplexity int, by model.ClusterRoleBindingBy) int
+		ClusterRoleBindings func(childComplexity int, first *int32, after *string, selector *model.LabelSelectorInput) int
+		ClusterRoles        func(childComplexity int, first *int32, after *string, selector *model.LabelSelectorInput) int
+		Collection          func(childComplexity int, by model.CollectionBy) int
+		Collections         func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		File                func(childComplexity int, by model.FileBy) int
+		Namespace           func(childComplexity int, by model.NamespaceBy) int
+		Namespaces          func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+		Node                func(childComplexity int, id string) int
+		Nodes               func(childComplexity int, ids []string) int
+		Product             func(childComplexity int, by model.ProductBy) int
+		ProductVariant      func(childComplexity int, by model.ProductVariantBy) int
+		ProductVariants     func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		Products            func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		Repositories        func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		Repository          func(childComplexity int, by model.RepositoryBy) int
+		Role                func(childComplexity int, by model.RoleBy) int
+		RoleBinding         func(childComplexity int, by model.RoleBindingBy) int
+		RoleBindings        func(childComplexity int, namespace string, first *int32, after *string, selector *model.LabelSelectorInput) int
+		Roles               func(childComplexity int, namespace string, first *int32, after *string, selector *model.LabelSelectorInput) int
+		ServiceAccounts     func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+	}
+
+	RBACAttributeCondition struct {
+		Attr   func(childComplexity int) int
+		Op     func(childComplexity int) int
+		Value  func(childComplexity int) int
+		Values func(childComplexity int) int
+	}
+
+	RBACCondition struct {
+		Attribute func(childComplexity int) int
+		Token     func(childComplexity int) int
+	}
+
+	RBACResolvedRole struct {
+		RoleKind func(childComplexity int) int
+		RoleName func(childComplexity int) int
+		RoleUID  func(childComplexity int) int
+	}
+
+	RBACRoleRef struct {
+		Kind func(childComplexity int) int
+		Name func(childComplexity int) int
+	}
+
+	RBACRule struct {
+		ResourceNames func(childComplexity int) int
+		Resources     func(childComplexity int) int
+		Verbs         func(childComplexity int) int
+		When          func(childComplexity int) int
+	}
+
+	RBACStatus struct {
+		Conditions         func(childComplexity int) int
+		ObservedGeneration func(childComplexity int) int
+		Resolved           func(childComplexity int) int
+	}
+
+	RBACSubject struct {
+		Kind func(childComplexity int) int
+		Name func(childComplexity int) int
 	}
 
 	ReactivateUserPayload struct {
@@ -654,6 +838,11 @@ type ComplexityRoot struct {
 		ProcReceive          func(childComplexity int) int
 		ReferenceTransaction func(childComplexity int) int
 		Update               func(childComplexity int) int
+	}
+
+	ReconcileRBACNamespaceCleanupsPayload struct {
+		NextCursor func(childComplexity int) int
+		Pending    func(childComplexity int) int
 	}
 
 	RefreshTokenPayload struct {
@@ -793,6 +982,69 @@ type ComplexityRoot struct {
 		Name func(childComplexity int) int
 	}
 
+	Role struct {
+		APIVersion func(childComplexity int) int
+		ID         func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Spec       func(childComplexity int) int
+		Status     func(childComplexity int) int
+	}
+
+	RoleBinding struct {
+		APIVersion func(childComplexity int) int
+		ID         func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Spec       func(childComplexity int) int
+		Status     func(childComplexity int) int
+	}
+
+	RoleBindingConnection struct {
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
+	}
+
+	RoleBindingEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
+	}
+
+	RoleBindingSpec struct {
+		RoleRef  func(childComplexity int) int
+		Subjects func(childComplexity int) int
+	}
+
+	RoleBindingWatchEvent struct {
+		Name            func(childComplexity int) int
+		Namespace       func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		RoleBinding     func(childComplexity int) int
+		Type            func(childComplexity int) int
+	}
+
+	RoleConnection struct {
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
+	}
+
+	RoleEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
+	}
+
+	RoleSpec struct {
+		Rules func(childComplexity int) int
+	}
+
+	RoleWatchEvent struct {
+		Name            func(childComplexity int) int
+		Namespace       func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		Role            func(childComplexity int) int
+		Type            func(childComplexity int) int
+	}
+
 	RotateServiceAccountKeyPayload struct {
 		ServiceAccount func(childComplexity int) int
 	}
@@ -857,13 +1109,57 @@ type ComplexityRoot struct {
 		Type func(childComplexity int) int
 	}
 
+	SubjectAccessReview struct {
+		APIVersion func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Spec       func(childComplexity int) int
+		Status     func(childComplexity int) int
+	}
+
+	SubjectAccessReviewPrincipal struct {
+		Groups  func(childComplexity int) int
+		Subject func(childComplexity int) int
+	}
+
+	SubjectAccessReviewResourceRef struct {
+		ID func(childComplexity int) int
+	}
+
+	SubjectAccessReviewRevision struct {
+		CapturedAt   func(childComplexity int) int
+		GitRevision  func(childComplexity int) int
+		NamespaceUID func(childComplexity int) int
+		TierID       func(childComplexity int) int
+		TierRevision func(childComplexity int) int
+	}
+
+	SubjectAccessReviewSpec struct {
+		Action      func(childComplexity int) int
+		Context     func(childComplexity int) int
+		Principal   func(childComplexity int) int
+		ResourceRef func(childComplexity int) int
+	}
+
+	SubjectAccessReviewStatus struct {
+		Allowed       func(childComplexity int) int
+		BuiltinDigest func(childComplexity int) int
+		CatalogDigest func(childComplexity int) int
+		Hypothetical  func(childComplexity int) int
+		Reason        func(childComplexity int) int
+		Revisions     func(childComplexity int) int
+	}
+
 	Subscription struct {
-		WatchCategories   func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
-		WatchFiles        func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
-		WatchNamespaces   func(childComplexity int, selector *model.LabelSelectorInput, resourceVersion *string) int
-		WatchProducts     func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
-		WatchRepositories func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
-		WatchResources    func(childComplexity int, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchCategories          func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchClusterRoleBindings func(childComplexity int, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchClusterRoles        func(childComplexity int, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchFiles               func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchNamespaces          func(childComplexity int, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchProducts            func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchRepositories        func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchResources           func(childComplexity int, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchRoleBindings        func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchRoles               func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 	}
 
 	SuspendUserPayload struct {
@@ -910,6 +1206,14 @@ type ComplexityRoot struct {
 		HasMoreProductDependents func(childComplexity int) int
 	}
 
+	UpdateClusterRoleBindingPayload struct {
+		ClusterRoleBinding func(childComplexity int) int
+	}
+
+	UpdateClusterRolePayload struct {
+		ClusterRole func(childComplexity int) int
+	}
+
 	UpdateNamespacePayload struct {
 		Namespace func(childComplexity int) int
 	}
@@ -936,6 +1240,14 @@ type ComplexityRoot struct {
 
 	UpdateResourceStatusPayload struct {
 		Object func(childComplexity int) int
+	}
+
+	UpdateRoleBindingPayload struct {
+		RoleBinding func(childComplexity int) int
+	}
+
+	UpdateRolePayload struct {
+		Role func(childComplexity int) int
 	}
 
 	UpdateUserPayload struct {
@@ -971,6 +1283,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 	ec := newExecutionContext(nil, e, nil)
 	_ = ec
 	switch typeName + "." + field {
+
+	case "AccessReviewPayload.subjectAccessReview":
+		if e.ComplexityRoot.AccessReviewPayload.SubjectAccessReview == nil {
+			break
+		}
+
+		return e.ComplexityRoot.AccessReviewPayload.SubjectAccessReview(childComplexity), true
 
 	case "ActorConnection.edges":
 		if e.ComplexityRoot.ActorConnection.Edges == nil {
@@ -1264,6 +1583,223 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CategoryWatchEvent.Type(childComplexity), true
 
+	case "ClusterRole.apiVersion":
+		if e.ComplexityRoot.ClusterRole.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRole.APIVersion(childComplexity), true
+
+	case "ClusterRole.id":
+		if e.ComplexityRoot.ClusterRole.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRole.ID(childComplexity), true
+
+	case "ClusterRole.kind":
+		if e.ComplexityRoot.ClusterRole.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRole.Kind(childComplexity), true
+
+	case "ClusterRole.metadata":
+		if e.ComplexityRoot.ClusterRole.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRole.Metadata(childComplexity), true
+
+	case "ClusterRole.spec":
+		if e.ComplexityRoot.ClusterRole.Spec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRole.Spec(childComplexity), true
+
+	case "ClusterRole.status":
+		if e.ComplexityRoot.ClusterRole.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRole.Status(childComplexity), true
+
+	case "ClusterRoleBinding.apiVersion":
+		if e.ComplexityRoot.ClusterRoleBinding.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBinding.APIVersion(childComplexity), true
+
+	case "ClusterRoleBinding.id":
+		if e.ComplexityRoot.ClusterRoleBinding.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBinding.ID(childComplexity), true
+
+	case "ClusterRoleBinding.kind":
+		if e.ComplexityRoot.ClusterRoleBinding.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBinding.Kind(childComplexity), true
+
+	case "ClusterRoleBinding.metadata":
+		if e.ComplexityRoot.ClusterRoleBinding.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBinding.Metadata(childComplexity), true
+
+	case "ClusterRoleBinding.spec":
+		if e.ComplexityRoot.ClusterRoleBinding.Spec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBinding.Spec(childComplexity), true
+
+	case "ClusterRoleBinding.status":
+		if e.ComplexityRoot.ClusterRoleBinding.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBinding.Status(childComplexity), true
+
+	case "ClusterRoleBindingConnection.edges":
+		if e.ComplexityRoot.ClusterRoleBindingConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBindingConnection.Edges(childComplexity), true
+
+	case "ClusterRoleBindingConnection.pageInfo":
+		if e.ComplexityRoot.ClusterRoleBindingConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBindingConnection.PageInfo(childComplexity), true
+
+	case "ClusterRoleBindingEdge.cursor":
+		if e.ComplexityRoot.ClusterRoleBindingEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBindingEdge.Cursor(childComplexity), true
+
+	case "ClusterRoleBindingEdge.node":
+		if e.ComplexityRoot.ClusterRoleBindingEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBindingEdge.Node(childComplexity), true
+
+	case "ClusterRoleBindingSpec.roleRef":
+		if e.ComplexityRoot.ClusterRoleBindingSpec.RoleRef == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBindingSpec.RoleRef(childComplexity), true
+
+	case "ClusterRoleBindingSpec.subjects":
+		if e.ComplexityRoot.ClusterRoleBindingSpec.Subjects == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBindingSpec.Subjects(childComplexity), true
+
+	case "ClusterRoleBindingWatchEvent.clusterRoleBinding":
+		if e.ComplexityRoot.ClusterRoleBindingWatchEvent.ClusterRoleBinding == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBindingWatchEvent.ClusterRoleBinding(childComplexity), true
+
+	case "ClusterRoleBindingWatchEvent.name":
+		if e.ComplexityRoot.ClusterRoleBindingWatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBindingWatchEvent.Name(childComplexity), true
+
+	case "ClusterRoleBindingWatchEvent.resourceVersion":
+		if e.ComplexityRoot.ClusterRoleBindingWatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBindingWatchEvent.ResourceVersion(childComplexity), true
+
+	case "ClusterRoleBindingWatchEvent.type":
+		if e.ComplexityRoot.ClusterRoleBindingWatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleBindingWatchEvent.Type(childComplexity), true
+
+	case "ClusterRoleConnection.edges":
+		if e.ComplexityRoot.ClusterRoleConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleConnection.Edges(childComplexity), true
+
+	case "ClusterRoleConnection.pageInfo":
+		if e.ComplexityRoot.ClusterRoleConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleConnection.PageInfo(childComplexity), true
+
+	case "ClusterRoleEdge.cursor":
+		if e.ComplexityRoot.ClusterRoleEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleEdge.Cursor(childComplexity), true
+
+	case "ClusterRoleEdge.node":
+		if e.ComplexityRoot.ClusterRoleEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleEdge.Node(childComplexity), true
+
+	case "ClusterRoleSpec.rules":
+		if e.ComplexityRoot.ClusterRoleSpec.Rules == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleSpec.Rules(childComplexity), true
+
+	case "ClusterRoleWatchEvent.clusterRole":
+		if e.ComplexityRoot.ClusterRoleWatchEvent.ClusterRole == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleWatchEvent.ClusterRole(childComplexity), true
+
+	case "ClusterRoleWatchEvent.name":
+		if e.ComplexityRoot.ClusterRoleWatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleWatchEvent.Name(childComplexity), true
+
+	case "ClusterRoleWatchEvent.resourceVersion":
+		if e.ComplexityRoot.ClusterRoleWatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleWatchEvent.ResourceVersion(childComplexity), true
+
+	case "ClusterRoleWatchEvent.type":
+		if e.ComplexityRoot.ClusterRoleWatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ClusterRoleWatchEvent.Type(childComplexity), true
+
 	case "Collection.apiVersion":
 		if e.ComplexityRoot.Collection.APIVersion == nil {
 			break
@@ -1409,6 +1945,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CompleteCategoryDeletionPayload.ID(childComplexity), true
 
+	case "CompleteClusterRoleBindingDeletionPayload.id":
+		if e.ComplexityRoot.CompleteClusterRoleBindingDeletionPayload.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CompleteClusterRoleBindingDeletionPayload.ID(childComplexity), true
+
+	case "CompleteClusterRoleDeletionPayload.id":
+		if e.ComplexityRoot.CompleteClusterRoleDeletionPayload.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CompleteClusterRoleDeletionPayload.ID(childComplexity), true
+
 	case "CompleteNamespaceDeletionPayload.id":
 		if e.ComplexityRoot.CompleteNamespaceDeletionPayload.ID == nil {
 			break
@@ -1429,6 +1979,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CompleteRepositoryDeletionPayload.ID(childComplexity), true
+
+	case "CompleteRoleBindingDeletionPayload.id":
+		if e.ComplexityRoot.CompleteRoleBindingDeletionPayload.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CompleteRoleBindingDeletionPayload.ID(childComplexity), true
+
+	case "CompleteRoleDeletionPayload.id":
+		if e.ComplexityRoot.CompleteRoleDeletionPayload.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CompleteRoleDeletionPayload.ID(childComplexity), true
 
 	case "Condition.lastTransitionTime":
 		if e.ComplexityRoot.Condition.LastTransitionTime == nil {
@@ -1493,6 +2057,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CreateCategoryPayload.Category(childComplexity), true
 
+	case "CreateClusterRoleBindingPayload.clusterRoleBinding":
+		if e.ComplexityRoot.CreateClusterRoleBindingPayload.ClusterRoleBinding == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CreateClusterRoleBindingPayload.ClusterRoleBinding(childComplexity), true
+
+	case "CreateClusterRolePayload.clusterRole":
+		if e.ComplexityRoot.CreateClusterRolePayload.ClusterRole == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CreateClusterRolePayload.ClusterRole(childComplexity), true
+
 	case "CreateNamespacePayload.namespace":
 		if e.ComplexityRoot.CreateNamespacePayload.Namespace == nil {
 			break
@@ -1513,6 +2091,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.CreateRepositoryPayload.Repository(childComplexity), true
+
+	case "CreateRoleBindingPayload.roleBinding":
+		if e.ComplexityRoot.CreateRoleBindingPayload.RoleBinding == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CreateRoleBindingPayload.RoleBinding(childComplexity), true
+
+	case "CreateRolePayload.role":
+		if e.ComplexityRoot.CreateRolePayload.Role == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CreateRolePayload.Role(childComplexity), true
 
 	case "CreateServiceAccountPayload.serviceAccount":
 		if e.ComplexityRoot.CreateServiceAccountPayload.ServiceAccount == nil {
@@ -1654,6 +2246,34 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.DeleteCategoryPayload.Outcome(childComplexity), true
 
+	case "DeleteClusterRoleBindingPayload.clusterRoleBinding":
+		if e.ComplexityRoot.DeleteClusterRoleBindingPayload.ClusterRoleBinding == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteClusterRoleBindingPayload.ClusterRoleBinding(childComplexity), true
+
+	case "DeleteClusterRoleBindingPayload.outcome":
+		if e.ComplexityRoot.DeleteClusterRoleBindingPayload.Outcome == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteClusterRoleBindingPayload.Outcome(childComplexity), true
+
+	case "DeleteClusterRolePayload.clusterRole":
+		if e.ComplexityRoot.DeleteClusterRolePayload.ClusterRole == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteClusterRolePayload.ClusterRole(childComplexity), true
+
+	case "DeleteClusterRolePayload.outcome":
+		if e.ComplexityRoot.DeleteClusterRolePayload.Outcome == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteClusterRolePayload.Outcome(childComplexity), true
+
 	case "DeleteNamespacePayload.namespace":
 		if e.ComplexityRoot.DeleteNamespacePayload.Namespace == nil {
 			break
@@ -1695,6 +2315,34 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.DeleteRepositoryPayload.Repository(childComplexity), true
+
+	case "DeleteRoleBindingPayload.outcome":
+		if e.ComplexityRoot.DeleteRoleBindingPayload.Outcome == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteRoleBindingPayload.Outcome(childComplexity), true
+
+	case "DeleteRoleBindingPayload.roleBinding":
+		if e.ComplexityRoot.DeleteRoleBindingPayload.RoleBinding == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteRoleBindingPayload.RoleBinding(childComplexity), true
+
+	case "DeleteRolePayload.outcome":
+		if e.ComplexityRoot.DeleteRolePayload.Outcome == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteRolePayload.Outcome(childComplexity), true
+
+	case "DeleteRolePayload.role":
+		if e.ComplexityRoot.DeleteRolePayload.Role == nil {
+			break
+		}
+
+		return e.ComplexityRoot.DeleteRolePayload.Role(childComplexity), true
 
 	case "DeleteServiceAccountPayload.serviceAccount":
 		if e.ComplexityRoot.DeleteServiceAccountPayload.ServiceAccount == nil {
@@ -2063,6 +2711,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.CompleteCategoryDeletion(childComplexity, args["input"].(model.CompleteCategoryDeletionInput)), true
 
+	case "Mutation.completeClusterRoleBindingDeletion":
+		if e.ComplexityRoot.Mutation.CompleteClusterRoleBindingDeletion == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_completeClusterRoleBindingDeletion_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CompleteClusterRoleBindingDeletion(childComplexity, args["input"].(model.CompleteClusterRoleBindingDeletionInput)), true
+
+	case "Mutation.completeClusterRoleDeletion":
+		if e.ComplexityRoot.Mutation.CompleteClusterRoleDeletion == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_completeClusterRoleDeletion_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CompleteClusterRoleDeletion(childComplexity, args["input"].(model.CompleteClusterRoleDeletionInput)), true
+
 	case "Mutation.completeNamespaceDeletion":
 		if e.ComplexityRoot.Mutation.CompleteNamespaceDeletion == nil {
 			break
@@ -2099,6 +2771,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.CompleteRepositoryDeletion(childComplexity, args["input"].(model.CompleteRepositoryDeletionInput)), true
 
+	case "Mutation.completeRoleBindingDeletion":
+		if e.ComplexityRoot.Mutation.CompleteRoleBindingDeletion == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_completeRoleBindingDeletion_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CompleteRoleBindingDeletion(childComplexity, args["input"].(model.CompleteRoleBindingDeletionInput)), true
+
+	case "Mutation.completeRoleDeletion":
+		if e.ComplexityRoot.Mutation.CompleteRoleDeletion == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_completeRoleDeletion_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CompleteRoleDeletion(childComplexity, args["input"].(model.CompleteRoleDeletionInput)), true
+
 	case "Mutation.createCategory":
 		if e.ComplexityRoot.Mutation.CreateCategory == nil {
 			break
@@ -2110,6 +2806,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.CreateCategory(childComplexity, args["input"].(model.CreateCategoryInput)), true
+
+	case "Mutation.createClusterRole":
+		if e.ComplexityRoot.Mutation.CreateClusterRole == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_createClusterRole_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CreateClusterRole(childComplexity, args["input"].(model.CreateClusterRoleInput)), true
+
+	case "Mutation.createClusterRoleBinding":
+		if e.ComplexityRoot.Mutation.CreateClusterRoleBinding == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_createClusterRoleBinding_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CreateClusterRoleBinding(childComplexity, args["input"].(model.CreateClusterRoleBindingInput)), true
 
 	case "Mutation.createNamespace":
 		if e.ComplexityRoot.Mutation.CreateNamespace == nil {
@@ -2146,6 +2866,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.CreateRepository(childComplexity, args["input"].(model.CreateRepositoryInput)), true
+
+	case "Mutation.createRole":
+		if e.ComplexityRoot.Mutation.CreateRole == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_createRole_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CreateRole(childComplexity, args["input"].(model.CreateRoleInput)), true
+
+	case "Mutation.createRoleBinding":
+		if e.ComplexityRoot.Mutation.CreateRoleBinding == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_createRoleBinding_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.CreateRoleBinding(childComplexity, args["input"].(model.CreateRoleBindingInput)), true
 
 	case "Mutation.createServiceAccount":
 		if e.ComplexityRoot.Mutation.CreateServiceAccount == nil {
@@ -2195,6 +2939,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.DeleteCategory(childComplexity, args["input"].(model.DeleteCategoryInput)), true
 
+	case "Mutation.deleteClusterRole":
+		if e.ComplexityRoot.Mutation.DeleteClusterRole == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_deleteClusterRole_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.DeleteClusterRole(childComplexity, args["input"].(model.DeleteClusterRoleInput)), true
+
+	case "Mutation.deleteClusterRoleBinding":
+		if e.ComplexityRoot.Mutation.DeleteClusterRoleBinding == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_deleteClusterRoleBinding_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.DeleteClusterRoleBinding(childComplexity, args["input"].(model.DeleteClusterRoleBindingInput)), true
+
 	case "Mutation.deleteNamespace":
 		if e.ComplexityRoot.Mutation.DeleteNamespace == nil {
 			break
@@ -2230,6 +2998,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.DeleteRepository(childComplexity, args["input"].(model.DeleteRepositoryInput)), true
+
+	case "Mutation.deleteRole":
+		if e.ComplexityRoot.Mutation.DeleteRole == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_deleteRole_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.DeleteRole(childComplexity, args["input"].(model.DeleteRoleInput)), true
+
+	case "Mutation.deleteRoleBinding":
+		if e.ComplexityRoot.Mutation.DeleteRoleBinding == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_deleteRoleBinding_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.DeleteRoleBinding(childComplexity, args["input"].(model.DeleteRoleBindingInput)), true
 
 	case "Mutation.deleteServiceAccount":
 		if e.ComplexityRoot.Mutation.DeleteServiceAccount == nil {
@@ -2321,6 +3113,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.ReactivateUser(childComplexity, args["input"].(model.ReactivateUserInput)), true
+
+	case "Mutation.reconcileRBACNamespaceCleanups":
+		if e.ComplexityRoot.Mutation.ReconcileRBACNamespaceCleanups == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_reconcileRBACNamespaceCleanups_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ReconcileRBACNamespaceCleanups(childComplexity, args["input"].(model.ReconcileRBACNamespaceCleanupsInput)), true
 
 	case "Mutation.refreshToken":
 		if e.ComplexityRoot.Mutation.RefreshToken == nil {
@@ -2430,6 +3234,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Mutation.UpdateCategoryStatus(childComplexity, args["input"].(model.UpdateCategoryStatusInput)), true
 
+	case "Mutation.updateClusterRole":
+		if e.ComplexityRoot.Mutation.UpdateClusterRole == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateClusterRole_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateClusterRole(childComplexity, args["input"].(model.UpdateClusterRoleInput)), true
+
+	case "Mutation.updateClusterRoleBinding":
+		if e.ComplexityRoot.Mutation.UpdateClusterRoleBinding == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateClusterRoleBinding_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateClusterRoleBinding(childComplexity, args["input"].(model.UpdateClusterRoleBindingInput)), true
+
 	case "Mutation.updateNamespace":
 		if e.ComplexityRoot.Mutation.UpdateNamespace == nil {
 			break
@@ -2513,6 +3341,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.UpdateResourceStatus(childComplexity, args["input"].(model.UpdateResourceStatusInput)), true
+
+	case "Mutation.updateRole":
+		if e.ComplexityRoot.Mutation.UpdateRole == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateRole_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateRole(childComplexity, args["input"].(model.UpdateRoleInput)), true
+
+	case "Mutation.updateRoleBinding":
+		if e.ComplexityRoot.Mutation.UpdateRoleBinding == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateRoleBinding_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateRoleBinding(childComplexity, args["input"].(model.UpdateRoleBindingInput)), true
 
 	case "Mutation.updateUser":
 		if e.ComplexityRoot.Mutation.UpdateUser == nil {
@@ -3406,6 +4258,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.QuantityDefinition.Min(childComplexity), true
 
+	case "Query.accessReview":
+		if e.ComplexityRoot.Query.AccessReview == nil {
+			break
+		}
+
+		args, err := ec.field_Query_accessReview_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.AccessReview(childComplexity, args["input"].(model.AccessReviewInput)), true
+
 	case "Query.actor":
 		if e.ComplexityRoot.Query.Actor == nil {
 			break
@@ -3453,6 +4317,54 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.Category(childComplexity, args["by"].(model.CategoryBy)), true
+
+	case "Query.clusterRole":
+		if e.ComplexityRoot.Query.ClusterRole == nil {
+			break
+		}
+
+		args, err := ec.field_Query_clusterRole_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ClusterRole(childComplexity, args["by"].(model.ClusterRoleBy)), true
+
+	case "Query.clusterRoleBinding":
+		if e.ComplexityRoot.Query.ClusterRoleBinding == nil {
+			break
+		}
+
+		args, err := ec.field_Query_clusterRoleBinding_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ClusterRoleBinding(childComplexity, args["by"].(model.ClusterRoleBindingBy)), true
+
+	case "Query.clusterRoleBindings":
+		if e.ComplexityRoot.Query.ClusterRoleBindings == nil {
+			break
+		}
+
+		args, err := ec.field_Query_clusterRoleBindings_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ClusterRoleBindings(childComplexity, args["first"].(*int32), args["after"].(*string), args["selector"].(*model.LabelSelectorInput)), true
+
+	case "Query.clusterRoles":
+		if e.ComplexityRoot.Query.ClusterRoles == nil {
+			break
+		}
+
+		args, err := ec.field_Query_clusterRoles_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ClusterRoles(childComplexity, args["first"].(*int32), args["after"].(*string), args["selector"].(*model.LabelSelectorInput)), true
 
 	case "Query.collection":
 		if e.ComplexityRoot.Query.Collection == nil {
@@ -3610,6 +4522,54 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.Repository(childComplexity, args["by"].(model.RepositoryBy)), true
 
+	case "Query.role":
+		if e.ComplexityRoot.Query.Role == nil {
+			break
+		}
+
+		args, err := ec.field_Query_role_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.Role(childComplexity, args["by"].(model.RoleBy)), true
+
+	case "Query.roleBinding":
+		if e.ComplexityRoot.Query.RoleBinding == nil {
+			break
+		}
+
+		args, err := ec.field_Query_roleBinding_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.RoleBinding(childComplexity, args["by"].(model.RoleBindingBy)), true
+
+	case "Query.roleBindings":
+		if e.ComplexityRoot.Query.RoleBindings == nil {
+			break
+		}
+
+		args, err := ec.field_Query_roleBindings_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.RoleBindings(childComplexity, args["namespace"].(string), args["first"].(*int32), args["after"].(*string), args["selector"].(*model.LabelSelectorInput)), true
+
+	case "Query.roles":
+		if e.ComplexityRoot.Query.Roles == nil {
+			break
+		}
+
+		args, err := ec.field_Query_roles_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.Roles(childComplexity, args["namespace"].(string), args["first"].(*int32), args["after"].(*string), args["selector"].(*model.LabelSelectorInput)), true
+
 	case "Query.serviceAccounts":
 		if e.ComplexityRoot.Query.ServiceAccounts == nil {
 			break
@@ -3621,6 +4581,146 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.ServiceAccounts(childComplexity, args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
+
+	case "RBACAttributeCondition.attr":
+		if e.ComplexityRoot.RBACAttributeCondition.Attr == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACAttributeCondition.Attr(childComplexity), true
+
+	case "RBACAttributeCondition.op":
+		if e.ComplexityRoot.RBACAttributeCondition.Op == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACAttributeCondition.Op(childComplexity), true
+
+	case "RBACAttributeCondition.value":
+		if e.ComplexityRoot.RBACAttributeCondition.Value == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACAttributeCondition.Value(childComplexity), true
+
+	case "RBACAttributeCondition.values":
+		if e.ComplexityRoot.RBACAttributeCondition.Values == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACAttributeCondition.Values(childComplexity), true
+
+	case "RBACCondition.attribute":
+		if e.ComplexityRoot.RBACCondition.Attribute == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACCondition.Attribute(childComplexity), true
+
+	case "RBACCondition.token":
+		if e.ComplexityRoot.RBACCondition.Token == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACCondition.Token(childComplexity), true
+
+	case "RBACResolvedRole.roleKind":
+		if e.ComplexityRoot.RBACResolvedRole.RoleKind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACResolvedRole.RoleKind(childComplexity), true
+
+	case "RBACResolvedRole.roleName":
+		if e.ComplexityRoot.RBACResolvedRole.RoleName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACResolvedRole.RoleName(childComplexity), true
+
+	case "RBACResolvedRole.roleUID":
+		if e.ComplexityRoot.RBACResolvedRole.RoleUID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACResolvedRole.RoleUID(childComplexity), true
+
+	case "RBACRoleRef.kind":
+		if e.ComplexityRoot.RBACRoleRef.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACRoleRef.Kind(childComplexity), true
+
+	case "RBACRoleRef.name":
+		if e.ComplexityRoot.RBACRoleRef.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACRoleRef.Name(childComplexity), true
+
+	case "RBACRule.resourceNames":
+		if e.ComplexityRoot.RBACRule.ResourceNames == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACRule.ResourceNames(childComplexity), true
+
+	case "RBACRule.resources":
+		if e.ComplexityRoot.RBACRule.Resources == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACRule.Resources(childComplexity), true
+
+	case "RBACRule.verbs":
+		if e.ComplexityRoot.RBACRule.Verbs == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACRule.Verbs(childComplexity), true
+
+	case "RBACRule.when":
+		if e.ComplexityRoot.RBACRule.When == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACRule.When(childComplexity), true
+
+	case "RBACStatus.conditions":
+		if e.ComplexityRoot.RBACStatus.Conditions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACStatus.Conditions(childComplexity), true
+
+	case "RBACStatus.observedGeneration":
+		if e.ComplexityRoot.RBACStatus.ObservedGeneration == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACStatus.ObservedGeneration(childComplexity), true
+
+	case "RBACStatus.resolved":
+		if e.ComplexityRoot.RBACStatus.Resolved == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACStatus.Resolved(childComplexity), true
+
+	case "RBACSubject.kind":
+		if e.ComplexityRoot.RBACSubject.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACSubject.Kind(childComplexity), true
+
+	case "RBACSubject.name":
+		if e.ComplexityRoot.RBACSubject.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACSubject.Name(childComplexity), true
 
 	case "ReactivateUserPayload.actor":
 		if e.ComplexityRoot.ReactivateUserPayload.Actor == nil {
@@ -3670,6 +4770,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.ReceivePackHookDefaults.Update(childComplexity), true
+
+	case "ReconcileRBACNamespaceCleanupsPayload.nextCursor":
+		if e.ComplexityRoot.ReconcileRBACNamespaceCleanupsPayload.NextCursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ReconcileRBACNamespaceCleanupsPayload.NextCursor(childComplexity), true
+
+	case "ReconcileRBACNamespaceCleanupsPayload.pending":
+		if e.ComplexityRoot.ReconcileRBACNamespaceCleanupsPayload.Pending == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ReconcileRBACNamespaceCleanupsPayload.Pending(childComplexity), true
 
 	case "RefreshTokenPayload.token":
 		if e.ComplexityRoot.RefreshTokenPayload.Token == nil {
@@ -4168,6 +5282,237 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ResourceOwner.Name(childComplexity), true
 
+	case "Role.apiVersion":
+		if e.ComplexityRoot.Role.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Role.APIVersion(childComplexity), true
+
+	case "Role.id":
+		if e.ComplexityRoot.Role.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Role.ID(childComplexity), true
+
+	case "Role.kind":
+		if e.ComplexityRoot.Role.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Role.Kind(childComplexity), true
+
+	case "Role.metadata":
+		if e.ComplexityRoot.Role.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Role.Metadata(childComplexity), true
+
+	case "Role.spec":
+		if e.ComplexityRoot.Role.Spec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Role.Spec(childComplexity), true
+
+	case "Role.status":
+		if e.ComplexityRoot.Role.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Role.Status(childComplexity), true
+
+	case "RoleBinding.apiVersion":
+		if e.ComplexityRoot.RoleBinding.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBinding.APIVersion(childComplexity), true
+
+	case "RoleBinding.id":
+		if e.ComplexityRoot.RoleBinding.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBinding.ID(childComplexity), true
+
+	case "RoleBinding.kind":
+		if e.ComplexityRoot.RoleBinding.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBinding.Kind(childComplexity), true
+
+	case "RoleBinding.metadata":
+		if e.ComplexityRoot.RoleBinding.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBinding.Metadata(childComplexity), true
+
+	case "RoleBinding.spec":
+		if e.ComplexityRoot.RoleBinding.Spec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBinding.Spec(childComplexity), true
+
+	case "RoleBinding.status":
+		if e.ComplexityRoot.RoleBinding.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBinding.Status(childComplexity), true
+
+	case "RoleBindingConnection.edges":
+		if e.ComplexityRoot.RoleBindingConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBindingConnection.Edges(childComplexity), true
+
+	case "RoleBindingConnection.pageInfo":
+		if e.ComplexityRoot.RoleBindingConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBindingConnection.PageInfo(childComplexity), true
+
+	case "RoleBindingEdge.cursor":
+		if e.ComplexityRoot.RoleBindingEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBindingEdge.Cursor(childComplexity), true
+
+	case "RoleBindingEdge.node":
+		if e.ComplexityRoot.RoleBindingEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBindingEdge.Node(childComplexity), true
+
+	case "RoleBindingSpec.roleRef":
+		if e.ComplexityRoot.RoleBindingSpec.RoleRef == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBindingSpec.RoleRef(childComplexity), true
+
+	case "RoleBindingSpec.subjects":
+		if e.ComplexityRoot.RoleBindingSpec.Subjects == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBindingSpec.Subjects(childComplexity), true
+
+	case "RoleBindingWatchEvent.name":
+		if e.ComplexityRoot.RoleBindingWatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBindingWatchEvent.Name(childComplexity), true
+
+	case "RoleBindingWatchEvent.namespace":
+		if e.ComplexityRoot.RoleBindingWatchEvent.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBindingWatchEvent.Namespace(childComplexity), true
+
+	case "RoleBindingWatchEvent.resourceVersion":
+		if e.ComplexityRoot.RoleBindingWatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBindingWatchEvent.ResourceVersion(childComplexity), true
+
+	case "RoleBindingWatchEvent.roleBinding":
+		if e.ComplexityRoot.RoleBindingWatchEvent.RoleBinding == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBindingWatchEvent.RoleBinding(childComplexity), true
+
+	case "RoleBindingWatchEvent.type":
+		if e.ComplexityRoot.RoleBindingWatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleBindingWatchEvent.Type(childComplexity), true
+
+	case "RoleConnection.edges":
+		if e.ComplexityRoot.RoleConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleConnection.Edges(childComplexity), true
+
+	case "RoleConnection.pageInfo":
+		if e.ComplexityRoot.RoleConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleConnection.PageInfo(childComplexity), true
+
+	case "RoleEdge.cursor":
+		if e.ComplexityRoot.RoleEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleEdge.Cursor(childComplexity), true
+
+	case "RoleEdge.node":
+		if e.ComplexityRoot.RoleEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleEdge.Node(childComplexity), true
+
+	case "RoleSpec.rules":
+		if e.ComplexityRoot.RoleSpec.Rules == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleSpec.Rules(childComplexity), true
+
+	case "RoleWatchEvent.name":
+		if e.ComplexityRoot.RoleWatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleWatchEvent.Name(childComplexity), true
+
+	case "RoleWatchEvent.namespace":
+		if e.ComplexityRoot.RoleWatchEvent.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleWatchEvent.Namespace(childComplexity), true
+
+	case "RoleWatchEvent.resourceVersion":
+		if e.ComplexityRoot.RoleWatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleWatchEvent.ResourceVersion(childComplexity), true
+
+	case "RoleWatchEvent.role":
+		if e.ComplexityRoot.RoleWatchEvent.Role == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleWatchEvent.Role(childComplexity), true
+
+	case "RoleWatchEvent.type":
+		if e.ComplexityRoot.RoleWatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RoleWatchEvent.Type(childComplexity), true
+
 	case "RotateServiceAccountKeyPayload.serviceAccount":
 		if e.ComplexityRoot.RotateServiceAccountKeyPayload.ServiceAccount == nil {
 			break
@@ -4406,6 +5751,160 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.StrategyDefinition.Type(childComplexity), true
 
+	case "SubjectAccessReview.apiVersion":
+		if e.ComplexityRoot.SubjectAccessReview.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReview.APIVersion(childComplexity), true
+
+	case "SubjectAccessReview.kind":
+		if e.ComplexityRoot.SubjectAccessReview.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReview.Kind(childComplexity), true
+
+	case "SubjectAccessReview.spec":
+		if e.ComplexityRoot.SubjectAccessReview.Spec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReview.Spec(childComplexity), true
+
+	case "SubjectAccessReview.status":
+		if e.ComplexityRoot.SubjectAccessReview.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReview.Status(childComplexity), true
+
+	case "SubjectAccessReviewPrincipal.groups":
+		if e.ComplexityRoot.SubjectAccessReviewPrincipal.Groups == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewPrincipal.Groups(childComplexity), true
+
+	case "SubjectAccessReviewPrincipal.subject":
+		if e.ComplexityRoot.SubjectAccessReviewPrincipal.Subject == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewPrincipal.Subject(childComplexity), true
+
+	case "SubjectAccessReviewResourceRef.id":
+		if e.ComplexityRoot.SubjectAccessReviewResourceRef.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewResourceRef.ID(childComplexity), true
+
+	case "SubjectAccessReviewRevision.capturedAt":
+		if e.ComplexityRoot.SubjectAccessReviewRevision.CapturedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewRevision.CapturedAt(childComplexity), true
+
+	case "SubjectAccessReviewRevision.gitRevision":
+		if e.ComplexityRoot.SubjectAccessReviewRevision.GitRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewRevision.GitRevision(childComplexity), true
+
+	case "SubjectAccessReviewRevision.namespaceUID":
+		if e.ComplexityRoot.SubjectAccessReviewRevision.NamespaceUID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewRevision.NamespaceUID(childComplexity), true
+
+	case "SubjectAccessReviewRevision.tierID":
+		if e.ComplexityRoot.SubjectAccessReviewRevision.TierID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewRevision.TierID(childComplexity), true
+
+	case "SubjectAccessReviewRevision.tierRevision":
+		if e.ComplexityRoot.SubjectAccessReviewRevision.TierRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewRevision.TierRevision(childComplexity), true
+
+	case "SubjectAccessReviewSpec.action":
+		if e.ComplexityRoot.SubjectAccessReviewSpec.Action == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewSpec.Action(childComplexity), true
+
+	case "SubjectAccessReviewSpec.context":
+		if e.ComplexityRoot.SubjectAccessReviewSpec.Context == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewSpec.Context(childComplexity), true
+
+	case "SubjectAccessReviewSpec.principal":
+		if e.ComplexityRoot.SubjectAccessReviewSpec.Principal == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewSpec.Principal(childComplexity), true
+
+	case "SubjectAccessReviewSpec.resourceRef":
+		if e.ComplexityRoot.SubjectAccessReviewSpec.ResourceRef == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewSpec.ResourceRef(childComplexity), true
+
+	case "SubjectAccessReviewStatus.allowed":
+		if e.ComplexityRoot.SubjectAccessReviewStatus.Allowed == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewStatus.Allowed(childComplexity), true
+
+	case "SubjectAccessReviewStatus.builtinDigest":
+		if e.ComplexityRoot.SubjectAccessReviewStatus.BuiltinDigest == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewStatus.BuiltinDigest(childComplexity), true
+
+	case "SubjectAccessReviewStatus.catalogDigest":
+		if e.ComplexityRoot.SubjectAccessReviewStatus.CatalogDigest == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewStatus.CatalogDigest(childComplexity), true
+
+	case "SubjectAccessReviewStatus.hypothetical":
+		if e.ComplexityRoot.SubjectAccessReviewStatus.Hypothetical == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewStatus.Hypothetical(childComplexity), true
+
+	case "SubjectAccessReviewStatus.reason":
+		if e.ComplexityRoot.SubjectAccessReviewStatus.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewStatus.Reason(childComplexity), true
+
+	case "SubjectAccessReviewStatus.revisions":
+		if e.ComplexityRoot.SubjectAccessReviewStatus.Revisions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.SubjectAccessReviewStatus.Revisions(childComplexity), true
+
 	case "Subscription.watchCategories":
 		if e.ComplexityRoot.Subscription.WatchCategories == nil {
 			break
@@ -4417,6 +5916,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.WatchCategories(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
+	case "Subscription.watchClusterRoleBindings":
+		if e.ComplexityRoot.Subscription.WatchClusterRoleBindings == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchClusterRoleBindings_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchClusterRoleBindings(childComplexity, args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
+	case "Subscription.watchClusterRoles":
+		if e.ComplexityRoot.Subscription.WatchClusterRoles == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchClusterRoles_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchClusterRoles(childComplexity, args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
 
 	case "Subscription.watchFiles":
 		if e.ComplexityRoot.Subscription.WatchFiles == nil {
@@ -4477,6 +6000,30 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.WatchResources(childComplexity, args["kind"].(string), args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
+	case "Subscription.watchRoleBindings":
+		if e.ComplexityRoot.Subscription.WatchRoleBindings == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchRoleBindings_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchRoleBindings(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
+	case "Subscription.watchRoles":
+		if e.ComplexityRoot.Subscription.WatchRoles == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchRoles_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchRoles(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
 
 	case "SuspendUserPayload.actor":
 		if e.ComplexityRoot.SuspendUserPayload.Actor == nil {
@@ -4618,6 +6165,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateCategoryStatusPayload.HasMoreProductDependents(childComplexity), true
 
+	case "UpdateClusterRoleBindingPayload.clusterRoleBinding":
+		if e.ComplexityRoot.UpdateClusterRoleBindingPayload.ClusterRoleBinding == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateClusterRoleBindingPayload.ClusterRoleBinding(childComplexity), true
+
+	case "UpdateClusterRolePayload.clusterRole":
+		if e.ComplexityRoot.UpdateClusterRolePayload.ClusterRole == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateClusterRolePayload.ClusterRole(childComplexity), true
+
 	case "UpdateNamespacePayload.namespace":
 		if e.ComplexityRoot.UpdateNamespacePayload.Namespace == nil {
 			break
@@ -4666,6 +6227,20 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.UpdateResourceStatusPayload.Object(childComplexity), true
+
+	case "UpdateRoleBindingPayload.roleBinding":
+		if e.ComplexityRoot.UpdateRoleBindingPayload.RoleBinding == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateRoleBindingPayload.RoleBinding(childComplexity), true
+
+	case "UpdateRolePayload.role":
+		if e.ComplexityRoot.UpdateRolePayload.Role == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateRolePayload.Role(childComplexity), true
 
 	case "UpdateUserPayload.actor":
 		if e.ComplexityRoot.UpdateUserPayload.Actor == nil {
@@ -4745,6 +6320,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
+		ec.unmarshalInputAccessReviewInput,
 		ec.unmarshalInputActorBy,
 		ec.unmarshalInputAssignUserGroupInput,
 		ec.unmarshalInputCatalogObjectReferenceInput,
@@ -4752,24 +6328,40 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCategoryFilterInput,
 		ec.unmarshalInputCategoryNamespacePath,
 		ec.unmarshalInputCategorySpecInput,
+		ec.unmarshalInputClusterRoleBindingBy,
+		ec.unmarshalInputClusterRoleBindingSpecInput,
+		ec.unmarshalInputClusterRoleBy,
+		ec.unmarshalInputClusterRoleSpecInput,
 		ec.unmarshalInputCollectionBy,
 		ec.unmarshalInputCollectionNamespacePath,
 		ec.unmarshalInputCompleteCategoryDeletionInput,
+		ec.unmarshalInputCompleteClusterRoleBindingDeletionInput,
+		ec.unmarshalInputCompleteClusterRoleDeletionInput,
 		ec.unmarshalInputCompleteNamespaceDeletionInput,
 		ec.unmarshalInputCompleteProductDeletionInput,
 		ec.unmarshalInputCompleteRepositoryDeletionInput,
+		ec.unmarshalInputCompleteRoleBindingDeletionInput,
+		ec.unmarshalInputCompleteRoleDeletionInput,
 		ec.unmarshalInputConditionInput,
 		ec.unmarshalInputCreateCategoryInput,
+		ec.unmarshalInputCreateClusterRoleBindingInput,
+		ec.unmarshalInputCreateClusterRoleInput,
 		ec.unmarshalInputCreateNamespaceInput,
 		ec.unmarshalInputCreateProductInput,
 		ec.unmarshalInputCreateRepositoryInput,
+		ec.unmarshalInputCreateRoleBindingInput,
+		ec.unmarshalInputCreateRoleInput,
 		ec.unmarshalInputCreateServiceAccountInput,
 		ec.unmarshalInputCreateStaffInput,
 		ec.unmarshalInputDeactivateUserInput,
 		ec.unmarshalInputDeleteCategoryInput,
+		ec.unmarshalInputDeleteClusterRoleBindingInput,
+		ec.unmarshalInputDeleteClusterRoleInput,
 		ec.unmarshalInputDeleteNamespaceInput,
 		ec.unmarshalInputDeleteProductInput,
 		ec.unmarshalInputDeleteRepositoryInput,
+		ec.unmarshalInputDeleteRoleBindingInput,
+		ec.unmarshalInputDeleteRoleInput,
 		ec.unmarshalInputDeleteServiceAccountInput,
 		ec.unmarshalInputDeleteUserInput,
 		ec.unmarshalInputFileBy,
@@ -4794,7 +6386,14 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputProductVariantNamespacePath,
 		ec.unmarshalInputProvisionNamespaceSystemRepositoryInput,
 		ec.unmarshalInputProvisionRepositoryStorageInput,
+		ec.unmarshalInputRBACAttributeConditionInput,
+		ec.unmarshalInputRBACConditionInput,
+		ec.unmarshalInputRBACNamespacePath,
+		ec.unmarshalInputRBACRoleRefInput,
+		ec.unmarshalInputRBACRuleInput,
+		ec.unmarshalInputRBACSubjectInput,
 		ec.unmarshalInputReactivateUserInput,
+		ec.unmarshalInputReconcileRBACNamespaceCleanupsInput,
 		ec.unmarshalInputRefreshTokenInput,
 		ec.unmarshalInputRemoveUserGroupInput,
 		ec.unmarshalInputRepositoryBy,
@@ -4806,14 +6405,23 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputResolvedCategoryTaxonomyInput,
 		ec.unmarshalInputResolvedProductStatusInput,
 		ec.unmarshalInputResourceOwnerInput,
+		ec.unmarshalInputRoleBindingBy,
+		ec.unmarshalInputRoleBindingSpecInput,
+		ec.unmarshalInputRoleBy,
+		ec.unmarshalInputRoleSpecInput,
 		ec.unmarshalInputRotateServiceAccountKeyInput,
 		ec.unmarshalInputServiceAccountPublicKeyInput,
 		ec.unmarshalInputSetUserEmailDeliverabilityInput,
+		ec.unmarshalInputSubjectAccessReviewPrincipalInput,
+		ec.unmarshalInputSubjectAccessReviewResourceRefInput,
+		ec.unmarshalInputSubjectAccessReviewSpecInput,
 		ec.unmarshalInputSuspendUserInput,
 		ec.unmarshalInputTokenRequestSpecInput,
 		ec.unmarshalInputTransferNamespaceOwnerInput,
 		ec.unmarshalInputUpdateCategoryInput,
 		ec.unmarshalInputUpdateCategoryStatusInput,
+		ec.unmarshalInputUpdateClusterRoleBindingInput,
+		ec.unmarshalInputUpdateClusterRoleInput,
 		ec.unmarshalInputUpdateNamespaceInput,
 		ec.unmarshalInputUpdateNamespaceStatusInput,
 		ec.unmarshalInputUpdateProductInput,
@@ -4821,6 +6429,8 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputUpdateRepositoryInput,
 		ec.unmarshalInputUpdateRepositoryStatusInput,
 		ec.unmarshalInputUpdateResourceStatusInput,
+		ec.unmarshalInputUpdateRoleBindingInput,
+		ec.unmarshalInputUpdateRoleInput,
 		ec.unmarshalInputUpdateUserInput,
 	)
 	first := true
@@ -5996,6 +7606,8 @@ type UpdateNamespacePayload {
 
 input UpdateNamespaceStatusInput {
   name: String!
+  """Optional incarnation precondition; controllers supply the observed UID."""
+  uid: ID
   resourceVersion: String!
   observedGeneration: Int
   lastAppliedRevision: String
@@ -6007,16 +7619,16 @@ type UpdateNamespaceStatusPayload {
 }
 
 """
-The successful result of requesting Namespace termination.
+The successful result of requesting resource termination.
 """
 enum ResourceDeletionOutcome {
   """
-  This request set the deletion timestamp and foreground deletion finalizer.
+  This request started foreground termination.
   """
   TERMINATION_STARTED
 
   """
-  The Namespace was already terminating, so no datastore write occurred.
+  The resource was already terminating, so this request did not start another termination.
   """
   ALREADY_TERMINATING
 }
@@ -6909,6 +8521,580 @@ extend type Product {
   ): ProductVariantConnection!
 }
 `, BuiltIn: false},
+	{Name: "../../../../../shared/schemas/admin/rbac.graphqls", Input: `# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 GitStore contributors
+
+"""
+A namespaced, Git-backed collection of additive authorization rules.
+"""
+type Role implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: RoleSpec!
+  status: RBACStatus!
+}
+
+"""
+A cluster-scoped role, including immutable release-owned built-ins.
+"""
+type ClusterRole implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: ClusterRoleSpec!
+  status: RBACStatus!
+}
+
+"""
+Binds a Role or ClusterRole within one namespace. roleRef is immutable.
+"""
+type RoleBinding implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: RoleBindingSpec!
+  status: RBACStatus!
+}
+
+"""
+Binds a ClusterRole at cluster scope. roleRef is immutable.
+"""
+type ClusterRoleBinding implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: ClusterRoleBindingSpec!
+  status: RBACStatus!
+}
+
+type RoleSpec {
+  rules: [RBACRule!]!
+}
+
+type ClusterRoleSpec {
+  rules: [RBACRule!]!
+}
+
+type RoleBindingSpec {
+  roleRef: RBACRoleRef!
+  subjects: [RBACSubject!]!
+}
+
+type ClusterRoleBindingSpec {
+  roleRef: RBACRoleRef!
+  subjects: [RBACSubject!]!
+}
+
+type RBACRule {
+  resources: [String!]!
+  verbs: [String!]!
+  resourceNames: [String!]
+  when: [RBACCondition!]
+}
+
+"""
+Exactly one of token or attribute is present. Conditions are from a closed
+vocabulary; arbitrary expressions and executable policy are not accepted.
+"""
+type RBACCondition {
+  token: String
+  attribute: RBACAttributeCondition
+}
+
+type RBACAttributeCondition {
+  attr: String!
+  op: String!
+  value: String
+  values: [String!]
+}
+
+enum RBACRoleKind {
+  ROLE
+  CLUSTER_ROLE
+}
+
+enum RBACSubjectKind {
+  USER
+  GROUP
+  SERVICE_ACCOUNT
+}
+
+type RBACRoleRef {
+  kind: RBACRoleKind!
+  name: String!
+}
+
+type RBACSubject {
+  kind: RBACSubjectKind!
+  name: String!
+}
+
+"""
+Controller-owned observation. A missing resolved link grants no authority.
+"""
+type RBACStatus {
+  observedGeneration: Int!
+  conditions: [Condition!]!
+  resolved: RBACResolvedRole
+}
+
+type RBACResolvedRole {
+  roleUID: ID!
+  roleKind: RBACRoleKind!
+  roleName: String!
+}
+
+input RoleSpecInput {
+  rules: [RBACRuleInput!]!
+}
+
+input ClusterRoleSpecInput {
+  rules: [RBACRuleInput!]!
+}
+
+input RoleBindingSpecInput {
+  roleRef: RBACRoleRefInput!
+  subjects: [RBACSubjectInput!]!
+}
+
+input ClusterRoleBindingSpecInput {
+  roleRef: RBACRoleRefInput!
+  subjects: [RBACSubjectInput!]!
+}
+
+input RBACRuleInput {
+  resources: [String!]!
+  verbs: [String!]!
+  resourceNames: [String!]
+  when: [RBACConditionInput!]
+}
+
+input RBACConditionInput @oneOf {
+  token: String
+  attribute: RBACAttributeConditionInput
+}
+
+input RBACAttributeConditionInput {
+  attr: String!
+  op: String!
+  value: String
+  values: [String!]
+}
+
+input RBACRoleRefInput {
+  kind: RBACRoleKind!
+  name: String!
+}
+
+input RBACSubjectInput {
+  kind: RBACSubjectKind!
+  name: String!
+}
+
+input RBACNamespacePath {
+  namespace: String!
+  name: String!
+}
+
+input RoleBy @oneOf {
+  id: ID
+  namespacePath: RBACNamespacePath
+}
+
+input ClusterRoleBy @oneOf {
+  id: ID
+  name: String
+}
+
+input RoleBindingBy @oneOf {
+  id: ID
+  namespacePath: RBACNamespacePath
+}
+
+input ClusterRoleBindingBy @oneOf {
+  id: ID
+  name: String
+}
+
+type RoleEdge {
+  cursor: String!
+  node: Role!
+}
+
+type RoleConnection {
+  edges: [RoleEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ClusterRoleEdge {
+  cursor: String!
+  node: ClusterRole!
+}
+
+type ClusterRoleConnection {
+  edges: [ClusterRoleEdge!]!
+  pageInfo: PageInfo!
+}
+
+type RoleBindingEdge {
+  cursor: String!
+  node: RoleBinding!
+}
+
+type RoleBindingConnection {
+  edges: [RoleBindingEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ClusterRoleBindingEdge {
+  cursor: String!
+  node: ClusterRoleBinding!
+}
+
+type ClusterRoleBindingConnection {
+  edges: [ClusterRoleBindingEdge!]!
+  pageInfo: PageInfo!
+}
+
+input CreateRoleInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "Role"
+  metadata: ObjectMetaInput!
+  spec: RoleSpecInput!
+}
+
+input UpdateRoleInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "Role"
+  metadata: ObjectMetaInput!
+  spec: RoleSpecInput!
+}
+
+input DeleteRoleInput {
+  id: ID!
+  resourceVersion: String!
+}
+
+input CompleteRoleDeletionInput {
+  id: ID!
+  name: String!
+  namespace: String!
+  resourceVersion: String!
+}
+
+input CreateClusterRoleInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "ClusterRole"
+  metadata: ObjectMetaInput!
+  spec: ClusterRoleSpecInput!
+}
+
+input UpdateClusterRoleInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "ClusterRole"
+  metadata: ObjectMetaInput!
+  spec: ClusterRoleSpecInput!
+}
+
+input DeleteClusterRoleInput {
+  id: ID!
+  resourceVersion: String!
+}
+
+input CompleteClusterRoleDeletionInput {
+  id: ID!
+  name: String!
+  resourceVersion: String!
+}
+
+input CreateRoleBindingInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "RoleBinding"
+  metadata: ObjectMetaInput!
+  spec: RoleBindingSpecInput!
+}
+
+input UpdateRoleBindingInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "RoleBinding"
+  metadata: ObjectMetaInput!
+  spec: RoleBindingSpecInput!
+}
+
+input DeleteRoleBindingInput {
+  id: ID!
+  resourceVersion: String!
+}
+
+input CompleteRoleBindingDeletionInput {
+  id: ID!
+  name: String!
+  namespace: String!
+  resourceVersion: String!
+}
+
+input CreateClusterRoleBindingInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "ClusterRoleBinding"
+  metadata: ObjectMetaInput!
+  spec: ClusterRoleBindingSpecInput!
+}
+
+input UpdateClusterRoleBindingInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "ClusterRoleBinding"
+  metadata: ObjectMetaInput!
+  spec: ClusterRoleBindingSpecInput!
+}
+
+input DeleteClusterRoleBindingInput {
+  id: ID!
+  resourceVersion: String!
+}
+
+input CompleteClusterRoleBindingDeletionInput {
+  id: ID!
+  name: String!
+  resourceVersion: String!
+}
+
+type CreateRolePayload {
+  role: Role
+}
+
+type UpdateRolePayload {
+  role: Role
+}
+
+type DeleteRolePayload {
+  role: Role
+  outcome: ResourceDeletionOutcome!
+}
+
+type CompleteRoleDeletionPayload {
+  id: ID!
+}
+
+type CreateClusterRolePayload {
+  clusterRole: ClusterRole
+}
+
+type UpdateClusterRolePayload {
+  clusterRole: ClusterRole
+}
+
+type DeleteClusterRolePayload {
+  clusterRole: ClusterRole
+  outcome: ResourceDeletionOutcome!
+}
+
+type CompleteClusterRoleDeletionPayload {
+  id: ID!
+}
+
+type CreateRoleBindingPayload {
+  roleBinding: RoleBinding
+}
+
+type UpdateRoleBindingPayload {
+  roleBinding: RoleBinding
+}
+
+type DeleteRoleBindingPayload {
+  roleBinding: RoleBinding
+  outcome: ResourceDeletionOutcome!
+}
+
+type CompleteRoleBindingDeletionPayload {
+  id: ID!
+}
+
+type CreateClusterRoleBindingPayload {
+  clusterRoleBinding: ClusterRoleBinding
+}
+
+type UpdateClusterRoleBindingPayload {
+  clusterRoleBinding: ClusterRoleBinding
+}
+
+type DeleteClusterRoleBindingPayload {
+  clusterRoleBinding: ClusterRoleBinding
+  outcome: ResourceDeletionOutcome!
+}
+
+type CompleteClusterRoleBindingDeletionPayload {
+  id: ID!
+}
+
+"""
+Watches use the shared durable journal. Omitted cursors watch future changes;
+capture the shared bootstrap cursor before listing current state. BOOKMARK
+and DELETED events carry no resource payload.
+"""
+type RoleWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+  role: Role
+}
+
+type ClusterRoleWatchEvent {
+  type: WatchEventType!
+  name: String!
+  resourceVersion: String!
+  clusterRole: ClusterRole
+}
+
+type RoleBindingWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+  roleBinding: RoleBinding
+}
+
+type ClusterRoleBindingWatchEvent {
+  type: WatchEventType!
+  name: String!
+  resourceVersion: String!
+  clusterRoleBinding: ClusterRoleBinding
+}
+
+"""
+A transient authorization request. Omitted groups use trusted directory
+membership; supplied groups, including an empty list, are hypothetical.
+"""
+input AccessReviewInput {
+  apiVersion: String! = "authorization.gitstore.dev/v1beta1"
+  kind: String! = "SubjectAccessReview"
+  spec: SubjectAccessReviewSpecInput!
+}
+
+input SubjectAccessReviewSpecInput {
+  principal: SubjectAccessReviewPrincipalInput!
+  action: String!
+  resourceRef: SubjectAccessReviewResourceRefInput!
+  """Optional hypothetical tier, visibility or targetOwnerRef facts."""
+  context: JSON
+}
+
+input SubjectAccessReviewPrincipalInput {
+  subject: String!
+  groups: [String!]
+}
+
+input SubjectAccessReviewResourceRefInput {
+  id: ID!
+}
+
+type AccessReviewPayload {
+  subjectAccessReview: SubjectAccessReview
+}
+
+"""A non-persisted result evaluated against authoritative policy snapshots."""
+type SubjectAccessReview {
+  apiVersion: String!
+  kind: String!
+  spec: SubjectAccessReviewSpec!
+  status: SubjectAccessReviewStatus!
+}
+
+type SubjectAccessReviewSpec {
+  principal: SubjectAccessReviewPrincipal!
+  action: String!
+  resourceRef: SubjectAccessReviewResourceRef!
+  context: JSON
+}
+
+type SubjectAccessReviewPrincipal {
+  subject: String!
+  groups: [String!]
+}
+
+type SubjectAccessReviewResourceRef {
+  id: ID!
+}
+
+type SubjectAccessReviewStatus {
+  allowed: Boolean!
+  reason: String!
+  hypothetical: Boolean!
+  revisions: [SubjectAccessReviewRevision!]!
+  catalogDigest: String!
+  builtinDigest: String!
+}
+
+type SubjectAccessReviewRevision {
+  tierID: ID!
+  namespaceUID: ID!
+  gitRevision: String!
+  tierRevision: String!
+  """Start of the bounded validation-start capture, not a global fence."""
+  capturedAt: DateTime!
+}
+
+extend type Query {
+  """Requires scope review permission even when reviewing oneself."""
+  accessReview(input: AccessReviewInput!): AccessReviewPayload!
+  role(by: RoleBy!): Role
+  clusterRole(by: ClusterRoleBy!): ClusterRole
+  roleBinding(by: RoleBindingBy!): RoleBinding
+  clusterRoleBinding(by: ClusterRoleBindingBy!): ClusterRoleBinding
+  roles(namespace: String!, first: Int, after: String, selector: LabelSelectorInput): RoleConnection!
+  clusterRoles(first: Int, after: String, selector: LabelSelectorInput): ClusterRoleConnection!
+  roleBindings(namespace: String!, first: Int, after: String, selector: LabelSelectorInput): RoleBindingConnection!
+  clusterRoleBindings(first: Int, after: String, selector: LabelSelectorInput): ClusterRoleBindingConnection!
+}
+
+extend type Mutation {
+  """
+  Processes bounded cleanup work for deleted Namespace incarnations.
+  Requires the enrolled controller and global Namespace purge permission.
+  """
+  reconcileRBACNamespaceCleanups(input: ReconcileRBACNamespaceCleanupsInput!): ReconcileRBACNamespaceCleanupsPayload!
+  """Commits a validated candidate; cache propagation may complete later."""
+  createRole(input: CreateRoleInput!): CreateRolePayload!
+  updateRole(input: UpdateRoleInput!): UpdateRolePayload!
+  """Starts termination, suppressing the role's grants."""
+  deleteRole(input: DeleteRoleInput!): DeleteRolePayload!
+  """Controller completion requiring purge permission and cleared blockers."""
+  completeRoleDeletion(input: CompleteRoleDeletionInput!): CompleteRoleDeletionPayload!
+  createClusterRole(input: CreateClusterRoleInput!): CreateClusterRolePayload!
+  updateClusterRole(input: UpdateClusterRoleInput!): UpdateClusterRolePayload!
+  deleteClusterRole(input: DeleteClusterRoleInput!): DeleteClusterRolePayload!
+  completeClusterRoleDeletion(input: CompleteClusterRoleDeletionInput!): CompleteClusterRoleDeletionPayload!
+  createRoleBinding(input: CreateRoleBindingInput!): CreateRoleBindingPayload!
+  updateRoleBinding(input: UpdateRoleBindingInput!): UpdateRoleBindingPayload!
+  deleteRoleBinding(input: DeleteRoleBindingInput!): DeleteRoleBindingPayload!
+  completeRoleBindingDeletion(input: CompleteRoleBindingDeletionInput!): CompleteRoleBindingDeletionPayload!
+  createClusterRoleBinding(input: CreateClusterRoleBindingInput!): CreateClusterRoleBindingPayload!
+  updateClusterRoleBinding(input: UpdateClusterRoleBindingInput!): UpdateClusterRoleBindingPayload!
+  deleteClusterRoleBinding(input: DeleteClusterRoleBindingInput!): DeleteClusterRoleBindingPayload!
+  completeClusterRoleBindingDeletion(input: CompleteClusterRoleBindingDeletionInput!): CompleteClusterRoleBindingDeletionPayload!
+}
+
+input ReconcileRBACNamespaceCleanupsInput {
+  after: String
+}
+
+type ReconcileRBACNamespaceCleanupsPayload {
+  nextCursor: String
+  pending: Boolean!
+}
+
+extend type Subscription {
+  watchRoles(namespace: String, selector: LabelSelectorInput, resourceVersion: String): RoleWatchEvent!
+  watchClusterRoles(selector: LabelSelectorInput, resourceVersion: String): ClusterRoleWatchEvent!
+  watchRoleBindings(namespace: String, selector: LabelSelectorInput, resourceVersion: String): RoleBindingWatchEvent!
+  watchClusterRoleBindings(selector: LabelSelectorInput, resourceVersion: String): ClusterRoleBindingWatchEvent!
+}
+`, BuiltIn: false},
 	{Name: "../../../../../shared/schemas/admin/repository.graphqls", Input: `# SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (c) 2026 GitStore contributors
 
@@ -7126,13 +9312,15 @@ extend type Mutation {
   completeRepositoryDeletion(input: CompleteRepositoryDeletionInput!): CompleteRepositoryDeletionPayload!
 }
 
-"""Author-controlled metadata shared by declarative resource mutations."""
+"""Metadata shared by declarative resource mutations."""
 input ObjectMetaInput {
   name: String!
   """Required by namespaced resources; omit for cluster-scoped resources."""
   namespace: String
   labels: JSON
   annotations: JSON
+  """Optimistic-concurrency token required for RBAC updates. Omit on creates and other resource mutations."""
+  resourceVersion: String
 }
 
 input RepositorySpecInput {
@@ -7423,6 +9611,12 @@ input UpdateResourceStatusInput {
   exists for an arbitrary CRD kind (mirrors WatchEvent.object).
   """
   resolved: JSON
+
+  """
+  RBAC lifecycle finalizers. Only the authorization lifecycle controller may
+  change its own finalizer; other resource kinds reject this field.
+  """
+  finalizers: [String!]
 }
 
 type UpdateResourceStatusPayload {
@@ -7963,6 +10157,14 @@ var parsedSchema = gqlparser.MustLoadSchema(sources...)
 // Each function is generated once per unique object type, deduplicating the
 // switch statements that were previously inlined in every fieldContext_* function.
 
+func (ec *executionContext) childFields_AccessReviewPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "subjectAccessReview":
+		return ec.fieldContext_AccessReviewPayload_subjectAccessReview(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type AccessReviewPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_ActorConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "edges":
@@ -8117,6 +10319,128 @@ func (ec *executionContext) childFields_CategoryWatchEvent(ctx context.Context, 
 	return nil, fmt.Errorf("no field named %q was found under type CategoryWatchEvent", field.Name)
 }
 
+func (ec *executionContext) childFields_ClusterRole(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_ClusterRole_id(ctx, field)
+	case "apiVersion":
+		return ec.fieldContext_ClusterRole_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_ClusterRole_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_ClusterRole_metadata(ctx, field)
+	case "spec":
+		return ec.fieldContext_ClusterRole_spec(ctx, field)
+	case "status":
+		return ec.fieldContext_ClusterRole_status(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ClusterRole", field.Name)
+}
+
+func (ec *executionContext) childFields_ClusterRoleBinding(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_ClusterRoleBinding_id(ctx, field)
+	case "apiVersion":
+		return ec.fieldContext_ClusterRoleBinding_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_ClusterRoleBinding_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_ClusterRoleBinding_metadata(ctx, field)
+	case "spec":
+		return ec.fieldContext_ClusterRoleBinding_spec(ctx, field)
+	case "status":
+		return ec.fieldContext_ClusterRoleBinding_status(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ClusterRoleBinding", field.Name)
+}
+
+func (ec *executionContext) childFields_ClusterRoleBindingConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "edges":
+		return ec.fieldContext_ClusterRoleBindingConnection_edges(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_ClusterRoleBindingConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ClusterRoleBindingConnection", field.Name)
+}
+
+func (ec *executionContext) childFields_ClusterRoleBindingEdge(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "cursor":
+		return ec.fieldContext_ClusterRoleBindingEdge_cursor(ctx, field)
+	case "node":
+		return ec.fieldContext_ClusterRoleBindingEdge_node(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ClusterRoleBindingEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_ClusterRoleBindingSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "roleRef":
+		return ec.fieldContext_ClusterRoleBindingSpec_roleRef(ctx, field)
+	case "subjects":
+		return ec.fieldContext_ClusterRoleBindingSpec_subjects(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ClusterRoleBindingSpec", field.Name)
+}
+
+func (ec *executionContext) childFields_ClusterRoleBindingWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_ClusterRoleBindingWatchEvent_type(ctx, field)
+	case "name":
+		return ec.fieldContext_ClusterRoleBindingWatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_ClusterRoleBindingWatchEvent_resourceVersion(ctx, field)
+	case "clusterRoleBinding":
+		return ec.fieldContext_ClusterRoleBindingWatchEvent_clusterRoleBinding(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ClusterRoleBindingWatchEvent", field.Name)
+}
+
+func (ec *executionContext) childFields_ClusterRoleConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "edges":
+		return ec.fieldContext_ClusterRoleConnection_edges(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_ClusterRoleConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ClusterRoleConnection", field.Name)
+}
+
+func (ec *executionContext) childFields_ClusterRoleEdge(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "cursor":
+		return ec.fieldContext_ClusterRoleEdge_cursor(ctx, field)
+	case "node":
+		return ec.fieldContext_ClusterRoleEdge_node(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ClusterRoleEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_ClusterRoleSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "rules":
+		return ec.fieldContext_ClusterRoleSpec_rules(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ClusterRoleSpec", field.Name)
+}
+
+func (ec *executionContext) childFields_ClusterRoleWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_ClusterRoleWatchEvent_type(ctx, field)
+	case "name":
+		return ec.fieldContext_ClusterRoleWatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_ClusterRoleWatchEvent_resourceVersion(ctx, field)
+	case "clusterRole":
+		return ec.fieldContext_ClusterRoleWatchEvent_clusterRole(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ClusterRoleWatchEvent", field.Name)
+}
+
 func (ec *executionContext) childFields_Collection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "id":
@@ -8193,6 +10517,22 @@ func (ec *executionContext) childFields_CompleteCategoryDeletionPayload(ctx cont
 	return nil, fmt.Errorf("no field named %q was found under type CompleteCategoryDeletionPayload", field.Name)
 }
 
+func (ec *executionContext) childFields_CompleteClusterRoleBindingDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_CompleteClusterRoleBindingDeletionPayload_id(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CompleteClusterRoleBindingDeletionPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_CompleteClusterRoleDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_CompleteClusterRoleDeletionPayload_id(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CompleteClusterRoleDeletionPayload", field.Name)
+}
+
 func (ec *executionContext) childFields_CompleteNamespaceDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "id":
@@ -8215,6 +10555,22 @@ func (ec *executionContext) childFields_CompleteRepositoryDeletionPayload(ctx co
 		return ec.fieldContext_CompleteRepositoryDeletionPayload_id(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CompleteRepositoryDeletionPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_CompleteRoleBindingDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_CompleteRoleBindingDeletionPayload_id(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CompleteRoleBindingDeletionPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_CompleteRoleDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_CompleteRoleDeletionPayload_id(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CompleteRoleDeletionPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_Condition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8253,6 +10609,22 @@ func (ec *executionContext) childFields_CreateCategoryPayload(ctx context.Contex
 	return nil, fmt.Errorf("no field named %q was found under type CreateCategoryPayload", field.Name)
 }
 
+func (ec *executionContext) childFields_CreateClusterRoleBindingPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "clusterRoleBinding":
+		return ec.fieldContext_CreateClusterRoleBindingPayload_clusterRoleBinding(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CreateClusterRoleBindingPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_CreateClusterRolePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "clusterRole":
+		return ec.fieldContext_CreateClusterRolePayload_clusterRole(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CreateClusterRolePayload", field.Name)
+}
+
 func (ec *executionContext) childFields_CreateNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "namespace":
@@ -8275,6 +10647,22 @@ func (ec *executionContext) childFields_CreateRepositoryPayload(ctx context.Cont
 		return ec.fieldContext_CreateRepositoryPayload_repository(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CreateRepositoryPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_CreateRoleBindingPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "roleBinding":
+		return ec.fieldContext_CreateRoleBindingPayload_roleBinding(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CreateRoleBindingPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_CreateRolePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "role":
+		return ec.fieldContext_CreateRolePayload_role(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CreateRolePayload", field.Name)
 }
 
 func (ec *executionContext) childFields_CreateServiceAccountPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -8323,6 +10711,26 @@ func (ec *executionContext) childFields_DeleteCategoryPayload(ctx context.Contex
 	return nil, fmt.Errorf("no field named %q was found under type DeleteCategoryPayload", field.Name)
 }
 
+func (ec *executionContext) childFields_DeleteClusterRoleBindingPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "clusterRoleBinding":
+		return ec.fieldContext_DeleteClusterRoleBindingPayload_clusterRoleBinding(ctx, field)
+	case "outcome":
+		return ec.fieldContext_DeleteClusterRoleBindingPayload_outcome(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type DeleteClusterRoleBindingPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_DeleteClusterRolePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "clusterRole":
+		return ec.fieldContext_DeleteClusterRolePayload_clusterRole(ctx, field)
+	case "outcome":
+		return ec.fieldContext_DeleteClusterRolePayload_outcome(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type DeleteClusterRolePayload", field.Name)
+}
+
 func (ec *executionContext) childFields_DeleteNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "namespace":
@@ -8351,6 +10759,26 @@ func (ec *executionContext) childFields_DeleteRepositoryPayload(ctx context.Cont
 		return ec.fieldContext_DeleteRepositoryPayload_outcome(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type DeleteRepositoryPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_DeleteRoleBindingPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "roleBinding":
+		return ec.fieldContext_DeleteRoleBindingPayload_roleBinding(ctx, field)
+	case "outcome":
+		return ec.fieldContext_DeleteRoleBindingPayload_outcome(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type DeleteRoleBindingPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_DeleteRolePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "role":
+		return ec.fieldContext_DeleteRolePayload_role(ctx, field)
+	case "outcome":
+		return ec.fieldContext_DeleteRolePayload_outcome(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type DeleteRolePayload", field.Name)
 }
 
 func (ec *executionContext) childFields_DeleteServiceAccountPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -9019,6 +11447,88 @@ func (ec *executionContext) childFields_QuantityDefinition(ctx context.Context, 
 	return nil, fmt.Errorf("no field named %q was found under type QuantityDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_RBACAttributeCondition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "attr":
+		return ec.fieldContext_RBACAttributeCondition_attr(ctx, field)
+	case "op":
+		return ec.fieldContext_RBACAttributeCondition_op(ctx, field)
+	case "value":
+		return ec.fieldContext_RBACAttributeCondition_value(ctx, field)
+	case "values":
+		return ec.fieldContext_RBACAttributeCondition_values(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RBACAttributeCondition", field.Name)
+}
+
+func (ec *executionContext) childFields_RBACCondition(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "token":
+		return ec.fieldContext_RBACCondition_token(ctx, field)
+	case "attribute":
+		return ec.fieldContext_RBACCondition_attribute(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RBACCondition", field.Name)
+}
+
+func (ec *executionContext) childFields_RBACResolvedRole(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "roleUID":
+		return ec.fieldContext_RBACResolvedRole_roleUID(ctx, field)
+	case "roleKind":
+		return ec.fieldContext_RBACResolvedRole_roleKind(ctx, field)
+	case "roleName":
+		return ec.fieldContext_RBACResolvedRole_roleName(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RBACResolvedRole", field.Name)
+}
+
+func (ec *executionContext) childFields_RBACRoleRef(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "kind":
+		return ec.fieldContext_RBACRoleRef_kind(ctx, field)
+	case "name":
+		return ec.fieldContext_RBACRoleRef_name(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RBACRoleRef", field.Name)
+}
+
+func (ec *executionContext) childFields_RBACRule(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "resources":
+		return ec.fieldContext_RBACRule_resources(ctx, field)
+	case "verbs":
+		return ec.fieldContext_RBACRule_verbs(ctx, field)
+	case "resourceNames":
+		return ec.fieldContext_RBACRule_resourceNames(ctx, field)
+	case "when":
+		return ec.fieldContext_RBACRule_when(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RBACRule", field.Name)
+}
+
+func (ec *executionContext) childFields_RBACStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "observedGeneration":
+		return ec.fieldContext_RBACStatus_observedGeneration(ctx, field)
+	case "conditions":
+		return ec.fieldContext_RBACStatus_conditions(ctx, field)
+	case "resolved":
+		return ec.fieldContext_RBACStatus_resolved(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RBACStatus", field.Name)
+}
+
+func (ec *executionContext) childFields_RBACSubject(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "kind":
+		return ec.fieldContext_RBACSubject_kind(ctx, field)
+	case "name":
+		return ec.fieldContext_RBACSubject_name(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RBACSubject", field.Name)
+}
+
 func (ec *executionContext) childFields_ReactivateUserPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "actor":
@@ -9043,6 +11553,16 @@ func (ec *executionContext) childFields_ReceivePackHookDefaults(ctx context.Cont
 		return ec.fieldContext_ReceivePackHookDefaults_referenceTransaction(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type ReceivePackHookDefaults", field.Name)
+}
+
+func (ec *executionContext) childFields_ReconcileRBACNamespaceCleanupsPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "nextCursor":
+		return ec.fieldContext_ReconcileRBACNamespaceCleanupsPayload_nextCursor(ctx, field)
+	case "pending":
+		return ec.fieldContext_ReconcileRBACNamespaceCleanupsPayload_pending(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ReconcileRBACNamespaceCleanupsPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_RefreshTokenPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -9319,6 +11839,132 @@ func (ec *executionContext) childFields_ResourceOwner(ctx context.Context, field
 	return nil, fmt.Errorf("no field named %q was found under type ResourceOwner", field.Name)
 }
 
+func (ec *executionContext) childFields_Role(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_Role_id(ctx, field)
+	case "apiVersion":
+		return ec.fieldContext_Role_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_Role_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_Role_metadata(ctx, field)
+	case "spec":
+		return ec.fieldContext_Role_spec(ctx, field)
+	case "status":
+		return ec.fieldContext_Role_status(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type Role", field.Name)
+}
+
+func (ec *executionContext) childFields_RoleBinding(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_RoleBinding_id(ctx, field)
+	case "apiVersion":
+		return ec.fieldContext_RoleBinding_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_RoleBinding_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_RoleBinding_metadata(ctx, field)
+	case "spec":
+		return ec.fieldContext_RoleBinding_spec(ctx, field)
+	case "status":
+		return ec.fieldContext_RoleBinding_status(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RoleBinding", field.Name)
+}
+
+func (ec *executionContext) childFields_RoleBindingConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "edges":
+		return ec.fieldContext_RoleBindingConnection_edges(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_RoleBindingConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RoleBindingConnection", field.Name)
+}
+
+func (ec *executionContext) childFields_RoleBindingEdge(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "cursor":
+		return ec.fieldContext_RoleBindingEdge_cursor(ctx, field)
+	case "node":
+		return ec.fieldContext_RoleBindingEdge_node(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RoleBindingEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_RoleBindingSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "roleRef":
+		return ec.fieldContext_RoleBindingSpec_roleRef(ctx, field)
+	case "subjects":
+		return ec.fieldContext_RoleBindingSpec_subjects(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RoleBindingSpec", field.Name)
+}
+
+func (ec *executionContext) childFields_RoleBindingWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_RoleBindingWatchEvent_type(ctx, field)
+	case "namespace":
+		return ec.fieldContext_RoleBindingWatchEvent_namespace(ctx, field)
+	case "name":
+		return ec.fieldContext_RoleBindingWatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_RoleBindingWatchEvent_resourceVersion(ctx, field)
+	case "roleBinding":
+		return ec.fieldContext_RoleBindingWatchEvent_roleBinding(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RoleBindingWatchEvent", field.Name)
+}
+
+func (ec *executionContext) childFields_RoleConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "edges":
+		return ec.fieldContext_RoleConnection_edges(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_RoleConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RoleConnection", field.Name)
+}
+
+func (ec *executionContext) childFields_RoleEdge(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "cursor":
+		return ec.fieldContext_RoleEdge_cursor(ctx, field)
+	case "node":
+		return ec.fieldContext_RoleEdge_node(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RoleEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_RoleSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "rules":
+		return ec.fieldContext_RoleSpec_rules(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RoleSpec", field.Name)
+}
+
+func (ec *executionContext) childFields_RoleWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_RoleWatchEvent_type(ctx, field)
+	case "namespace":
+		return ec.fieldContext_RoleWatchEvent_namespace(ctx, field)
+	case "name":
+		return ec.fieldContext_RoleWatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_RoleWatchEvent_resourceVersion(ctx, field)
+	case "role":
+		return ec.fieldContext_RoleWatchEvent_role(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type RoleWatchEvent", field.Name)
+}
+
 func (ec *executionContext) childFields_RotateServiceAccountKeyPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "serviceAccount":
@@ -9447,6 +12093,86 @@ func (ec *executionContext) childFields_StrategyDefinition(ctx context.Context, 
 	return nil, fmt.Errorf("no field named %q was found under type StrategyDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_SubjectAccessReview(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "apiVersion":
+		return ec.fieldContext_SubjectAccessReview_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_SubjectAccessReview_kind(ctx, field)
+	case "spec":
+		return ec.fieldContext_SubjectAccessReview_spec(ctx, field)
+	case "status":
+		return ec.fieldContext_SubjectAccessReview_status(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SubjectAccessReview", field.Name)
+}
+
+func (ec *executionContext) childFields_SubjectAccessReviewPrincipal(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "subject":
+		return ec.fieldContext_SubjectAccessReviewPrincipal_subject(ctx, field)
+	case "groups":
+		return ec.fieldContext_SubjectAccessReviewPrincipal_groups(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SubjectAccessReviewPrincipal", field.Name)
+}
+
+func (ec *executionContext) childFields_SubjectAccessReviewResourceRef(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_SubjectAccessReviewResourceRef_id(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SubjectAccessReviewResourceRef", field.Name)
+}
+
+func (ec *executionContext) childFields_SubjectAccessReviewRevision(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "tierID":
+		return ec.fieldContext_SubjectAccessReviewRevision_tierID(ctx, field)
+	case "namespaceUID":
+		return ec.fieldContext_SubjectAccessReviewRevision_namespaceUID(ctx, field)
+	case "gitRevision":
+		return ec.fieldContext_SubjectAccessReviewRevision_gitRevision(ctx, field)
+	case "tierRevision":
+		return ec.fieldContext_SubjectAccessReviewRevision_tierRevision(ctx, field)
+	case "capturedAt":
+		return ec.fieldContext_SubjectAccessReviewRevision_capturedAt(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SubjectAccessReviewRevision", field.Name)
+}
+
+func (ec *executionContext) childFields_SubjectAccessReviewSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "principal":
+		return ec.fieldContext_SubjectAccessReviewSpec_principal(ctx, field)
+	case "action":
+		return ec.fieldContext_SubjectAccessReviewSpec_action(ctx, field)
+	case "resourceRef":
+		return ec.fieldContext_SubjectAccessReviewSpec_resourceRef(ctx, field)
+	case "context":
+		return ec.fieldContext_SubjectAccessReviewSpec_context(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SubjectAccessReviewSpec", field.Name)
+}
+
+func (ec *executionContext) childFields_SubjectAccessReviewStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "allowed":
+		return ec.fieldContext_SubjectAccessReviewStatus_allowed(ctx, field)
+	case "reason":
+		return ec.fieldContext_SubjectAccessReviewStatus_reason(ctx, field)
+	case "hypothetical":
+		return ec.fieldContext_SubjectAccessReviewStatus_hypothetical(ctx, field)
+	case "revisions":
+		return ec.fieldContext_SubjectAccessReviewStatus_revisions(ctx, field)
+	case "catalogDigest":
+		return ec.fieldContext_SubjectAccessReviewStatus_catalogDigest(ctx, field)
+	case "builtinDigest":
+		return ec.fieldContext_SubjectAccessReviewStatus_builtinDigest(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type SubjectAccessReviewStatus", field.Name)
+}
+
 func (ec *executionContext) childFields_SuspendUserPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "actor":
@@ -9535,6 +12261,22 @@ func (ec *executionContext) childFields_UpdateCategoryStatusPayload(ctx context.
 	return nil, fmt.Errorf("no field named %q was found under type UpdateCategoryStatusPayload", field.Name)
 }
 
+func (ec *executionContext) childFields_UpdateClusterRoleBindingPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "clusterRoleBinding":
+		return ec.fieldContext_UpdateClusterRoleBindingPayload_clusterRoleBinding(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateClusterRoleBindingPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateClusterRolePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "clusterRole":
+		return ec.fieldContext_UpdateClusterRolePayload_clusterRole(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateClusterRolePayload", field.Name)
+}
+
 func (ec *executionContext) childFields_UpdateNamespacePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "namespace":
@@ -9589,6 +12331,22 @@ func (ec *executionContext) childFields_UpdateResourceStatusPayload(ctx context.
 		return ec.fieldContext_UpdateResourceStatusPayload_object(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateResourceStatusPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateRoleBindingPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "roleBinding":
+		return ec.fieldContext_UpdateRoleBindingPayload_roleBinding(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateRoleBindingPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateRolePayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "role":
+		return ec.fieldContext_UpdateRolePayload_role(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateRolePayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateUserPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

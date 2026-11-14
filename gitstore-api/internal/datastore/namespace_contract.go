@@ -5,9 +5,115 @@ package datastore
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"math/big"
+	"strings"
 )
+
+type NamespaceRBACBootstrap struct {
+	NamespaceUID   string `json:"namespaceUID"`
+	RepositoryID   string `json:"repositoryID"`
+	GitRef         string `json:"gitRef"`
+	ExpectedCommit string `json:"expectedCommit"`
+	Subject        string `json:"subject"`
+	Commit         string `json:"commit,omitempty"`
+}
+
+func bootstrapCommitValid(value string) bool {
+	if len(value) != 40 || strings.ToLower(value) != value {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func ReadNamespaceRBACBootstrap(namespace *Namespace) (*NamespaceRBACBootstrap, error) {
+	if namespace == nil {
+		return nil, ErrInvalidArgument
+	}
+	var status struct {
+		Bootstrap *NamespaceRBACBootstrap `json:"rbacBootstrap"`
+	}
+	if len(namespace.Status) > 0 {
+		if err := json.Unmarshal(namespace.Status, &status); err != nil {
+			return nil, err
+		}
+	}
+	if status.Bootstrap == nil {
+		return nil, nil
+	}
+	value := status.Bootstrap
+	if namespace.Name != "gitstore-system" || namespace.UID == "" || namespace.UID != value.NamespaceUID ||
+		value.RepositoryID == "" || len(value.RepositoryID) > 128 ||
+		!strings.HasPrefix(value.GitRef, "refs/heads/") || len(value.GitRef) > 256 ||
+		value.Subject == "" || len(value.Subject) > 256 || strings.TrimSpace(value.Subject) != value.Subject ||
+		!bootstrapCommitValid(value.ExpectedCommit) || value.Commit != "" && !bootstrapCommitValid(value.Commit) {
+		return nil, ErrInvalidArgument
+	}
+	return value, nil
+}
+
+// SetNamespaceRBACBootstrap prepares a system-owned status write. The caller
+// persists it with the Namespace UID/resourceVersion precondition.
+func SetNamespaceRBACBootstrap(namespace *Namespace, receipt NamespaceRBACBootstrap) error {
+	if namespace == nil || namespace.DeletionTimestamp != nil {
+		return ErrInvalidArgument
+	}
+	previous, err := ReadNamespaceRBACBootstrap(namespace)
+	if err != nil {
+		return err
+	}
+	fields := map[string]json.RawMessage{}
+	if len(namespace.Status) > 0 {
+		if err := json.Unmarshal(namespace.Status, &fields); err != nil {
+			return err
+		}
+	}
+	if fields == nil {
+		fields = map[string]json.RawMessage{}
+	}
+	fields["rbacBootstrap"], err = json.Marshal(receipt)
+	if err != nil {
+		return err
+	}
+	next := *namespace
+	next.Status, err = json.Marshal(fields)
+	if err != nil {
+		return err
+	}
+	if _, err := ReadNamespaceRBACBootstrap(&next); err != nil {
+		return err
+	}
+	if previous != nil {
+		identity := receipt
+		identity.Commit = previous.Commit
+		if identity != *previous || previous.Commit != "" && receipt.Commit != previous.Commit {
+			return ErrConflict
+		}
+	}
+	namespace.Status = next.Status
+	return nil
+}
+
+func MergeNamespaceInfrastructureStatus(previous, updated *Namespace) (json.RawMessage, error) {
+	next, err := ReadNamespaceRBACBootstrap(updated)
+	if err != nil {
+		return nil, err
+	}
+	merged, err := MergeInfrastructureStatus(previous.Status, updated.Status)
+	if err != nil {
+		return nil, err
+	}
+	copy := *updated
+	copy.Status = merged
+	if next != nil {
+		if err := SetNamespaceRBACBootstrap(&copy, *next); err != nil {
+			return nil, err
+		}
+	}
+	return copy.Status, nil
+}
 
 // NamespaceDeletionBlocked is a bounded preflight, not a transaction. Backends
 // must repeat the decision under their namespace creation fence when marking.
@@ -81,6 +187,9 @@ func PreserveDeletionStatus(previous, updated json.RawMessage) (json.RawMessage,
 		fields = map[string]json.RawMessage{}
 	}
 	for key, value := range next {
+		if key == "rbacBootstrap" {
+			continue
+		}
 		if key != "deletionIntent" || !HasDeletionIntent(previous) {
 			fields[key] = value
 		}

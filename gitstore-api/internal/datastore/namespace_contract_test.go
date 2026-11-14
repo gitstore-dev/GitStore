@@ -97,6 +97,43 @@ func TestMergeInfrastructureStatusAllowsReceiptProgressOnly(t *testing.T) {
 	require.NotContains(t, string(preserved), `"removalCommit"`)
 }
 
+func TestNamespaceRBACBootstrapReceiptIsMonotonicAndControllerProtected(t *testing.T) {
+	namespace := &Namespace{UID: "root-uid", Name: "gitstore-system", ResourceVersion: "1",
+		Status: json.RawMessage(`{"conditions":[],"futureField":{"keep":true}}`)}
+	intent := NamespaceRBACBootstrap{NamespaceUID: namespace.UID, RepositoryID: "repository",
+		GitRef: "refs/heads/main", ExpectedCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Subject: "first-admin"}
+	require.NoError(t, SetNamespaceRBACBootstrap(namespace, intent))
+	initial := namespace.Status
+	require.NoError(t, ApplyNamespaceStatusPatch(namespace, NamespaceStatusPatch{
+		ResourceVersion: "1", Conditions: []catalog.Condition{},
+	}))
+	stored, err := ReadNamespaceRBACBootstrap(namespace)
+	require.NoError(t, err)
+	require.Equal(t, &intent, stored)
+	require.Contains(t, string(namespace.Status), `"futureField"`)
+	forged := json.RawMessage(`{"rbacBootstrap":{"subject":"attacker"}}`)
+	preserved, err := PreserveDeletionStatus(initial, forged)
+	require.NoError(t, err)
+	require.JSONEq(t, string(initial), string(preserved))
+	preserved, err = PreserveDeletionStatus(json.RawMessage(`{}`), forged)
+	require.NoError(t, err)
+	require.JSONEq(t, `{}`, string(preserved), "ordinary status patches cannot create the receipt")
+
+	intent.Commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	require.NoError(t, SetNamespaceRBACBootstrap(namespace, intent))
+	completed := namespace.Status
+	intent.Commit = ""
+	require.ErrorIs(t, SetNamespaceRBACBootstrap(namespace, intent), ErrConflict)
+	require.Equal(t, completed, namespace.Status)
+	intent.Commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	intent.Subject = "replacement-admin"
+	require.ErrorIs(t, SetNamespaceRBACBootstrap(namespace, intent), ErrConflict)
+	namespace.UID = "recreated-root"
+	require.ErrorIs(t, SetNamespaceRBACBootstrap(namespace, intent), ErrInvalidArgument)
+	namespace.UID, namespace.Name = "root-uid", "ordinary"
+	require.ErrorIs(t, SetNamespaceRBACBootstrap(namespace, intent), ErrInvalidArgument)
+}
+
 func TestNormalizeNamespaceContract_CanonicalLegacyDefaults(t *testing.T) {
 	ns := &Namespace{}
 

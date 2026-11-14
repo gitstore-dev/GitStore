@@ -28,6 +28,7 @@ type Change struct {
 	After            json.RawMessage
 	DeletionPayload  json.RawMessage
 	At               time.Time
+	TierProgress     *datastore.RBACTierProgress
 }
 
 type MaterializerConfig struct {
@@ -75,6 +76,21 @@ func ClassifyResource(change Change, labels func(json.RawMessage) map[string]str
 		DeduplicationKey: change.DeduplicationKey,
 		At:               change.At,
 	}
+	if change.TierProgress != nil {
+		if len(change.Before) != 0 || len(change.After) != 0 || change.TierProgress.TierID == "" || change.TierProgress.Revision == 0 {
+			return datastore.ResourceWatchEvent{}, false
+		}
+		event.Type, event.Kind, event.Namespace, event.Name = datastore.ResourceWatchProgress, "RBACTier", "", ""
+		event.Payload, _ = json.Marshal(change.TierProgress)
+		return event, true
+	}
+	if labels == nil {
+		labels = namespaceLabels
+		switch change.Kind {
+		case "Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding":
+			labels = rbacLabels
+		}
+	}
 	switch {
 	case len(change.Before) == 0 && len(change.After) > 0:
 		event.Type = datastore.ResourceWatchAdded
@@ -115,6 +131,56 @@ func namespaceLabels(payload json.RawMessage) map[string]string {
 	labels := make(map[string]string, len(namespace.Labels))
 	maps.Copy(labels, namespace.Labels)
 	return labels
+}
+
+func rbacLabels(payload json.RawMessage) map[string]string {
+	var envelope struct {
+		Metadata struct {
+			Labels map[string]string `json:"labels"`
+		} `json:"metadata"`
+	}
+	if json.Unmarshal(payload, &envelope) != nil {
+		return nil
+	}
+	return envelope.Metadata.Labels
+}
+
+// RBACChange preserves the versioned resource envelope and emits only minimal
+// identity on final removal. Tier sentinels use Change.TierProgress instead.
+func RBACChange(before, after *datastore.RBACResource) (Change, error) {
+	resource := after
+	if resource == nil {
+		resource = before
+	}
+	if resource == nil {
+		return Change{}, datastore.ErrInvalidArgument
+	}
+	switch resource.Kind {
+	case datastore.RBACRole, datastore.RBACClusterRole, datastore.RBACRoleBinding, datastore.RBACClusterRoleBinding:
+	default:
+		return Change{}, datastore.ErrInvalidArgument
+	}
+	change := Change{Kind: string(resource.Kind), Namespace: resource.Metadata.Namespace, Name: resource.Metadata.Name}
+	var err error
+	if before != nil {
+		change.Before, err = json.Marshal(before)
+		if err != nil {
+			return Change{}, err
+		}
+	}
+	if after != nil {
+		change.After, err = json.Marshal(after)
+	} else {
+		change.DeletionPayload, err = json.Marshal(struct {
+			APIVersion string                 `json:"apiVersion"`
+			Kind       datastore.RBACKind     `json:"kind"`
+			Metadata   datastore.RBACMetadata `json:"metadata"`
+		}{
+			APIVersion: resource.APIVersion, Kind: resource.Kind,
+			Metadata: datastore.RBACMetadata{UID: resource.Metadata.UID, Name: resource.Metadata.Name, Namespace: resource.Metadata.Namespace},
+		})
+	}
+	return change, err
 }
 
 func jsonEqual(left, right json.RawMessage) bool {
@@ -288,14 +354,10 @@ func (m *Materializer) AppendBookmark(ctx context.Context, lease datastore.Resou
 }
 
 func (m *Materializer) classify(change Change) (datastore.ResourceWatchEvent, bool) {
-	labels := m.cfg.LabelExtractor
-	if labels == nil {
-		labels = namespaceLabels
-	}
 	if change.Kind == "" {
 		change.Kind = "Namespace"
 	}
-	return ClassifyResource(change, labels)
+	return ClassifyResource(change, m.cfg.LabelExtractor)
 }
 
 func sourceKey(kind string) string {

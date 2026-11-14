@@ -49,19 +49,21 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	GitService_CreateRepository_FullMethodName = "/gitstore.git.v1.GitService/CreateRepository"
-	GitService_DeleteRepository_FullMethodName = "/gitstore.git.v1.GitService/DeleteRepository"
-	GitService_InfoRefs_FullMethodName         = "/gitstore.git.v1.GitService/InfoRefs"
-	GitService_ReceivePack_FullMethodName      = "/gitstore.git.v1.GitService/ReceivePack"
-	GitService_UploadPack_FullMethodName       = "/gitstore.git.v1.GitService/UploadPack"
-	GitService_GetFile_FullMethodName          = "/gitstore.git.v1.GitService/GetFile"
-	GitService_GetFileStream_FullMethodName    = "/gitstore.git.v1.GitService/GetFileStream"
-	GitService_ListFiles_FullMethodName        = "/gitstore.git.v1.GitService/ListFiles"
-	GitService_CommitFile_FullMethodName       = "/gitstore.git.v1.GitService/CommitFile"
-	GitService_DeleteFile_FullMethodName       = "/gitstore.git.v1.GitService/DeleteFile"
-	GitService_CreateTag_FullMethodName        = "/gitstore.git.v1.GitService/CreateTag"
-	GitService_ListTags_FullMethodName         = "/gitstore.git.v1.GitService/ListTags"
-	GitService_GetLatestTag_FullMethodName     = "/gitstore.git.v1.GitService/GetLatestTag"
+	GitService_CreateRepository_FullMethodName     = "/gitstore.git.v1.GitService/CreateRepository"
+	GitService_DeleteRepository_FullMethodName     = "/gitstore.git.v1.GitService/DeleteRepository"
+	GitService_InfoRefs_FullMethodName             = "/gitstore.git.v1.GitService/InfoRefs"
+	GitService_ReceivePack_FullMethodName          = "/gitstore.git.v1.GitService/ReceivePack"
+	GitService_UploadPack_FullMethodName           = "/gitstore.git.v1.GitService/UploadPack"
+	GitService_GetFile_FullMethodName              = "/gitstore.git.v1.GitService/GetFile"
+	GitService_GetFileStream_FullMethodName        = "/gitstore.git.v1.GitService/GetFileStream"
+	GitService_ListFiles_FullMethodName            = "/gitstore.git.v1.GitService/ListFiles"
+	GitService_GetFileProvenance_FullMethodName    = "/gitstore.git.v1.GitService/GetFileProvenance"
+	GitService_CommitFile_FullMethodName           = "/gitstore.git.v1.GitService/CommitFile"
+	GitService_CommitFileAtRevision_FullMethodName = "/gitstore.git.v1.GitService/CommitFileAtRevision"
+	GitService_DeleteFile_FullMethodName           = "/gitstore.git.v1.GitService/DeleteFile"
+	GitService_CreateTag_FullMethodName            = "/gitstore.git.v1.GitService/CreateTag"
+	GitService_ListTags_FullMethodName             = "/gitstore.git.v1.GitService/ListTags"
+	GitService_GetLatestTag_FullMethodName         = "/gitstore.git.v1.GitService/GetLatestTag"
 )
 
 // GitServiceClient is the client API for GitService service.
@@ -95,8 +97,13 @@ type GitServiceClient interface {
 	GetFileStream(ctx context.Context, in *GetFileStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetFileStreamResponse], error)
 	// ListFiles enumerates file paths under an optional prefix at the given ref.
 	ListFiles(ctx context.Context, in *ListFilesRequest, opts ...grpc.CallOption) (*ListFilesResponse, error)
+	// Bounded first-parent provenance for a canonical RBAC path at an exact commit.
+	GetFileProvenance(ctx context.Context, in *GetFileProvenanceRequest, opts ...grpc.CallOption) (*GetFileProvenanceResponse, error)
 	// CommitFile writes a single file and commits it to the default branch.
 	CommitFile(ctx context.Context, in *CommitFileRequest, opts ...grpc.CallOption) (*CommitFileResponse, error)
+	// Commits only if the explicit branch still points to the admitted revision.
+	// Older servers return UNIMPLEMENTED rather than ignoring the precondition.
+	CommitFileAtRevision(ctx context.Context, in *CommitFileAtRevisionRequest, opts ...grpc.CallOption) (*CommitFileResponse, error)
 	// DeleteFile removes a file and commits the deletion to the default branch.
 	DeleteFile(ctx context.Context, in *DeleteFileRequest, opts ...grpc.CallOption) (*DeleteFileResponse, error)
 	// CreateTag creates an annotated tag on HEAD (or the specified commit).
@@ -216,10 +223,30 @@ func (c *gitServiceClient) ListFiles(ctx context.Context, in *ListFilesRequest, 
 	return out, nil
 }
 
+func (c *gitServiceClient) GetFileProvenance(ctx context.Context, in *GetFileProvenanceRequest, opts ...grpc.CallOption) (*GetFileProvenanceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFileProvenanceResponse)
+	err := c.cc.Invoke(ctx, GitService_GetFileProvenance_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gitServiceClient) CommitFile(ctx context.Context, in *CommitFileRequest, opts ...grpc.CallOption) (*CommitFileResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CommitFileResponse)
 	err := c.cc.Invoke(ctx, GitService_CommitFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gitServiceClient) CommitFileAtRevision(ctx context.Context, in *CommitFileAtRevisionRequest, opts ...grpc.CallOption) (*CommitFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CommitFileResponse)
+	err := c.cc.Invoke(ctx, GitService_CommitFileAtRevision_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -297,8 +324,13 @@ type GitServiceServer interface {
 	GetFileStream(*GetFileStreamRequest, grpc.ServerStreamingServer[GetFileStreamResponse]) error
 	// ListFiles enumerates file paths under an optional prefix at the given ref.
 	ListFiles(context.Context, *ListFilesRequest) (*ListFilesResponse, error)
+	// Bounded first-parent provenance for a canonical RBAC path at an exact commit.
+	GetFileProvenance(context.Context, *GetFileProvenanceRequest) (*GetFileProvenanceResponse, error)
 	// CommitFile writes a single file and commits it to the default branch.
 	CommitFile(context.Context, *CommitFileRequest) (*CommitFileResponse, error)
+	// Commits only if the explicit branch still points to the admitted revision.
+	// Older servers return UNIMPLEMENTED rather than ignoring the precondition.
+	CommitFileAtRevision(context.Context, *CommitFileAtRevisionRequest) (*CommitFileResponse, error)
 	// DeleteFile removes a file and commits the deletion to the default branch.
 	DeleteFile(context.Context, *DeleteFileRequest) (*DeleteFileResponse, error)
 	// CreateTag creates an annotated tag on HEAD (or the specified commit).
@@ -341,8 +373,14 @@ func (UnimplementedGitServiceServer) GetFileStream(*GetFileStreamRequest, grpc.S
 func (UnimplementedGitServiceServer) ListFiles(context.Context, *ListFilesRequest) (*ListFilesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListFiles not implemented")
 }
+func (UnimplementedGitServiceServer) GetFileProvenance(context.Context, *GetFileProvenanceRequest) (*GetFileProvenanceResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetFileProvenance not implemented")
+}
 func (UnimplementedGitServiceServer) CommitFile(context.Context, *CommitFileRequest) (*CommitFileResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CommitFile not implemented")
+}
+func (UnimplementedGitServiceServer) CommitFileAtRevision(context.Context, *CommitFileAtRevisionRequest) (*CommitFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CommitFileAtRevision not implemented")
 }
 func (UnimplementedGitServiceServer) DeleteFile(context.Context, *DeleteFileRequest) (*DeleteFileResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteFile not implemented")
@@ -496,6 +534,24 @@ func _GitService_ListFiles_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GitService_GetFileProvenance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFileProvenanceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GitServiceServer).GetFileProvenance(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GitService_GetFileProvenance_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GitServiceServer).GetFileProvenance(ctx, req.(*GetFileProvenanceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GitService_CommitFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CommitFileRequest)
 	if err := dec(in); err != nil {
@@ -510,6 +566,24 @@ func _GitService_CommitFile_Handler(srv interface{}, ctx context.Context, dec fu
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(GitServiceServer).CommitFile(ctx, req.(*CommitFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GitService_CommitFileAtRevision_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CommitFileAtRevisionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GitServiceServer).CommitFileAtRevision(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GitService_CommitFileAtRevision_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GitServiceServer).CommitFileAtRevision(ctx, req.(*CommitFileAtRevisionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -614,8 +688,16 @@ var GitService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GitService_ListFiles_Handler,
 		},
 		{
+			MethodName: "GetFileProvenance",
+			Handler:    _GitService_GetFileProvenance_Handler,
+		},
+		{
 			MethodName: "CommitFile",
 			Handler:    _GitService_CommitFile_Handler,
+		},
+		{
+			MethodName: "CommitFileAtRevision",
+			Handler:    _GitService_CommitFileAtRevision_Handler,
 		},
 		{
 			MethodName: "DeleteFile",

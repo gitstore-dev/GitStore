@@ -16,8 +16,8 @@ ServiceAccounts); spec 065 (groups and profile type from the UserDir).
 - Design doc 022 predates ADR-0010, ADR-0012, ADR-0015, ADR-0018 and specs
   064/065; where they disagree, the later documents win and 022 is amended.
 - Q: Consistency model? → A: Bounded staleness from the watch journal for
-  ordinary decisions; strict authoritative reads for RBAC writes and access
-  reviews (FR-012).
+  ordinary decisions; authoritative snapshots captured at validation start
+  for RBAC writes and access reviews (FR-012, clarified 2026-11-09).
 - Q: Is RBAC deletion subject to finalizers and ownerReferences? → A: Yes.
   Bindings hold a blocking ownerReference to their role; Roles/RoleBindings
   hold a non-blocking ownerReference to their Namespace (cascade); deletion
@@ -43,6 +43,44 @@ ServiceAccounts); spec 065 (groups and profile type from the UserDir).
   A: No; only the fixed GitStore policy module. Deferred until there is
   customer demand.
 
+### Session 2026-11-09
+
+- `namespace-creator` binds to UserDir-synthesized `system:staff`, not
+  `system:authenticated`; USER namespace owner provisioning preserves the
+  Staff-only creation policy from spec 065.
+- Restarted APIs remain unready for affected authorization until complete
+  snapshots and gap-free watch positions are established (FR-011a).
+- Q: How is permission containment checked for conditional grants? → A:
+  Conservatively: ordinary grant checks succeed only where complete coverage
+  is provable. Otherwise require explicit `bind` or `escalate`. Bindings to
+  absent roles require `bind` and grant nothing until the reference resolves.
+- Q: Can revocation invalidate an RBAC write already being validated in
+  another repository? → A: No. Use authoritative tier snapshots captured at
+  validation start, not a stale ordinary-decision cache. A concurrent
+  revocation may commit before the already-authorized write completes.
+  Cross-repository commit-time linearizability and a global write fence are
+  explicitly out of scope. Decisions and access reviews identify the
+  captured revision vector; they do not claim a globally atomic read.
+- Access reviews adapt the transient `SubjectAccessReview` envelope from the
+  storage-group catalogue, following the existing `TokenRequest` API pattern:
+  versioned request parameters in `spec`, evaluated results in `status`.
+  This does not add a persisted review resource or a separate
+  `SelfSubjectAccessReview` operation.
+
+### Session 2026-11-11
+
+- AuthN, AuthZ and UserDir providers remain freely combinable. In an AuthN
+  chain, the provider that successfully authenticates the request determines
+  `Principal.Subject`: for example, the configured OIDC username-claim value
+  or a static user's username. UserDir enrichment must preserve that subject,
+  issuer and authentication method. Namespace identity, ownership and User
+  binding subjects use the authenticated subject, never a substituted
+  directory UID or profile username.
+- `subjectUsername` retains its trusted-human-profile requirement but compares
+  the resource name with the AuthN-selected subject. This corrects the
+  directory-username comparison introduced in spec 065; it does not relax
+  the existing immutable USER namespace identity or Staff creation policy.
+
 ## Overview
 
 Spec 064's `rbac-local` reads one operator-edited policy file: changing a
@@ -65,6 +103,10 @@ journal; the active production authorization provider translates that
 projection into its engine's native policy and answers every decision. Changes can be made by Git push
 (GitOps, pull-request review) or through GraphQL mutations that commit the
 equivalent manifest — both paths go through the same admission.
+
+Access checks use a separate transient `SubjectAccessReview` contract in
+`authorization.gitstore.dev/v1beta1`, not the Git-backed RBAC group. Reviews
+have no durable resource lifecycle; any audit record is stored separately.
 
 Design doc 022's direction is carried over where it still holds (embedded
 evaluation, no network hop per decision, revisioned IAM snapshots, namespace
@@ -190,9 +232,10 @@ rejected.
 1. **Given** a fresh deployment, **When** it starts, **Then** built-in
    ClusterRoles (`cluster-admin`, `admin`, `edit`, `view`,
    `namespace-owner`, `namespace-creator`, `namespace-full-control`, `controller`,
-   `system:api-internal`) and the system ClusterRoleBindings (controller
-   ServiceAccount, `system:api`, `namespace-owner` and `namespace-creator` to
-   `system:authenticated`) are effective.
+   `system:api-internal`) and the system ClusterRoleBindings are effective:
+   the controller ServiceAccount has its built-in binding, `system:api` is
+   bound to `system:api-internal`, `namespace-owner` is bound to
+   `system:authenticated`, and `namespace-creator` is bound to `system:staff`.
 2. **Given** a configured initial cluster-admin subject, **When** the
    deployment starts, **Then** that subject holds `cluster-admin`, and the
    binding appears as a normal, removable ClusterRoleBinding once an
@@ -226,29 +269,36 @@ and confirm the answer matches enforcement.
 3. **Given** an access-review request for (subject, action, resource),
    **When** evaluated, **Then** the answer and reason match what enforcement
    would decide.
+4. **Given** an authorized reviewer submits a versioned
+   `SubjectAccessReview`, **When** evaluated, **Then** the response echoes
+   the review parameters in `spec` and returns the decision, reason and
+   evaluated revisions in `status`, without creating a Git manifest or
+   independently persisted resource.
 
 ---
 
 ### User Story 6 - Use a personal namespace without manual grants (Priority: P1)
 
-An authenticated human who is permitted to create a USER namespace creates
-one named after their authenticated username. GitStore provisions the owner's
-namespace access automatically; no operator edits a policy file or creates a
-binding for that user. The owner can manage every namespaced resource there,
-while existing admission and transfer invariants continue to apply.
+An authenticated Staff user who is permitted to create a USER namespace
+creates one named after their authenticated username. GitStore provisions
+the owner's namespace access automatically; no operator edits a policy file
+or creates a binding for that user. The owner can manage every namespaced
+resource there, while existing admission and transfer invariants continue to
+apply.
 
 **Independent Test**: With two API replicas and no pre-existing user binding,
-create USER namespace `alice` as `alice`; verify the system-managed binding
-appears in `alice/gitstore-system`, becomes effective on both replicas, and
-permits namespaced operations there while denying access to `bob`'s namespace.
+create USER namespace `alice` as Staff user `alice`; verify the system-managed
+binding appears in `alice/gitstore-system`, becomes effective on both replicas,
+and permits namespaced operations there while denying access to `bob`'s
+namespace.
 
 **Acceptance Scenarios**:
 
-1. **Given** an authorized human `alice` with no binding in namespace `alice`,
-   **When** she creates her USER namespace, **Then** GitStore provisions a
-   RoleBinding to built-in ClusterRole `namespace-full-control`, with subject
-   `{kind: User, name: alice}`, without requiring Alice to already hold RBAC
-   write, `bind` or `escalate` permissions.
+1. **Given** an authorized Staff user `alice` with no binding in namespace
+   `alice`, **When** she creates her USER namespace, **Then** GitStore
+   provisions a RoleBinding to built-in ClusterRole `namespace-full-control`,
+   with subject `{kind: User, name: alice}`, without requiring Alice to
+   already hold RBAC write, `bind` or `escalate` permissions.
 2. **Given** that binding, **When** it becomes effective, **Then** all registered
    namespaced resource/verb pairs are granted in `alice` on every replica;
    other namespaces and cluster-scoped resources receive no additional grants.
@@ -341,12 +391,17 @@ permits namespaced operations there while denying access to `bob`'s namespace.
 - **FR-007**: Creating or updating a Role/ClusterRole MUST be rejected unless
   the caller holds every permission the role grants, in the target scope, or
   holds the corresponding `escalate` permission. "Holds" is decided by
-  expanding the role's rules over the closed vocabulary and asking the active
-  provider's `Authorize` for each resulting permission, so the check works
-  with any provider.
+  expanding the role's rules over the closed vocabulary and checking the
+  active provider against the captured FR-012 snapshots. A concrete
+  `Authorize` result MUST NOT be treated as proof of coverage across arbitrary
+  names, subjects or conditional attributes. Ordinary checks MAY accept only
+  grants whose complete coverage is provable; otherwise explicit `escalate`
+  is required.
 - **FR-008**: Creating or updating a binding MUST be rejected unless the
   caller holds every permission of the referenced role in the binding's
-  scope, or holds the corresponding `bind` permission.
+  scope under FR-007's conservative coverage rule, or holds the corresponding
+  `bind` permission. An absent role requires explicit `bind`; admission MUST
+  NOT treat its currently empty effective permission set as proof of coverage.
 - **FR-009**: Built-in ClusterRole `admin` MUST include managing Roles and
   RoleBindings in its namespace (subject to FR-007/FR-008); `edit` and `view`
   MUST NOT include RBAC writes; `view` MUST NOT include reading RBAC
@@ -367,13 +422,28 @@ permits namespaced operations there while denying access to `bob`'s namespace.
   journal, replaced atomically per tier (cluster, each namespace) and tagged
   with the tier revision. The datastore holds only the reconciled RBAC
   resources, never a translated copy.
+- **FR-011a**: Each API replica MUST remain unready to serve
+  authorization-dependent requests until it has loaded a complete cluster
+  snapshot from the datastore projection and established a gap-free watch
+  position for that snapshot. A namespace tier MUST remain unavailable for
+  authorization until its complete snapshot and corresponding watch position
+  are established. Bootstrap or resync failure MUST keep the affected
+  readiness condition false; requests for an unready tier MUST fail closed
+  with FR-013's stable retryable authorization error. After cursor loss, a
+  complete resync and new watch position MUST be established before the tier
+  becomes ready again.
 - **FR-012**: Ordinary decisions MUST use watch-driven bounded staleness: no
   per-decision datastore I/O; a tier whose snapshot lags the journal by more
   than a configured bound (default 5 s) or whose cursor is lost MUST deny
   until resynced. RBAC writes (FR-007/FR-008 escalation checks) and access
-  reviews (FR-015) MUST instead evaluate against the authoritative current
-  revision of every tier they touch, so a stale snapshot can never be used to
-  escalate.
+  reviews (FR-015) MUST instead capture authoritative snapshots of every tier
+  they touch at validation start and use those immutable snapshots throughout
+  validation. Capture MUST identify each tier's revision and MUST NOT
+  silently substitute a lagging watch cache. Concurrent cross-repository
+  revocation does not invalidate an already-authorized operation; no globally
+  atomic revision vector or commit-time authorization fence is required.
+  A Git conflict that requires a new candidate MUST restart validation with
+  fresh snapshots. Validation MUST have a bounded deadline.
 - **FR-013**: Any uncertainty — evaluation error, missing tier snapshot,
   lag beyond bound, corrupted or partial snapshot — MUST deny with a stable,
   retryable authorization error and log the cause.
@@ -381,7 +451,13 @@ permits namespaced operations there while denying access to `bob`'s namespace.
   affecting them changes, within the propagation bound.
 - **FR-015**: An access-review query MUST return the decision and reason the
   provider would produce for (subject, groups, action, resource), restricted
-  to callers allowed to review that scope.
+  to callers allowed to review that scope. It MUST adapt the transient
+  `authorization.gitstore.dev/v1beta1` `SubjectAccessReview` envelope:
+  review parameters in `spec`, evaluated decision and revision diagnostics
+  in `status`. A review MUST NOT acquire a durable resource identity,
+  CRUD/list/watch lifecycle or Git manifest; audit records remain separate.
+  Reviewing oneself through this query still requires review permission;
+  a distinct `SelfSubjectAccessReview` contract is not part of this feature.
 
 **Built-ins and bootstrap**
 
@@ -438,10 +514,11 @@ permits namespaced operations there while denying access to `bob`'s namespace.
 - **FR-025**: For each admitted USER namespace, GitStore MUST automatically
   provision exactly one system-managed RoleBinding in that namespace's
   `gitstore-system` repository, referencing built-in ClusterRole
-  `namespace-full-control` and the namespace's authenticated human owner as
-  a structured User subject. This MUST work for both namespace creation paths
-  (Git push and GraphQL), require no per-user operator action, and reconcile
-  existing live USER namespaces when the production provider is enabled.
+  `namespace-full-control` and the namespace's authenticated owner, whose
+  UserDir profile type MUST be Staff, as a structured User subject. This MUST
+  work for both namespace creation paths (Git push and GraphQL), require no
+  per-user operator action, and reconcile existing live USER namespaces when
+  the production provider is enabled.
 - **FR-026**: `namespace-full-control` MUST be an immutable built-in granting
   `resources: ["*"]` and `verbs: ["*"]`. Its managed owner binding MUST be
   namespaced, never a ClusterRoleBinding. It grants all registered namespaced
@@ -474,6 +551,13 @@ permits namespaced operations there while denying access to `bob`'s namespace.
   deletion. This is an explicit exception to last-binding self-removal; it does
   not protect ordinary user-created bindings. A collision with a non-managed
   manifest MUST fail closed and report a condition, never silently adopt it.
+  A pre-existing ordinary collision MAY be deleted under normal RBAC
+  authorization when its persisted UID differs from the managed deterministic
+  UID and it carries no reserved managed provenance. Unknown identity or copied
+  managed provenance MUST NOT qualify for this cleanup exception. The exception
+  does not permit ordinary reserved-name creation, replacement or adoption;
+  unchanged ordinary collision manifests MUST NOT block unrelated authorized
+  writes.
 - **FR-030**: Managed bindings MUST carry the Namespace UID ownerReference
   and follow FR-018b/FR-018c cleanup and revocation. Namespace deletion MUST
   stop their grants within the revocation bound even if binding cleanup is
@@ -522,8 +606,9 @@ permits namespaced operations there while denying access to `bob`'s namespace.
   revision and that no grant persists beyond the revocation bound.
 - **PR-006 Fault Recovery**: `make chaos CHAOS_PROFILE=api-restart` and a
   watch-journal interruption: affected replicas deny for the gap, resync from
-  a full snapshot, and resume correct decisions within 30 s; no replica
-  admits a revoked grant after recovery.
+  a full snapshot while remaining unready for affected authorization, then
+  resume correct decisions within 30 s; no replica admits a revoked grant
+  after recovery.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -549,8 +634,9 @@ permits namespaced operations there while denying access to `bob`'s namespace.
   GraphQL paths.
 - **SC-003**: The OPA provider and rbac-local both pass 100% of spec 064's
   provider-neutral decision table.
-- **SC-004**: 0 decisions are allowed on a known-stale or missing snapshot
-  across fault-injection runs; recovery within 30 s.
+- **SC-004**: 0 decisions are allowed on a known-stale, missing, or
+  cursorless snapshot across fault-injection runs; authorization readiness
+  remains false until resync completes, with recovery within 30 s.
 - **SC-005**: Every effective permission is traceable to a Git commit, author
   and manifest, or to a named built-in.
 - **SC-006**: A fresh deployment is administrable by the configured initial
@@ -575,8 +661,9 @@ permits namespaced operations there while denying access to `bob`'s namespace.
   `resourceNames`).
 - The four kinds are watched through the durable watch journal like other
   catalog kinds.
-- Admin/Storefront endpoint split, `@authorize` directive and visibility-aware
-  list filtering remain separate features.
+- The implemented Admin/Storefront endpoint split is reused; RBAC management
+  lives on Admin only. The `@authorize` directive and visibility-aware list
+  filtering remain separate features.
 - No role aggregation, role inheritance or nested groups.
 - Operator guardrail policies and the extra decision inputs they would need
   (MFA, network, time) are deferred until there is customer demand.

@@ -56,6 +56,18 @@ type User interface {
 	GetContactConsent() *ContactConsent
 }
 
+// A transient authorization request. Omitted groups use trusted directory
+// membership; supplied groups, including an empty list, are hypothetical.
+type AccessReviewInput struct {
+	APIVersion string                        `json:"apiVersion"`
+	Kind       string                        `json:"kind"`
+	Spec       *SubjectAccessReviewSpecInput `json:"spec"`
+}
+
+type AccessReviewPayload struct {
+	SubjectAccessReview *SubjectAccessReview `json:"subjectAccessReview,omitempty"`
+}
+
 // Exactly one identifier; workload names are separate from human usernames.
 type ActorBy struct {
 	ID                 *string `json:"id,omitempty"`
@@ -226,6 +238,98 @@ type CategoryWatchEvent struct {
 	Category *Category `json:"category,omitempty"`
 }
 
+// A cluster-scoped role, including immutable release-owned built-ins.
+type ClusterRole struct {
+	ID         string           `json:"id"`
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	Metadata   *ObjectMeta      `json:"metadata"`
+	Spec       *ClusterRoleSpec `json:"spec"`
+	Status     *RBACStatus      `json:"status"`
+}
+
+func (ClusterRole) IsNode() {}
+
+// Opaque identifier encoding a resource kind and stable resource UID.
+func (this ClusterRole) GetID() string { return this.ID }
+
+// Binds a ClusterRole at cluster scope. roleRef is immutable.
+type ClusterRoleBinding struct {
+	ID         string                  `json:"id"`
+	APIVersion string                  `json:"apiVersion"`
+	Kind       string                  `json:"kind"`
+	Metadata   *ObjectMeta             `json:"metadata"`
+	Spec       *ClusterRoleBindingSpec `json:"spec"`
+	Status     *RBACStatus             `json:"status"`
+}
+
+func (ClusterRoleBinding) IsNode() {}
+
+// Opaque identifier encoding a resource kind and stable resource UID.
+func (this ClusterRoleBinding) GetID() string { return this.ID }
+
+type ClusterRoleBindingBy struct {
+	ID   *string `json:"id,omitempty"`
+	Name *string `json:"name,omitempty"`
+}
+
+type ClusterRoleBindingConnection struct {
+	Edges    []*ClusterRoleBindingEdge `json:"edges"`
+	PageInfo *PageInfo                 `json:"pageInfo"`
+}
+
+type ClusterRoleBindingEdge struct {
+	Cursor string              `json:"cursor"`
+	Node   *ClusterRoleBinding `json:"node"`
+}
+
+type ClusterRoleBindingSpec struct {
+	RoleRef  *RBACRoleRef   `json:"roleRef"`
+	Subjects []*RBACSubject `json:"subjects"`
+}
+
+type ClusterRoleBindingSpecInput struct {
+	RoleRef  *RBACRoleRefInput   `json:"roleRef"`
+	Subjects []*RBACSubjectInput `json:"subjects"`
+}
+
+type ClusterRoleBindingWatchEvent struct {
+	Type               WatchEventType      `json:"type"`
+	Name               string              `json:"name"`
+	ResourceVersion    string              `json:"resourceVersion"`
+	ClusterRoleBinding *ClusterRoleBinding `json:"clusterRoleBinding,omitempty"`
+}
+
+type ClusterRoleBy struct {
+	ID   *string `json:"id,omitempty"`
+	Name *string `json:"name,omitempty"`
+}
+
+type ClusterRoleConnection struct {
+	Edges    []*ClusterRoleEdge `json:"edges"`
+	PageInfo *PageInfo          `json:"pageInfo"`
+}
+
+type ClusterRoleEdge struct {
+	Cursor string       `json:"cursor"`
+	Node   *ClusterRole `json:"node"`
+}
+
+type ClusterRoleSpec struct {
+	Rules []*RBACRule `json:"rules"`
+}
+
+type ClusterRoleSpecInput struct {
+	Rules []*RBACRuleInput `json:"rules"`
+}
+
+type ClusterRoleWatchEvent struct {
+	Type            WatchEventType `json:"type"`
+	Name            string         `json:"name"`
+	ResourceVersion string         `json:"resourceVersion"`
+	ClusterRole     *ClusterRole   `json:"clusterRole,omitempty"`
+}
+
 // A Collection is a namespace-scoped catalog resource that groups products via
 // a declarative label selector. Defined by git push; mutations are not supported.
 type Collection struct {
@@ -315,6 +419,26 @@ type CompleteCategoryDeletionPayload struct {
 	ID *string `json:"id,omitempty"`
 }
 
+type CompleteClusterRoleBindingDeletionInput struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type CompleteClusterRoleBindingDeletionPayload struct {
+	ID string `json:"id"`
+}
+
+type CompleteClusterRoleDeletionInput struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type CompleteClusterRoleDeletionPayload struct {
+	ID string `json:"id"`
+}
+
 // Controller-only finalizer completion for a terminating namespace.
 type CompleteNamespaceDeletionInput struct {
 	// Relay Node ID of the exact namespace incarnation being finalized.
@@ -350,6 +474,28 @@ type CompleteRepositoryDeletionInput struct {
 
 type CompleteRepositoryDeletionPayload struct {
 	ID *string `json:"id,omitempty"`
+}
+
+type CompleteRoleBindingDeletionInput struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Namespace       string `json:"namespace"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type CompleteRoleBindingDeletionPayload struct {
+	ID string `json:"id"`
+}
+
+type CompleteRoleDeletionInput struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Namespace       string `json:"namespace"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type CompleteRoleDeletionPayload struct {
+	ID string `json:"id"`
 }
 
 // A named status condition shared by core catalog resources.
@@ -392,6 +538,28 @@ type CreateCategoryPayload struct {
 	Category *Category `json:"category,omitempty"`
 }
 
+type CreateClusterRoleBindingInput struct {
+	APIVersion string                       `json:"apiVersion"`
+	Kind       string                       `json:"kind"`
+	Metadata   *ObjectMetaInput             `json:"metadata"`
+	Spec       *ClusterRoleBindingSpecInput `json:"spec"`
+}
+
+type CreateClusterRoleBindingPayload struct {
+	ClusterRoleBinding *ClusterRoleBinding `json:"clusterRoleBinding,omitempty"`
+}
+
+type CreateClusterRoleInput struct {
+	APIVersion string                `json:"apiVersion"`
+	Kind       string                `json:"kind"`
+	Metadata   *ObjectMetaInput      `json:"metadata"`
+	Spec       *ClusterRoleSpecInput `json:"spec"`
+}
+
+type CreateClusterRolePayload struct {
+	ClusterRole *ClusterRole `json:"clusterRole,omitempty"`
+}
+
 // Declarative resource envelope for creating a namespace.
 type CreateNamespaceInput struct {
 	APIVersion string              `json:"apiVersion"`
@@ -427,6 +595,28 @@ type CreateRepositoryInput struct {
 
 type CreateRepositoryPayload struct {
 	Repository *Repository `json:"repository"`
+}
+
+type CreateRoleBindingInput struct {
+	APIVersion string                `json:"apiVersion"`
+	Kind       string                `json:"kind"`
+	Metadata   *ObjectMetaInput      `json:"metadata"`
+	Spec       *RoleBindingSpecInput `json:"spec"`
+}
+
+type CreateRoleBindingPayload struct {
+	RoleBinding *RoleBinding `json:"roleBinding,omitempty"`
+}
+
+type CreateRoleInput struct {
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	Metadata   *ObjectMetaInput `json:"metadata"`
+	Spec       *RoleSpecInput   `json:"spec"`
+}
+
+type CreateRolePayload struct {
+	Role *Role `json:"role,omitempty"`
 }
 
 // createServiceAccount mutation input.
@@ -537,6 +727,26 @@ type DeleteCategoryPayload struct {
 	Outcome  ResourceDeletionOutcome `json:"outcome"`
 }
 
+type DeleteClusterRoleBindingInput struct {
+	ID              string `json:"id"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type DeleteClusterRoleBindingPayload struct {
+	ClusterRoleBinding *ClusterRoleBinding     `json:"clusterRoleBinding,omitempty"`
+	Outcome            ResourceDeletionOutcome `json:"outcome"`
+}
+
+type DeleteClusterRoleInput struct {
+	ID              string `json:"id"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type DeleteClusterRolePayload struct {
+	ClusterRole *ClusterRole            `json:"clusterRole,omitempty"`
+	Outcome     ResourceDeletionOutcome `json:"outcome"`
+}
+
 // Input for deleting a namespace.
 type DeleteNamespaceInput struct {
 	// The identifier of the namespace to delete.
@@ -574,6 +784,26 @@ type DeleteRepositoryPayload struct {
 	// The Repository while foreground termination is in progress.
 	Repository *Repository             `json:"repository,omitempty"`
 	Outcome    ResourceDeletionOutcome `json:"outcome"`
+}
+
+type DeleteRoleBindingInput struct {
+	ID              string `json:"id"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type DeleteRoleBindingPayload struct {
+	RoleBinding *RoleBinding            `json:"roleBinding,omitempty"`
+	Outcome     ResourceDeletionOutcome `json:"outcome"`
+}
+
+type DeleteRoleInput struct {
+	ID              string `json:"id"`
+	ResourceVersion string `json:"resourceVersion"`
+}
+
+type DeleteRolePayload struct {
+	Role    *Role                   `json:"role,omitempty"`
+	Outcome ResourceDeletionOutcome `json:"outcome"`
 }
 
 // deleteServiceAccount mutation input.
@@ -908,13 +1138,15 @@ type ObjectMeta struct {
 	DeletionTimestamp *time.Time        `json:"deletionTimestamp,omitempty"`
 }
 
-// Author-controlled metadata shared by declarative resource mutations.
+// Metadata shared by declarative resource mutations.
 type ObjectMetaInput struct {
 	Name string `json:"name"`
 	// Required by namespaced resources; omit for cluster-scoped resources.
 	Namespace   *string        `json:"namespace,omitempty"`
 	Labels      map[string]any `json:"labels,omitempty"`
 	Annotations map[string]any `json:"annotations,omitempty"`
+	// Optimistic-concurrency token required for RBAC updates. Omit on creates and other resource mutations.
+	ResourceVersion *string `json:"resourceVersion,omitempty"`
 }
 
 // A system-managed relationship to another resource. When
@@ -1214,6 +1446,84 @@ type QuantityDefinition struct {
 type Query struct {
 }
 
+type RBACAttributeCondition struct {
+	Attr   string   `json:"attr"`
+	Op     string   `json:"op"`
+	Value  *string  `json:"value,omitempty"`
+	Values []string `json:"values,omitempty"`
+}
+
+type RBACAttributeConditionInput struct {
+	Attr   string   `json:"attr"`
+	Op     string   `json:"op"`
+	Value  *string  `json:"value,omitempty"`
+	Values []string `json:"values,omitempty"`
+}
+
+// Exactly one of token or attribute is present. Conditions are from a closed
+// vocabulary; arbitrary expressions and executable policy are not accepted.
+type RBACCondition struct {
+	Token     *string                 `json:"token,omitempty"`
+	Attribute *RBACAttributeCondition `json:"attribute,omitempty"`
+}
+
+type RBACConditionInput struct {
+	Token     *string                      `json:"token,omitempty"`
+	Attribute *RBACAttributeConditionInput `json:"attribute,omitempty"`
+}
+
+type RBACNamespacePath struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+type RBACResolvedRole struct {
+	RoleUID  string       `json:"roleUID"`
+	RoleKind RBACRoleKind `json:"roleKind"`
+	RoleName string       `json:"roleName"`
+}
+
+type RBACRoleRef struct {
+	Kind RBACRoleKind `json:"kind"`
+	Name string       `json:"name"`
+}
+
+type RBACRoleRefInput struct {
+	Kind RBACRoleKind `json:"kind"`
+	Name string       `json:"name"`
+}
+
+type RBACRule struct {
+	Resources     []string         `json:"resources"`
+	Verbs         []string         `json:"verbs"`
+	ResourceNames []string         `json:"resourceNames,omitempty"`
+	When          []*RBACCondition `json:"when,omitempty"`
+}
+
+type RBACRuleInput struct {
+	Resources     []string              `json:"resources"`
+	Verbs         []string              `json:"verbs"`
+	ResourceNames []string              `json:"resourceNames,omitempty"`
+	When          []*RBACConditionInput `json:"when,omitempty"`
+}
+
+// Controller-owned observation. A missing resolved link grants no authority.
+type RBACStatus struct {
+	ObservedGeneration int32             `json:"observedGeneration"`
+	Conditions         []*Condition      `json:"conditions"`
+	Resolved           *RBACResolvedRole `json:"resolved,omitempty"`
+}
+
+type RBACSubject struct {
+	Kind RBACSubjectKind `json:"kind"`
+	Name string          `json:"name"`
+}
+
+type RBACSubjectInput struct {
+	Kind RBACSubjectKind `json:"kind"`
+	Name string          `json:"name"`
+}
+
 type ReactivateUserInput struct {
 	ID string `json:"id"`
 }
@@ -1229,6 +1539,15 @@ type ReceivePackHookDefaults struct {
 	ProcReceive          *HookToggle `json:"procReceive,omitempty"`
 	PostUpdate           *HookToggle `json:"postUpdate,omitempty"`
 	ReferenceTransaction *HookToggle `json:"referenceTransaction,omitempty"`
+}
+
+type ReconcileRBACNamespaceCleanupsInput struct {
+	After *string `json:"after,omitempty"`
+}
+
+type ReconcileRBACNamespaceCleanupsPayload struct {
+	NextCursor *string `json:"nextCursor,omitempty"`
+	Pending    bool    `json:"pending"`
 }
 
 // Refresh token mutation input (Relay pattern)
@@ -1509,6 +1828,103 @@ type ResourceOwnerInput struct {
 	Name string    `json:"name"`
 }
 
+// A namespaced, Git-backed collection of additive authorization rules.
+type Role struct {
+	ID         string      `json:"id"`
+	APIVersion string      `json:"apiVersion"`
+	Kind       string      `json:"kind"`
+	Metadata   *ObjectMeta `json:"metadata"`
+	Spec       *RoleSpec   `json:"spec"`
+	Status     *RBACStatus `json:"status"`
+}
+
+func (Role) IsNode() {}
+
+// Opaque identifier encoding a resource kind and stable resource UID.
+func (this Role) GetID() string { return this.ID }
+
+// Binds a Role or ClusterRole within one namespace. roleRef is immutable.
+type RoleBinding struct {
+	ID         string           `json:"id"`
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	Metadata   *ObjectMeta      `json:"metadata"`
+	Spec       *RoleBindingSpec `json:"spec"`
+	Status     *RBACStatus      `json:"status"`
+}
+
+func (RoleBinding) IsNode() {}
+
+// Opaque identifier encoding a resource kind and stable resource UID.
+func (this RoleBinding) GetID() string { return this.ID }
+
+type RoleBindingBy struct {
+	ID            *string            `json:"id,omitempty"`
+	NamespacePath *RBACNamespacePath `json:"namespacePath,omitempty"`
+}
+
+type RoleBindingConnection struct {
+	Edges    []*RoleBindingEdge `json:"edges"`
+	PageInfo *PageInfo          `json:"pageInfo"`
+}
+
+type RoleBindingEdge struct {
+	Cursor string       `json:"cursor"`
+	Node   *RoleBinding `json:"node"`
+}
+
+type RoleBindingSpec struct {
+	RoleRef  *RBACRoleRef   `json:"roleRef"`
+	Subjects []*RBACSubject `json:"subjects"`
+}
+
+type RoleBindingSpecInput struct {
+	RoleRef  *RBACRoleRefInput   `json:"roleRef"`
+	Subjects []*RBACSubjectInput `json:"subjects"`
+}
+
+type RoleBindingWatchEvent struct {
+	Type            WatchEventType `json:"type"`
+	Namespace       *string        `json:"namespace,omitempty"`
+	Name            string         `json:"name"`
+	ResourceVersion string         `json:"resourceVersion"`
+	RoleBinding     *RoleBinding   `json:"roleBinding,omitempty"`
+}
+
+type RoleBy struct {
+	ID            *string            `json:"id,omitempty"`
+	NamespacePath *RBACNamespacePath `json:"namespacePath,omitempty"`
+}
+
+type RoleConnection struct {
+	Edges    []*RoleEdge `json:"edges"`
+	PageInfo *PageInfo   `json:"pageInfo"`
+}
+
+type RoleEdge struct {
+	Cursor string `json:"cursor"`
+	Node   *Role  `json:"node"`
+}
+
+type RoleSpec struct {
+	Rules []*RBACRule `json:"rules"`
+}
+
+type RoleSpecInput struct {
+	Rules []*RBACRuleInput `json:"rules"`
+}
+
+// Watches use the shared durable journal. Omitted cursors watch future changes;
+// capture the shared bootstrap cursor before listing current state. BOOKMARK
+// and DELETED events carry no resource payload.
+type RoleWatchEvent struct {
+	Type            WatchEventType `json:"type"`
+	Namespace       *string        `json:"namespace,omitempty"`
+	Name            string         `json:"name"`
+	ResourceVersion string         `json:"resourceVersion"`
+	Role            *Role          `json:"role,omitempty"`
+}
+
 // rotateServiceAccountKey mutation input. add and removeKids
 // may both be non-empty in the same call to support an overlap window during
 // rotation.
@@ -1661,6 +2077,65 @@ type StrategyDefinition struct {
 	Type string `json:"type"`
 }
 
+// A non-persisted result evaluated against authoritative policy snapshots.
+type SubjectAccessReview struct {
+	APIVersion string                     `json:"apiVersion"`
+	Kind       string                     `json:"kind"`
+	Spec       *SubjectAccessReviewSpec   `json:"spec"`
+	Status     *SubjectAccessReviewStatus `json:"status"`
+}
+
+type SubjectAccessReviewPrincipal struct {
+	Subject string   `json:"subject"`
+	Groups  []string `json:"groups,omitempty"`
+}
+
+type SubjectAccessReviewPrincipalInput struct {
+	Subject string   `json:"subject"`
+	Groups  []string `json:"groups,omitempty"`
+}
+
+type SubjectAccessReviewResourceRef struct {
+	ID string `json:"id"`
+}
+
+type SubjectAccessReviewResourceRefInput struct {
+	ID string `json:"id"`
+}
+
+type SubjectAccessReviewRevision struct {
+	TierID       string `json:"tierID"`
+	NamespaceUID string `json:"namespaceUID"`
+	GitRevision  string `json:"gitRevision"`
+	TierRevision string `json:"tierRevision"`
+	// Start of the bounded validation-start capture, not a global fence.
+	CapturedAt time.Time `json:"capturedAt"`
+}
+
+type SubjectAccessReviewSpec struct {
+	Principal   *SubjectAccessReviewPrincipal   `json:"principal"`
+	Action      string                          `json:"action"`
+	ResourceRef *SubjectAccessReviewResourceRef `json:"resourceRef"`
+	Context     map[string]any                  `json:"context,omitempty"`
+}
+
+type SubjectAccessReviewSpecInput struct {
+	Principal   *SubjectAccessReviewPrincipalInput   `json:"principal"`
+	Action      string                               `json:"action"`
+	ResourceRef *SubjectAccessReviewResourceRefInput `json:"resourceRef"`
+	// Optional hypothetical tier, visibility or targetOwnerRef facts.
+	Context map[string]any `json:"context,omitempty"`
+}
+
+type SubjectAccessReviewStatus struct {
+	Allowed       bool                           `json:"allowed"`
+	Reason        string                         `json:"reason"`
+	Hypothetical  bool                           `json:"hypothetical"`
+	Revisions     []*SubjectAccessReviewRevision `json:"revisions"`
+	CatalogDigest string                         `json:"catalogDigest"`
+	BuiltinDigest string                         `json:"builtinDigest"`
+}
+
 type Subscription struct {
 }
 
@@ -1770,6 +2245,28 @@ type UpdateCategoryStatusPayload struct {
 	HasMoreProductDependents bool `json:"hasMoreProductDependents"`
 }
 
+type UpdateClusterRoleBindingInput struct {
+	APIVersion string                       `json:"apiVersion"`
+	Kind       string                       `json:"kind"`
+	Metadata   *ObjectMetaInput             `json:"metadata"`
+	Spec       *ClusterRoleBindingSpecInput `json:"spec"`
+}
+
+type UpdateClusterRoleBindingPayload struct {
+	ClusterRoleBinding *ClusterRoleBinding `json:"clusterRoleBinding,omitempty"`
+}
+
+type UpdateClusterRoleInput struct {
+	APIVersion string                `json:"apiVersion"`
+	Kind       string                `json:"kind"`
+	Metadata   *ObjectMetaInput      `json:"metadata"`
+	Spec       *ClusterRoleSpecInput `json:"spec"`
+}
+
+type UpdateClusterRolePayload struct {
+	ClusterRole *ClusterRole `json:"clusterRole,omitempty"`
+}
+
 // Declarative resource envelope for updating a namespace.
 type UpdateNamespaceInput struct {
 	APIVersion string              `json:"apiVersion"`
@@ -1783,7 +2280,9 @@ type UpdateNamespacePayload struct {
 }
 
 type UpdateNamespaceStatusInput struct {
-	Name                string            `json:"name"`
+	Name string `json:"name"`
+	// Optional incarnation precondition; controllers supply the observed UID.
+	UID                 *string           `json:"uid,omitempty"`
 	ResourceVersion     string            `json:"resourceVersion"`
 	ObservedGeneration  *int32            `json:"observedGeneration,omitempty"`
 	LastAppliedRevision *string           `json:"lastAppliedRevision,omitempty"`
@@ -1860,11 +2359,36 @@ type UpdateResourceStatusInput struct {
 	// Kind-specific resolved payload, JSON-boxed since no static input type
 	// exists for an arbitrary CRD kind (mirrors WatchEvent.object).
 	Resolved map[string]any `json:"resolved,omitempty"`
+	// RBAC lifecycle finalizers. Only the authorization lifecycle controller may
+	// change its own finalizer; other resource kinds reject this field.
+	Finalizers []string `json:"finalizers,omitempty"`
 }
 
 type UpdateResourceStatusPayload struct {
 	// JSON-boxed current resource state.
 	Object map[string]any `json:"object,omitempty"`
+}
+
+type UpdateRoleBindingInput struct {
+	APIVersion string                `json:"apiVersion"`
+	Kind       string                `json:"kind"`
+	Metadata   *ObjectMetaInput      `json:"metadata"`
+	Spec       *RoleBindingSpecInput `json:"spec"`
+}
+
+type UpdateRoleBindingPayload struct {
+	RoleBinding *RoleBinding `json:"roleBinding,omitempty"`
+}
+
+type UpdateRoleInput struct {
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	Metadata   *ObjectMetaInput `json:"metadata"`
+	Spec       *RoleSpecInput   `json:"spec"`
+}
+
+type UpdateRolePayload struct {
+	Role *Role `json:"role,omitempty"`
 }
 
 // Only display name, pending primary email and consent may be edited.
@@ -2368,6 +2892,118 @@ func (e ProductLifecycleState) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+type RBACRoleKind string
+
+const (
+	RBACRoleKindRole        RBACRoleKind = "ROLE"
+	RBACRoleKindClusterRole RBACRoleKind = "CLUSTER_ROLE"
+)
+
+var AllRBACRoleKind = []RBACRoleKind{
+	RBACRoleKindRole,
+	RBACRoleKindClusterRole,
+}
+
+func (e RBACRoleKind) IsValid() bool {
+	switch e {
+	case RBACRoleKindRole, RBACRoleKindClusterRole:
+		return true
+	}
+	return false
+}
+
+func (e RBACRoleKind) String() string {
+	return string(e)
+}
+
+func (e *RBACRoleKind) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = RBACRoleKind(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid RBACRoleKind", str)
+	}
+	return nil
+}
+
+func (e RBACRoleKind) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *RBACRoleKind) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e RBACRoleKind) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type RBACSubjectKind string
+
+const (
+	RBACSubjectKindUser           RBACSubjectKind = "USER"
+	RBACSubjectKindGroup          RBACSubjectKind = "GROUP"
+	RBACSubjectKindServiceAccount RBACSubjectKind = "SERVICE_ACCOUNT"
+)
+
+var AllRBACSubjectKind = []RBACSubjectKind{
+	RBACSubjectKindUser,
+	RBACSubjectKindGroup,
+	RBACSubjectKindServiceAccount,
+}
+
+func (e RBACSubjectKind) IsValid() bool {
+	switch e {
+	case RBACSubjectKindUser, RBACSubjectKindGroup, RBACSubjectKindServiceAccount:
+		return true
+	}
+	return false
+}
+
+func (e RBACSubjectKind) String() string {
+	return string(e)
+}
+
+func (e *RBACSubjectKind) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = RBACSubjectKind(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid RBACSubjectKind", str)
+	}
+	return nil
+}
+
+func (e RBACSubjectKind) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *RBACSubjectKind) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e RBACSubjectKind) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
 type RepositoryVisibility string
 
 const (
@@ -2425,13 +3061,13 @@ func (e RepositoryVisibility) MarshalJSON() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// The successful result of requesting Namespace termination.
+// The successful result of requesting resource termination.
 type ResourceDeletionOutcome string
 
 const (
-	// This request set the deletion timestamp and foreground deletion finalizer.
+	// This request started foreground termination.
 	ResourceDeletionOutcomeTerminationStarted ResourceDeletionOutcome = "TERMINATION_STARTED"
-	// The Namespace was already terminating, so no datastore write occurred.
+	// The resource was already terminating, so this request did not start another termination.
 	ResourceDeletionOutcomeAlreadyTerminating ResourceDeletionOutcome = "ALREADY_TERMINATING"
 )
 

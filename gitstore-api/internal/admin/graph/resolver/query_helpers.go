@@ -14,6 +14,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
+	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
@@ -79,6 +80,8 @@ func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (mo
 		return nil, err
 	}
 	switch kind {
+	case nodeKindRole, nodeKindClusterRole, nodeKindRoleBinding, nodeKindClusterRoleBinding:
+		return r.readRBACNode(ctx, rbac.Kind(kind), rawID)
 	case nodeKindStaff, nodeKindCustomer, nodeKindServiceAccount:
 		return r.actorNode(ctx, kind, rawID)
 	case nodeKindFile:

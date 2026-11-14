@@ -5,6 +5,7 @@ package cataloggrpc
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 	"unicode"
@@ -88,21 +89,40 @@ func (s *Server) authenticateCallback(ctx context.Context, method string, reques
 		seen[ref.GetRefName()] = true
 	}
 	actor := envelope.GetActor()
-	principal := &auth.Principal{Subject: actor.GetSubject(), Groups: append([]string(nil), actor.GetGroups()...), AuthMethod: actor.GetAuthMethod(), ServiceAccountUID: actor.GetServiceAccountUid()}
+	principal := &auth.Principal{Subject: actor.GetSubject(), Issuer: actor.GetIssuer(), Groups: append([]string(nil), actor.GetGroups()...), AuthMethod: actor.GetAuthMethod(), ServiceAccountUID: actor.GetServiceAccountUid()}
 	if !auth.ValidTrustedPrincipal(principal) || principal.AuthMethod == "none" || principal.AuthMethod == "serviceaccount-assertion" {
 		return ctx, status.Error(codes.Unauthenticated, "verified callback actor required")
 	}
+	// Committed RBAC is repaired from Git without reauthorizing the historical
+	// actor. Ordinary catalog admission retains its live identity check below.
+	if method != catalogv1.CatalogService_AdmitResources_FullMethodName {
+		principal, err = s.authenticateLiveCallbackActor(ctx, principal)
+		if err != nil {
+			return ctx, err
+		}
+	}
+	return auth.ContextWithPrincipal(ctx, principal), nil
+}
+
+func (s *Server) authenticateLiveCallbackActor(ctx context.Context, principal *auth.Principal) (*auth.Principal, error) {
 	if principal.ServiceAccountUID != "" {
 		name := strings.TrimPrefix(principal.Subject, "system:serviceaccount:")
 		account, err := s.store.GetServiceAccountBySubject(ctx, name)
 		if err != nil || account == nil || account.Disabled || account.DeletionTimestamp != nil || account.UID != principal.ServiceAccountUID {
-			return ctx, status.Error(codes.Unauthenticated, "callback ServiceAccount is no longer valid")
+			return nil, status.Error(codes.Unauthenticated, "callback ServiceAccount is no longer valid")
 		}
 	}
 	if s.registry == nil || s.registry.AuthZ() == nil {
-		return ctx, status.Error(codes.Unavailable, "callback authorizer unavailable")
+		return nil, status.Error(codes.Unavailable, "callback authorizer unavailable")
 	}
-	return auth.ContextWithPrincipal(ctx, principal), nil
+	enriched, err := auth.EnrichPrincipal(ctx, s.registry.UserDir(), principal)
+	if errors.Is(err, auth.ErrProfileInactive) {
+		return nil, status.Error(codes.Unauthenticated, "callback actor is no longer active")
+	}
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, "callback directory facts unavailable")
+	}
+	return enriched, nil
 }
 
 // AdmissionContext carries per-request state for the post-receive admission

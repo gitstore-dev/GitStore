@@ -123,10 +123,16 @@ service GitService {
   // ListFiles enumerates file paths under an optional prefix at the given ref.
   rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
 
+  // Bounded first-parent provenance for a canonical RBAC path at an exact commit.
+  rpc GetFileProvenance(GetFileProvenanceRequest) returns (GetFileProvenanceResponse);
+
   // ── Write operations ───────────────────────────────────────────────────────
 
   // CommitFile writes a single file and commits it to the default branch.
   rpc CommitFile(CommitFileRequest) returns (CommitFileResponse);
+  // Commits only if the explicit branch still points to the admitted revision.
+  // Older servers return UNIMPLEMENTED rather than ignoring the precondition.
+  rpc CommitFileAtRevision(CommitFileAtRevisionRequest) returns (CommitFileResponse);
 
   // DeleteFile removes a file and commits the deletion to the default branch.
   rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
@@ -141,6 +147,22 @@ service GitService {
 
   // GetLatestTag returns the latest semver release tag by version ordering.
   rpc GetLatestTag(GetLatestTagRequest) returns (GetLatestTagResponse);
+}
+
+message GetFileProvenanceRequest {
+  string repository_id = 15;
+  RequestAuthorization authorization = 14;
+  string commit_sha = 1;
+  string path = 2;
+}
+
+message GetFileProvenanceResponse {
+  string snapshot_commit_sha = 1;
+  string change_commit_sha = 2;
+  string path = 3;
+  string author_name = 4;
+  int64 author_time_unix = 5;
+  uint32 commits_examined = 6;
 }
 
 // ─── Git smart HTTP transport messages ────────────────────────────────────────
@@ -311,6 +333,19 @@ message CommitFileRequest {
 message CommitFileResponse {
   string commit_sha = 1;
   string branch     = 2;
+}
+
+message CommitFileAtRevisionRequest {
+  CommitFileRequest file = 1;
+  string ref_name = 2;
+  string expected_commit_sha = 3;
+  // Retain private durable evidence for retrying this exact write. Retries
+  // return its original commit only with proven bounded branch ancestry;
+  // they never restore content that was subsequently removed or changed.
+  bool retain_receipt = 4;
+  // Inspect proven publication without creating or resuming a write.
+  // Requires retain_receipt; an absent receipt returns NOT_FOUND.
+  bool receipt_only = 5;
 }
 
 message DeleteFileRequest {

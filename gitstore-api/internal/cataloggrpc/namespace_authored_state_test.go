@@ -9,13 +9,102 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCommittedNamespaceCallbackWaitsOnlyForUnavailableAuthorization(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		failure     error
+		cancelEarly bool
+		created     bool
+	}{
+		{name: "publication recovers", failure: auth.ErrAuthorizationUnavailable, created: true},
+		{name: "denial is not retried", failure: gitclient.ErrAuthorizationDenied},
+		{name: "cancellation stops waiting", failure: auth.ErrAuthorizationUnavailable, cancelEarly: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := newNamespacePolicyDatastore(t)
+			commit := strings.Repeat("a", 40)
+			path := "namespaces/publication-retry.md"
+			reader := newTreeGitReader(&commit, map[string]map[string][]byte{
+				commit: {path: namespaceManifest("publication-retry", "Publication retry", "ORGANIZATION")},
+			})
+			calls := 0
+			reader.resolveRefFunc = func(context.Context, string, string) (string, error) {
+				calls++
+				if calls == 1 {
+					return "", fmt.Errorf("git authorization evaluation: %w", test.failure)
+				}
+				return commit, nil
+			}
+			srv := newCatalogServer(t, store, reader)
+			ctx := t.Context()
+			if test.cancelEarly {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, 50*time.Millisecond)
+				defer cancel()
+			}
+			_, err := srv.AdmitResources(ctx, &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID, NewCommitSha: commit, ChangedPaths: []string{path},
+				Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{
+					Subject: "alice", AuthMethod: "static-users",
+				}},
+			})
+			require.NoError(t, err)
+			stored, err := store.GetNamespaceByName(t.Context(), "publication-retry")
+			if test.created {
+				require.NoError(t, err)
+				require.Equal(t, commit, stored.GitCommitSHA)
+				require.Greater(t, calls, 1)
+			} else {
+				require.ErrorIs(t, err, datastore.ErrNotFound)
+				require.Equal(t, 1, calls)
+			}
+		})
+	}
+}
+
+func TestCommittedUserNamespaceReadbackPreservesProtectedOwnerAnnotations(t *testing.T) {
+	store := newNamespacePolicyDatastore(t)
+	first, second := strings.Repeat("3", 40), strings.Repeat("4", 40)
+	path := "namespaces/alice.md"
+	current := first
+	manifests := map[string]map[string][]byte{
+		first:  {path: namespaceManifest("alice", "First", "USER")},
+		second: {path: namespaceManifest("alice", "Second", "USER")},
+	}
+	srv := newCatalogServer(t, store, newTreeGitReader(&current, manifests))
+	ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{
+		Subject: "alice", AuthMethod: "static-users", Issuer: "gitstore/static-users",
+	})
+	for _, commit := range []string{first, second} {
+		current = commit
+		operation := admission.OperationCreate
+		if commit == second {
+			operation = admission.OperationUpdate
+		}
+		result, err := srv.Server.AdmitCommittedManifest(ctx, admission.CommittedManifestRequest{
+			RepositoryID: testRepoID, ActorSubject: "alice", RefName: "refs/heads/main",
+			Path: path, CommitSHA: commit, Content: manifests[commit][path], Operation: operation,
+		})
+		require.NoError(t, err, "server-minted annotations are not an authored-content mismatch")
+		require.Equal(t, commit, result.CommitSHA)
+		stored, err := store.GetNamespaceByName(ctx, "alice")
+		require.NoError(t, err)
+		require.Equal(t, "static-users", stored.Annotations[datastore.OwnerAuthMethodAnnotationKey])
+		require.Equal(t, "gitstore/static-users", stored.Annotations[datastore.OwnerIssuerAnnotationKey])
+	}
+}
 
 func TestAdmitResourcesNamespacePersistsCompleteAuthoredState(t *testing.T) {
 	store := newNamespacePolicyDatastore(t)

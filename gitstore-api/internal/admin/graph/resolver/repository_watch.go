@@ -207,5 +207,5 @@ func (r *Resolver) watchRepositoryResources(ctx context.Context, namespace *stri
 			}
 		}
 	}()
-	return out, nil
+	return guardWatch(ctx, r, "Repository", namespace, out, cancel), nil
 }

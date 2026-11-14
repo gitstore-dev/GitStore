@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
@@ -88,6 +89,78 @@ func TestUserNamespaceConcurrentCreateHasOneWinner(t *testing.T) {
 	require.Equal(t, "alice", current.EffectiveOwnerSub())
 }
 
+func TestUserNamespaceProtectsOwnerAuthenticationAnnotations(t *testing.T) {
+	const methodKey = "rbac.authorization.gitstore.dev/owner-auth-method"
+	const issuerKey = "rbac.authorization.gitstore.dev/owner-issuer"
+	for _, method := range []string{"oidc-jwt", "static-users"} {
+		t.Run(method, func(t *testing.T) {
+			store := newAdmissionStore(t)
+			principal := &auth.Principal{Subject: "alice", AuthMethod: method, Issuer: "trusted-issuer"}
+			ctx := auth.ContextWithPrincipal(t.Context(), principal)
+			resource := namespaceResource("alice", "USER")
+			resource.Metadata.Annotations = map[string]string{"example.com/note": "kept"}
+			created, _, err := namespaceadmission.ApplyManifest(ctx, store, fixedIDs{uuid.NewString()},
+				resource, time.Now(), "revision", principal.Subject, admission.OperationCreate)
+			require.NoError(t, err)
+			require.Equal(t, "alice", created.EffectiveOwnerSub())
+			require.Equal(t, method, created.Annotations[methodKey])
+			require.Equal(t, principal.Issuer, created.Annotations[issuerKey])
+			require.Equal(t, "kept", created.Annotations["example.com/note"])
+			require.NotContains(t, resource.Metadata.Annotations, methodKey, "do not mutate the authored manifest")
+
+			adminCtx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{
+				Subject: "admin", AuthMethod: "static-users", Issuer: "another-issuer",
+			})
+			resource.Spec.Title = "updated"
+			updated, _, err := namespaceadmission.ApplyManifest(adminCtx, store, fixedIDs{}, resource,
+				time.Now(), "next-revision", "admin", admission.OperationUpdate)
+			require.NoError(t, err)
+			require.Equal(t, method, updated.Annotations[methodKey])
+			require.Equal(t, principal.Issuer, updated.Annotations[issuerKey])
+
+			for _, key := range []string{methodKey, issuerKey} {
+				resource.Metadata.Annotations = map[string]string{key: "forged"}
+				_, _, err = namespaceadmission.ApplyManifest(ctx, store, fixedIDs{}, resource,
+					time.Now(), "tampered-revision", principal.Subject, admission.OperationUpdate)
+				require.Error(t, err, key)
+			}
+		})
+	}
+}
+
+func TestUserNamespaceOwnerAuthenticationCannotBeClaimedByAnotherActor(t *testing.T) {
+	const methodKey = "rbac.authorization.gitstore.dev/owner-auth-method"
+	const issuerKey = "rbac.authorization.gitstore.dev/owner-issuer"
+	store := newAdmissionStore(t)
+	resource := namespaceResource("alice", "USER")
+	resource.Metadata.Annotations = map[string]string{methodKey: "oidc-jwt", issuerKey: "forged-issuer"}
+	_, _, err := namespaceadmission.ApplyManifest(t.Context(), store, fixedIDs{uuid.NewString()},
+		resource, time.Now(), "revision", "alice", admission.OperationCreate)
+	require.Error(t, err, "authored annotations alone cannot establish authenticated provenance")
+}
+
+func TestLegacyUserNamespaceOwnerAuthenticationIsBackfilledOnlyByItsOwner(t *testing.T) {
+	store := newAdmissionStore(t)
+	resource := namespaceResource("alice", "USER")
+	_, _, err := namespaceadmission.ApplyManifest(t.Context(), store, fixedIDs{uuid.NewString()},
+		resource, time.Now(), "revision", "alice", admission.OperationCreate)
+	require.NoError(t, err)
+	for _, actor := range []string{"admin", "alice"} {
+		ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{
+			Subject: actor, AuthMethod: "static-users", Issuer: "trusted-issuer",
+		})
+		resource.Spec.Title = actor
+		updated, _, err := namespaceadmission.ApplyManifest(ctx, store, fixedIDs{}, resource,
+			time.Now(), actor+"-revision", actor, admission.OperationUpdate)
+		require.NoError(t, err)
+		if actor == "alice" {
+			require.Equal(t, "static-users", updated.Annotations["rbac.authorization.gitstore.dev/owner-auth-method"])
+			require.Equal(t, "trusted-issuer", updated.Annotations["rbac.authorization.gitstore.dev/owner-issuer"])
+		} else {
+			require.NotContains(t, updated.Annotations, "rbac.authorization.gitstore.dev/owner-auth-method")
+		}
+	}
+}
 func TestApplyManifestPolicyRejections(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()

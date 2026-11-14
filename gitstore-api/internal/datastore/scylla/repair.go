@@ -17,9 +17,58 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 	"github.com/gocql/gocql"
 	"github.com/scylladb/gocqlx/v3"
 )
+
+func (s *scyllaDatastore) RepairRBACProjection(ctx context.Context, tier string, revision uint64) error {
+	if !rbac.ValidTier(tier) {
+		return datastore.RBACError(rbac.ErrInvalid)
+	}
+	state, steps, err := s.readRBACTier(ctx, tier)
+	if err != nil {
+		return err
+	}
+	if state.Revision != revision {
+		return datastore.RBACError(rbac.ErrConflict)
+	}
+	for _, step := range steps {
+		if step.Removed {
+			// UID tombstones prevent delayed repair from resurrecting a lookup.
+			err = s.session.Session.Query("UPDATE rbac_resources_by_id SET deleted=true,tier=null,entry=null WHERE uid=?", step.UID).
+				WithContext(ctx).Consistency(gocql.Quorum).Exec()
+		} else {
+			_, err = s.session.Session.Query("INSERT INTO rbac_resources_by_id (uid,tier,entry,deleted) VALUES (?,?,?,false) IF NOT EXISTS",
+				step.UID, tier, rbacEntry(step.Key)).WithContext(ctx).Consistency(gocql.Quorum).SerialConsistency(gocql.Serial).MapScanCAS(make(map[string]any))
+		}
+		if err != nil {
+			return err
+		}
+		if step.Removed && step.BeforeRoleUID != "" {
+			err = s.session.Session.Query("UPDATE rbac_bindings_by_role SET deleted=true,tier=null,entry=null WHERE role_uid=? AND binding_uid=?",
+				step.BeforeRoleUID, step.UID).WithContext(ctx).Consistency(gocql.Quorum).Exec()
+		} else if step.AfterRoleUID != "" {
+			_, err = s.session.Session.Query("INSERT INTO rbac_bindings_by_role (role_uid,binding_uid,tier,entry,deleted) VALUES (?,?,?,?,false) IF NOT EXISTS",
+				step.AfterRoleUID, step.UID, tier, rbacEntry(step.Key)).WithContext(ctx).Consistency(gocql.Quorum).SerialConsistency(gocql.Serial).MapScanCAS(make(map[string]any))
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if len(steps) == 0 {
+		return nil
+	}
+	applied, err := s.session.Session.Query("UPDATE rbac_resources_by_scope SET repair=? WHERE tier=? AND entry=? IF revision=?",
+		[]byte("[]"), tier, "", revision).WithContext(ctx).Consistency(gocql.Quorum).SerialConsistency(gocql.Serial).MapScanCAS(make(map[string]any))
+	if err != nil {
+		return err
+	}
+	if !applied {
+		return datastore.RBACError(rbac.ErrConflict)
+	}
+	return nil
+}
 
 type FindingType string
 

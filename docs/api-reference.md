@@ -1087,6 +1087,142 @@ Git-backed catalogue resources are projected into GraphQL after post-receive adm
 
 Post-receive admission is asynchronous and cannot reject an already accepted Git push. DB-backed conflicts such as duplicate variant SKUs leave the existing stored resource unchanged and skip the conflicting incoming resource.
 
+## RBAC resources and access reviews
+
+**Availability:** these Admin schema contracts are present, but dynamic RBAC
+production activation remains gated. Selecting `opa` currently refuses
+production startup; keep the supported provider configured. They are not
+Storefront operations.
+
+`Role`, `ClusterRole`, `RoleBinding` and `ClusterRoleBinding` use
+`rbac.authorization.gitstore.dev/v1beta1` envelopes with Node identity,
+`metadata`, `spec` and controller-owned `status`. Roles and bindings are
+namespaced; their Cluster counterparts omit the namespace. Each kind has a
+single lookup, bounded Relay list, typed watch and action-specific
+create/update/delete/complete-deletion mutations. Updates require the returned
+version in `metadata.resourceVersion`; omit it on creates. Delete and completion
+inputs keep their top-level `resourceVersion` precondition. Other resource
+mutations do not accept this metadata precondition. Final removal additionally
+requires purge authority and completed finalizers.
+
+Each RBAC delete payload includes `outcome: ResourceDeletionOutcome!`:
+`TERMINATION_STARTED` when this request starts termination, or
+`ALREADY_TERMINATING` when it observes an existing termination without authoring
+another Git commit. Neither outcome means foreground deletion has finished.
+
+GraphQL role-reference kinds are `ROLE` and `CLUSTER_ROLE`; subject kinds are
+`USER`, `GROUP` and `SERVICE_ACCOUNT`. Git manifests and static policy files
+retain `Role`/`ClusterRole` and `User`/`Group`/`ServiceAccount`; the API converts
+these values at the GraphQL boundary.
+
+RBAC manifests have fixed paths under `rbac/roles`, `rbac/clusterroles`,
+`rbac/rolebindings` or `rbac/clusterrolebindings`, with `<name>.yaml` filenames,
+in the authoritative system repository. Git pre-receive and GraphQL writes
+share admission and conservative delegation checks. Reverts are new writes,
+not an authorization bypass. A successful write identifies its Git revision;
+it does not promise every API has already consumed it. A committed write with
+projection failure returns partial-outcome diagnostics rather than pretending
+to roll Git back.
+
+### SubjectAccessReview
+
+`accessReview(input:)` is an Admin Query returning
+`AccessReviewPayload.subjectAccessReview`. Its default input version and kind
+are `authorization.gitstore.dev/v1beta1` and `SubjectAccessReview`.
+
+```graphql
+query {
+  accessReview(input: {
+    spec: {
+      principal: {subject: "user-123"}
+      action: "product.read"
+      resourceRef: {id: "<product-node-id>"}
+    }
+  }) {
+    subjectAccessReview {
+      apiVersion
+      kind
+      status {
+        allowed
+        reason
+        hypothetical
+        revisions { tierID namespaceUID gitRevision tierRevision capturedAt }
+        catalogDigest
+        builtinDigest
+      }
+    }
+  }
+}
+```
+
+Replace the placeholder with an existing Admin Node ID. The response echoes
+accepted parameters in `spec`; the server resolves resource facts itself.
+The authenticated reviewer needs `role.access-review.create` in the target
+Namespace or `clusterRole.access-review.create` for cluster scope. Targeting
+oneself does not waive this requirement. Omitted groups require complete
+trusted directory membership; explicit groups, including `[]`, or proposed
+context mark the result hypothetical. They never authenticate as the target.
+
+Reviews are transient: no name, UID, persistence, Node, list, watch or
+SelfSubjectAccessReview operation is added. A policy denial returns
+`allowed: false`; unavailable authoritative state returns retryable
+`AUTHORIZATION_UNAVAILABLE`, not a guessed denial. Results identify the exact
+evaluated revision vector and match enforcement only at the same input and
+revision.
+
+### Source provenance
+
+RBAC resource objects contain only `id`, `apiVersion`, `kind`, `metadata`,
+`spec` and `status`. Send `GitStore-Provenance-Include: true` to request
+optional `extensions.provenance` diagnostics; no `source` field is added to
+the resource schema. Each array entry identifies an authorized returned
+resource by Node `id` and response `path`, including aliases and connection
+indices:
+
+```json
+{
+  "extensions": {
+    "provenance": [{
+      "path": ["roles", "edges", 0, "node"],
+      "id": "<returned Node ID>",
+      "repositoryRef": "shop/gitstore-system",
+      "ref": "refs/heads/main",
+      "file": "rbac/roles/reader.yaml",
+      "commit": "sha1:<admitted snapshot>",
+      "changeCommit": "sha1:<last path-blob change>",
+      "author": "<Git author name>",
+      "authoredAt": "2026-01-01T00:00:00Z"
+    }]
+  }
+}
+```
+
+`metadata.revision` identifies the admitted snapshot; `changeCommit` identifies
+the last first-parent commit changing the file's blob at that snapshot.
+Merges introducing changed blobs and reverts are attributed to their own
+commits. Git author metadata is not authenticated identity; no email is
+returned. Virtual built-ins instead report `builtinName` and `builtinDigest`,
+without repository/history fields.
+
+History lookup independently requires the resource read permission. It is
+limited to 256 commits, a five-second API deadline and four concurrent reads.
+At most 64 resources are inspected per response; a final
+`{"error":"PROVENANCE_LIMIT_EXCEEDED"}` entry reports truncation. Missing
+history, exhausted depth, busy workers, unavailable Git or incompatible peers
+produce a resource-associated `{"error":"PROVENANCE_UNAVAILABLE"}` entry
+without changing ordinary resource data. Entries for denied or null resource
+objects are omitted. Requests without the header and authorization decisions
+never traverse history; publication actors are never substituted for Git
+authors. This optional extension currently covers the four RBAC kinds.
+
+Authenticated GitStore operation audit is separate: canonical RBAC rows retain
+server-controlled creation/update actors and timestamps. Creation facts remain
+immutable, replay does not restamp them, and unknown legacy creators remain
+unknown. Recovery writes identify the recovery service, not a guessed original
+human author. These fields are not added to the typed GraphQL metadata schema;
+Git author/committer identities and dates remain in Git commit objects, not
+dedicated audit columns.
+
 ## Resource metadata and namespace scope
 
 All resource envelopes use `ObjectMeta` and authoring inputs use `ObjectMetaInput`.

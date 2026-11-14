@@ -1,0 +1,573 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 GitStore contributors
+
+"""
+A namespaced, Git-backed collection of additive authorization rules.
+"""
+type Role implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: RoleSpec!
+  status: RBACStatus!
+}
+
+"""
+A cluster-scoped role, including immutable release-owned built-ins.
+"""
+type ClusterRole implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: ClusterRoleSpec!
+  status: RBACStatus!
+}
+
+"""
+Binds a Role or ClusterRole within one namespace. roleRef is immutable.
+"""
+type RoleBinding implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: RoleBindingSpec!
+  status: RBACStatus!
+}
+
+"""
+Binds a ClusterRole at cluster scope. roleRef is immutable.
+"""
+type ClusterRoleBinding implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: ClusterRoleBindingSpec!
+  status: RBACStatus!
+}
+
+type RoleSpec {
+  rules: [RBACRule!]!
+}
+
+type ClusterRoleSpec {
+  rules: [RBACRule!]!
+}
+
+type RoleBindingSpec {
+  roleRef: RBACRoleRef!
+  subjects: [RBACSubject!]!
+}
+
+type ClusterRoleBindingSpec {
+  roleRef: RBACRoleRef!
+  subjects: [RBACSubject!]!
+}
+
+type RBACRule {
+  resources: [String!]!
+  verbs: [String!]!
+  resourceNames: [String!]
+  when: [RBACCondition!]
+}
+
+"""
+Exactly one of token or attribute is present. Conditions are from a closed
+vocabulary; arbitrary expressions and executable policy are not accepted.
+"""
+type RBACCondition {
+  token: String
+  attribute: RBACAttributeCondition
+}
+
+type RBACAttributeCondition {
+  attr: String!
+  op: String!
+  value: String
+  values: [String!]
+}
+
+enum RBACRoleKind {
+  ROLE
+  CLUSTER_ROLE
+}
+
+enum RBACSubjectKind {
+  USER
+  GROUP
+  SERVICE_ACCOUNT
+}
+
+type RBACRoleRef {
+  kind: RBACRoleKind!
+  name: String!
+}
+
+type RBACSubject {
+  kind: RBACSubjectKind!
+  name: String!
+}
+
+"""
+Controller-owned observation. A missing resolved link grants no authority.
+"""
+type RBACStatus {
+  observedGeneration: Int!
+  conditions: [Condition!]!
+  resolved: RBACResolvedRole
+}
+
+type RBACResolvedRole {
+  roleUID: ID!
+  roleKind: RBACRoleKind!
+  roleName: String!
+}
+
+input RoleSpecInput {
+  rules: [RBACRuleInput!]!
+}
+
+input ClusterRoleSpecInput {
+  rules: [RBACRuleInput!]!
+}
+
+input RoleBindingSpecInput {
+  roleRef: RBACRoleRefInput!
+  subjects: [RBACSubjectInput!]!
+}
+
+input ClusterRoleBindingSpecInput {
+  roleRef: RBACRoleRefInput!
+  subjects: [RBACSubjectInput!]!
+}
+
+input RBACRuleInput {
+  resources: [String!]!
+  verbs: [String!]!
+  resourceNames: [String!]
+  when: [RBACConditionInput!]
+}
+
+input RBACConditionInput @oneOf {
+  token: String
+  attribute: RBACAttributeConditionInput
+}
+
+input RBACAttributeConditionInput {
+  attr: String!
+  op: String!
+  value: String
+  values: [String!]
+}
+
+input RBACRoleRefInput {
+  kind: RBACRoleKind!
+  name: String!
+}
+
+input RBACSubjectInput {
+  kind: RBACSubjectKind!
+  name: String!
+}
+
+input RBACNamespacePath {
+  namespace: String!
+  name: String!
+}
+
+input RoleBy @oneOf {
+  id: ID
+  namespacePath: RBACNamespacePath
+}
+
+input ClusterRoleBy @oneOf {
+  id: ID
+  name: String
+}
+
+input RoleBindingBy @oneOf {
+  id: ID
+  namespacePath: RBACNamespacePath
+}
+
+input ClusterRoleBindingBy @oneOf {
+  id: ID
+  name: String
+}
+
+type RoleEdge {
+  cursor: String!
+  node: Role!
+}
+
+type RoleConnection {
+  edges: [RoleEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ClusterRoleEdge {
+  cursor: String!
+  node: ClusterRole!
+}
+
+type ClusterRoleConnection {
+  edges: [ClusterRoleEdge!]!
+  pageInfo: PageInfo!
+}
+
+type RoleBindingEdge {
+  cursor: String!
+  node: RoleBinding!
+}
+
+type RoleBindingConnection {
+  edges: [RoleBindingEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ClusterRoleBindingEdge {
+  cursor: String!
+  node: ClusterRoleBinding!
+}
+
+type ClusterRoleBindingConnection {
+  edges: [ClusterRoleBindingEdge!]!
+  pageInfo: PageInfo!
+}
+
+input CreateRoleInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "Role"
+  metadata: ObjectMetaInput!
+  spec: RoleSpecInput!
+}
+
+input UpdateRoleInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "Role"
+  metadata: ObjectMetaInput!
+  spec: RoleSpecInput!
+}
+
+input DeleteRoleInput {
+  id: ID!
+  resourceVersion: String!
+}
+
+input CompleteRoleDeletionInput {
+  id: ID!
+  name: String!
+  namespace: String!
+  resourceVersion: String!
+}
+
+input CreateClusterRoleInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "ClusterRole"
+  metadata: ObjectMetaInput!
+  spec: ClusterRoleSpecInput!
+}
+
+input UpdateClusterRoleInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "ClusterRole"
+  metadata: ObjectMetaInput!
+  spec: ClusterRoleSpecInput!
+}
+
+input DeleteClusterRoleInput {
+  id: ID!
+  resourceVersion: String!
+}
+
+input CompleteClusterRoleDeletionInput {
+  id: ID!
+  name: String!
+  resourceVersion: String!
+}
+
+input CreateRoleBindingInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "RoleBinding"
+  metadata: ObjectMetaInput!
+  spec: RoleBindingSpecInput!
+}
+
+input UpdateRoleBindingInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "RoleBinding"
+  metadata: ObjectMetaInput!
+  spec: RoleBindingSpecInput!
+}
+
+input DeleteRoleBindingInput {
+  id: ID!
+  resourceVersion: String!
+}
+
+input CompleteRoleBindingDeletionInput {
+  id: ID!
+  name: String!
+  namespace: String!
+  resourceVersion: String!
+}
+
+input CreateClusterRoleBindingInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "ClusterRoleBinding"
+  metadata: ObjectMetaInput!
+  spec: ClusterRoleBindingSpecInput!
+}
+
+input UpdateClusterRoleBindingInput {
+  apiVersion: String! = "rbac.authorization.gitstore.dev/v1beta1"
+  kind: String! = "ClusterRoleBinding"
+  metadata: ObjectMetaInput!
+  spec: ClusterRoleBindingSpecInput!
+}
+
+input DeleteClusterRoleBindingInput {
+  id: ID!
+  resourceVersion: String!
+}
+
+input CompleteClusterRoleBindingDeletionInput {
+  id: ID!
+  name: String!
+  resourceVersion: String!
+}
+
+type CreateRolePayload {
+  role: Role
+}
+
+type UpdateRolePayload {
+  role: Role
+}
+
+type DeleteRolePayload {
+  role: Role
+  outcome: ResourceDeletionOutcome!
+}
+
+type CompleteRoleDeletionPayload {
+  id: ID!
+}
+
+type CreateClusterRolePayload {
+  clusterRole: ClusterRole
+}
+
+type UpdateClusterRolePayload {
+  clusterRole: ClusterRole
+}
+
+type DeleteClusterRolePayload {
+  clusterRole: ClusterRole
+  outcome: ResourceDeletionOutcome!
+}
+
+type CompleteClusterRoleDeletionPayload {
+  id: ID!
+}
+
+type CreateRoleBindingPayload {
+  roleBinding: RoleBinding
+}
+
+type UpdateRoleBindingPayload {
+  roleBinding: RoleBinding
+}
+
+type DeleteRoleBindingPayload {
+  roleBinding: RoleBinding
+  outcome: ResourceDeletionOutcome!
+}
+
+type CompleteRoleBindingDeletionPayload {
+  id: ID!
+}
+
+type CreateClusterRoleBindingPayload {
+  clusterRoleBinding: ClusterRoleBinding
+}
+
+type UpdateClusterRoleBindingPayload {
+  clusterRoleBinding: ClusterRoleBinding
+}
+
+type DeleteClusterRoleBindingPayload {
+  clusterRoleBinding: ClusterRoleBinding
+  outcome: ResourceDeletionOutcome!
+}
+
+type CompleteClusterRoleBindingDeletionPayload {
+  id: ID!
+}
+
+"""
+Watches use the shared durable journal. Omitted cursors watch future changes;
+capture the shared bootstrap cursor before listing current state. BOOKMARK
+and DELETED events carry no resource payload.
+"""
+type RoleWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+  role: Role
+}
+
+type ClusterRoleWatchEvent {
+  type: WatchEventType!
+  name: String!
+  resourceVersion: String!
+  clusterRole: ClusterRole
+}
+
+type RoleBindingWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+  roleBinding: RoleBinding
+}
+
+type ClusterRoleBindingWatchEvent {
+  type: WatchEventType!
+  name: String!
+  resourceVersion: String!
+  clusterRoleBinding: ClusterRoleBinding
+}
+
+"""
+A transient authorization request. Omitted groups use trusted directory
+membership; supplied groups, including an empty list, are hypothetical.
+"""
+input AccessReviewInput {
+  apiVersion: String! = "authorization.gitstore.dev/v1beta1"
+  kind: String! = "SubjectAccessReview"
+  spec: SubjectAccessReviewSpecInput!
+}
+
+input SubjectAccessReviewSpecInput {
+  principal: SubjectAccessReviewPrincipalInput!
+  action: String!
+  resourceRef: SubjectAccessReviewResourceRefInput!
+  """Optional hypothetical tier, visibility or targetOwnerRef facts."""
+  context: JSON
+}
+
+input SubjectAccessReviewPrincipalInput {
+  subject: String!
+  groups: [String!]
+}
+
+input SubjectAccessReviewResourceRefInput {
+  id: ID!
+}
+
+type AccessReviewPayload {
+  subjectAccessReview: SubjectAccessReview
+}
+
+"""A non-persisted result evaluated against authoritative policy snapshots."""
+type SubjectAccessReview {
+  apiVersion: String!
+  kind: String!
+  spec: SubjectAccessReviewSpec!
+  status: SubjectAccessReviewStatus!
+}
+
+type SubjectAccessReviewSpec {
+  principal: SubjectAccessReviewPrincipal!
+  action: String!
+  resourceRef: SubjectAccessReviewResourceRef!
+  context: JSON
+}
+
+type SubjectAccessReviewPrincipal {
+  subject: String!
+  groups: [String!]
+}
+
+type SubjectAccessReviewResourceRef {
+  id: ID!
+}
+
+type SubjectAccessReviewStatus {
+  allowed: Boolean!
+  reason: String!
+  hypothetical: Boolean!
+  revisions: [SubjectAccessReviewRevision!]!
+  catalogDigest: String!
+  builtinDigest: String!
+}
+
+type SubjectAccessReviewRevision {
+  tierID: ID!
+  namespaceUID: ID!
+  gitRevision: String!
+  tierRevision: String!
+  """Start of the bounded validation-start capture, not a global fence."""
+  capturedAt: DateTime!
+}
+
+extend type Query {
+  """Requires scope review permission even when reviewing oneself."""
+  accessReview(input: AccessReviewInput!): AccessReviewPayload!
+  role(by: RoleBy!): Role
+  clusterRole(by: ClusterRoleBy!): ClusterRole
+  roleBinding(by: RoleBindingBy!): RoleBinding
+  clusterRoleBinding(by: ClusterRoleBindingBy!): ClusterRoleBinding
+  roles(namespace: String!, first: Int, after: String, selector: LabelSelectorInput): RoleConnection!
+  clusterRoles(first: Int, after: String, selector: LabelSelectorInput): ClusterRoleConnection!
+  roleBindings(namespace: String!, first: Int, after: String, selector: LabelSelectorInput): RoleBindingConnection!
+  clusterRoleBindings(first: Int, after: String, selector: LabelSelectorInput): ClusterRoleBindingConnection!
+}
+
+extend type Mutation {
+  """
+  Processes bounded cleanup work for deleted Namespace incarnations.
+  Requires the enrolled controller and global Namespace purge permission.
+  """
+  reconcileRBACNamespaceCleanups(input: ReconcileRBACNamespaceCleanupsInput!): ReconcileRBACNamespaceCleanupsPayload!
+  """Commits a validated candidate; cache propagation may complete later."""
+  createRole(input: CreateRoleInput!): CreateRolePayload!
+  updateRole(input: UpdateRoleInput!): UpdateRolePayload!
+  """Starts termination, suppressing the role's grants."""
+  deleteRole(input: DeleteRoleInput!): DeleteRolePayload!
+  """Controller completion requiring purge permission and cleared blockers."""
+  completeRoleDeletion(input: CompleteRoleDeletionInput!): CompleteRoleDeletionPayload!
+  createClusterRole(input: CreateClusterRoleInput!): CreateClusterRolePayload!
+  updateClusterRole(input: UpdateClusterRoleInput!): UpdateClusterRolePayload!
+  deleteClusterRole(input: DeleteClusterRoleInput!): DeleteClusterRolePayload!
+  completeClusterRoleDeletion(input: CompleteClusterRoleDeletionInput!): CompleteClusterRoleDeletionPayload!
+  createRoleBinding(input: CreateRoleBindingInput!): CreateRoleBindingPayload!
+  updateRoleBinding(input: UpdateRoleBindingInput!): UpdateRoleBindingPayload!
+  deleteRoleBinding(input: DeleteRoleBindingInput!): DeleteRoleBindingPayload!
+  completeRoleBindingDeletion(input: CompleteRoleBindingDeletionInput!): CompleteRoleBindingDeletionPayload!
+  createClusterRoleBinding(input: CreateClusterRoleBindingInput!): CreateClusterRoleBindingPayload!
+  updateClusterRoleBinding(input: UpdateClusterRoleBindingInput!): UpdateClusterRoleBindingPayload!
+  deleteClusterRoleBinding(input: DeleteClusterRoleBindingInput!): DeleteClusterRoleBindingPayload!
+  completeClusterRoleBindingDeletion(input: CompleteClusterRoleBindingDeletionInput!): CompleteClusterRoleBindingDeletionPayload!
+}
+
+input ReconcileRBACNamespaceCleanupsInput {
+  after: String
+}
+
+type ReconcileRBACNamespaceCleanupsPayload {
+  nextCursor: String
+  pending: Boolean!
+}
+
+extend type Subscription {
+  watchRoles(namespace: String, selector: LabelSelectorInput, resourceVersion: String): RoleWatchEvent!
+  watchClusterRoles(selector: LabelSelectorInput, resourceVersion: String): ClusterRoleWatchEvent!
+  watchRoleBindings(namespace: String, selector: LabelSelectorInput, resourceVersion: String): RoleBindingWatchEvent!
+  watchClusterRoleBindings(selector: LabelSelectorInput, resourceVersion: String): ClusterRoleBindingWatchEvent!
+}

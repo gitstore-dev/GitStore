@@ -16,6 +16,7 @@ import (
 	"time"
 
 	units "github.com/docker/go-units"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/go-playground/validator/v10"
 	"github.com/go-viper/mapstructure/v2"
@@ -55,6 +56,84 @@ type ApiConfig struct {
 	Datastore    DatastoreConfig               `mapstructure:"datastore"`
 	Watch        WatchConfig                   `mapstructure:"watch"`
 	Profiling    observability.ProfilingConfig `mapstructure:"profiling"`
+}
+
+// OPAConfig holds the OPA provider's dynamic-RBAC rollout and runtime bounds.
+type OPAConfig struct {
+	WritesEnabled       bool          `mapstructure:"writes_enabled"`
+	InitialAdminSubject string        `mapstructure:"initial_admin_subject"`
+	MaxStaleness        time.Duration `mapstructure:"max_staleness"`
+	ValidationTimeout   time.Duration `mapstructure:"validation_timeout"`
+	RebuildWorkers      int           `mapstructure:"rebuild_workers"`
+	DirtyQueueCapacity  int           `mapstructure:"dirty_queue_capacity"` // Distinct dirty-tier entries, not bytes.
+	SnapshotRetries     int           `mapstructure:"snapshot_retries"`
+	SnapshotMemorySize  string        `mapstructure:"snapshot_memory_size"`
+	SnapshotMemoryBytes int64         `mapstructure:"-"`
+	RebuildMemorySize   string        `mapstructure:"rebuild_memory_size"`
+	RebuildMemoryBytes  int64         `mapstructure:"-"`
+}
+
+func (c OPAConfig) ValidateProvider(provider string) error {
+	if c.WritesEnabled && provider != "opa" {
+		return errors.New("api.auth.opa.writes_enabled requires the opa authz provider")
+	}
+	if c.InitialAdminSubject != "" && provider != "opa" {
+		return errors.New("api.auth.opa.initial_admin_subject requires the opa authz provider")
+	}
+	if c.InitialAdminSubject != "" && !auth.ValidTrustedPrincipal(&auth.Principal{Subject: c.InitialAdminSubject, AuthMethod: "bootstrap"}) {
+		return errors.New("api.auth.opa.initial_admin_subject must be a non-reserved authenticated User subject")
+	}
+	return nil
+}
+
+func (c *OPAConfig) Validate(provider string) error {
+	if err := c.ValidateProvider(provider); err != nil {
+		return err
+	}
+	for _, limit := range []struct {
+		key        string
+		value, max time.Duration
+	}{
+		{"max_staleness", c.MaxStaleness, 5 * time.Second},
+		{"validation_timeout", c.ValidationTimeout, 30 * time.Second},
+	} {
+		if limit.value <= 0 || limit.value > limit.max {
+			return fmt.Errorf("api.auth.opa.%s must be positive and at most %s", limit.key, limit.max)
+		}
+	}
+	for _, limit := range []struct {
+		key        string
+		value, max int
+	}{
+		{"rebuild_workers", c.RebuildWorkers, 4},
+		{"dirty_queue_capacity", c.DirtyQueueCapacity, 1024},
+		{"snapshot_retries", c.SnapshotRetries, 3},
+	} {
+		if limit.value < 1 || limit.value > limit.max {
+			return fmt.Errorf("api.auth.opa.%s must be between 1 and %d", limit.key, limit.max)
+		}
+	}
+	for _, limit := range []struct {
+		key, value string
+		bytes      *int64
+		max        int64
+	}{
+		{"snapshot_memory_size", c.SnapshotMemorySize, &c.SnapshotMemoryBytes, 512 << 20},
+		{"rebuild_memory_size", c.RebuildMemorySize, &c.RebuildMemoryBytes, 64 << 20},
+	} {
+		bytes, err := ParseIECBytes(limit.value)
+		if err != nil {
+			return fmt.Errorf("invalid api.auth.opa.%s: %w", limit.key, err)
+		}
+		if bytes < 1 || bytes > limit.max {
+			return fmt.Errorf("api.auth.opa.%s must be positive and at most %d bytes", limit.key, limit.max)
+		}
+		*limit.bytes = bytes
+	}
+	if c.RebuildMemoryBytes > c.SnapshotMemoryBytes {
+		return errors.New("api.auth.opa.rebuild_memory_size must not exceed snapshot_memory_size")
+	}
+	return nil
 }
 
 type NotificationConfig struct {
@@ -124,6 +203,7 @@ type AuthConfig struct {
 	AuthZ       AuthZConfig         `mapstructure:"authz"`
 	UserDir     UserDirConfig       `mapstructure:"userdir"`
 	RBACLocal   RBACConfig          `mapstructure:"rbac_local"`
+	OPA         OPAConfig           `mapstructure:"opa"`
 	Kratos      KratosUserDirConfig `mapstructure:"kratos"`
 
 	// ServiceAccount configures the serviceaccount-assertion/serviceaccount-jwt
@@ -482,6 +562,15 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("api.auth.jwt.refresh_grace", "60s")
 	v.SetDefault("api.auth.authn.chain", []string{"static-users", "anonymous"})
 	v.SetDefault("api.auth.authz.provider", "rbac-local")
+	v.SetDefault("api.auth.opa.writes_enabled", false)
+	v.SetDefault("api.auth.opa.initial_admin_subject", "")
+	v.SetDefault("api.auth.opa.max_staleness", "5s")
+	v.SetDefault("api.auth.opa.validation_timeout", "30s")
+	v.SetDefault("api.auth.opa.rebuild_workers", 4)
+	v.SetDefault("api.auth.opa.dirty_queue_capacity", 1024)
+	v.SetDefault("api.auth.opa.snapshot_retries", 3)
+	v.SetDefault("api.auth.opa.snapshot_memory_size", "512MiB")
+	v.SetDefault("api.auth.opa.rebuild_memory_size", "64MiB")
 	v.SetDefault("api.auth.userdir.provider", "none")
 	v.SetDefault("api.auth.kratos.admin_uri", "")
 	v.SetDefault("api.auth.kratos.webhook_uri", "")
@@ -654,6 +743,9 @@ func validateConfig(cfg *Config) error {
 		return err
 	}
 	if err := validateAuthChainConfig(cfg); err != nil {
+		return err
+	}
+	if err := cfg.Api.Auth.OPA.Validate(cfg.Api.Auth.AuthZ.Provider); err != nil {
 		return err
 	}
 	if err := validatePushLimitsConfig(&cfg.PushLimits); err != nil {

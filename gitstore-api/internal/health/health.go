@@ -52,6 +52,7 @@ type Handler struct {
 	startTime           time.Time
 	clock               apiruntime.Clock
 	resourceWatchReady  func(context.Context) error
+	authorizationReady  func(context.Context) error
 	metricsHandler      http.Handler
 	metricsRegistration metric.Registration
 }
@@ -63,6 +64,7 @@ type HandlerDeps struct {
 	Version            string
 	Clock              apiruntime.Clock
 	ResourceWatchReady func(context.Context) error
+	AuthorizationReady func(context.Context) error
 	InstanceID         string
 	RegisterCleanup    func(func())
 }
@@ -97,6 +99,7 @@ func NewHandler(deps HandlerDeps) *Handler {
 		startTime:           clock.Now(),
 		clock:               clock,
 		resourceWatchReady:  deps.ResourceWatchReady,
+		authorizationReady:  deps.AuthorizationReady,
 		metricsHandler:      metricsHandler,
 		metricsRegistration: registration,
 	}
@@ -181,6 +184,15 @@ func (h *Handler) performChecks(ctx context.Context) map[string]Check {
 			checks["resource_watch"] = check
 			mu.Unlock()
 		}()
+	}
+	if h.authorizationReady != nil {
+		check := Check{Status: StatusHealthy, Message: "Authorization snapshot operational"}
+		if err := h.authorizationReady(ctx); err != nil {
+			check = Check{Status: StatusUnhealthy, Message: "Authorization snapshot unavailable"}
+		}
+		mu.Lock()
+		checks["authorization"] = check
+		mu.Unlock()
 	}
 
 	wg.Add(1)

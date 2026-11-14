@@ -109,7 +109,9 @@ func (sbr *streamBatchReader) run(ctx context.Context) (err error) {
 		}
 	}
 
-	wnd := sbr.getPollWindow()
+	queryWindow := sbr.config.Advanced.QueryTimeWindowSize
+	maxEmptyWindow := max(queryWindow, sbr.config.Advanced.MaxEmptyQueryTimeWindowSize)
+	wnd := sbr.getPollWindow(queryWindow)
 
 	tableMissingRetryLimit := sbr.config.Advanced.TableMissingRetryLimit
 	tableMissingRetries := 0
@@ -124,6 +126,19 @@ outer:
 		if CompareTimeUUID(wnd.begin, wnd.end) < 0 {
 			var iter cdcIterator
 			iter, err = queryRange(wnd.begin, wnd.end)
+			if err == nil && queryWindow > sbr.config.Advanced.QueryTimeWindowSize {
+				_, row := iter.Next()
+				if row != nil {
+					// A wider range is only an emptiness probe. Reread a
+					// nonempty range at the ordinary bound before delivery.
+					err = iter.Close()
+					queryWindow = sbr.config.Advanced.QueryTimeWindowSize
+					wnd = sbr.getPollWindow(queryWindow)
+					if err == nil {
+						iter, err = queryRange(wnd.begin, wnd.end)
+					}
+				}
+			}
 			if err != nil {
 				if isTableMissingError(err) {
 					tableMissingRetries++
@@ -147,6 +162,12 @@ outer:
 			}
 
 			if err == nil {
+				if !hadRows && maxEmptyWindow > sbr.config.Advanced.QueryTimeWindowSize {
+					if end, closed := sbr.endTimestamp.Load().(gocql.UUID); closed && end != (gocql.UUID{}) && CompareTimeUUID(end, wnd.end) < 0 {
+						wnd.end = end
+						wnd.touchesConfidenceWindow = false
+					}
+				}
 				// If there were no errors, then we can safely advance
 				// all streams to the window end
 				sbr.advanceAllStreamsTo(wnd.end)
@@ -165,7 +186,12 @@ outer:
 			}
 		}
 
-		wnd = sbr.getPollWindow()
+		if err != nil || hadRows || wnd.touchesConfidenceWindow {
+			queryWindow = sbr.config.Advanced.QueryTimeWindowSize
+		} else {
+			queryWindow += min(queryWindow, maxEmptyWindow-queryWindow)
+		}
+		wnd = sbr.getPollWindow(queryWindow)
 
 		var delay time.Duration
 		switch {
@@ -245,27 +271,25 @@ type pollWindow struct {
 	touchesConfidenceWindow bool
 }
 
-func (sbr *streamBatchReader) getPollWindow() pollWindow {
+func (sbr *streamBatchReader) getPollWindow(queryWindow time.Duration) pollWindow {
 	// Left range end is the minimum of all progresses of each stream
 	windowStart := sbr.getPollWindowStart()
 
 	// Right range end is the minimum of (left range + query window size, now - confidence window size)
-	queryWindowRightEnd := windowStart.Time().Add(sbr.config.Advanced.QueryTimeWindowSize)
+	queryWindowRightEnd := windowStart.Time().Add(queryWindow)
 	confidenceWindowStart := sbr.getConfidenceLimitPoint()
+	window := pollWindow{begin: windowStart, end: gocql.MinTimeUUID(confidenceWindowStart), touchesConfidenceWindow: true}
 	if queryWindowRightEnd.Before(confidenceWindowStart) {
-		return pollWindow{
-			begin: windowStart,
-			end:   gocql.MinTimeUUID(queryWindowRightEnd),
-
-			touchesConfidenceWindow: false,
+		window.end = gocql.MinTimeUUID(queryWindowRightEnd)
+		window.touchesConfidenceWindow = false
+	}
+	if queryWindow > sbr.config.Advanced.QueryTimeWindowSize {
+		if end, closed := sbr.endTimestamp.Load().(gocql.UUID); closed && end != (gocql.UUID{}) && CompareTimeUUID(end, window.end) < 0 {
+			window.end = end
+			window.touchesConfidenceWindow = false
 		}
 	}
-	return pollWindow{
-		begin: windowStart,
-		end:   gocql.MinTimeUUID(confidenceWindowStart),
-
-		touchesConfidenceWindow: true,
-	}
+	return window
 }
 
 func (sbr *streamBatchReader) getPollWindowStart() gocql.UUID {
