@@ -68,6 +68,35 @@ func (d *DecisionLogger) AuthorizationSnapshot() (AuthorizationSnapshot, bool) {
 	return AuthorizationSnapshot{}, false
 }
 
+func (d *DecisionLogger) PinAuthorization(ctx context.Context, model AuthorizationModel) (PinnedAuthorization, error) {
+	if provider, ok := d.inner.(AuthorizationPinProvider); ok {
+		evaluation, err := provider.PinAuthorization(ctx, model)
+		if err != nil || evaluation == nil {
+			return evaluation, err
+		}
+		return &loggedPinnedAuthorization{DecisionLogger: NewDecisionLogger(evaluation, d.logger), evaluation: evaluation}, nil
+	}
+	return nil, ErrNotSupported
+}
+
+type loggedPinnedAuthorization struct {
+	*DecisionLogger
+	evaluation PinnedAuthorization
+}
+
+func (p *loggedPinnedAuthorization) Close() { p.evaluation.Close() }
+
+func (p *loggedPinnedAuthorization) Covers(ctx context.Context, principal *Principal, request AuthorizationCoverageRequest) (AuthorizationCoverage, error) {
+	return CheckAuthorizationCoverage(ctx, p.evaluation, principal, request)
+}
+
+func (d *DecisionLogger) AuthorizationReadiness(tierID string) (AuthorizationReadiness, bool) {
+	if provider, ok := d.inner.(AuthorizationReadinessProvider); ok {
+		return provider.AuthorizationReadiness(tierID)
+	}
+	return AuthorizationReadiness{}, false
+}
+
 // Authorize calls the wrapped provider and logs the decision.
 func (d *DecisionLogger) Authorize(ctx context.Context, p *Principal, action string, res ResourceContext) (Decision, error) {
 	start := time.Now()
@@ -137,6 +166,9 @@ func (d *DecisionLogger) Authorize(ctx context.Context, p *Principal, action str
 		zap.Int64("latency_ms", latency.Milliseconds()),
 		zap.Int64("latency_ns", latency.Nanoseconds()),
 	)
+	if namespace, ok := res.Attrs["namespace"].(string); ok && namespace != "" {
+		fields = append(fields, logString("resource_namespace", namespace, 256))
+	}
 	if decision.PolicyDigest != "" {
 		valid := len(decision.PolicyDigest) == 64
 		for i := 0; valid && i < len(decision.PolicyDigest); i++ {
@@ -147,6 +179,22 @@ func (d *DecisionLogger) Authorize(ctx context.Context, p *Principal, action str
 			fields = append(fields, zap.String("policy_digest", decision.PolicyDigest))
 		} else {
 			fields = append(fields, zap.Bool("invalid_policy_digest", true))
+		}
+	}
+	if snapshot := decision.AuthorizationSnapshot; snapshot != nil {
+		valid := snapshot.Loaded && len(snapshot.Tiers) > 0 && len(snapshot.Tiers) <= 2 &&
+			len(snapshot.ModelVersion) <= 64 && validAuthorizationDigest(snapshot.CatalogDigest) &&
+			validAuthorizationDigest(snapshot.BuiltinDigest)
+		for _, tier := range snapshot.Tiers {
+			valid = valid && len(tier.TierID) > 0 && len(tier.TierID) <= 64 &&
+				len(tier.GitRevision) <= 256 && validAuthorizationDigest(tier.ContentDigest)
+		}
+		if valid {
+			fields = append(fields, zap.String("authorization_model", snapshot.ModelVersion),
+				zap.String("catalog_digest", snapshot.CatalogDigest), zap.String("builtin_digest", snapshot.BuiltinDigest),
+				zap.Any("authorization_tiers", snapshot.Tiers))
+		} else {
+			fields = append(fields, zap.Bool("invalid_authorization_snapshot", true))
 		}
 	}
 	if truncated {
@@ -165,4 +213,16 @@ func (d *DecisionLogger) Authorize(ctx context.Context, p *Principal, action str
 	entry.Write(fields...)
 
 	return decision, err
+}
+
+func validAuthorizationDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, b := range value {
+		if !(b >= '0' && b <= '9' || b >= 'a' && b <= 'f') {
+			return false
+		}
+	}
+	return true
 }

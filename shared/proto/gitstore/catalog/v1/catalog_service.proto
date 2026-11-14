@@ -3,7 +3,7 @@
 //
 // CatalogService — hook pipeline callout contract (spec#018)
 //
-// Two RPCs:
+// Hook callouts:
 //   ValidateResources — blocking pre-receive validation callout.
 //     Called by gitstore-git-service before any refs are updated.
 //     Returns all field-level violations across all submitted blobs.
@@ -26,6 +26,10 @@ service CatalogService {
   // The response carries all violations across all blobs in a single call.
   rpc ValidateResources(ValidateResourcesRequest) returns (ValidateResourcesResponse);
 
+  // RBAC receives require a complete proposed tree. A distinct method makes
+  // older API binaries fail closed rather than ignore that security input.
+  rpc ValidateRBACReceive(ValidateRBACReceiveRequest) returns (ValidateRBACReceiveResponse);
+
   // ValidateResourceDeletions validates all supported resource deletions
   // against proposed trees before refs are updated. It is read-only and is
   // invoked only when a push derives one or more OperationDelete transitions.
@@ -38,8 +42,7 @@ service CatalogService {
 }
 
 // ResourceBlob is a candidate resource file extracted from an incoming commit.
-// Any file whose raw bytes begin with a YAML frontmatter delimiter (`---`) qualifies.
-// The git service performs the frontmatter detection locally before including a file here.
+// Catalog frontmatter files and plain YAML in the reserved RBAC subtree qualify.
 message ResourceBlob {
   // path is the repository-relative file path, e.g. "products/widget.md".
   string path = 1;
@@ -58,6 +61,13 @@ message ResourceValidationTree {
   repeated ResourceBlob old_blobs = 1;
   repeated ResourceBlob proposed_blobs = 2;
   ReceiveRef ref = 3;
+  RBACValidationTree rbac_tree = 4;
+}
+
+// Presence attests to the entire proposed RBAC subtree, including an empty
+// tree after deletion. Changed blobs remain separate and retain their bounds.
+message RBACValidationTree {
+  repeated ResourceBlob blobs = 1;
 }
 
 // Only the authenticated Git service forwards these verified identity facts.
@@ -67,6 +77,7 @@ message CallbackActor {
   repeated string groups = 2;
   string auth_method = 3;
   string service_account_uid = 4;
+  string issuer = 5;
 }
 
 message ReceiveRef {
@@ -120,6 +131,20 @@ message ValidateResourcesResponse {
   // errors contains all field-level violations across all blobs.
   // Non-empty only when accepted=false.
   // All violations across all files are collected before returning (no fail-fast).
+  repeated ValidationError errors = 2;
+}
+
+// Dedicated RPC messages retain the validation callback's wire field numbers.
+message ValidateRBACReceiveRequest {
+  string repository_id = 15;
+  reserved 1;
+  reserved "blobs";
+  repeated ResourceValidationTree trees = 2;
+  CallbackAuthorization authorization = 3;
+}
+
+message ValidateRBACReceiveResponse {
+  bool accepted = 1;
   repeated ValidationError errors = 2;
 }
 

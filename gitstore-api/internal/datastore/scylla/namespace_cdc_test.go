@@ -155,6 +155,45 @@ func TestCDCCompletedWindowUnblocksBusyStreamWithoutRetiringQuietStream(t *testi
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
+func TestCDCReadProgressUsesPublishedMinimumAcrossEveryStream(t *testing.T) {
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.ResourceWatchLease{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	through := make(chan time.Time, 2)
+	sequencer.persistReadProgress = func(_ context.Context, at time.Time) error {
+		store.mu.Lock()
+		count := len(store.events)
+		store.mu.Unlock()
+		if count == 0 {
+			return errors.New("source readiness advanced before journal publication")
+		}
+		through <- at
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	defer func() { cancel(); require.ErrorIs(t, <-done, context.Canceled) }()
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"fast", "slow"})
+	require.NoError(t, sequencer.Register(ctx, "fast"))
+	require.NoError(t, sequencer.Register(ctx, "slow"))
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	progressed := make(chan string, 4)
+	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("fast", "future", gocql.MinTimeUUID(now.Add(time.Second)), progressed)))
+	select {
+	case <-through:
+		t.Fatal("one active stream cannot prove another stream's readiness")
+	case <-time.After(60 * time.Millisecond):
+	}
+	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("slow", "present", gocql.MinTimeUUID(now), progressed)))
+	select {
+	case actual := <-through:
+		require.Equal(t, now, actual)
+	case <-time.After(time.Second):
+		t.Fatal("complete safe source frontier was not persisted")
+	}
+}
+
 func TestRepositoryCDCUsesSharedSequencerAndJournalEnvelope(t *testing.T) {
 	store := &sequencerStore{}
 	materializer := watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{})
@@ -303,6 +342,67 @@ func TestNamespaceCDCSequencerDoesNotCheckpointWhenFrontierPersistenceFails(t *t
 	store.mu.Lock()
 	assert.Equal(t, []string{"appended"}, store.names, "journal append remains safely replayable")
 	store.mu.Unlock()
+}
+
+func TestNamespaceCDCSequencerCoalescesIdleCheckpointsWithoutDelayingChanges(t *testing.T) {
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		require.ErrorIs(t, <-done, context.Canceled)
+	})
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"stream-a"})
+	require.NoError(t, sequencer.Register(ctx, "stream-a"))
+	checkpoints := make(chan namespaceCDCPublishedBatch, 64)
+	sequencer.persistFrontier = func(_ context.Context, batch namespaceCDCPublishedBatch) error {
+		checkpoints <- batch
+		return nil
+	}
+	base := time.Now().UTC()
+	progressed := make(chan string, 64)
+	submitEmpty := func(index int) {
+		request := sequenceTestRequest("stream-a", "empty", gocql.MinTimeUUID(base.Add(time.Duration(index)*time.Millisecond)), progressed)
+		request.progressOnly = true
+		require.NoError(t, sequencer.Submit(ctx, request))
+	}
+	submitEmpty(0)
+	select {
+	case <-checkpoints:
+	case <-time.After(time.Second):
+		t.Fatal("initial idle checkpoint did not persist")
+	}
+	for index := 1; index <= 20; index++ {
+		submitEmpty(index)
+		time.Sleep(5 * time.Millisecond)
+	}
+	select {
+	case <-checkpoints:
+		t.Fatal("idle query completions persisted again inside the batching interval")
+	default:
+	}
+	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("stream-a", "changed",
+		gocql.MinTimeUUID(base.Add(21*time.Millisecond)), progressed)))
+	select {
+	case <-checkpoints:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("a resource change was delayed behind idle checkpoint batching")
+	}
+	require.Eventually(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return len(store.names) == 1 && store.names[0] == "changed"
+	}, time.Second, time.Millisecond)
+	submitEmpty(22)
+	select {
+	case batch := <-checkpoints:
+		require.Equal(t, gocql.MinTimeUUID(base.Add(22*time.Millisecond)),
+			batch.Progress[cdcProgressKeyEncoded(batch.Generation, "namespaces_by_uid", "stream-a")])
+	case <-time.After(time.Second):
+		t.Fatal("the latest quiet query completion did not eventually persist")
+	}
 }
 
 func TestNamespaceCDCSequencerFailsClosedWhenStreamMovesBackward(t *testing.T) {

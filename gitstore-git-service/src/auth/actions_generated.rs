@@ -23,6 +23,25 @@ pub const CATEGORYTAXONOMY_STATUS_WRITE: &str = "categoryTaxonomy.status.write";
 pub const CATEGORYTAXONOMY_TRANSFER: &str = "categoryTaxonomy.transfer";
 pub const CATEGORYTAXONOMY_UPDATE: &str = "categoryTaxonomy.update";
 pub const CATEGORYTAXONOMY_WATCH: &str = "categoryTaxonomy.watch";
+pub const CLUSTERROLE_ACCESS_REVIEW_CREATE: &str = "clusterRole.access-review.create";
+pub const CLUSTERROLE_CREATE: &str = "clusterRole.create";
+pub const CLUSTERROLE_DELETE: &str = "clusterRole.delete";
+pub const CLUSTERROLE_ESCALATE: &str = "clusterRole.escalate";
+pub const CLUSTERROLE_LIST: &str = "clusterRole.list";
+pub const CLUSTERROLE_PURGE: &str = "clusterRole.purge";
+pub const CLUSTERROLE_READ: &str = "clusterRole.read";
+pub const CLUSTERROLE_STATUS_WRITE: &str = "clusterRole.status.write";
+pub const CLUSTERROLE_UPDATE: &str = "clusterRole.update";
+pub const CLUSTERROLE_WATCH: &str = "clusterRole.watch";
+pub const CLUSTERROLEBINDING_BIND: &str = "clusterRoleBinding.bind";
+pub const CLUSTERROLEBINDING_CREATE: &str = "clusterRoleBinding.create";
+pub const CLUSTERROLEBINDING_DELETE: &str = "clusterRoleBinding.delete";
+pub const CLUSTERROLEBINDING_LIST: &str = "clusterRoleBinding.list";
+pub const CLUSTERROLEBINDING_PURGE: &str = "clusterRoleBinding.purge";
+pub const CLUSTERROLEBINDING_READ: &str = "clusterRoleBinding.read";
+pub const CLUSTERROLEBINDING_STATUS_WRITE: &str = "clusterRoleBinding.status.write";
+pub const CLUSTERROLEBINDING_UPDATE: &str = "clusterRoleBinding.update";
+pub const CLUSTERROLEBINDING_WATCH: &str = "clusterRoleBinding.watch";
 pub const COLLECTION_CREATE: &str = "collection.create";
 pub const COLLECTION_DELETE: &str = "collection.delete";
 pub const COLLECTION_LIST: &str = "collection.list";
@@ -84,6 +103,25 @@ pub const REPOSITORY_STATUS_WRITE: &str = "repository.status.write";
 pub const REPOSITORY_TRANSFER: &str = "repository.transfer";
 pub const REPOSITORY_UPDATE: &str = "repository.update";
 pub const REPOSITORY_WATCH: &str = "repository.watch";
+pub const ROLE_ACCESS_REVIEW_CREATE: &str = "role.access-review.create";
+pub const ROLE_CREATE: &str = "role.create";
+pub const ROLE_DELETE: &str = "role.delete";
+pub const ROLE_ESCALATE: &str = "role.escalate";
+pub const ROLE_LIST: &str = "role.list";
+pub const ROLE_PURGE: &str = "role.purge";
+pub const ROLE_READ: &str = "role.read";
+pub const ROLE_STATUS_WRITE: &str = "role.status.write";
+pub const ROLE_UPDATE: &str = "role.update";
+pub const ROLE_WATCH: &str = "role.watch";
+pub const ROLEBINDING_BIND: &str = "roleBinding.bind";
+pub const ROLEBINDING_CREATE: &str = "roleBinding.create";
+pub const ROLEBINDING_DELETE: &str = "roleBinding.delete";
+pub const ROLEBINDING_LIST: &str = "roleBinding.list";
+pub const ROLEBINDING_PURGE: &str = "roleBinding.purge";
+pub const ROLEBINDING_READ: &str = "roleBinding.read";
+pub const ROLEBINDING_STATUS_WRITE: &str = "roleBinding.status.write";
+pub const ROLEBINDING_UPDATE: &str = "roleBinding.update";
+pub const ROLEBINDING_WATCH: &str = "roleBinding.watch";
 pub const SERVICEACCOUNT_CREATE: &str = "serviceAccount.create";
 pub const SERVICEACCOUNT_DELETE: &str = "serviceAccount.delete";
 pub const SERVICEACCOUNT_KEY_ROTATE: &str = "serviceAccount.key.rotate";
@@ -114,6 +152,25 @@ pub const AUTHORIZATION_ACTIONS: &[ActionDefinition] = &[
     ActionDefinition { action: "categoryTaxonomy.transfer", kind: "categoryTaxonomy", scope: "namespace", resource: "categoryTaxonomy", verb: "transfer", reserved: false },
     ActionDefinition { action: "categoryTaxonomy.update", kind: "categoryTaxonomy", scope: "namespace", resource: "categoryTaxonomy", verb: "update", reserved: false },
     ActionDefinition { action: "categoryTaxonomy.watch", kind: "categoryTaxonomy", scope: "namespace", resource: "categoryTaxonomy", verb: "watch", reserved: false },
+    ActionDefinition { action: "clusterRole.access-review.create", kind: "clusterRole", scope: "cluster", resource: "clusterRole/access-review", verb: "create", reserved: false },
+    ActionDefinition { action: "clusterRole.create", kind: "clusterRole", scope: "cluster", resource: "clusterRole", verb: "create", reserved: false },
+    ActionDefinition { action: "clusterRole.delete", kind: "clusterRole", scope: "cluster", resource: "clusterRole", verb: "delete", reserved: false },
+    ActionDefinition { action: "clusterRole.escalate", kind: "clusterRole", scope: "cluster", resource: "clusterRole", verb: "escalate", reserved: false },
+    ActionDefinition { action: "clusterRole.list", kind: "clusterRole", scope: "cluster", resource: "clusterRole", verb: "list", reserved: false },
+    ActionDefinition { action: "clusterRole.purge", kind: "clusterRole", scope: "cluster", resource: "clusterRole", verb: "purge", reserved: false },
+    ActionDefinition { action: "clusterRole.read", kind: "clusterRole", scope: "cluster", resource: "clusterRole", verb: "read", reserved: false },
+    ActionDefinition { action: "clusterRole.status.write", kind: "clusterRole", scope: "cluster", resource: "clusterRole/status", verb: "write", reserved: false },
+    ActionDefinition { action: "clusterRole.update", kind: "clusterRole", scope: "cluster", resource: "clusterRole", verb: "update", reserved: false },
+    ActionDefinition { action: "clusterRole.watch", kind: "clusterRole", scope: "cluster", resource: "clusterRole", verb: "watch", reserved: false },
+    ActionDefinition { action: "clusterRoleBinding.bind", kind: "clusterRoleBinding", scope: "cluster", resource: "clusterRoleBinding", verb: "bind", reserved: false },
+    ActionDefinition { action: "clusterRoleBinding.create", kind: "clusterRoleBinding", scope: "cluster", resource: "clusterRoleBinding", verb: "create", reserved: false },
+    ActionDefinition { action: "clusterRoleBinding.delete", kind: "clusterRoleBinding", scope: "cluster", resource: "clusterRoleBinding", verb: "delete", reserved: false },
+    ActionDefinition { action: "clusterRoleBinding.list", kind: "clusterRoleBinding", scope: "cluster", resource: "clusterRoleBinding", verb: "list", reserved: false },
+    ActionDefinition { action: "clusterRoleBinding.purge", kind: "clusterRoleBinding", scope: "cluster", resource: "clusterRoleBinding", verb: "purge", reserved: false },
+    ActionDefinition { action: "clusterRoleBinding.read", kind: "clusterRoleBinding", scope: "cluster", resource: "clusterRoleBinding", verb: "read", reserved: false },
+    ActionDefinition { action: "clusterRoleBinding.status.write", kind: "clusterRoleBinding", scope: "cluster", resource: "clusterRoleBinding/status", verb: "write", reserved: false },
+    ActionDefinition { action: "clusterRoleBinding.update", kind: "clusterRoleBinding", scope: "cluster", resource: "clusterRoleBinding", verb: "update", reserved: false },
+    ActionDefinition { action: "clusterRoleBinding.watch", kind: "clusterRoleBinding", scope: "cluster", resource: "clusterRoleBinding", verb: "watch", reserved: false },
     ActionDefinition { action: "collection.create", kind: "collection", scope: "namespace", resource: "collection", verb: "create", reserved: false },
     ActionDefinition { action: "collection.delete", kind: "collection", scope: "namespace", resource: "collection", verb: "delete", reserved: false },
     ActionDefinition { action: "collection.list", kind: "collection", scope: "namespace", resource: "collection", verb: "list", reserved: false },
@@ -175,6 +232,25 @@ pub const AUTHORIZATION_ACTIONS: &[ActionDefinition] = &[
     ActionDefinition { action: "repository.transfer", kind: "repository", scope: "namespace", resource: "repository", verb: "transfer", reserved: false },
     ActionDefinition { action: "repository.update", kind: "repository", scope: "namespace", resource: "repository", verb: "update", reserved: false },
     ActionDefinition { action: "repository.watch", kind: "repository", scope: "namespace", resource: "repository", verb: "watch", reserved: false },
+    ActionDefinition { action: "role.access-review.create", kind: "role", scope: "namespace", resource: "role/access-review", verb: "create", reserved: false },
+    ActionDefinition { action: "role.create", kind: "role", scope: "namespace", resource: "role", verb: "create", reserved: false },
+    ActionDefinition { action: "role.delete", kind: "role", scope: "namespace", resource: "role", verb: "delete", reserved: false },
+    ActionDefinition { action: "role.escalate", kind: "role", scope: "namespace", resource: "role", verb: "escalate", reserved: false },
+    ActionDefinition { action: "role.list", kind: "role", scope: "namespace", resource: "role", verb: "list", reserved: false },
+    ActionDefinition { action: "role.purge", kind: "role", scope: "namespace", resource: "role", verb: "purge", reserved: false },
+    ActionDefinition { action: "role.read", kind: "role", scope: "namespace", resource: "role", verb: "read", reserved: false },
+    ActionDefinition { action: "role.status.write", kind: "role", scope: "namespace", resource: "role/status", verb: "write", reserved: false },
+    ActionDefinition { action: "role.update", kind: "role", scope: "namespace", resource: "role", verb: "update", reserved: false },
+    ActionDefinition { action: "role.watch", kind: "role", scope: "namespace", resource: "role", verb: "watch", reserved: false },
+    ActionDefinition { action: "roleBinding.bind", kind: "roleBinding", scope: "namespace", resource: "roleBinding", verb: "bind", reserved: false },
+    ActionDefinition { action: "roleBinding.create", kind: "roleBinding", scope: "namespace", resource: "roleBinding", verb: "create", reserved: false },
+    ActionDefinition { action: "roleBinding.delete", kind: "roleBinding", scope: "namespace", resource: "roleBinding", verb: "delete", reserved: false },
+    ActionDefinition { action: "roleBinding.list", kind: "roleBinding", scope: "namespace", resource: "roleBinding", verb: "list", reserved: false },
+    ActionDefinition { action: "roleBinding.purge", kind: "roleBinding", scope: "namespace", resource: "roleBinding", verb: "purge", reserved: false },
+    ActionDefinition { action: "roleBinding.read", kind: "roleBinding", scope: "namespace", resource: "roleBinding", verb: "read", reserved: false },
+    ActionDefinition { action: "roleBinding.status.write", kind: "roleBinding", scope: "namespace", resource: "roleBinding/status", verb: "write", reserved: false },
+    ActionDefinition { action: "roleBinding.update", kind: "roleBinding", scope: "namespace", resource: "roleBinding", verb: "update", reserved: false },
+    ActionDefinition { action: "roleBinding.watch", kind: "roleBinding", scope: "namespace", resource: "roleBinding", verb: "watch", reserved: false },
     ActionDefinition { action: "serviceAccount.create", kind: "serviceAccount", scope: "cluster", resource: "serviceAccount", verb: "create", reserved: false },
     ActionDefinition { action: "serviceAccount.delete", kind: "serviceAccount", scope: "cluster", resource: "serviceAccount", verb: "delete", reserved: false },
     ActionDefinition { action: "serviceAccount.key.rotate", kind: "serviceAccount", scope: "cluster", resource: "serviceAccount/key", verb: "rotate", reserved: false },

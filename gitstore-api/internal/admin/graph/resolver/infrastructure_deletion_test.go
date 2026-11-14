@@ -13,6 +13,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
@@ -315,6 +316,12 @@ func TestSystemRepositoryCannotBeDeletedByUser(t *testing.T) {
 	require.Empty(t, e.git.deletes)
 }
 
+type unavailableCleanupHandoff struct{ rbac.Store }
+
+func (s unavailableCleanupHandoff) ScheduleRBACNamespaceCleanup(context.Context, rbac.NamespaceCleanup) error {
+	return rbac.ErrUnavailable
+}
+
 func TestNamespaceDeletionRemovesManifestAndFinalizesEmptySystemRepository(t *testing.T) {
 	e := newCategoryLifecycleEnv(t)
 	ctx := context.Background()
@@ -338,6 +345,15 @@ func TestNamespaceDeletionRemovesManifestAndFinalizesEmptySystemRepository(t *te
 	require.NoError(t, err)
 	require.NotNil(t, current.DeletionTimestamp)
 	require.Equal(t, ns.Generation, current.Generation)
+	e.service.rbacNamespaceCleanup = true
+	originalStore := e.service.store
+	rbacStore := originalStore.(datastore.RBACCapable).RBACStore()
+	e.service.store = rbacLifecycleDatastore{Datastore: originalStore, rbac: unavailableCleanupHandoff{Store: rbacStore}}
+	_, err = e.service.CompleteNamespaceDeletion(ctx, current.Name, current.ResourceVersion, current.UID)
+	require.ErrorIs(t, err, rbac.ErrUnavailable)
+	_, err = originalStore.GetNamespace(ctx, current.UID)
+	require.NoError(t, err, "parent removal cannot precede durable cleanup handoff")
+	e.service.store = originalStore
 	assertInfrastructureReadFailuresBlockCompletion(t, e, func() error {
 		_, err := e.service.CompleteNamespaceDeletion(ctx, current.Name, current.ResourceVersion, current.UID)
 		return err
@@ -348,4 +364,7 @@ func TestNamespaceDeletionRemovesManifestAndFinalizesEmptySystemRepository(t *te
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 	_, err = e.store.LookupRepository(ctx, current.Name, "gitstore-system")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
+	jobs, err := rbacStore.ListRBACNamespaceCleanups(ctx, "", 100)
+	require.NoError(t, err)
+	require.Equal(t, []rbac.NamespaceCleanup{{NamespaceUID: current.UID, Namespace: current.Name}}, jobs.Jobs)
 }

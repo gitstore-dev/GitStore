@@ -9,15 +9,20 @@ package scylla_test
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net"
 	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla/migrations"
+	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 	"github.com/gocql/gocql"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -377,6 +382,7 @@ func TestServiceAccountCDCUpgradePreservesDataAndMigrationHistory(t *testing.T) 
 		done     int
 		written  int64
 	}
+
 	readHistory := func() map[string]ledgerEntry {
 		history := make(map[string]ledgerEntry)
 		iter := session.Query("SELECT name, checksum, done, writetime(done) FROM gocqlx_migrate").Iter()
@@ -399,11 +405,12 @@ func TestServiceAccountCDCUpgradePreservesDataAndMigrationHistory(t *testing.T) 
 
 	require.NoError(t, scylla.RunMigrations(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop()))
 	after := readHistory()
-	require.Len(t, after, 13)
+	require.Len(t, after, 14)
 	for name, entry := range before {
 		require.Equal(t, entry, after[name], "upgrade must preserve the applied ledger for %s", name)
 	}
 	require.Contains(t, after, "013_service_account_cdc.cql")
+	require.Contains(t, after, "014_rbac.cql")
 	var retained gocql.UUID
 	require.NoError(t, session.Query("SELECT uid FROM service_accounts_by_cluster_name WHERE name=?", "existing-ci-bot").Scan(&retained))
 	require.Equal(t, uid, retained, "enabling CDC must not replace existing identities")
@@ -421,6 +428,82 @@ func TestServiceAccountCDCUpgradePreservesDataAndMigrationHistory(t *testing.T) 
 		"database is ahead")
 	require.NoError(t, scylla.RunMigrations(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop()))
 	require.Equal(t, after, readHistory(), "rerunning the forward bundle must preserve applied history")
+}
+
+func TestRBACMigrationRetainsLegacyAuditPayloadAndLedger(t *testing.T) {
+	root, err := openRootSession(scyllaAddr)
+	require.NoError(t, err)
+	t.Cleanup(root.Close)
+	keyspace := "gitstore_scylla_test_audit_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	require.NoError(t, root.Query("CREATE KEYSPACE "+keyspace+
+		" WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}").Exec())
+	t.Cleanup(func() {
+		assert.NoError(t, root.Query("DROP KEYSPACE "+keyspace).SetRequestTimeout(30*time.Second).Exec())
+	})
+	session := newRawSessionForKeyspace(t, keyspace)
+	require.NoError(t, scylla.RunMigrationsWithFS(t.Context(), session, keyspace, uuid.NewString(),
+		zap.NewNop(), migrationSetThrough(t, "014_rbac.cql")))
+	readLedger := func() map[string]string {
+		result := map[string]string{}
+		iter := session.Query("SELECT name,checksum,writetime(done) FROM gocqlx_migrate").Iter()
+		var name, checksum string
+		var written int64
+		for iter.Scan(&name, &checksum, &written) {
+			result[name] = fmt.Sprintf("%s/%d", checksum, written)
+		}
+		require.NoError(t, iter.Close())
+		return result
+	}
+	before := readLedger()
+	require.Len(t, before, 14)
+	tier, uid := uuid.NewString(), uuid.NewString()
+	created := time.Unix(1_700_000_000, 0).UTC()
+	resource := &rbac.Resource{APIVersion: rbac.APIVersion, Kind: rbac.Role, NamespaceUID: tier,
+		Metadata: rbac.Metadata{Name: "legacy", Namespace: "contract", UID: uid,
+			Generation: 1, ResourceVersion: "1", CreationTimestamp: &created},
+		Spec: json.RawMessage(`{"rules":[]}`)}
+	payload, err := json.Marshal(resource)
+	require.NoError(t, err)
+	require.NoError(t, session.Query(`INSERT INTO rbac_resources_by_scope
+		(tier,entry,uid,payload,revision) VALUES (?,?,?,?,?)`, tier, "Role/legacy", uid, payload, int64(1)).Exec())
+	require.NoError(t, session.Query(`INSERT INTO rbac_resources_by_scope
+		(tier,entry,revision,role_count,binding_count,payload_bytes,projection) VALUES (?,?,?,?,?,?,?)`,
+		tier, "", int64(1), 1, 0, int64(len(payload)), []byte(`{}`)).Exec())
+	require.NoError(t, scylla.RunMigrations(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop()))
+	after := readLedger()
+	require.Len(t, after, 14)
+	for name, entry := range before {
+		require.Equal(t, entry, after[name], "applied migration ledger must remain untouched")
+	}
+	var retained []byte
+	require.NoError(t, session.Query("SELECT payload FROM rbac_resources_by_scope WHERE tier=? AND entry=?",
+		tier, "Role/legacy").Scan(&retained))
+	require.Equal(t, payload, retained, "migration replay must not backfill or invent audit")
+	cfg := testScyllaConfig(t)
+	cfg.Keyspace, cfg.AutoMigrate = keyspace, false
+	ds, err := scylla.New(cfg, zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, ds.Close()) })
+	store := ds.(datastore.RBACCapable).RBACStore()
+	key := rbac.ResourceKey{TierID: tier, Kind: rbac.Role, Name: "legacy"}
+	current, err := store.GetRBAC(t.Context(), key)
+	require.NoError(t, err)
+	require.Empty(t, current.Metadata.CreationActor)
+	require.Nil(t, current.Metadata.UpdateTimestamp)
+	current.Status = json.RawMessage(`{"observedGeneration":1}`)
+	_, err = store.ApplyRBAC(datastore.ContextWithRBACAuditActor(t.Context(), "upgrade-controller"), rbac.TierWrite{
+		TierID: tier, ExpectedRevision: 1,
+		Changes: []rbac.Change{{Resource: current, ExpectedUID: uid, ExpectedResourceVersion: "1"}},
+	})
+	require.NoError(t, err)
+	current, err = store.GetRBAC(t.Context(), key)
+	require.NoError(t, err)
+	require.Empty(t, current.Metadata.CreationActor)
+	require.Equal(t, &created, current.Metadata.CreationTimestamp)
+	require.Equal(t, "upgrade-controller", current.Metadata.UpdateActor)
+	require.NotNil(t, current.Metadata.UpdateTimestamp)
+	require.NoError(t, scylla.ValidateSchema(t.Context(), session))
+	require.Equal(t, after, readLedger())
 }
 
 // The per-resource baseline has no supported rollback below itself: a binary

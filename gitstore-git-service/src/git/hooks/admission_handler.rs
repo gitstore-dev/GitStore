@@ -16,8 +16,9 @@ use catalog_proto::catalog_service_client::CatalogServiceClient;
 use catalog_proto::AdmitResourcesRequest;
 
 /// Implements `AdmissionHandler` for the post-receive slot.
-/// Checks the ref against `branch_pattern` (a full-match regex); if matching,
-/// fire-and-forgets `AdmitResources`. Always returns `Accept`.
+/// Catalog admission follows `branch_pattern`. Other heads containing RBAC
+/// notify only that reserved subtree; the API verifies its canonical branch.
+/// Always returns `Accept`.
 pub struct AdmissionControlHandler {
     service_token: String,
     client: CatalogServiceClient<tonic::transport::Channel>,
@@ -69,7 +70,10 @@ impl AdmissionHandler for AdmissionControlHandler {
         );
         let matching_updates: Vec<_> = updates
             .iter()
-            .filter(|update| self.branch_pattern.is_match(&update.ref_name))
+            .filter(|update| {
+                self.branch_pattern.is_match(&update.ref_name)
+                    || update.ref_name.starts_with("refs/heads/")
+            })
             .cloned()
             .collect();
         if matching_updates.is_empty() {
@@ -79,6 +83,7 @@ impl AdmissionHandler for AdmissionControlHandler {
         // Keep that work off the async executor that serves RPC streams.
         let git_dir = git_dir.to_path_buf();
         let path_updates = matching_updates.clone();
+        let branch_pattern = self.branch_pattern.clone();
         let paths = crate::spawn_blocking(move || {
             let repo = if git_dir.as_os_str().is_empty() {
                 None
@@ -91,20 +96,29 @@ impl AdmissionHandler for AdmissionControlHandler {
                     }
                 }
             };
-            path_updates.iter().map(|update| {
-                repo.as_ref()
-                    .map(|repo| compute_changed_paths_in_repo(repo, &update.old_oid, &update.new_oid))
-                    .unwrap_or_default()
+            path_updates.into_iter().filter_map(|update| {
+                let paths = if branch_pattern.is_match(&update.ref_name) {
+                    repo.as_ref()
+                        .map(|repo| compute_changed_paths_in_repo(repo, &update.old_oid, &update.new_oid))
+                        .unwrap_or_default()
+                } else if repo.as_ref().is_some_and(|repo| {
+                    has_rbac_root(repo, &update.old_oid) || has_rbac_root(repo, &update.new_oid)
+                }) {
+                    vec!["rbac".to_owned()]
+                } else {
+                    return None;
+                };
+                Some((update, paths))
             }).collect::<Vec<_>>()
         }).await?;
 
-        for (update, changed_paths) in matching_updates.iter().zip(paths) {
+        for (update, changed_paths) in paths {
             let old_commit_sha = update.old_oid.clone();
             let new_commit_sha = update.new_oid.clone();
             let ref_name = update.ref_name.clone();
             let mut client = self.client.clone();
             let repository_id = repository_id.to_string();
-            let authorization = Some(hook_ctx.callback_authorization(vec![update.into()]));
+            let authorization = Some(hook_ctx.callback_authorization(vec![(&update).into()]));
             let service_token = self.service_token.clone();
 
             tokio::spawn(async move {
@@ -141,6 +155,20 @@ impl AdmissionHandler for AdmissionControlHandler {
 // ---------------------------------------------------------------------------
 // Path computation helper
 // ---------------------------------------------------------------------------
+
+fn has_rbac_root(repo: &gix::Repository, commit: &str) -> bool {
+    let Ok(commit) = gix::ObjectId::from_hex(commit.as_bytes()) else {
+        return false;
+    };
+    let Some(root) = get_tree_id(repo, commit) else {
+        return false;
+    };
+    let Ok(tree) = repo.find_tree(root) else {
+        return false;
+    };
+    tree.decode()
+        .is_ok_and(|tree| tree.entries.iter().any(|entry| entry.filename == "rbac"))
+}
 
 /// Compute the changed file paths for one ref update, given an already-open
 /// repository.  The tree-walking logic lives in `crate::git::tree_diff`.
@@ -294,10 +322,18 @@ mod tests {
     struct MockCatalogService {
         admit_call_count: Arc<AtomicU32>,
         actor_subject: Arc<Mutex<String>>,
+        requests: Arc<Mutex<Vec<AdmitResourcesRequest>>>,
     }
 
     #[tonic::async_trait]
     impl CatalogService for MockCatalogService {
+        async fn validate_rbac_receive(
+            &self,
+            _req: Request<catalog_proto::ValidateRbacReceiveRequest>,
+        ) -> Result<Response<catalog_proto::ValidateRbacReceiveResponse>, Status> {
+            Err(Status::unimplemented("RBAC receives are unavailable"))
+        }
+
         async fn validate_resources(
             &self,
             _req: Request<ValidateResourcesRequest>,
@@ -313,13 +349,17 @@ mod tests {
             req: Request<AdmitResourcesRequest>,
         ) -> Result<Response<AdmitResourcesResponse>, Status> {
             self.admit_call_count.fetch_add(1, Ordering::SeqCst);
+            let req = req.into_inner();
             *self.actor_subject.lock().unwrap() = req
-                .into_inner()
                 .authorization
+                .as_ref()
                 .unwrap()
                 .actor
+                .as_ref()
                 .unwrap()
-                .subject;
+                .subject
+                .clone();
+            self.requests.lock().unwrap().push(req);
             Ok(Response::new(AdmitResourcesResponse {}))
         }
 
@@ -342,11 +382,20 @@ mod tests {
         admit_count: Arc<AtomicU32>,
         actor_subject: Arc<Mutex<String>>,
     ) -> String {
+        start_mock_server_with_requests(admit_count, actor_subject, Arc::default()).await
+    }
+
+    async fn start_mock_server_with_requests(
+        admit_count: Arc<AtomicU32>,
+        actor_subject: Arc<Mutex<String>>,
+        requests: Arc<Mutex<Vec<AdmitResourcesRequest>>>,
+    ) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let svc = MockCatalogService {
             admit_call_count: admit_count,
             actor_subject,
+            requests,
         };
         tokio::spawn(async move {
             Server::builder()
@@ -369,6 +418,63 @@ mod tests {
             },
             new_oid: "b".repeat(40),
         }
+    }
+
+    #[tokio::test]
+    async fn custom_branch_rbac_notifications_do_not_import_catalog_paths() {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let addr =
+            start_mock_server_with_requests(Arc::default(), Arc::default(), requests.clone()).await;
+        let directory = tempfile::TempDir::new().unwrap();
+        let (repo, old) = make_repo_with_files(
+            directory.path(),
+            &[("rbac/clusterroles/reader.yaml", b"kind: ClusterRole\n")],
+        );
+        let new = add_file_to_repo(&repo, old, "products/widget.md", b"catalog content");
+        let handler = AdmissionControlHandler::connect(&addr, "^refs/heads/main$".to_owned())
+            .await
+            .unwrap()
+            .with_service_token("fixture-key");
+        let update = RefUpdate {
+            ref_name: "refs/heads/trunk".to_owned(),
+            old_oid: old.to_string(),
+            new_oid: new.to_string(),
+        };
+        assert!(matches!(
+            handler
+                .admit(
+                    "post-receive",
+                    &[update],
+                    "repo-1",
+                    directory.path(),
+                    &make_hook_context("alice"),
+                )
+                .await
+                .unwrap(),
+            AdmissionDecision::Accept
+        ));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while requests.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("custom canonical RBAC branch was filtered out");
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].ref_name, "refs/heads/trunk");
+        assert_eq!(requests[0].changed_paths, vec!["rbac"]);
+        assert_eq!(
+            requests[0]
+                .authorization
+                .as_ref()
+                .unwrap()
+                .actor
+                .as_ref()
+                .unwrap()
+                .subject,
+            "alice"
+        );
     }
 
     // T019a: ref matching branch_pattern triggers AdmitResources call

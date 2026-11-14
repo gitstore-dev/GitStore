@@ -42,6 +42,15 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_API__AUTH__JWT__REFRESH_GRACE",
 		"GITSTORE_API__AUTH__AUTHN__CHAIN",
 		"GITSTORE_API__AUTH__AUTHZ__PROVIDER",
+		"GITSTORE_API__AUTH__OPA__WRITES_ENABLED",
+		"GITSTORE_API__AUTH__OPA__INITIAL_ADMIN_SUBJECT",
+		"GITSTORE_API__AUTH__OPA__MAX_STALENESS",
+		"GITSTORE_API__AUTH__OPA__VALIDATION_TIMEOUT",
+		"GITSTORE_API__AUTH__OPA__REBUILD_WORKERS",
+		"GITSTORE_API__AUTH__OPA__DIRTY_QUEUE_CAPACITY",
+		"GITSTORE_API__AUTH__OPA__SNAPSHOT_RETRIES",
+		"GITSTORE_API__AUTH__OPA__SNAPSHOT_MEMORY_SIZE",
+		"GITSTORE_API__AUTH__OPA__REBUILD_MEMORY_SIZE",
 		"GITSTORE_API__AUTH__USERDIR__PROVIDER",
 		"GITSTORE_API__NOTIFICATION__PROVIDER",
 		"GITSTORE_API__NOTIFICATION__API_KEY",
@@ -109,6 +118,126 @@ func clearEnv(t *testing.T) func() {
 			}
 		}
 	}
+}
+
+func TestDynamicRBACRolloutConfiguration(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "rbac-local", cfg.Api.Auth.AuthZ.Provider)
+	require.Equal(t, []string{"static-users", "anonymous"}, cfg.Api.Auth.AuthN.Chain)
+	require.Equal(t, "none", cfg.Api.Auth.UserDir.Provider)
+	require.False(t, cfg.Api.Auth.OPA.WritesEnabled)
+
+	t.Setenv("GITSTORE_API__AUTH__OPA__WRITES_ENABLED", "true")
+	_, err = Load()
+	require.ErrorContains(t, err, "api.auth.opa.writes_enabled requires the opa authz provider")
+
+	t.Setenv("GITSTORE_API__AUTH__AUTHZ__PROVIDER", "allow-all")
+	_, err = Load()
+	require.ErrorContains(t, err, "api.auth.opa.writes_enabled requires the opa authz provider")
+
+	t.Setenv("GITSTORE_API__AUTH__AUTHZ__PROVIDER", "opa")
+	cfg, err = Load()
+	require.NoError(t, err)
+	require.Equal(t, "opa", cfg.Api.Auth.AuthZ.Provider)
+	require.Equal(t, []string{"static-users", "anonymous"}, cfg.Api.Auth.AuthN.Chain)
+	require.Equal(t, "none", cfg.Api.Auth.UserDir.Provider)
+	require.True(t, cfg.Api.Auth.OPA.WritesEnabled)
+	require.Equal(t, int64(512<<20), cfg.Api.Auth.OPA.SnapshotMemoryBytes)
+	require.Equal(t, int64(64<<20), cfg.Api.Auth.OPA.RebuildMemoryBytes)
+}
+
+func TestDynamicRBACBoundedOverrides(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_API__AUTH__OPA__MAX_STALENESS", "3s")
+	t.Setenv("GITSTORE_API__AUTH__OPA__VALIDATION_TIMEOUT", "10s")
+	t.Setenv("GITSTORE_API__AUTH__OPA__REBUILD_WORKERS", "2")
+	t.Setenv("GITSTORE_API__AUTH__OPA__DIRTY_QUEUE_CAPACITY", "128")
+	t.Setenv("GITSTORE_API__AUTH__OPA__SNAPSHOT_RETRIES", "2")
+	t.Setenv("GITSTORE_API__AUTH__OPA__SNAPSHOT_MEMORY_SIZE", "128MiB")
+	t.Setenv("GITSTORE_API__AUTH__OPA__REBUILD_MEMORY_SIZE", "32MiB")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 3*time.Second, cfg.Api.Auth.OPA.MaxStaleness)
+	require.Equal(t, 10*time.Second, cfg.Api.Auth.OPA.ValidationTimeout)
+	require.Equal(t, 2, cfg.Api.Auth.OPA.RebuildWorkers)
+	require.Equal(t, 128, cfg.Api.Auth.OPA.DirtyQueueCapacity)
+	require.Equal(t, 2, cfg.Api.Auth.OPA.SnapshotRetries)
+	require.Equal(t, int64(128<<20), cfg.Api.Auth.OPA.SnapshotMemoryBytes)
+	require.Equal(t, int64(32<<20), cfg.Api.Auth.OPA.RebuildMemoryBytes)
+	require.False(t, cfg.Api.Auth.OPA.WritesEnabled)
+}
+
+func TestOPAConfigurationFileUsesProviderNamespaceAndEntryCount(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte("[api.auth.opa]\ndirty_queue_capacity = 7\nmax_staleness = \"2s\"\n"), 0600))
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	require.Equal(t, 7, cfg.Api.Auth.OPA.DirtyQueueCapacity)
+	require.Equal(t, 2*time.Second, cfg.Api.Auth.OPA.MaxStaleness)
+	require.Equal(t, []string{"static-users", "anonymous"}, cfg.Api.Auth.AuthN.Chain)
+	require.Equal(t, "none", cfg.Api.Auth.UserDir.Provider)
+}
+
+func TestDynamicRBACInitialAdministratorRequiresAnExternalUserAndOPA(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_API__AUTH__OPA__INITIAL_ADMIN_SUBJECT", "initial-admin-subject")
+	_, err := Load()
+	require.ErrorContains(t, err, "initial_admin_subject requires the opa")
+	t.Setenv("GITSTORE_API__AUTH__AUTHZ__PROVIDER", "opa")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "initial-admin-subject", cfg.Api.Auth.OPA.InitialAdminSubject)
+	for _, invalid := range []string{"system:api", "system:serviceaccount:controller", "anon", "invalid\nsubject"} {
+		t.Setenv("GITSTORE_API__AUTH__OPA__INITIAL_ADMIN_SUBJECT", invalid)
+		_, err := Load()
+		require.ErrorContains(t, err, "non-reserved authenticated User subject")
+	}
+}
+
+func TestDynamicRBACRejectsInvalidLimits(t *testing.T) {
+	for _, test := range []struct {
+		key, value string
+	}{
+		{"MAX_STALENESS", "0s"},
+		{"MAX_STALENESS", "6s"},
+		{"VALIDATION_TIMEOUT", "0s"},
+		{"VALIDATION_TIMEOUT", "31s"},
+		{"REBUILD_WORKERS", "0"},
+		{"REBUILD_WORKERS", "5"},
+		{"DIRTY_QUEUE_CAPACITY", "0"},
+		{"DIRTY_QUEUE_CAPACITY", "1025"},
+		{"DIRTY_QUEUE_CAPACITY", "1MiB"},
+		{"SNAPSHOT_RETRIES", "0"},
+		{"SNAPSHOT_RETRIES", "4"},
+		{"SNAPSHOT_MEMORY_SIZE", "0B"},
+		{"SNAPSHOT_MEMORY_SIZE", "513MiB"},
+		{"SNAPSHOT_MEMORY_SIZE", "512MB"},
+		{"REBUILD_MEMORY_SIZE", "0B"},
+		{"REBUILD_MEMORY_SIZE", "65MiB"},
+	} {
+		t.Run(test.key+"/"+test.value, func(t *testing.T) {
+			defer clearEnv(t)()
+			setRequiredAuth(t)
+			t.Setenv("GITSTORE_API__AUTH__OPA__"+test.key, test.value)
+			_, err := Load()
+			require.ErrorContains(t, err, "api.auth.opa.")
+		})
+	}
+	t.Run("scratch exceeds aggregate budget", func(t *testing.T) {
+		defer clearEnv(t)()
+		setRequiredAuth(t)
+		t.Setenv("GITSTORE_API__AUTH__OPA__SNAPSHOT_MEMORY_SIZE", "32MiB")
+		t.Setenv("GITSTORE_API__AUTH__OPA__REBUILD_MEMORY_SIZE", "64MiB")
+		_, err := Load()
+		require.ErrorContains(t, err, "api.auth.opa.rebuild_memory_size")
+	})
 }
 
 func TestProfilingConfigurationRequiresLoopbackAndToken(t *testing.T) {

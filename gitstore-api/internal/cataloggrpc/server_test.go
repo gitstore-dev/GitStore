@@ -75,6 +75,21 @@ func (s *catalogTestServer) ValidateResources(ctx context.Context, request *cata
 	req.Authorization = fixtureValidationEnvelope(req.RepositoryId, req.Trees)
 	return s.Server.ValidateResources(s.fixtureContext(ctx, req), req)
 }
+func (s *catalogTestServer) ValidateRBACReceive(ctx context.Context, request *catalogv1.ValidateResourcesRequest) (*catalogv1.ValidateResourcesResponse, error) {
+	cloned := proto.Clone(request).(*catalogv1.ValidateResourcesRequest)
+	req := &catalogv1.ValidateRBACReceiveRequest{RepositoryId: cloned.RepositoryId, Trees: cloned.Trees,
+		Authorization: fixtureValidationEnvelope(cloned.RepositoryId, cloned.Trees)}
+	signature, err := auth.SignRPC(s.serviceSecret, "gitstore-api", catalogv1.CatalogService_ValidateRBACReceive_FullMethodName, req)
+	if err != nil {
+		return nil, err
+	}
+	ctx = metadata.NewIncomingContext(ctx, metadata.Pairs(auth.RPCSignatureMetadata, signature))
+	response, err := s.Server.ValidateRBACReceive(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return &catalogv1.ValidateResourcesResponse{Accepted: response.Accepted, Errors: response.Errors}, nil
+}
 func (s *catalogTestServer) ValidateResourceDeletions(ctx context.Context, request *catalogv1.ValidateResourceDeletionsRequest) (*catalogv1.ValidateResourceDeletionsResponse, error) {
 	req := proto.Clone(request).(*catalogv1.ValidateResourceDeletionsRequest)
 	req.Authorization = fixtureValidationEnvelope(req.RepositoryId, req.Trees)
@@ -125,6 +140,62 @@ func newCatalogServer(t *testing.T, store datastore.Datastore, git cataloggrpc.G
 	return &catalogTestServer{Server: srv, serviceSecret: deps.ServiceSecret}
 }
 
+type callbackIdentityDirectory struct {
+	auth.UserDirProvider
+	resolve func(*auth.Principal) (*auth.UserProfile, error)
+}
+
+func (d callbackIdentityDirectory) ResolvePrincipal(_ context.Context, principal *auth.Principal) (*auth.UserProfile, error) {
+	return d.resolve(principal)
+}
+
+func (callbackIdentityDirectory) ListActors(context.Context, auth.ActorPageRequest) (*auth.ActorPage, error) {
+	return nil, auth.ErrNotSupported
+}
+
+func TestCallbackPreservesWinningAuthenticationForDirectoryResolution(t *testing.T) {
+	for _, method := range []string{"oidc-jwt", "static-users"} {
+		t.Run(method, func(t *testing.T) {
+			allow := testutil.NewAllowAllAuthZ()
+			resolved := false
+			directory := callbackIdentityDirectory{resolve: func(principal *auth.Principal) (*auth.UserProfile, error) {
+				require.Equal(t, "authenticated-name", principal.Subject)
+				require.Equal(t, "trusted-issuer", principal.Issuer)
+				require.Equal(t, method, principal.AuthMethod)
+				resolved = true
+				return &auth.UserProfile{Subject: "directory-uid", Username: "directory-name",
+					Kind: auth.ProfileStaff, Active: true, Lifecycle: auth.ActorActive}, nil
+			}}
+			srv := newCatalogServer(t, newTestDatastore(t), nil, func(deps *cataloggrpc.ServerDeps) {
+				deps.Registry = auth.NewProviderRegistry(nil, allow, directory)
+			})
+			ref := &catalogv1.ReceiveRef{RefName: "refs/heads/main", OldCommitSha: strings.Repeat("0", 40), NewCommitSha: strings.Repeat("a", 40)}
+			req := &catalogv1.ValidateResourcesRequest{RepositoryId: testRepoID,
+				Trees: []*catalogv1.ResourceValidationTree{{Ref: ref,
+					ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "products/widget.md", Content: makeProduct("widget")}}}},
+				Authorization: &catalogv1.CallbackAuthorization{RepositoryId: testRepoID, ReceiveId: "identity-receive",
+					Refs: []*catalogv1.ReceiveRef{ref}, Actor: &catalogv1.CallbackActor{
+						Subject: "authenticated-name", AuthMethod: method, Issuer: "trusted-issuer",
+					}}}
+			signed := srv.fixtureContext(t.Context(), req)
+			tampered := proto.Clone(req).(*catalogv1.ValidateResourcesRequest)
+			tampered.Authorization.Actor.Issuer = "forged-issuer"
+			_, err := srv.Server.ValidateResources(signed, tampered)
+			require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err))
+			require.False(t, resolved)
+
+			response, err := srv.Server.ValidateResources(srv.fixtureContext(t.Context(), req), req)
+			require.NoError(t, err)
+			require.True(t, response.Accepted)
+			require.True(t, resolved, "directory resolution must retain the signed AuthN facts")
+			require.NotEmpty(t, allow.Calls)
+			for _, call := range allow.Calls {
+				require.Equal(t, "authenticated-name", call.Subject)
+			}
+		})
+	}
+}
+
 func TestCallbackBindingAndLiveSemanticPolicy(t *testing.T) {
 	allow := testutil.NewAllowAllAuthZ()
 	registry := auth.NewProviderRegistry(nil, allow, nil)
@@ -162,6 +233,52 @@ func TestCallbackBindingAndLiveSemanticPolicy(t *testing.T) {
 	_, err = srv.Server.ValidateResources(srv.fixtureContext(t.Context(), req), req)
 	require.Equal(t, codes.PermissionDenied, grpcstatus.Code(err))
 	require.Equal(t, "product.create", deny.Action)
+}
+
+func TestCallbackReceiveMetadataCompatibility(t *testing.T) {
+	srv := newCatalogServer(t, nil, nil)
+	for _, tc := range []struct {
+		name   string
+		mutate func(*catalogv1.ValidateResourcesRequest)
+		code   codes.Code
+	}{
+		{"missing trees", func(r *catalogv1.ValidateResourcesRequest) { r.Trees = nil }, codes.InvalidArgument},
+		{"missing envelope", func(r *catalogv1.ValidateResourcesRequest) { r.Authorization = nil }, codes.PermissionDenied},
+		{"missing actor", func(r *catalogv1.ValidateResourcesRequest) { r.Authorization.Actor = nil }, codes.Unauthenticated},
+		{"missing receive", func(r *catalogv1.ValidateResourcesRequest) { r.Authorization.ReceiveId = "" }, codes.PermissionDenied},
+		{"missing old oid", func(r *catalogv1.ValidateResourcesRequest) { r.Trees[0].Ref.OldCommitSha = "" }, codes.PermissionDenied},
+		{"missing new oid", func(r *catalogv1.ValidateResourcesRequest) { r.Trees[0].Ref.NewCommitSha = "" }, codes.PermissionDenied},
+		{"mismatched ref", func(r *catalogv1.ValidateResourcesRequest) { r.Authorization.Refs[0].RefName = "refs/heads/other" }, codes.PermissionDenied},
+		{"partial receive", func(r *catalogv1.ValidateResourcesRequest) { r.Authorization.Refs = nil }, codes.PermissionDenied},
+		{"too many groups", func(r *catalogv1.ValidateResourcesRequest) {
+			r.Authorization.Actor.Groups = make([]string, auth.MaxPrincipalGroups+1)
+		}, codes.Unauthenticated},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			trees := []*catalogv1.ResourceValidationTree{{}}
+			req := &catalogv1.ValidateResourcesRequest{RepositoryId: testRepoID, Trees: trees, Authorization: fixtureValidationEnvelope(testRepoID, trees)}
+			req = proto.Clone(req).(*catalogv1.ValidateResourcesRequest)
+			tc.mutate(req)
+			_, err := srv.Server.ValidateResources(srv.fixtureContext(t.Context(), req), req)
+			require.Equal(t, tc.code, grpcstatus.Code(err))
+		})
+	}
+}
+
+func TestCallbackSignatureBindsCandidateBytesAndObjectIdentity(t *testing.T) {
+	srv := newCatalogServer(t, nil, nil)
+	for _, mutate := range []func(*catalogv1.ResourceBlob){
+		func(b *catalogv1.ResourceBlob) { b.Path = "rbac/roles/other.yaml" },
+		func(b *catalogv1.ResourceBlob) { b.BlobOid = strings.Repeat("b", 40) },
+		func(b *catalogv1.ResourceBlob) { b.Content = []byte("different candidate") },
+	} {
+		trees := []*catalogv1.ResourceValidationTree{{ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "rbac/roles/editor.yaml", BlobOid: strings.Repeat("a", 40), Content: []byte("candidate")}}}}
+		req := &catalogv1.ValidateResourcesRequest{RepositoryId: testRepoID, Trees: trees, Authorization: fixtureValidationEnvelope(testRepoID, trees)}
+		ctx := srv.fixtureContext(t.Context(), req)
+		mutate(req.Trees[0].ProposedBlobs[0])
+		_, err := srv.Server.ValidateResources(ctx, req)
+		require.Equal(t, codes.Unauthenticated, grpcstatus.Code(err))
+	}
 }
 
 func TestCallbacksRequireServiceAuthenticationAndBoundActor(t *testing.T) {

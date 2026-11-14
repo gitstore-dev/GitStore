@@ -53,6 +53,7 @@ func (s *ResourceStatus) UnmarshalJSON(data []byte) error {
 // StatusPatch is a partial-merge update applied to a resource's .status sub-resource.
 // Only non-nil pointer fields are included in the API request.
 type StatusPatch struct {
+	UID                 string
 	ResourceVersion     string
 	ObservedGeneration  *int64
 	LastAppliedRevision *string

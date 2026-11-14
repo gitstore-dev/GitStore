@@ -224,6 +224,72 @@ func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	t.Helper()
 	ctx := context.Background()
 
+	t.Run("Namespace/RBACBootstrapReceipt", func(t *testing.T) {
+		namespace := newNamespace(datastore.NamespaceTierOrganization)
+		namespace.Name = "gitstore-system"
+		require.NoError(t, ds.CreateNamespace(ctx, namespace))
+		datastore.NormalizeNamespaceContract(namespace)
+		start := make(chan struct{})
+		results := make(chan error, 2)
+		for _, subject := range []string{"first-admin", "other-admin"} {
+			copy := *namespace
+			require.NoError(t, datastore.SetNamespaceRBACBootstrap(&copy, datastore.NamespaceRBACBootstrap{
+				NamespaceUID: namespace.UID, RepositoryID: newID(), GitRef: "refs/heads/main",
+				ExpectedCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Subject: subject,
+			}))
+			datastore.AdvanceNamespaceSystemVersion(&copy)
+			go func() {
+				<-start
+				results <- ds.UpdateNamespace(ctx, &copy, namespace.ResourceVersion)
+			}()
+		}
+		close(start)
+		winners := 0
+		for range 2 {
+			if err := <-results; err == nil {
+				winners++
+			} else {
+				require.ErrorIs(t, err, datastore.ErrConflict)
+			}
+		}
+		require.Equal(t, 1, winners)
+		current, err := ds.GetNamespace(ctx, namespace.UID)
+		require.NoError(t, err)
+		receipt, err := datastore.ReadNamespaceRBACBootstrap(current)
+		require.NoError(t, err)
+		require.NotNil(t, receipt)
+		receipt.Commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		version := current.ResourceVersion
+		require.NoError(t, datastore.SetNamespaceRBACBootstrap(current, *receipt))
+		datastore.AdvanceNamespaceSystemVersion(current)
+		require.NoError(t, ds.UpdateNamespace(ctx, current, version))
+		restarted, err := ds.GetNamespace(ctx, namespace.UID)
+		require.NoError(t, err)
+		version = restarted.ResourceVersion
+		require.NoError(t, datastore.ApplyNamespaceStatusPatch(restarted, datastore.NamespaceStatusPatch{
+			ResourceVersion: version, Conditions: []catalog.Condition{},
+		}))
+		require.NoError(t, ds.UpdateNamespace(ctx, restarted, version))
+		restarted, err = ds.GetNamespace(ctx, namespace.UID)
+		require.NoError(t, err)
+		actual, err := datastore.ReadNamespaceRBACBootstrap(restarted)
+		require.NoError(t, err)
+		require.Equal(t, receipt, actual, "controller writes must retain the once-only receipt")
+		version = restarted.ResourceVersion
+		restarted.Status = namespace.Status
+		datastore.AdvanceNamespaceSystemVersion(restarted)
+		require.NoError(t, ds.UpdateNamespace(ctx, restarted, version), "omitting a receipt cannot erase it")
+		restarted, err = ds.GetNamespace(ctx, namespace.UID)
+		require.NoError(t, err)
+		actual, err = datastore.ReadNamespaceRBACBootstrap(restarted)
+		require.NoError(t, err)
+		require.Equal(t, receipt, actual)
+	})
+
+	t.Run("RBAC", func(t *testing.T) {
+		runRBACStoreContract(t, ds)
+	})
+
 	t.Run("OwnerReferenceLifecycle", func(t *testing.T) {
 		runOwnerReferenceLifecycleContract(t, ds)
 	})

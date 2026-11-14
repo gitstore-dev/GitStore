@@ -323,6 +323,15 @@ func committedResourceMatches(resource any, req admission.CommittedManifestReque
 	if !ok {
 		return false
 	}
+	if parent, ok := resource.(*datastore.Namespace); ok {
+		var decision *namespaceadmission.Decision
+		expected.Annotations, decision = namespaceadmission.OwnerIdentityAnnotations(namespaceadmission.PolicyCheck{
+			Tier: parent.Tier, Annotations: expected.Annotations,
+		}, parent)
+		if decision != nil {
+			return false
+		}
+	}
 	expectedSpec, expectedErr := json.Marshal(expected.Spec)
 	var expectedValue, storedValue any
 	if expectedErr != nil || json.Unmarshal(expectedSpec, &expectedValue) != nil || json.Unmarshal(storedSpec, &storedValue) != nil ||
@@ -496,7 +505,7 @@ func (s *Server) validateCommittedOperation(ctx context.Context, entry *parsedEn
 			if !ok {
 				return fmt.Errorf("unsupported tier %q", entry.parsed.Namespace.Spec.Tier)
 			}
-			if decision := namespaceadmission.ValidateIdentity(namespaceadmission.PolicyCheck{Name: entry.identity.Name, Tier: tier, Actor: auth.PrincipalFromContext(ctx).Subject, Annotations: entry.parsed.Namespace.Metadata.Annotations}, resource); decision != nil {
+			if decision := namespaceadmission.ValidateIdentity(namespaceadmission.PolicyCheck{Name: entry.identity.Name, Tier: tier, Actor: auth.PrincipalFromContext(ctx).Subject, Principal: auth.PrincipalFromContext(ctx), Annotations: entry.parsed.Namespace.Metadata.Annotations}, resource); decision != nil {
 				return decision
 			}
 		}
@@ -510,7 +519,7 @@ func (s *Server) validateCommittedOperation(ctx context.Context, entry *parsedEn
 	}
 	if existing == nil && entry.parsed.Namespace != nil {
 		tier, _ := namespaceadmission.TierFromManifest(entry.parsed.Namespace.Spec.Tier)
-		if decision := namespaceadmission.ValidateIdentity(namespaceadmission.PolicyCheck{Name: entry.identity.Name, Tier: tier, Actor: auth.PrincipalFromContext(ctx).Subject, Annotations: entry.parsed.Namespace.Metadata.Annotations}, nil); decision != nil {
+		if decision := namespaceadmission.ValidateIdentity(namespaceadmission.PolicyCheck{Name: entry.identity.Name, Tier: tier, Actor: auth.PrincipalFromContext(ctx).Subject, Principal: auth.PrincipalFromContext(ctx), Annotations: entry.parsed.Namespace.Metadata.Annotations}, nil); decision != nil {
 			return decision
 		}
 	}

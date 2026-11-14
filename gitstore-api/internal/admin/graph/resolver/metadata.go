@@ -13,7 +13,13 @@ func validateMetadataScope(kind string, metadata *model.ObjectMetaInput) *admiss
 	if metadata != nil {
 		namespace = metadata.Namespace
 	}
-	return admission.ValidateNamespaceScope(kind, namespace)
+	if err := admission.ValidateNamespaceScope(kind, namespace); err != nil {
+		return err
+	}
+	if metadata != nil && metadata.ResourceVersion != nil {
+		return admission.NewError(admission.CodeBadUserInput, "UNSUPPORTED_RESOURCE_VERSION", "metadata.resourceVersion is supported only by RBAC updates")
+	}
+	return nil
 }
 
 func namespaceValue(namespace *string) string {

@@ -11,11 +11,22 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
 
 // UpdateResourceStatus is the resolver for the updateResourceStatus field.
 func (r *mutationResolver) UpdateResourceStatus(ctx context.Context, input model.UpdateResourceStatusInput) (*model.UpdateResourceStatusPayload, error) {
+	switch input.Kind {
+	case "Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding":
+		return r.updateRBACStatusGeneric(ctx, input)
+	}
+	if input.Finalizers != nil {
+		return nil, &gqlerror.Error{
+			Message:    "finalizer updates are not supported for this kind",
+			Extensions: map[string]any{"code": "BAD_USER_INPUT"},
+		}
+	}
 	switch input.Kind {
 	case "CategoryTaxonomy":
 		return r.updateCategoryTaxonomyStatusGeneric(ctx, input)
@@ -53,6 +64,10 @@ func (r *queryResolver) Nodes(ctx context.Context, ids []string) ([]model.Node, 
 
 // WatchResources is the resolver for the watchResources field.
 func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.WatchEvent, error) {
+	switch kind {
+	case "Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding":
+		return r.watchRBACResources(ctx, rbac.Kind(kind), namespace, selector, resourceVersion)
+	}
 	if kind == "Namespace" {
 		if namespace != nil && *namespace != "" {
 			return nil, &gqlerror.Error{Message: "Namespace watch is cluster-scoped and does not accept namespace", Extensions: map[string]any{"code": "BAD_USER_INPUT"}}

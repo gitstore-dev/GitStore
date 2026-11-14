@@ -1791,7 +1791,7 @@ func (ec *executionContext) unmarshalInputUpdateNamespaceStatusInput(ctx context
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "resourceVersion", "observedGeneration", "lastAppliedRevision", "conditions"}
+	fieldsInOrder := [...]string{"name", "uid", "resourceVersion", "observedGeneration", "lastAppliedRevision", "conditions"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -1805,6 +1805,13 @@ func (ec *executionContext) unmarshalInputUpdateNamespaceStatusInput(ctx context
 				return it, err
 			}
 			it.Name = data
+		case "uid":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("uid"))
+			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.UID = data
 		case "resourceVersion":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("resourceVersion"))
 			data, err := ec.unmarshalNString2string(ctx, v)

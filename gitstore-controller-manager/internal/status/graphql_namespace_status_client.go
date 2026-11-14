@@ -46,6 +46,9 @@ func (c *graphqlNamespaceStatusClient) Apply(ctx context.Context, key types.Work
 		"name":            key.Name,
 		"resourceVersion": patch.ResourceVersion,
 	}
+	if patch.UID != "" {
+		input["uid"] = patch.UID
+	}
 	if patch.ObservedGeneration != nil {
 		input["observedGeneration"] = *patch.ObservedGeneration
 	}
@@ -53,7 +56,7 @@ func (c *graphqlNamespaceStatusClient) Apply(ctx context.Context, key types.Work
 		input["lastAppliedRevision"] = *patch.LastAppliedRevision
 	}
 	if patch.Conditions != nil {
-		input["conditions"] = toConditionInputs(patch.Conditions)
+		input["conditions"] = ToConditionInputs(patch.Conditions)
 	}
 
 	var resp updateNamespaceStatusResponse

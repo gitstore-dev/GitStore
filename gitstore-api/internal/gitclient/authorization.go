@@ -21,8 +21,22 @@ import (
 // can prompt for credentials — from a genuine transport/service failure.
 var ErrAuthorizationDenied = errors.New("git service request authorization denied")
 
-// authorizeRequest evaluates the current provider before constructing a signed
-// RPC actor snapshot. Explicit internal backing work is still policy-controlled;
+type pinnedBackingKey struct{}
+
+type pinnedBackingAuthorization struct {
+	repositoryID string
+	authorize    func(context.Context, *auth.Principal, string, auth.ResourceContext) (auth.Decision, error)
+}
+
+// ContextWithPinnedBackingAuthorization retains a validation-start evaluator
+// for one repository's internal content write, never an external Git request.
+func ContextWithPinnedBackingAuthorization(ctx context.Context, repositoryID string,
+	authorize func(context.Context, *auth.Principal, string, auth.ResourceContext) (auth.Decision, error)) context.Context {
+	return context.WithValue(ctx, pinnedBackingKey{}, pinnedBackingAuthorization{repositoryID, authorize})
+}
+
+// authorizeRequest evaluates the current or explicitly captured provider before
+// constructing a signed RPC actor snapshot. Internal work stays policy-controlled;
 // an absent principal or authorizer never becomes an implicit system identity.
 func (c *Client) authorizeRequest(ctx context.Context, action, repositoryID string) (*gitv1.RequestAuthorization, error) {
 	envelope, err := RequestAuthorization(ctx, action, repositoryID)
@@ -46,6 +60,19 @@ func (c *Client) authorizeRequest(ctx context.Context, action, repositoryID stri
 		if repository != nil {
 			resource.Name, resource.OwnerSub = repository.Name, repository.EffectiveOwnerSub()
 			resource.Attrs["namespace"] = repository.Namespace
+			if action == auth.ActionRepositoryDelete && repository.DeletionTimestamp != nil {
+				if namespaces, ok := c.Store.(interface {
+					GetNamespaceByName(context.Context, string) (*datastore.Namespace, error)
+				}); ok {
+					parent, lookupErr := namespaces.GetNamespaceByName(ctx, repository.Namespace)
+					if lookupErr != nil {
+						return nil, fmt.Errorf("git authorization namespace lookup: %w", lookupErr)
+					}
+					if parent != nil && parent.DeletionTimestamp != nil && datastore.IsNamespaceSystemRepository(parent, repository) {
+						resource.Attrs["namespaceCleanup"] = true
+					}
+				}
+			}
 			if visibility, present := auth.VisibilityFromSpec(repository.Spec); present {
 				resource.Attrs["visibility"] = visibility
 			}
@@ -55,7 +82,16 @@ func (c *Client) authorizeRequest(ctx context.Context, action, repositoryID stri
 	} else if principal.Subject != "system:api" {
 		return nil, fmt.Errorf("git authorization resource lookup is unavailable")
 	}
-	decision, err := provider.Authorize(ctx, principal, action, resource)
+	evaluate := provider.Authorize
+	if pinned, ok := ctx.Value(pinnedBackingKey{}).(pinnedBackingAuthorization); ok &&
+		principal.Subject == "system:api" && principal.AuthMethod == "internal" &&
+		action == auth.ActionRepositoryContentsWrite && repositoryID == pinned.repositoryID {
+		if pinned.authorize == nil {
+			return nil, fmt.Errorf("%w: captured authorizer is required", ErrAuthorizationDenied)
+		}
+		evaluate = pinned.authorize
+	}
+	decision, err := evaluate(ctx, principal, action, resource)
 	if err != nil {
 		return nil, fmt.Errorf("git authorization evaluation: %w", err)
 	}

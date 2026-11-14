@@ -215,13 +215,15 @@ extend type Mutation {
   completeRepositoryDeletion(input: CompleteRepositoryDeletionInput!): CompleteRepositoryDeletionPayload!
 }
 
-"""Author-controlled metadata shared by declarative resource mutations."""
+"""Metadata shared by declarative resource mutations."""
 input ObjectMetaInput {
   name: String!
   """Required by namespaced resources; omit for cluster-scoped resources."""
   namespace: String
   labels: JSON
   annotations: JSON
+  """Optimistic-concurrency token required for RBAC updates. Omit on creates and other resource mutations."""
+  resourceVersion: String
 }
 
 input RepositorySpecInput {

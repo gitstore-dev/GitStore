@@ -93,7 +93,9 @@ not invent directory groups.
 
 Namespace authorization remains RBAC-driven: the shipped
 `namespace-creator` binds to `system:staff` and uses `when` predicates for
-USER tier and canonical username matching.
+USER tier and AuthN-selected subject matching. The directory's identity UID
+and username are enrichment facts, not replacements for the authenticated
+subject used by namespace ownership or User bindings.
 
 ## Actor lifecycle
 

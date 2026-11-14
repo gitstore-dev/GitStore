@@ -1344,7 +1344,7 @@ func (m *memdbDatastore) UpdateNamespace(_ context.Context, ns *datastore.Namesp
 			return err
 		}
 	}
-	status, err := datastore.MergeInfrastructureStatus(current.Status, ns.Status)
+	status, err := datastore.MergeNamespaceInfrastructureStatus(current, ns)
 	if err != nil {
 		txn.Abort()
 		return err

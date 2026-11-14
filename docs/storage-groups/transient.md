@@ -50,15 +50,32 @@ kind: SubjectAccessReview
 spec:
   principal:
     subject: user-123
-    issuer: oidc
-  action: repository.write
+  action: repository.contents.read
   resourceRef:
-    kind: Repository
-    name: catalog
+    id: "<repository-node-id>"
 status:
   allowed: true
   reason: RoleBindingMatched
+  hypothetical: false
+  revisions:
+  - tierID: cluster
+    gitRevision: "main@sha1:<commit>"
+    tierRevision: "7"
+    capturedAt: "2026-11-10T12:00:00.000Z"
+  catalogDigest: "<catalog-digest>"
+  builtinDigest: "<builtin-digest>"
 ```
+
+The Admin schema adapts this envelope as
+`accessReview(input:).subjectAccessReview`, with accepted inputs in `spec`
+and the evaluated decision/revision identities in `status`. Dynamic production
+execution remains gated; see [configuration](../configuration.md#dynamic-rbac-rollout)
+and the [API contract](../api-reference.md#subjectaccessreview).
+The authenticated reviewer needs scope-specific review permission, including
+when reviewing oneself. Omitted groups require trusted directory resolution;
+explicit groups or context are hypothetical. Reviews are not durable resources
+and have no Node, CRUD, list or watch lifecycle. Other catalogue entries above
+describe resource shapes, not a guarantee of implemented endpoints.
 
 ## Admission And Validation
 

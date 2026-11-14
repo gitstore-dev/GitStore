@@ -5,7 +5,9 @@ package gitclient
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -14,9 +16,94 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPinnedBackingWriteRetainsCapturedAuthorityWithoutBroadeningScope(t *testing.T) {
+	registry := auth.NewProviderRegistry(nil, testutil.NewDenyAllAuthZ(t), nil)
+	client := &Client{Registry: registry, Store: authorizationRepositoryFixture{
+		repository: &datastore.Repository{Name: "gitstore-system", Namespace: "acme"},
+	}}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	calls := 0
+	pinned := ContextWithPinnedBackingAuthorization(ctx, "captured-repository",
+		func(ctx context.Context, principal *auth.Principal, action string, resource auth.ResourceContext) (auth.Decision, error) {
+			calls++
+			require.Equal(t, "system:api", principal.Subject)
+			require.Equal(t, "internal", principal.AuthMethod)
+			require.Equal(t, auth.ActionRepositoryContentsWrite, action)
+			require.Equal(t, "acme", resource.Attrs["namespace"])
+			if err := ctx.Err(); err != nil {
+				return auth.Decision{}, err
+			}
+			return auth.Decision{Outcome: auth.OutcomeAllow}, nil
+		})
+	internal := ContextForBackingWork(pinned)
+	_, err := client.authorizeRequest(internal, auth.ActionRepositoryContentsWrite, "captured-repository")
+	require.NoError(t, err, "live cache invalidation must not veto an already-captured backing write")
+	require.Equal(t, 1, calls)
+
+	for _, test := range []struct {
+		ctx        context.Context
+		action     string
+		repository string
+	}{
+		{internal, auth.ActionRepositoryContentsWrite, "other-repository"},
+		{internal, auth.ActionRepositoryContentsRead, "captured-repository"},
+		{internal, auth.ActionRepositoryDelete, "captured-repository"},
+		{auth.ContextWithPrincipal(pinned, &auth.Principal{Subject: "alice", AuthMethod: "static-users"}), auth.ActionRepositoryContentsWrite, "captured-repository"},
+	} {
+		_, err := client.authorizeRequest(test.ctx, test.action, test.repository)
+		require.ErrorIs(t, err, ErrAuthorizationDenied)
+	}
+	require.Equal(t, 1, calls, "other actors, operations and repositories must retain live authorization")
+	cancel()
+	_, err = client.authorizeRequest(internal, auth.ActionRepositoryContentsWrite, "captured-repository")
+	require.True(t, errors.Is(err, context.Canceled))
+}
+
 type authorizationRepositoryFixture struct {
 	repository *datastore.Repository
 	err        error
+}
+
+type namespaceCleanupRepositoryFixture struct {
+	authorizationRepositoryFixture
+	parent *datastore.Namespace
+}
+
+func (f namespaceCleanupRepositoryFixture) GetNamespaceByName(context.Context, string) (*datastore.Namespace, error) {
+	return f.parent, nil
+}
+
+func TestNamespaceCleanupScopeComesOnlyFromTerminatingSystemStorage(t *testing.T) {
+	for _, scenario := range []string{"cleanup", "live namespace", "live repository", "ordinary repository", "authored reserved name", "other operation"} {
+		t.Run(scenario, func(t *testing.T) {
+			now := time.Now()
+			parent := &datastore.Namespace{Name: "shop", DeletionTimestamp: &now}
+			repository := &datastore.Repository{UID: "repo", RepositoryID: "repo", Namespace: "shop",
+				Name: "gitstore-system", DeletionTimestamp: &now}
+			action := auth.ActionRepositoryDelete
+			switch scenario {
+			case "live namespace":
+				parent.DeletionTimestamp = nil
+			case "live repository":
+				repository.DeletionTimestamp = nil
+			case "ordinary repository":
+				repository.Name = "catalog"
+			case "authored reserved name":
+				repository.SourcePath = "repositories/forged.md"
+			case "other operation":
+				action = auth.ActionRepositoryContentsWrite
+			}
+			recorder := testutil.NewAllowAllAuthZ()
+			client := &Client{Registry: auth.NewProviderRegistry(nil, recorder, nil),
+				Store: namespaceCleanupRepositoryFixture{authorizationRepositoryFixture{repository: repository}, parent}}
+			envelope, err := client.authorizeRequest(ContextForBackingWork(t.Context()), action, "repo")
+			require.NoError(t, err)
+			require.Equal(t, "repo", envelope.RepositoryId)
+			require.Equal(t, "shop", recorder.Resource.Attrs["namespace"])
+			require.Equal(t, scenario == "cleanup", recorder.Resource.Attrs["namespaceCleanup"] == true)
+		})
+	}
 }
 
 func (f authorizationRepositoryFixture) GetRepository(context.Context, string) (*datastore.Repository, error) {

@@ -49,6 +49,9 @@ func (r *mutationResolver) UpdateNamespaceStatus(ctx context.Context, input mode
 	if err != nil {
 		return nil, err
 	}
+	if input.UID != nil && *input.UID != namespace.UID && *input.UID != mustEncodeNodeID(nodeKindNamespace, namespace.UID) {
+		return nil, statusConflictError("Namespace", "", input.Name, namespace.ResourceVersion)
+	}
 	patch := datastore.NamespaceStatusPatch{ResourceVersion: input.ResourceVersion}
 	if input.ObservedGeneration != nil {
 		generation := int64(*input.ObservedGeneration)
@@ -265,5 +268,5 @@ func (r *subscriptionResolver) WatchNamespaces(ctx context.Context, selector *mo
 			}
 		}
 	}()
-	return out, nil
+	return guardWatch(ctx, r.Resolver, "Namespace", nil, out, cancel), nil
 }

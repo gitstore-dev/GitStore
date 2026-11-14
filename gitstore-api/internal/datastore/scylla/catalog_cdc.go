@@ -20,7 +20,7 @@ import (
 	scyllacdc "github.com/scylladb/scylla-cdc-go"
 )
 
-// catalogCDCSource is one resource kind whose authoritative table
+// catalogCDCSource is one kind or discriminated authoritative table which
 // feeds the shared resource watch journal. New kinds (including future
 // custom resources) register here instead of adding a dedicated runner.
 type catalogCDCSource struct {
@@ -28,9 +28,14 @@ type catalogCDCSource struct {
 	clusterScoped bool
 	// payload converts a decoded CDC image into the kind's datastore JSON.
 	payload func(rows []*scyllacdc.ChangeRow) (json.RawMessage, error)
+	// Discriminated tables decode a complete frame once, rather than running
+	// competing per-kind readers against the same authoritative partition.
+	changes         func(string, scyllacdc.Change) ([]watchjournal.Change, error)
+	maxFrameChanges int
 }
 
 var catalogCDCSources = map[string]catalogCDCSource{
+	"RBAC": {table: "rbac_resources_by_scope", changes: rbacCDCChanges, maxFrameChanges: rbacCDCMaxFrameChanges},
 	"ServiceAccount": {table: "service_accounts_by_cluster_name", clusterScoped: true, payload: func(rows []*scyllacdc.ChangeRow) (json.RawMessage, error) {
 		return marshalServiceAccountCDC(serviceAccountCDCRow(rows))
 	}},
@@ -69,6 +74,20 @@ func (s *scyllaDatastore) runCatalogResourceCDC(ctx context.Context, materialize
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	sequencer := newNamespaceCDCSequencer(materializer, lease)
+	sequencer.progressTable = s.keyspace + "." + source.table
+	sequencer.persistProgress = func(ctx context.Context, progress map[string]gocql.UUID) error {
+		return s.saveCDCProgressBatch(ctx, lease, kind, progress)
+	}
+	if kind == "RBAC" || kind == "ServiceAccount" {
+		var err error
+		sequencer.persistReadProgress, err = s.sourceReadProgress(runCtx, lease, kind)
+		if err != nil {
+			return err
+		}
+	}
+	if source.maxFrameChanges > 0 {
+		sequencer.maxFrameChanges = source.maxFrameChanges
+	}
 	progress := &repositoryCDCProgressManager{journal: s, lease: lease, source: kind}
 	progress.beginGeneration = func(generationCtx context.Context, generation time.Time) error {
 		streams, err := s.resourceCDCGenerationStreams(generationCtx, generation, source.table, kind)
@@ -79,12 +98,13 @@ func (s *scyllaDatastore) runCatalogResourceCDC(ctx context.Context, materialize
 	}
 	sequencerErr := make(chan error, 1)
 	go func() { sequencerErr <- sequencer.Run(runCtx); cancel() }()
-	factory := &catalogCDCConsumerFactory{sequencer: sequencer, onReady: ready, kind: kind, payload: source.payload, clusterScoped: source.clusterScoped}
+	factory := &catalogCDCConsumerFactory{sequencer: sequencer, onReady: ready, kind: kind, payload: source.payload, clusterScoped: source.clusterScoped, decodeChanges: source.changes}
 	reader, err := scyllacdc.NewReader(runCtx, &scyllacdc.ReaderConfig{
 		Session: s.session.Session, TableNames: []string{s.keyspace + "." + source.table}, Consistency: gocql.Quorum,
 		ChangeConsumerFactory: factory, ProgressManager: progress, Logger: zapCDCLogger{s.log},
 		Advanced: scyllacdc.AdvancedReaderConfig{ChangeAgeLimit: changeAgeLimit, ConfidenceWindowSize: confidenceWindow,
-			PostEmptyQueryDelay: 100 * time.Millisecond, PostNonEmptyQueryDelay: 100 * time.Millisecond,
+			MaxEmptyQueryTimeWindowSize: namespaceCDCEmptyProbeWindow,
+			PostEmptyQueryDelay:         100 * time.Millisecond, PostNonEmptyQueryDelay: 100 * time.Millisecond,
 			PostFailedQueryDelay: 100 * time.Millisecond, MaxPostFailedQueryDelay: 2 * time.Second, TableMissingRetryLimit: 30},
 	})
 	if err != nil {
@@ -109,6 +129,7 @@ type catalogCDCConsumerFactory struct {
 	kind          string
 	payload       func([]*scyllacdc.ChangeRow) (json.RawMessage, error)
 	clusterScoped bool
+	decodeChanges func(string, scyllacdc.Change) ([]watchjournal.Change, error)
 }
 
 func (f *catalogCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, input scyllacdc.CreateChangeConsumerInput) (scyllacdc.ChangeConsumer, error) {
@@ -127,6 +148,7 @@ func (f *catalogCDCConsumerFactory) CreateChangeConsumer(ctx context.Context, in
 		kind:          f.kind,
 		payload:       f.payload,
 		clusterScoped: f.clusterScoped,
+		decodeChanges: f.decodeChanges,
 	}, nil
 }
 
@@ -150,6 +172,7 @@ type catalogCDCConsumer struct {
 	kind          string
 	payload       func([]*scyllacdc.ChangeRow) (json.RawMessage, error)
 	clusterScoped bool
+	decodeChanges func(string, scyllacdc.Change) ([]watchjournal.Change, error)
 }
 
 func (c *catalogCDCConsumer) Consume(ctx context.Context, change scyllacdc.Change) error {
@@ -174,6 +197,9 @@ func (c *catalogCDCConsumer) Consume(ctx context.Context, change scyllacdc.Chang
 const catalogCDCMaxRowsPerChange = 16
 
 func (c *catalogCDCConsumer) changes(change scyllacdc.Change) ([]watchjournal.Change, error) {
+	if c.decodeChanges != nil {
+		return c.decodeChanges(c.streamID, change)
+	}
 	if len(change.PreImage) > catalogCDCMaxRowsPerChange || len(change.PostImage) > catalogCDCMaxRowsPerChange {
 		return nil, fmt.Errorf("%w: %s CDC frame exceeds %d row images", datastore.ErrNamespaceWatchDiscontinuity, c.kind, catalogCDCMaxRowsPerChange)
 	}

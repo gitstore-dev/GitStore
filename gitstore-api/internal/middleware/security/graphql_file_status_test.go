@@ -23,6 +23,73 @@ import (
 	"go.uber.org/zap"
 )
 
+type unavailableStatusAuthZ struct{ auth.AuthZProvider }
+
+func (unavailableStatusAuthZ) Authorize(context.Context, *auth.Principal, string, auth.ResourceContext) (auth.Decision, error) {
+	return auth.Decision{}, errors.New("private authorization dependency failure")
+}
+
+type unavailableSnapshotAuthZ struct{ auth.AuthZProvider }
+
+func (unavailableSnapshotAuthZ) Authorize(context.Context, *auth.Principal, string, auth.ResourceContext) (auth.Decision, error) {
+	return auth.Decision{}, fmt.Errorf("private snapshot dependency failure: %w", auth.ErrAuthorizationUnavailable)
+}
+
+func TestCatalogSnapshotUnavailableRetainsRetryableEnvelope(t *testing.T) {
+	for _, field := range []struct{ object, name string }{
+		{"Query", "products"}, {"Mutation", "createProduct"}, {"Subscription", "watchProducts"},
+	} {
+		t.Run(field.name, func(t *testing.T) {
+			provider := unavailableSnapshotAuthZ{testutil.NewAllowAllAuthZ()}
+			middleware := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, provider, nil), &testutil.StubStore{}, zap.NewNop())
+			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "reader"})
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+				Object: field.object, Field: graphql.CollectedField{Field: &ast.Field{Name: field.name}},
+				Args: map[string]any{
+					"namespace": "shop",
+					"input":     map[string]any{"metadata": map[string]any{"namespace": "shop", "name": "pending"}},
+				},
+			})
+			called := false
+			_, err := middleware.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+				called = true
+				return nil, nil
+			})
+			require.False(t, called)
+			var structured *gqlerror.Error
+			require.ErrorAs(t, err, &structured)
+			require.Equal(t, "AUTHORIZATION_UNAVAILABLE", structured.Extensions["code"])
+			require.Equal(t, true, structured.Extensions["retryable"])
+			require.NotContains(t, structured.Message, "private")
+		})
+	}
+}
+
+func TestRBACStatusUnavailableRetainsRetryableEnvelope(t *testing.T) {
+	for _, kind := range []string{"Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding"} {
+		t.Run(kind, func(t *testing.T) {
+			provider := unavailableStatusAuthZ{testutil.NewAllowAllAuthZ()}
+			middleware := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, provider, nil), &testutil.StubStore{}, zap.NewNop())
+			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "controller"})
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+				Object: "Mutation", Field: graphql.CollectedField{Field: &ast.Field{Name: "updateResourceStatus"}},
+				Args: map[string]any{"input": model.UpdateResourceStatusInput{Kind: kind, Name: "pending", Namespace: "shop", ResourceVersion: "1"}},
+			})
+			called := false
+			_, err := middleware.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+				called = true
+				return nil, nil
+			})
+			require.False(t, called)
+			var structured *gqlerror.Error
+			require.ErrorAs(t, err, &structured)
+			require.Equal(t, "AUTHORIZATION_UNAVAILABLE", structured.Extensions["code"])
+			require.Equal(t, true, structured.Extensions["retryable"])
+			require.NotContains(t, structured.Message, "private")
+		})
+	}
+}
+
 // TestGraphQLFieldAuthorizerUpdateResourceStatusFileUsesFileStatusWriteAction
 // exercises the REAL production authorization boundary for File status
 // writes: GraphQLFieldAuthorizer resolves the exact registered status action.
@@ -205,6 +272,10 @@ func TestCanonicalWatchAndStatusBoundaryMatrix(t *testing.T) {
 		{"CategoryTaxonomy", "categoryTaxonomy", "watchCategories", "updateCategoryStatus"},
 		{"Product", "product", "watchProducts", "updateProductStatus"},
 		{"File", "file", "watchFiles", ""},
+		{"Role", "role", "watchRoles", ""},
+		{"RoleBinding", "roleBinding", "watchRoleBindings", ""},
+		{"ClusterRole", "clusterRole", "watchClusterRoles", ""},
+		{"ClusterRoleBinding", "clusterRoleBinding", "watchClusterRoleBindings", ""},
 	} {
 		for _, field := range []string{tc.watch, "watchResources", tc.status, "updateResourceStatus"} {
 			if field == "" || (tc.kind == "Product" && field == "updateResourceStatus") {
@@ -220,7 +291,7 @@ func TestCanonicalWatchAndStatusBoundaryMatrix(t *testing.T) {
 					object, verb := "Subscription", "watch"
 					args := map[string]any{"kind": tc.kind, "namespace": "acme"}
 					want := auth.ResourceContext{Kind: tc.canonical, Attrs: map[string]any{}}
-					if tc.kind != "Namespace" {
+					if tc.kind != "Namespace" && tc.kind != "ClusterRole" && tc.kind != "ClusterRoleBinding" {
 						want.Attrs["namespace"] = "acme"
 					}
 					if field == tc.status || field == "updateResourceStatus" {

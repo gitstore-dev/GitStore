@@ -176,23 +176,40 @@ func waitSecretTestReady(t *testing.T, c *secretTestController, want bool, timeo
 
 func secretTestGraphQL(t *testing.T, api, token, query string, variables map[string]any) gqlResponse {
 	t.Helper()
+	return secretTestGraphQLWithTimeout(t, api, token, query, variables, 10*time.Second)
+}
+
+func secretTestGraphQLWithTimeout(t *testing.T, api, token, query string, variables map[string]any, timeout time.Duration) gqlResponse {
+	t.Helper()
+	return secretTestGraphQLWithHeaders(t, api, token, query, variables, timeout, nil)
+}
+
+func secretTestGraphQLWithHeaders(t *testing.T, api, token, query string, variables map[string]any, timeout time.Duration, headers map[string]string) gqlResponse {
+	t.Helper()
 	data, err := json.Marshal(gqlRequest{Query: query, Variables: variables})
 	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, api+"/admin/graphql", bytes.NewReader(data))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
-	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	response, err := (&http.Client{Timeout: timeout}).Do(req)
 	if err != nil {
 		t.Fatal("test GraphQL request failed")
 	}
 	defer response.Body.Close()
 	var result gqlResponse
 	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result); err != nil {
-		t.Fatal("invalid test GraphQL response")
+		if response.StatusCode < 400 {
+			t.Fatalf("invalid test GraphQL response (HTTP %d)", response.StatusCode)
+		}
+		result.Errors = []json.RawMessage{json.RawMessage(`{"message":"non-GraphQL HTTP failure"}`)}
 	}
+	result.Status = response.StatusCode
 	return result
 }
 

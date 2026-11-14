@@ -93,7 +93,7 @@ func TestReadNotFoundUsesSharedEnvelopeOverTransport(t *testing.T) {
 		t.Run(lookup.name, func(t *testing.T) {
 			store, _ := newGlobalIDTestResolver(t)
 			for range 2 {
-				root, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop()})
+				root, err := NewResolver(ResolverDeps{Store: store, Registry: auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil), Logger: zap.NewNop()})
 				require.NoError(t, err)
 				middleware := security.NewAuthorizeWithStore(auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil), store, zap.NewNop())
 				server := handler.NewDefaultServer(generated.NewExecutableSchema(generated.Config{Resolvers: root}))
@@ -133,6 +133,8 @@ func requireReadNotFoundEnvelope(t *testing.T, err error, kind string) {
 		nodeKindCategory: "CATEGORY_NOT_FOUND", nodeKindRepository: "REPOSITORY_NOT_FOUND",
 		nodeKindCollection: "COLLECTION_NOT_FOUND", nodeKindProductVariant: "PRODUCT_VARIANT_NOT_FOUND", nodeKindFile: "FILE_NOT_FOUND",
 		nodeKindStaff: "STAFF_NOT_FOUND", nodeKindCustomer: "CUSTOMER_NOT_FOUND", nodeKindServiceAccount: "SERVICEACCOUNT_NOT_FOUND",
+		nodeKindRole: "ROLE_NOT_FOUND", nodeKindClusterRole: "CLUSTERROLE_NOT_FOUND",
+		nodeKindRoleBinding: "ROLEBINDING_NOT_FOUND", nodeKindClusterRoleBinding: "CLUSTERROLEBINDING_NOT_FOUND",
 	}
 	require.Equal(t, []map[string]any{{
 		"reason": reasons[kind], "message": graphErr.Message, "level": string(admission.LevelFailure),
@@ -731,6 +733,19 @@ type globalIDPointFailureStore struct {
 	enabled *atomic.Bool
 }
 
+type globalIDRBACPointFailureStore struct {
+	datastore.RBACStore
+	err error
+}
+
+func (s globalIDPointFailureStore) RBACStore() datastore.RBACStore {
+	return globalIDRBACPointFailureStore{err: s.err}
+}
+
+func (s globalIDRBACPointFailureStore) GetRBACByUID(context.Context, string) (*datastore.RBACResource, error) {
+	return nil, s.err
+}
+
 func (s globalIDPointFailureStore) GetFile(context.Context, string) (*datastore.File, error) {
 	return nil, s.err
 }
@@ -828,7 +843,7 @@ func TestNodeReadsDistinguishAbsenceFromInfrastructureFailure(t *testing.T) {
 				store, root := newGlobalIDTestResolver(t)
 				failed := globalIDPointFailureStore{Datastore: store, err: failure}
 				root.store, root.service.store = failed, failed
-				root.registry = auth.NewProviderRegistry(nil, nil, globalIDFailureDirectory{err: failure})
+				root.registry = auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), globalIDFailureDirectory{err: failure})
 				query := &queryResolver{Resolver: root}
 				id := mustEncodeNodeID(kind, globalIDTestProductUID)
 				node, err := query.Node(t.Context(), id)
@@ -1245,7 +1260,7 @@ func newGlobalIDTestResolver(t *testing.T) (datastore.Datastore, *Resolver) {
 	t.Helper()
 	store, err := memdb.New()
 	require.NoError(t, err)
-	r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop()})
+	r, err := NewResolver(ResolverDeps{Store: store, Registry: auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil), Logger: zap.NewNop()})
 	require.NoError(t, err)
 	return store, r
 }

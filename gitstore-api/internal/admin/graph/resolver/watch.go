@@ -9,10 +9,12 @@ import (
 	"errors"
 	"time"
 
+	"github.com/99designs/gqlgen/graphql"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
@@ -24,6 +26,66 @@ const (
 	fileWatchBootstrapCursor       = "__file_watch_bootstrap__"
 	categoryWatchBootstrapCursor   = "__category_watch_bootstrap__"
 )
+
+func rbacJournalNode(event datastore.ResourceWatchEvent, kind rbac.Kind) (model.Node, error) {
+	if event.Type == datastore.ResourceWatchBookmark || event.Type == datastore.ResourceWatchDeleted {
+		return nil, nil
+	}
+	var resource rbac.Resource
+	if len(event.Payload) == 0 || json.Unmarshal(event.Payload, &resource) != nil ||
+		resource.APIVersion != rbac.APIVersion || resource.Kind != kind ||
+		resource.Metadata.Name != event.Name || resource.Metadata.Namespace != event.Namespace {
+		return nil, gqlerror.Errorf("invalid RBAC journal resource image")
+	}
+	return rbacResourceToGraphQL(&resource)
+}
+
+func rbacJournalNamespace(event datastore.ResourceWatchEvent) *string {
+	if event.Namespace == "" {
+		return nil
+	}
+	return &event.Namespace
+}
+
+func watchRBACJournal[T any](ctx context.Context, r *Resolver, kind rbac.Kind, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string, path string, convert func(datastore.ResourceWatchEvent) (T, error)) (<-chan T, error) {
+	if !kind.Namespaced() && namespace != nil && *namespace != "" {
+		return nil, rbacLifecycleError(rbac.ErrInvalid)
+	}
+	if err := r.authorizeRBACRead(ctx, kind, "watch", namespaceValue(namespace), ""); err != nil {
+		return nil, err
+	}
+	return watchCatalogJournal(ctx, r, string(kind), namespace, selector, resourceVersion, path, func(event datastore.ResourceWatchEvent) (T, error) {
+		if r.registry.AuthZ().Name() != "opa" {
+			if err := r.authorizeRBACRead(ctx, kind, "watch", namespaceValue(namespace), ""); err != nil {
+				var zero T
+				return zero, err
+			}
+		}
+		return convert(event)
+	})
+}
+
+func (r *Resolver) watchRBACResources(ctx context.Context, kind rbac.Kind, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.WatchEvent, error) {
+	return watchRBACJournal(ctx, r, kind, namespace, selector, resourceVersion, "generic", func(event datastore.ResourceWatchEvent) (*model.WatchEvent, error) {
+		node, err := rbacJournalNode(event, kind)
+		if err != nil {
+			return nil, err
+		}
+		out := &model.WatchEvent{Type: model.WatchEventType(event.Type), Kind: string(kind),
+			Namespace: rbacJournalNamespace(event), Name: event.Name,
+			ResourceVersion: watchjournal.EncodeCursor(event.Epoch, event.Sequence)}
+		if node != nil {
+			data, err := json.Marshal(node)
+			if err != nil {
+				return nil, err
+			}
+			if err := json.Unmarshal(data, &out.Object); err != nil {
+				return nil, err
+			}
+		}
+		return out, nil
+	})
+}
 
 // normalizeResourceWatchCursor preserves the private typed-watch bootstrap
 // sentinels while resource projections share one generic
@@ -191,7 +253,7 @@ func watchCatalogJournal[T any](ctx context.Context, r *Resolver, kind string, n
 			}
 		}
 	}()
-	return out, nil
+	return guardWatch(ctx, r, kind, namespace, out, cancel), nil
 }
 
 // NamespaceJournalEventToGraphQL maps the durable event envelope without
@@ -309,6 +371,9 @@ func namespaceWatchGraphQLError(err error) *gqlerror.Error {
 }
 
 func addNamespaceWatchSubscriptionError(ctx context.Context, err error) {
+	if !graphql.HasOperationContext(ctx) {
+		return
+	}
 	var gqlErr *gqlerror.Error
 	if !errors.As(err, &gqlErr) {
 		gqlErr = gqlerror.Errorf("durable resource watch failed")
@@ -397,7 +462,7 @@ func (r *Resolver) watchNamespaceResources(ctx context.Context, selector *model.
 			}
 		}
 	}()
-	return out, nil
+	return guardWatch(ctx, r, "Namespace", nil, out, cancel), nil
 }
 
 func fileResolvedFromJSONMap(m map[string]any) *catalog.ResolvedFileDefinition {

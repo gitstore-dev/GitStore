@@ -240,6 +240,8 @@ type UpdateNamespacePayload {
 
 input UpdateNamespaceStatusInput {
   name: String!
+  """Optional incarnation precondition; controllers supply the observed UID."""
+  uid: ID
   resourceVersion: String!
   observedGeneration: Int
   lastAppliedRevision: String
@@ -251,16 +253,16 @@ type UpdateNamespaceStatusPayload {
 }
 
 """
-The successful result of requesting Namespace termination.
+The successful result of requesting resource termination.
 """
 enum ResourceDeletionOutcome {
   """
-  This request set the deletion timestamp and foreground deletion finalizer.
+  This request started foreground termination.
   """
   TERMINATION_STARTED
 
   """
-  The Namespace was already terminating, so no datastore write occurred.
+  The resource was already terminating, so this request did not start another termination.
   """
   ALREADY_TERMINATING
 }

@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.gitstore.dev/rbac.authorization.gitstore.dev/v1beta1/role.schema.json",
+  "title": "GitStore Role",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {"const": "rbac.authorization.gitstore.dev/v1beta1"},
+    "kind": {"const": "Role"},
+    "metadata": {"allOf": [{"$ref": "#/$defs/ObjectMeta"}, {"required": ["namespace"]}]},
+    "spec": {"$ref": "#/$defs/RoleSpec"}
+  },
+  "$defs": {
+    "Name": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+      "maxLength": 63
+    },
+    "ObjectMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"$ref": "#/$defs/Name"},
+        "namespace": {"type": "string", "pattern": "\\S"},
+        "labels": {"type": "object", "additionalProperties": {"type": "string", "maxLength": 63}},
+        "annotations": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "ClusterObjectMeta": {
+      "allOf": [{"$ref": "#/$defs/ObjectMeta"}, {"not": {"required": ["namespace"]}}]
+    },
+    "RoleSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rules"],
+      "properties": {
+        "rules": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/Rule"}}
+      }
+    },
+    "Rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resources", "verbs"],
+      "properties": {
+        "resources": {
+          "type": "array", "minItems": 1, "maxItems": 128,
+          "items": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^(\\*|[A-Za-z][A-Za-z0-9]*(/[a-z][a-z-]*)?)$"}
+        },
+        "verbs": {
+          "type": "array", "minItems": 1, "maxItems": 32,
+          "items": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^(\\*|[a-z][a-z-]*)$"}
+        },
+        "resourceNames": {
+          "type": "array", "maxItems": 256,
+          "items": {"type": "string", "minLength": 1, "maxLength": 256}
+        },
+        "when": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/Condition"}}
+      }
+    },
+    "Condition": {
+      "oneOf": [
+        {"enum": ["owner", "targetOwnerMember", "subjectUsername"]},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["attr", "op"],
+          "properties": {
+            "attr": {"enum": ["namespace", "tier", "visibility"]},
+            "op": {"enum": ["eq", "neq", "in", "notIn"]},
+            "value": {"type": "string", "maxLength": 256},
+            "values": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "string", "maxLength": 256}}
+          },
+          "oneOf": [
+            {"properties": {"op": {"enum": ["eq", "neq"]}}, "required": ["value"], "not": {"required": ["values"]}},
+            {"properties": {"op": {"enum": ["in", "notIn"]}}, "required": ["values"], "not": {"required": ["value"]}}
+          ]
+        }
+      ]
+    },
+    "RoleRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": {"enum": ["Role", "ClusterRole"]},
+        "name": {"$ref": "#/$defs/Name"}
+      }
+    },
+    "Subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name"],
+      "properties": {
+        "kind": {"enum": ["User", "Group", "ServiceAccount"]},
+        "name": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "\\S"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "User"}}},
+          "then": {
+            "properties": {
+              "name": {
+                "anyOf": [
+                  {"const": "system:api"},
+                  {"not": {"anyOf": [{"pattern": "^system:"}, {"pattern": "^serviceaccount:"}]}}
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"kind": {"const": "ServiceAccount"}}},
+          "then": {"properties": {"name": {"not": {"pattern": "[:/]"}}}}
+        }
+      ]
+    },
+    "BindingSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["roleRef", "subjects"],
+      "properties": {
+        "roleRef": {"$ref": "#/$defs/RoleRef"},
+        "subjects": {"type": "array", "minItems": 1, "maxItems": 1000, "uniqueItems": true, "items": {"$ref": "#/$defs/Subject"}}
+      }
+    }
+  }
+}

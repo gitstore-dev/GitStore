@@ -13,7 +13,9 @@
   Controller spans cover individual reconciliation
   attempts, requests and WebSocket dials, not entire watches.
 - `scylla-cdc-go` is a production-source copy of the existing v1.2.1 dependency
-  with minimal reader-shutdown and completed-query notification patches.
+  with reader-shutdown, completed-query notification and opt-in empty-range
+  catch-up patches. Wider probes must never deliver changes or acknowledge
+  failed queries; nonempty ranges retain the ordinary query bound.
   Preserve its Apache-2.0 license and
   provenance in `NOTICE.md`. Native and container API builds use the same
   local replacement.

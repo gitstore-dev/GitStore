@@ -117,7 +117,11 @@ converted to empty profiles.
   `namespace-creator` to `system:staff`, not `system:authenticated` or
   `system:serviceaccounts`.
 - The RBAC `when` language must support a trusted `subjectUsername`
-  predicate, matching the resource name to `principal.Username`. The
+  predicate, requiring a trusted human profile and matching the resource
+  name to the winning AuthN provider's `principal.Subject`, not the directory's
+  `profile.Subject` or `profile.Username`. Enrichment preserves the authenticated
+  subject, issuer and authentication method. AuthN, AuthZ and UserDir remain
+  independently selectable. The
   `namespace-creator` rule combines this predicate with `tier == USER`.
   The shipped policy therefore does not grant Namespace creation to customers
   or ServiceAccounts; policy remains the authorization authority.

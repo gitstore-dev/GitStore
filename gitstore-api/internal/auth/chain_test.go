@@ -166,6 +166,35 @@ func TestChain_FirstAllowWins(t *testing.T) {
 	assert.Equal(t, "p1", principal.Subject)
 }
 
+func TestChain_MixedHumanProvidersKeepWinningIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name, first, second string
+		challenge           bool
+	}{
+		{"oidc wins", "oidc-jwt", "static-users", false},
+		{"static wins", "static-users", "oidc-jwt", false},
+		{"oidc challenges", "oidc-jwt", "static-users", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			first := &stubProvider{name: test.first, outcome: authpkg.OutcomeAllow,
+				principal: &authpkg.Principal{Subject: "first-name", Issuer: "first-issuer", AuthMethod: test.first}}
+			second := &stubProvider{name: test.second, outcome: authpkg.OutcomeAllow,
+				principal: &authpkg.Principal{Subject: "second-name", Issuer: "second-issuer", AuthMethod: test.second}}
+			winner := first.principal
+			if test.challenge {
+				first.outcome = authpkg.OutcomeChallenge
+				winner = second.principal
+			}
+			principal, decision, err := authpkg.NewChainedAuthN(first, second).Authenticate(t.Context(), authpkg.AuthRequest{})
+			require.NoError(t, err)
+			require.Equal(t, authpkg.OutcomeAllow, decision.Outcome)
+			require.Equal(t, winner.Subject, principal.Subject)
+			require.Equal(t, winner.Issuer, principal.Issuer)
+			require.Equal(t, winner.AuthMethod, principal.AuthMethod)
+		})
+	}
+}
+
 func TestChain_DenyShortCircuits(t *testing.T) {
 	p1 := &stubProvider{name: "p1", outcome: authpkg.OutcomeDeny, reason: "blocked"}
 	p2 := &stubProvider{name: "p2", outcome: authpkg.OutcomeAllow, reason: "ok"}

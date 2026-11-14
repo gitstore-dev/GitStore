@@ -24,9 +24,48 @@ import (
 type writeStub struct {
 	gitv1.UnimplementedGitServiceServer
 
-	commitFileFunc func(*gitv1.CommitFileRequest) (*gitv1.CommitFileResponse, error)
-	deleteFileFunc func(*gitv1.DeleteFileRequest) (*gitv1.DeleteFileResponse, error)
-	createTagFunc  func(*gitv1.CreateTagRequest) (*gitv1.CreateTagResponse, error)
+	commitFileFunc    func(*gitv1.CommitFileRequest) (*gitv1.CommitFileResponse, error)
+	guardedCommitFunc func(*gitv1.CommitFileAtRevisionRequest) (*gitv1.CommitFileAtRevisionResponse, error)
+	deleteFileFunc    func(*gitv1.DeleteFileRequest) (*gitv1.DeleteFileResponse, error)
+	createTagFunc     func(*gitv1.CreateTagRequest) (*gitv1.CreateTagResponse, error)
+}
+
+func (s *writeStub) CommitFileAtRevision(_ context.Context, req *gitv1.CommitFileAtRevisionRequest) (*gitv1.CommitFileAtRevisionResponse, error) {
+	if s.guardedCommitFunc != nil {
+		return s.guardedCommitFunc(req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not set up")
+}
+
+func TestGuardedCommitDoesNotFallBackToLegacyWriter(t *testing.T) {
+	legacyCalled := false
+	c := startBufconn(t, &writeStub{commitFileFunc: func(*gitv1.CommitFileRequest) (*gitv1.CommitFileResponse, error) {
+		legacyCalled = true
+		return &gitv1.CommitFileResponse{}, nil
+	}})
+	_, err := c.CommitFileAtRevisionForRepo(t.Context(), c.RepositoryID, gitclient.CommitFileAtRevisionParams{
+		CommitFileParams: gitclient.CommitFileParams{Path: "rbac/roles/reader.yaml"},
+		RefName:          "refs/heads/main", ExpectedCommitSHA: "old",
+	})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	require.False(t, legacyCalled)
+}
+
+func TestGuardedCommitPreservesSignedScopeAndPreconditions(t *testing.T) {
+	c := startBufconn(t, &writeStub{guardedCommitFunc: func(req *gitv1.CommitFileAtRevisionRequest) (*gitv1.CommitFileAtRevisionResponse, error) {
+		require.Equal(t, "refs/heads/main", req.RefName)
+		require.Equal(t, "admitted-tip", req.ExpectedCommitSha)
+		require.Equal(t, "verified-actor", req.File.AuthorName)
+		require.Equal(t, "system:api", req.File.Authorization.Actor.Subject)
+		require.Equal(t, req.File.RepositoryId, req.File.Authorization.RepositoryId)
+		return &gitv1.CommitFileAtRevisionResponse{CommitSha: "committed"}, nil
+	}})
+	sha, err := c.CommitFileAtRevisionForRepo(t.Context(), c.RepositoryID, gitclient.CommitFileAtRevisionParams{
+		CommitFileParams: gitclient.CommitFileParams{Path: "rbac/roles/reader.yaml", AuthorName: "verified-actor"},
+		RefName:          "refs/heads/main", ExpectedCommitSHA: "admitted-tip",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "committed", sha)
 }
 
 func (s *writeStub) CommitFile(_ context.Context, req *gitv1.CommitFileRequest) (*gitv1.CommitFileResponse, error) {

@@ -71,6 +71,32 @@ pub struct PushContext {
     pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetFileProvenanceRequest {
+    #[prost(string, tag="15")]
+    pub repository_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
+    #[prost(string, tag="1")]
+    pub commit_sha: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub path: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetFileProvenanceResponse {
+    #[prost(string, tag="1")]
+    pub snapshot_commit_sha: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub change_commit_sha: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub author_name: ::prost::alloc::string::String,
+    #[prost(int64, tag="5")]
+    pub author_time_unix: i64,
+    #[prost(uint32, tag="6")]
+    pub commits_examined: u32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InfoRefsRequest {
     /// repository_id is the stable UUIDv7 of the target repository.
     #[prost(string, tag="15")]
@@ -284,6 +310,31 @@ pub struct CommitFileRequest {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommitFileResponse {
+    #[prost(string, tag="1")]
+    pub commit_sha: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub branch: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CommitFileAtRevisionRequest {
+    #[prost(message, optional, tag="1")]
+    pub file: ::core::option::Option<CommitFileRequest>,
+    #[prost(string, tag="2")]
+    pub ref_name: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub expected_commit_sha: ::prost::alloc::string::String,
+    /// Retain private durable evidence for retrying this exact write. Retries
+    /// return its original commit only with proven bounded branch ancestry;
+    /// they never restore content that was subsequently removed or changed.
+    #[prost(bool, tag="4")]
+    pub retain_receipt: bool,
+    /// Inspect proven publication without creating or resuming a write.
+    /// Requires retain_receipt; an absent receipt returns NOT_FOUND.
+    #[prost(bool, tag="5")]
+    pub receipt_only: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CommitFileAtRevisionResponse {
     #[prost(string, tag="1")]
     pub commit_sha: ::prost::alloc::string::String,
     #[prost(string, tag="2")]

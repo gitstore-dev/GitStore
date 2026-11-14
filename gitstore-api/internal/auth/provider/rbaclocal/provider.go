@@ -185,9 +185,9 @@ func stringSet(values []string) map[string]struct{} {
 	return out
 }
 
-// principalSubjects defends the provider boundary as well as AuthN. A prefix
+// PrincipalSubjects defends the provider boundary as well as AuthN. A prefix
 // alone never proves ServiceAccount identity; groups are already trusted facts.
-func principalSubjects(p *auth.Principal, subjects []SubjectRef) ([]SubjectRef, bool) {
+func PrincipalSubjects(p *auth.Principal, subjects []SubjectRef) ([]SubjectRef, bool) {
 	if p == nil || !validIdentifier(p.Subject) || p.AuthMethod == "" || len(p.Groups) > MaxPrincipalGroups {
 		return nil, false
 	}
@@ -243,14 +243,14 @@ func (p *RBACLocalProvider) Authorize(_ context.Context, principal *auth.Princip
 	}
 	definition, registered := auth.LookupAction(action)
 	var subjectBuffer [MaxPrincipalGroups + 1]SubjectRef
-	subjects, valid := principalSubjects(principal, subjectBuffer[:0])
+	subjects, valid := PrincipalSubjects(principal, subjectBuffer[:0])
 	if snapshot == nil || !registered || resource.Kind != definition.Kind || !valid || len(resource.Name) > 256 || len(resource.OwnerSub) > 256 {
 		return deny("invalid authorization request")
 	}
 	target := ""
 	if definition.Verb == "transfer" {
 		var ok bool
-		target, ok = targetOwner(resource.Attrs["targetOwnerRef"])
+		target, ok = TargetOwner(resource.Attrs["targetOwnerRef"])
 		if !ok {
 			return deny("transfer requires valid targetOwnerRef")
 		}
@@ -334,7 +334,9 @@ func (p *RBACLocalProvider) Authorize(_ context.Context, principal *auth.Princip
 func ownerMatches(owner string, p *auth.Principal) bool {
 	return owner != "" && (owner == p.Subject || slices.Contains(p.Groups, owner))
 }
-func targetOwner(value any) (string, bool) {
+
+// TargetOwner validates and normalizes a transfer target independently of policy.
+func TargetOwner(value any) (string, bool) {
 	target, ok := value.(map[string]any)
 	if !ok || len(target) != 2 {
 		return "", false
@@ -415,7 +417,7 @@ func (p *RBACLocalProvider) HasAnyRoleBindingFor(subjects []string) bool {
 func (p *RBACLocalProvider) hasEffectivePermission(principal *auth.Principal) bool {
 	snapshot := p.snapshot.Load()
 	var subjectBuffer [MaxPrincipalGroups + 1]SubjectRef
-	subjects, ok := principalSubjects(principal, subjectBuffer[:0])
+	subjects, ok := PrincipalSubjects(principal, subjectBuffer[:0])
 	if !ok || snapshot == nil {
 		return false
 	}

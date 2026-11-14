@@ -254,19 +254,111 @@ that verifies bearer JWTs via OIDC Discovery + JWKS. It is enabled only when
 | `api.auth.kratos.admin_token` | `GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN` | string | (empty) | Only for an authenticating Admin gateway | **Yes** | Bearer credential; stock self-hosted Kratos does not validate it |
 | `api.auth.kratos.max_response_size` | `GITSTORE_API__AUTH__KRATOS__MAX_RESPONSE_SIZE` | IEC size string | `1MiB` | No | No | Positive directory response and webhook body limit, at most `4MiB`; bare numbers and decimal units are rejected |
 
+#### Dynamic RBAC rollout
+
+Dynamic RBAC writes default to disabled. Enabling
+`api.auth.opa.writes_enabled` requires `api.auth.authz.provider = "opa"`;
+static providers never merge dynamic grants. The OPA provider currently
+refuses production startup pending complete bootstrap, lifecycle and rollout
+validation. Keep an existing provider selected; these settings alone do
+not enable a usable dynamic authorization service.
+
+The embedded engine accepts only the release's fixed policy; operators
+cannot supply Rego source or remote bundles. Its in-memory translations are
+disposable and do not replace durable RBAC resources.
+
+Durable journal delivery alone does not establish authorization readiness.
+Serving requires a complete consistent snapshot and verified continuous,
+fresh watch progress; resource update timestamps alone are not freshness
+evidence. Production activation remains gated.
+
+Background workers alternate queued rebuilds with the oldest due origin checks.
+This prevents a rebuild backlog from indefinitely postponing those checks;
+overload or slow checks still fail closed at the configured freshness bound.
+
+Progress-only CDC checkpoints use a 500 ms idle coalescing interval; resource
+changes keep the 25 ms flush cadence. Source freshness advances only after successful
+publication and checkpoint persistence.
+
+Each API retains up to 128 verified immutable Git tree digests to avoid
+repeated manifest scans. Every reuse still checks the live Namespace UID,
+lifecycle, repository and resolved ref. New revisions require a complete
+bounded scan; cached digests do not renew watch freshness or authorization.
+
+| Key | Env Var | Type | Default | Required | Sensitive | Description |
+|-----|---------|------|---------|----------|-----------|-------------|
+| `api.auth.opa.writes_enabled` | `GITSTORE_API__AUTH__OPA__WRITES_ENABLED` | boolean | `false` | No | No | Dynamic-write rollout gate; requires the OPA provider |
+| `api.auth.opa.initial_admin_subject` | `GITSTORE_API__AUTH__OPA__INITIAL_ADMIN_SUBJECT` | string | (empty) | For first initialization | No | First administrator's authenticated User subject; requires OPA. Reserved system and ServiceAccount subjects are rejected. Does not enable production activation. |
+| `api.auth.opa.max_staleness` | `GITSTORE_API__AUTH__OPA__MAX_STALENESS` | duration | `5s` | No | No | Positive freshness bound, at most `5s` |
+| `api.auth.opa.validation_timeout` | `GITSTORE_API__AUTH__OPA__VALIDATION_TIMEOUT` | duration | `30s` | No | No | Positive validation deadline, at most `30s` |
+| `api.auth.opa.rebuild_workers` | `GITSTORE_API__AUTH__OPA__REBUILD_WORKERS` | integer | `4` | No | No | Rebuild concurrency, from 1 to 4 |
+| `api.auth.opa.dirty_queue_capacity` | `GITSTORE_API__AUTH__OPA__DIRTY_QUEUE_CAPACITY` | integer (entries) | `1024` | No | No | Maximum distinct dirty tiers queued for rebuild, from 1 to 1,024; not a byte-size limit |
+| `api.auth.opa.snapshot_retries` | `GITSTORE_API__AUTH__OPA__SNAPSHOT_RETRIES` | integer | `3` | No | No | Snapshot retry bound, from 1 to 3 |
+| `api.auth.opa.snapshot_memory_size` | `GITSTORE_API__AUTH__OPA__SNAPSHOT_MEMORY_SIZE` | IEC size string | `512MiB` | No | No | Positive translated-snapshot budget, at most `512MiB` |
+| `api.auth.opa.rebuild_memory_size` | `GITSTORE_API__AUTH__OPA__REBUILD_MEMORY_SIZE` | IEC size string | `64MiB` | No | No | Positive per-rebuild scratch budget, at most `64MiB` and no greater than the snapshot budget |
+
+Limits are validated even with writes disabled. They may be reduced but
+not raised above these ceilings.
+
+Provider settings use `[api.auth.opa]`, independently of the selected AuthN
+chain and user directory. Queue capacity is an entry count; only the memory
+budgets use IEC byte units.
+
+The initial administrator setting is a once-only bootstrap input, not a
+continuous grant. Its ordinary binding can be removed after another recovery
+administrator is established; restarting must not restore it. Release-owned
+roles and system bindings are immutable and separate from that binding.
+
+Personal USER namespace access uses a controller-managed
+`namespace-owner-access` binding for the verified Staff owner's AuthN-selected
+subject, never a substituted directory ID or profile username. Its fixed
+`namespace-full-control` template cannot be replaced
+or removed through ordinary owner or administrator writes. Collisions fail
+closed. `OwnerAccessReady` reports Pending, Failed or BindingAdmitted
+separately from API policy-cache readiness. Namespace removal records durable
+UID-bound child cleanup without waiting for it; this is not a general orphan
+collector or Git object garbage collection. Retired namespace grants remain
+suppressed during cleanup. Deleting its verified terminating system storage
+requires current cluster policy; an unavailable cluster still blocks cleanup.
+
+USER namespace admission records the owner's authentication method and issuer
+in protected `rbac.authorization.gitstore.dev/owner-auth-method` and
+`rbac.authorization.gitstore.dev/owner-issuer` metadata annotations. They accompany
+the existing owner annotation and are separate from lifecycle `ownerReferences`.
+Authored manifests may omit them; admission preserves established values and
+rejects forged or changed values. Owner provisioning uses these facts for
+issuer-qualified directory resolution and still requires a current active Staff
+profile. A legacy namespace without these facts requires an authenticated owner
+update before qualified owner provisioning can succeed; an administrator cannot
+invent another owner's provenance. Retiring a provider or issuer requires an
+explicit transition, not an inferred replacement.
+
+The dynamic contract authorizes writes and access reviews from current
+validation-start snapshots. It does not impose a global commit fence: an
+already-authorized write may finish after a concurrent revocation. A changed
+candidate or conflict retry requires a fresh capture. Ordinary decisions use
+bounded local snapshots; missing, stale or incomplete state is unavailable,
+including for privileged identities, rather than an implicit allow.
+
+Do not switch a live fleet between static and dynamic providers through an
+ordinary rolling configuration change. Dynamic grants are not merged into
+static policy. Any future cutover must freeze writes, drain incompatible
+traffic, verify seeded grant parity and admit each replica only after snapshot
+readiness. Do not roll back to a static policy that omits admitted grants or
+revocations. Production activation and that cutover remain unavailable.
+
 #### Production identity guidance
 
 Avoid `none` as the UserDir provider in production: it performs no directory
 lookup and provides no directory profiles or groups. `static-users` is
 intended for local and development deployments; its UserDir support is limited
 to basic profile lookup and does not provide directory-managed groups or
-account changes. Do not use `static-users` as a production human AuthN or
-UserDir provider, either by itself or alongside the OIDC/Kratos identity
-setup. In particular, do not chain it alongside `oidc-jwt`, use it as UserDir
-for OIDC logins, or use `static-users` AuthN with Kratos UserDir. A mixed
-configuration can leave credentials and profile state under different
-authorities. Service-account authentication providers are separate and may
-still be configured as needed.
+account changes. Prefer a production identity provider for human credentials
+and directory administration. This recommendation does not couple provider
+selection: AuthN, AuthZ and UserDir may be freely combined, including chained
+OIDC/static authentication and static authentication with Kratos UserDir.
+Configure directory mappings for each winning provider and issuer; differing
+credential and profile authorities do not imply interchangeable identifiers.
 
 For human login with the reference OIDC stack, use `oidc-jwt` for AuthN so
 login and directory profiles use the same identity store. The API accepts
@@ -299,9 +391,14 @@ The sample namespace-creator policy binds `system:staff` and requires both
 USER tier and `subjectUsername`, which matches the resource name against the
 authenticated subject, not the directory username or identity UID. A valid
 directory username and a trusted Staff or Customer profile are still required
-by the condition; the sample binding grants creation only to Staff. Namespace
+by the condition; the sample binding grants creation only to Staff. The AuthN
+provider that authenticates the request selects that subject: the configured OIDC username
+claim value or the static user's username, for example. Directory enrichment
+adds profile and group facts without replacing the subject with the directory's
+ID or username. Ownership and User bindings use the same authenticated subject.
+AuthN, AuthZ and UserDir providers remain independently selectable. Namespace
 creation remains policy-controlled, with immutable USER namespace ownership
-validated independently.
+validated independently, not a separate endpoint guard.
 
 See [Configure local authorization](authorization.md) for Role and ClusterRole
 bindings, namespace scope, subject matching and `resourceNames` examples.

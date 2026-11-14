@@ -81,6 +81,27 @@ into diagnostics. Sustained-load/replacement acceptance is tracked in
 [#451](https://github.com/gitstore-dev/GitStore/issues/451), not established by
 these operator checks.
 
+### Dynamic RBAC startup and readiness
+
+If an API refuses startup with an OPA production-acceptance message, do not
+work around it by granting the controller or users broader static authority.
+Dynamic production activation is unavailable in this binary. Keep the
+supported provider configured and dynamic writes disabled. A configuration
+change alone cannot activate it; see
+[dynamic RBAC configuration](../configuration.md#dynamic-rbac-rollout).
+
+Credential readiness and authorization readiness are separate checks. A
+controller can have a valid token while the API lacks a complete, fresh policy
+snapshot. Diagnose API readiness and durable watch progress before rotating
+healthy keys. Do not treat retryable authorization unavailability as a policy
+denial or recreate a ServiceAccount to recover missing policy state.
+
+Do not mix static and dynamic authorization providers during a live rollout
+or restore a static file that omits admitted grants or revocations. Preserve
+Git history, bootstrap receipts and each controller's private checkpoints.
+Keep exactly one Git process active; any replacement must stop before its
+successor starts on retained storage.
+
 ### Token lifecycle
 
 The controller signs a fresh, 45-second proof-of-possession assertion and

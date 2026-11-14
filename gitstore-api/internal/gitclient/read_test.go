@@ -9,11 +9,12 @@ package gitclient_test
 import (
 	"bytes"
 	"context"
-	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"io"
+	"strings"
 	"testing"
 
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -25,6 +26,7 @@ type readStub struct {
 	gitv1.UnimplementedGitServiceServer
 
 	getFileFunc      func(*gitv1.GetFileRequest) (*gitv1.GetFileResponse, error)
+	provenanceFunc   func(*gitv1.GetFileProvenanceRequest) (*gitv1.GetFileProvenanceResponse, error)
 	listFilesFunc    func(*gitv1.ListFilesRequest) (*gitv1.ListFilesResponse, error)
 	getLatestTagFunc func(*gitv1.GetLatestTagRequest) (*gitv1.GetLatestTagResponse, error)
 	listTagsFunc     func(*gitv1.ListTagsRequest) (*gitv1.ListTagsResponse, error)
@@ -36,6 +38,41 @@ func (s *readStub) GetFile(_ context.Context, req *gitv1.GetFileRequest) (*gitv1
 		return s.getFileFunc(req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not set up")
+}
+
+func (s *readStub) GetFileProvenance(_ context.Context, req *gitv1.GetFileProvenanceRequest) (*gitv1.GetFileProvenanceResponse, error) {
+	if s.provenanceFunc != nil {
+		return s.provenanceFunc(req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not set up")
+}
+
+func TestReadFileProvenanceUsesExactCommitAndBackingReadIdentity(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	client := startBufconn(t, &readStub{provenanceFunc: func(req *gitv1.GetFileProvenanceRequest) (*gitv1.GetFileProvenanceResponse, error) {
+		require.Equal(t, "rbac/roles/reader.yaml", req.Path)
+		require.Equal(t, sha, req.CommitSha)
+		require.Equal(t, "system:api", req.Authorization.Actor.Subject)
+		require.Equal(t, "repository.contents.read", req.Authorization.Action)
+		require.Equal(t, req.RepositoryId, req.Authorization.RepositoryId)
+		return &gitv1.GetFileProvenanceResponse{SnapshotCommitSha: sha, AuthorName: "Git author"}, nil
+	}})
+	result, err := client.ReadFileProvenanceForRepo(t.Context(), client.RepositoryID, "rbac/roles/reader.yaml", sha)
+	require.NoError(t, err)
+	require.Equal(t, "Git author", result.AuthorName)
+}
+
+func TestReadFileProvenancePreservesUnavailableHistoryWithoutFallback(t *testing.T) {
+	for _, code := range []codes.Code{codes.ResourceExhausted, codes.Unimplemented, codes.NotFound} {
+		t.Run(code.String(), func(t *testing.T) {
+			client := startBufconn(t, &readStub{provenanceFunc: func(*gitv1.GetFileProvenanceRequest) (*gitv1.GetFileProvenanceResponse, error) {
+				return nil, status.Error(code, "bounded history unavailable")
+			}})
+			result, err := client.ReadFileProvenanceForRepo(t.Context(), client.RepositoryID, "rbac/roles/reader.yaml", strings.Repeat("a", 40))
+			require.Equal(t, code, status.Code(err))
+			require.Nil(t, result)
+		})
+	}
 }
 
 func (s *readStub) ListFiles(_ context.Context, req *gitv1.ListFilesRequest) (*gitv1.ListFilesResponse, error) {

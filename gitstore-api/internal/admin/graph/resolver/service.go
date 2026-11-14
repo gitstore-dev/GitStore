@@ -54,11 +54,13 @@ type Service struct {
 	clock     apiruntime.Clock
 	ids       apiruntime.IDGenerator
 
-	namespacePolicy   namespaceadmission.PolicyEvaluator
-	namespaceMetrics  *namespaceadmission.Metrics
-	committedAdmitter admission.CommittedManifestAdmitter
-	manifestValidator admission.ManifestValidator
-	pushLimits        config.PushLimitsConfig
+	namespacePolicy              namespaceadmission.PolicyEvaluator
+	namespaceMetrics             *namespaceadmission.Metrics
+	committedAdmitter            admission.CommittedManifestAdmitter
+	manifestValidator            admission.ManifestValidator
+	pushLimits                   config.PushLimitsConfig
+	provisionNamespaceRepository func(context.Context, string) error
+	rbacNamespaceCleanup         bool
 }
 
 // GitWriter is the write subset of gitclient.Client used by the Service.
@@ -78,14 +80,16 @@ type GitWriter interface {
 
 // ServiceDeps contains dependencies for GraphQL business logic.
 type ServiceDeps struct {
-	Store                     datastore.Datastore
-	GitWriter                 GitWriter
-	Logger                    *zap.Logger
-	Clock                     apiruntime.Clock
-	IDGenerator               apiruntime.IDGenerator
-	NamespacePolicyEvaluator  namespaceadmission.PolicyEvaluator
-	NamespaceMetrics          *namespaceadmission.Metrics
-	CommittedManifestAdmitter admission.CommittedManifestAdmitter
+	EnableRBACNamespaceCleanup   bool
+	ProvisionNamespaceRepository func(context.Context, string) error
+	Store                        datastore.Datastore
+	GitWriter                    GitWriter
+	Logger                       *zap.Logger
+	Clock                        apiruntime.Clock
+	IDGenerator                  apiruntime.IDGenerator
+	NamespacePolicyEvaluator     namespaceadmission.PolicyEvaluator
+	NamespaceMetrics             *namespaceadmission.Metrics
+	CommittedManifestAdmitter    admission.CommittedManifestAdmitter
 	// ManifestValidator runs push pre-receive checks for mutations. When nil,
 	// the admitter is used if it also implements ManifestValidator.
 	ManifestValidator admission.ManifestValidator
@@ -121,16 +125,18 @@ func NewService(deps ServiceDeps) (*Service, error) {
 		manifestValidator, _ = deps.CommittedManifestAdmitter.(admission.ManifestValidator)
 	}
 	return &Service{
-		manifestValidator: manifestValidator,
-		store:             deps.Store,
-		gitWriter:         deps.GitWriter,
-		logger:            deps.Logger,
-		clock:             clock,
-		ids:               ids,
-		namespacePolicy:   namespacePolicy,
-		namespaceMetrics:  namespaceMetrics,
-		committedAdmitter: deps.CommittedManifestAdmitter,
-		pushLimits:        deps.PushLimits,
+		rbacNamespaceCleanup:         deps.EnableRBACNamespaceCleanup,
+		manifestValidator:            manifestValidator,
+		store:                        deps.Store,
+		gitWriter:                    deps.GitWriter,
+		logger:                       deps.Logger,
+		clock:                        clock,
+		ids:                          ids,
+		namespacePolicy:              namespacePolicy,
+		namespaceMetrics:             namespaceMetrics,
+		committedAdmitter:            deps.CommittedManifestAdmitter,
+		pushLimits:                   deps.PushLimits,
+		provisionNamespaceRepository: deps.ProvisionNamespaceRepository,
 	}, nil
 }
 
@@ -1302,6 +1308,9 @@ func (s *Service) ProvisionSystemRepository(ctx context.Context, namespace, call
 	if current.DeletionTimestamp != nil || intent != nil {
 		return admission.NewError(admission.CodeFailedPrecondition, "NAMESPACE_TERMINATING", "namespace deletion is pending")
 	}
+	if s.provisionNamespaceRepository != nil {
+		return s.provisionNamespaceRepository(ctx, namespaceName)
+	}
 	if _, err := s.store.LookupRepository(ctx, namespaceName, SystemRepositoryName); err == nil {
 		s.logger.Info("system repository already provisioned",
 			zap.String("namespace", namespaceName),
@@ -1557,6 +1566,17 @@ func (s *Service) CompleteNamespaceDeletion(ctx context.Context, name, expectedR
 	}
 	if err := s.verifyInfrastructureRemoval(ctx, current.Status, current.UID); err != nil {
 		return current, err
+	}
+	if s.rbacNamespaceCleanup {
+		capable, ok := s.store.(datastore.RBACCapable)
+		if !ok || capable.RBACStore() == nil {
+			return current, datastore.ErrRBACUnavailable
+		}
+		if err := capable.RBACStore().ScheduleRBACNamespaceCleanup(ctx, datastore.RBACNamespaceCleanup{
+			NamespaceUID: current.UID, Namespace: current.Name,
+		}); err != nil {
+			return current, err
+		}
 	}
 	if err := s.finalizeNamespaceSystemRepository(ctx, current); err != nil {
 		return current, err

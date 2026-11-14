@@ -17,11 +17,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/allowall"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/anonymous"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/kratos"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/oidcjwt"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/opa"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountassertion"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/serviceaccountjwt"
@@ -35,6 +37,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/githttp"
 	"github.com/gitstore-dev/gitstore/api/internal/health"
 	"github.com/gitstore-dev/gitstore/api/internal/notification"
+	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
 	"github.com/gitstore-dev/gitstore/api/internal/watchjournal"
 	"github.com/gitstore-dev/gitstore/api/internal/wsregistry"
@@ -158,11 +161,37 @@ func registerIdentityMailRoute(router *gin.Engine, cfg config.ApiConfig, runtime
 
 // NewServer builds the API, Git HTTP, and catalog gRPC servers from config.
 func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
+	return newServer(cfg, log, false)
+}
+
+// The internal opt-in exercises the same lifecycle in owned acceptance tests.
+// Public construction remains gated until the rollout evidence is complete.
+func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool) (*Server, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("app: config is required")
 	}
 	if log == nil {
 		return nil, fmt.Errorf("app: logger is required")
+	}
+	if cfg.Api.Auth.AuthZ.Provider == "opa" && !enableDynamic {
+		return nil, errors.New("opa authz provider is unavailable: production acceptance is pending")
+	}
+	constructed := false
+	var prepared *opa.Provider
+	defer func() {
+		if !constructed && prepared != nil {
+			prepared.Close()
+		}
+	}()
+	if cfg.Api.Auth.AuthZ.Provider == "opa" {
+		if err := cfg.Api.Auth.OPA.Validate("opa"); err != nil {
+			return nil, err
+		}
+		var err error
+		prepared, err = opa.NewProviderWithMemoryLimit(context.Background(), cfg.Api.Auth.OPA.SnapshotMemoryBytes)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := cfg.Api.ValidatePorts(); err != nil {
 		return nil, err
@@ -181,7 +210,6 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create datastore: %w", err)
 	}
-	constructed := false
 	var namespaceWatch *namespaceWatchRuntime
 	var resourceJournal datastore.ResourceWatchJournal
 	{
@@ -247,7 +275,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = store.Close()
 		return nil, fmt.Errorf("datastore does not implement shared session revocations")
 	}
-	registry, authReloader, providerShutdowns, err := buildProviderRegistry(cfg, store, log, revocations, resourceJournal)
+	registry, authReloader, providerShutdowns, err := buildProviderRegistryWithOPA(cfg, store, log, revocations, prepared, resourceJournal)
 	if err != nil {
 		_ = gitClient.Close()
 		_ = store.Close()
@@ -269,7 +297,32 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	)
 	gitClient.Registry = registry
 	gitClient.Store = store
-	if err := ensureBootstrapResources(context.Background(), store, gitClient, clock, ids, log); err != nil {
+	var dynamic *rbacRuntime
+	var validator *admission.RBACValidator
+	var recoveryReader rbac.OriginGitReader
+	var provisionNamespace func(context.Context, string) error
+	if prepared != nil {
+		recovery := &rbacRecoveryGit{store: store, client: gitClient}
+		recoveryReader = recovery
+		provisionNamespace = recovery.provisionNamespace
+		dynamic, err = newInitializedCanonicalRBACRuntime(context.Background(), store, resourceJournal, recovery, cfg.Api.Auth.OPA, log,
+			rbacRuntimeOptions{provider: prepared, prepare: func(ctx context.Context) error {
+				return ensureBootstrapResources(ctx, store, recovery, clock, ids, log)
+			}})
+		if err != nil {
+			return nil, fmt.Errorf("initialize RBAC runtime: %w", err)
+		}
+		providerShutdowns = append([]providerShutdowner{dynamic}, providerShutdowns...)
+		if cfg.Api.Auth.OPA.WritesEnabled {
+			builtins, err := rbac.ReleaseBuiltins()
+			if err != nil {
+				return nil, err
+			}
+			validator = &admission.RBACValidator{Capture: dynamic.validationCapture(registry),
+				Builtins: builtins, Ready: dynamic.Ready, Clock: clock, IDGenerator: ids,
+				ManagedStore: store, ControllerSubject: cfg.Api.Admin.ControllerSubject}
+		}
+	} else if err := ensureBootstrapResources(context.Background(), store, gitClient, clock, ids, log); err != nil {
 		return nil, fmt.Errorf("bootstrap resources: %w", err)
 	}
 
@@ -282,6 +335,8 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		ServiceSecretPrevious: cfg.GrpcAuth.HmacSecretPrevious,
 		Store:                 store,
 		GitClient:             gitClient,
+		RBACValidator:         validator,
+		RBACGitReader:         recoveryReader,
 		Logger:                log,
 		Clock:                 clock,
 	})
@@ -301,24 +356,26 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		}
 	}()
 	gqlRouter, err := NewGraphQLHandler(GraphQLHandlerDeps{
-		RegisterCleanup:           registerCleanup,
-		ConnectionRegistry:        connections,
-		Endpoint:                  cfg.Api.Admin,
-		TrustedProxies:            cfg.Api.TrustedProxies,
-		Store:                     store,
-		GitWriter:                 gitClient,
-		Logger:                    log,
-		Registry:                  registry,
-		Clock:                     clock,
-		IDs:                       ids,
-		CommittedManifestAdmitter: catalogServer,
-		ResourceJournal:           resourceJournal,
-		NamespaceWatch:            cfg.Api.Watch.Journal,
-		NamespaceMetrics:          namespaceWatchMetrics(namespaceWatch),
-		ServiceAccountAudience:    cfg.Api.Auth.ServiceAccount.Audience,
-		RateLimitPerSecond:        cfg.Api.RateLimit.PerSecond,
-		RateLimitBurst:            cfg.Api.RateLimit.Burst,
-		PushLimits:                cfg.PushLimits,
+		ProvisionNamespaceRepository: provisionNamespace,
+		RegisterCleanup:              registerCleanup,
+		ConnectionRegistry:           connections,
+		Endpoint:                     cfg.Api.Admin,
+		TrustedProxies:               cfg.Api.TrustedProxies,
+		Store:                        store,
+		GitWriter:                    gitClient,
+		Logger:                       log,
+		Registry:                     registry,
+		Clock:                        clock,
+		IDs:                          ids,
+		CommittedManifestAdmitter:    catalogServer,
+		RBACValidator:                validator,
+		ResourceJournal:              resourceJournal,
+		NamespaceWatch:               cfg.Api.Watch.Journal,
+		NamespaceMetrics:             namespaceWatchMetrics(namespaceWatch),
+		ServiceAccountAudience:       cfg.Api.Auth.ServiceAccount.Audience,
+		RateLimitPerSecond:           cfg.Api.RateLimit.PerSecond,
+		RateLimitBurst:               cfg.Api.RateLimit.Burst,
+		PushLimits:                   cfg.PushLimits,
 	})
 	if err != nil {
 		return nil, err
@@ -327,8 +384,15 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	if err := registerIdentityMailRoute(gqlRouter, cfg.Api, authReloader); err != nil {
 		return nil, err
 	}
-	router := healthHandler(gqlRouter, store, log, clock, namespaceWatch, instanceID, registerCleanup)
+	var ready []func(context.Context) error
+	if dynamic != nil {
+		ready = append(ready, dynamic.Ready)
+	}
+	router := healthHandler(gqlRouter, store, log, clock, namespaceWatch, instanceID, registerCleanup, ready...)
 	var graphQlHandler http.Handler = router
+	if dynamic != nil {
+		graphQlHandler = rbacServingHandler(graphQlHandler, dynamic.Ready)
+	}
 
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Api.AdminPort),
@@ -345,6 +409,9 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		Ids:       ids,
 		Registry:  registry,
 	})
+	if dynamic != nil {
+		gitHttpHandler = rbacServingHandler(gitHttpHandler, dynamic.Ready)
+	}
 	gitHttpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Api.GitPort),
 		Handler:      observability.HTTPHandler(gitHttpHandler, log),
@@ -377,7 +444,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 		_ = grpcListener.Close()
 		return nil, err
 	}
-	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(catalogTelemetry))
+	grpcServer := grpc.NewServer(grpc.MaxRecvMsgSize(96<<20), grpc.UnaryInterceptor(catalogTelemetry))
 	catalogv1.RegisterCatalogServiceServer(grpcServer, catalogServer)
 	constructed = true
 
@@ -397,14 +464,14 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 	}, nil
 }
 
-func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logger, clock apiruntime.Clock, namespaceWatch *namespaceWatchRuntime, instanceID string, registerCleanup func(func())) *gin.Engine {
+func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logger, clock apiruntime.Clock, namespaceWatch *namespaceWatchRuntime, instanceID string, registerCleanup func(func()), authorizationReady ...func(context.Context) error) *gin.Engine {
 	var resourceWatchReady func(context.Context) error
 	if namespaceWatch != nil {
 		resourceWatchReady = func(ctx context.Context) error {
 			return namespaceWatchReadiness(ctx, namespaceWatch, clock.Now())
 		}
 	}
-	healthHandler := health.NewHandler(health.HandlerDeps{
+	deps := health.HandlerDeps{
 		Store:              store,
 		Logger:             log,
 		Version:            version,
@@ -412,7 +479,11 @@ func healthHandler(router *gin.Engine, store datastore.Datastore, log *zap.Logge
 		ResourceWatchReady: resourceWatchReady,
 		InstanceID:         instanceID,
 		RegisterCleanup:    registerCleanup,
-	})
+	}
+	if len(authorizationReady) > 0 {
+		deps.AuthorizationReady = authorizationReady[0]
+	}
+	healthHandler := health.NewHandler(deps)
 
 	router.GET("/health", healthHandler.Health)
 	router.GET("/ready", healthHandler.Ready)
@@ -449,12 +520,17 @@ type serviceAccountStore interface {
 // The second return value validates and atomically swaps the complete auth set on
 // SIGHUP. The third return value lists resources that must be shut down with the server.
 func buildProviderRegistry(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore, journals ...datastore.ResourceWatchJournal) (*auth.ProviderRegistry, *providerRegistryRuntime, []providerShutdowner, error) {
-	registry, shutdowns, err := constructProviderRegistry(cfg, store, log, revocations, journals...)
+	return buildProviderRegistryWithOPA(cfg, store, log, revocations, nil, journals...)
+}
+
+func buildProviderRegistryWithOPA(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore,
+	prepared *opa.Provider, journals ...datastore.ResourceWatchJournal) (*auth.ProviderRegistry, *providerRegistryRuntime, []providerShutdowner, error) {
+	registry, shutdowns, err := constructProviderRegistryWithOPA(cfg, store, log, revocations, prepared, journals...)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	runtime := &providerRegistryRuntime{
-		cfg: cfg, store: store, log: log, revocations: revocations, registry: registry, shutdowns: shutdowns,
+		cfg: cfg, store: store, log: log, revocations: revocations, registry: registry, shutdowns: shutdowns, preparedOPA: prepared,
 	}
 	if len(journals) > 0 {
 		runtime.journal = journals[0]
@@ -474,6 +550,7 @@ type providerRegistryRuntime struct {
 	journal               datastore.ResourceWatchJournal
 	invalidateConnections func()
 	sendInvitation        func(context.Context, *auth.UserProfile, string) error
+	preparedOPA           *opa.Provider
 }
 
 func (r *providerRegistryRuntime) setInvalidationHandler(handler func()) {
@@ -520,7 +597,12 @@ func (r *providerRegistryRuntime) Reload() (err error) {
 	if r.closed {
 		return errors.New("auth provider registry is closed")
 	}
-	newRegistry, newShutdowns, err := constructProviderRegistry(r.cfg, r.store, r.log, r.revocations, r.journal)
+	current := r.registry.AuthZ()
+	if current != nil && current.Name() != r.cfg.Api.Auth.AuthZ.Provider &&
+		(current.Name() == "opa" || r.cfg.Api.Auth.AuthZ.Provider == "opa") {
+		return errors.New("changing the opa authz provider requires a controlled restart with write freeze and traffic drain")
+	}
+	newRegistry, newShutdowns, err := constructProviderRegistryWithOPA(r.cfg, r.store, r.log, r.revocations, r.preparedOPA, r.journal)
 	if err != nil {
 		return err
 	}
@@ -556,7 +638,11 @@ func (r *providerRegistryRuntime) Shutdown() {
 	}
 }
 
-func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore, journals ...datastore.ResourceWatchJournal) (*auth.ProviderRegistry, []providerShutdowner, error) {
+func constructProviderRegistryWithOPA(cfg *config.Config, store serviceAccountStore, log *zap.Logger, revocations staticusers.RevocationStore,
+	prepared *opa.Provider, journals ...datastore.ResourceWatchJournal) (*auth.ProviderRegistry, []providerShutdowner, error) {
+	if err := cfg.Api.Auth.OPA.ValidateProvider(cfg.Api.Auth.AuthZ.Provider); err != nil {
+		return nil, nil, err
+	}
 	// Build AuthN providers in chain order.
 	chain := cfg.Api.Auth.AuthN.Chain
 	if len(chain) == 0 {
@@ -627,6 +713,12 @@ func constructProviderRegistry(cfg *config.Config, store serviceAccountStore, lo
 		rbacProvider = p
 	case "allow-all":
 		authzProvider = allowall.New(log)
+	case "opa":
+		if prepared == nil {
+			cleanup()
+			return nil, nil, errors.New("opa authz provider is unavailable: initialized runtime is required")
+		}
+		authzProvider = prepared
 	default:
 		cleanup()
 		return nil, nil, fmt.Errorf("unknown authz provider %q", cfg.Api.Auth.AuthZ.Provider)

@@ -9,9 +9,11 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,14 +31,177 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
+	rbaccontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/rbac"
 	repositorycontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/repository"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/secret"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gitstore-dev/gitstore/secretmaterial"
 	"github.com/stretchr/testify/require"
+	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb/opt"
 	"go.uber.org/zap"
 )
+
+func TestRBACNativeProcess(t *testing.T) {
+	path := os.Getenv("GITSTORE_RBAC_NATIVE_TEST_CONFIG")
+	if path == "" {
+		t.Skip("owned native RBAC process fixture not selected")
+	}
+	require.Equal(t, "1", os.Getenv("GITSTORE_RBAC_NATIVE_TEST_OWNED"), "explicit ownership acknowledgement is required")
+	args := os.Args
+	os.Args = []string{"owned-rbac-controller", "--config-file", path}
+	defer func() { os.Args = args }()
+	run(true)
+	if receipt := os.Getenv("GITSTORE_RBAC_NATIVE_TEST_CHECKPOINT_RECEIPT"); receipt != "" {
+		dir := os.Getenv("GITSTORE_CONTROLLER__CHECKPOINT__DIR")
+		require.True(t, filepath.IsAbs(dir))
+		db, err := leveldb.OpenFile(filepath.Join(dir, "Namespace.disk-v2"), &opt.Options{ReadOnly: true})
+		require.NoError(t, err, "inspect only after the process has closed its checkpoint writer")
+		defer func() { require.NoError(t, db.Close()) }()
+		schema, err := db.Get([]byte("schema"), nil)
+		require.NoError(t, err)
+		require.Equal(t, "2", string(schema))
+		state := make(map[string]any)
+		for _, key := range []string{"active", "generation", "staging"} {
+			value, err := db.Get([]byte(key), nil)
+			if errors.Is(err, leveldb.ErrNotFound) {
+				state[key] = uint64(0)
+				continue
+			}
+			require.NoError(t, err)
+			require.Len(t, value, 8)
+			state[key] = binary.BigEndian.Uint64(value)
+		}
+		cursor, err := db.Get([]byte("cursor"), nil)
+		require.NoError(t, err)
+		state["hasCursor"] = len(cursor) > 0
+		data, err := json.Marshal(state)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(receipt, data, 0600))
+	}
+}
+
+func TestRBACPrimaryGroupPersistsWorkAcrossIndependentReplicaReplacement(t *testing.T) {
+	for replica := range 2 {
+		t.Run(fmt.Sprintf("replica-%d", replica), func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := &config.Config{Controller: config.ControllerConfig{Checkpoint: config.CheckpointConfig{Dir: dir}}}
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			mgr := manager.New()
+			var runners sync.WaitGroup
+			client := graphqlclient.New("http://unused.invalid/admin/graphql", graphqlclient.NewStaticToken("enrolled"))
+			closeStores, err := registerDiskControllersWithRBAC(ctx, &runners, mgr, cfg, zap.NewNop(), client, true)
+			require.NoError(t, err)
+			runners.Wait()
+			for _, kind := range []string{"Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding", rbaccontroller.NamespaceCleanupWorkKind} {
+				namespace := ""
+				if kind == "Role" || kind == "RoleBinding" {
+					namespace = "shop"
+				}
+				key := types.WorkItemKey{Kind: kind, Namespace: namespace, Name: "pending"}
+				require.True(t, mgr.KindStats()[kind].Registered)
+				require.NoError(t, mgr.Enqueue(key))
+			}
+			require.NoError(t, closeStores())
+			for _, kind := range []string{"Role", "RoleBinding", "ClusterRole", "ClusterRoleBinding", rbaccontroller.NamespaceCleanupWorkKind} {
+				store, err := checkpoint.OpenDiskStore(dir, kind)
+				require.NoError(t, err)
+				work, err := store.Pending(t.Context(), "", 10)
+				require.NoError(t, err)
+				require.Len(t, work, 1)
+				require.Equal(t, kind, work[0].Key.Kind)
+				if kind == rbaccontroller.NamespaceCleanupWorkKind {
+					progressed, err := store.ProcessFanout(t.Context())
+					require.NoError(t, err, "an idle work-only poller must not require a resource snapshot")
+					require.False(t, progressed)
+				}
+				require.NoError(t, store.Close())
+			}
+		})
+	}
+}
+
+type ownerCatchupSource struct {
+	pages [][]namespacecontroller.Namespace
+	lists atomic.Int64
+}
+
+func (*ownerCatchupSource) List(context.Context) (listwatch.ListResponse[namespacecontroller.Namespace], error) {
+	return listwatch.ListResponse[namespacecontroller.Namespace]{}, errors.New("owner catch-up must use streaming pages")
+}
+
+func (s *ownerCatchupSource) ListPages(_ context.Context, visit func([]namespacecontroller.Namespace) error) (string, error) {
+	s.lists.Add(1)
+	for _, page := range s.pages {
+		if err := visit(page); err != nil {
+			return "", err
+		}
+	}
+	return "rwv1:test:1", nil
+}
+
+type ownerCatchupWatch struct {
+	events chan listwatch.WatchEvent[namespacecontroller.Namespace]
+}
+
+func (w *ownerCatchupWatch) Events() <-chan listwatch.WatchEvent[namespacecontroller.Namespace] {
+	return w.events
+}
+func (*ownerCatchupWatch) Err() error { return nil }
+func (*ownerCatchupWatch) Stop()      {}
+
+func (*ownerCatchupSource) Watch(context.Context, string) (listwatch.Watcher[namespacecontroller.Namespace], error) {
+	watch := &ownerCatchupWatch{events: make(chan listwatch.WatchEvent[namespacecontroller.Namespace], 1)}
+	watch.events <- listwatch.WatchEvent[namespacecontroller.Namespace]{Type: listwatch.Bookmark, ResourceVersion: "rwv1:test:2"}
+	return watch, nil
+}
+
+func TestExistingUSERNamespaceCatchupPagesAndPendingWorkSurviveReplacement(t *testing.T) {
+	for range 2 {
+		root := t.TempDir()
+		source := &ownerCatchupSource{pages: [][]namespacecontroller.Namespace{
+			{{UID: "namespace-alice", Name: "alice", Tier: "USER", OwnerKind: "USER", OwnerSubject: "staff-subject-alice", ResourceVersion: "1"}},
+			{{UID: "namespace-bob", Name: "bob", Tier: "USER", OwnerKind: "USER", OwnerSubject: "staff-subject-bob", ResourceVersion: "1"}},
+		}}
+		for range 2 {
+			store, err := checkpoint.OpenDiskStore(root, "Namespace")
+			require.NoError(t, err)
+			ctx, cancel := context.WithCancel(t.Context())
+			runner := newDiskRunner("Namespace", source, store, &config.Config{}, zap.NewNop(),
+				func(namespace namespacecontroller.Namespace) types.WorkItemKey {
+					return types.WorkItemKey{Kind: "Namespace", Name: namespace.Name}
+				}, func(namespace namespacecontroller.Namespace) string { return namespace.ResourceVersion })
+			done := make(chan error, 1)
+			go func() { defer close(done); done <- runner.Run(ctx) }()
+			t.Cleanup(func() { cancel(); <-done; _ = store.Close() })
+			require.Eventually(t, func() bool {
+				return runner.Cache.HasSynced() && !runner.Cache.RecoveryState().Recovering
+			}, 5*time.Second, time.Millisecond)
+			work, err := store.Pending(t.Context(), "", 10)
+			require.NoError(t, err)
+			require.Len(t, work, 2, "cold migration work cannot disappear before owner provisioning succeeds")
+			for _, pending := range work {
+				namespace, found, err := runner.Lookup(t.Context(), pending.Key)
+				require.NoError(t, err)
+				require.True(t, found)
+				require.Equal(t, "USER", namespace.Tier)
+				require.Equal(t, "staff-subject-"+namespace.Name, namespace.OwnerSubject,
+					"persist the immutable subject, never replace it with a username")
+			}
+			require.EqualValues(t, 1, source.lists.Load(), "replacement resumes durable work without another full list")
+			cancel()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(5 * time.Second):
+				t.Fatal("catch-up runner did not stop before replacement")
+			}
+			require.NoError(t, store.Close())
+		}
+	}
+}
 
 func TestProductionRegistrationUsesDiskForEveryKind(t *testing.T) {
 	dir := t.TempDir()

@@ -129,6 +129,11 @@ type AdvancedReaderConfig struct {
 	// the size of the restriction window.
 	QueryTimeWindowSize time.Duration
 
+	// MaxEmptyQueryTimeWindowSize optionally widens historical empty-range
+	// probes. Nonempty ranges are reread using QueryTimeWindowSize before
+	// delivering changes. Zero disables probing.
+	MaxEmptyQueryTimeWindowSize time.Duration
+
 	// When the library starts for the first time it has to start consuming
 	// changes from some point in time. This parameter defines how far in the
 	// past it needs to look. If the value of the parameter is set to an hour,

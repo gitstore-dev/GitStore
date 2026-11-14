@@ -24,6 +24,13 @@ deployed fault evidence is tracked in [#451](https://github.com/gitstore-dev/Git
 Architectural acceptance is not capacity acceptance. `rbac-local` remains
 development/evaluation-only.
 
+**Amendment (2026-11-10, spec 066):** Section 16 records the implemented,
+production-gated Git-backed model and embedded OPA evaluator. It preserves
+this ADR's acceptance date, the provider contract and allow-only vocabulary.
+Validation-start capture deliberately does not implement a global
+authorization fence. Replica/rolling, capacity and rollout acceptance remain
+separate gates; this amendment does not enable production OPA.
+
 ## Decision
 
 ### 1. Preserve the provider contract
@@ -89,7 +96,9 @@ resource-version guards remain independent requirements.
 
 `ClusterRoleBinding` reaches cluster and namespaced resources. A
 `RoleBinding` requires a namespace and may reference `Role` or
-`ClusterRole`, confined to that namespace. Role definitions have no namespace.
+`ClusterRole`, confined to that namespace. Static configuration role definitions
+have no namespace; Git-backed Role resource envelopes carry their Namespace
+identity as described in section 16.
 Cluster-scoped kinds (`namespace`, `serviceAccount`) require cluster bindings;
 scope comes from the catalog, not the presence of a namespace attribute.
 
@@ -329,6 +338,69 @@ wildcard non-expansion, collision/name-reuse rejection, and sustained admission
 and reconciliation load. The first implementation must specify shared revision
 storage and activation barriers before claiming replica consistency.
 
+### 16. Git-backed RBAC and embedded OPA
+
+The four provider-neutral kinds are `Role`, `ClusterRole`, `RoleBinding` and
+`ClusterRoleBinding` in `rbac.authorization.gitstore.dev/v1beta1`. Namespaced
+resources belong to an immutable Namespace UID and its system repository;
+cluster resources belong to the root system repository. Fixed canonical
+manifest paths, whole-candidate admission and expected Git OIDs protect both
+pushes and GraphQL writes. Git is authoritative; atomic Scylla/memdb tiers,
+projection receipts and bounded repair are derived state. A committed write
+with a failed projection is not a Git rollback.
+
+The embedded `opa` provider prepares release-owned Rego once and evaluates
+bounded immutable data indexes locally. It accepts no operator Rego, remote
+bundle or sidecar, and performs no datastore, UserDir or network reads per
+ordinary decision. Missing, stale, partial or cursorless snapshots fail closed
+before privileged-identity shortcuts. Decisions carry their evaluated tier
+revisions and catalog/built-in digests, not whichever publication happens to
+be current at logging time. Namespace name reuse cannot select an old UID's
+grants. Static providers remain independent; their grants are never merged.
+
+Writes and reviews capture authoritative snapshots current at validation
+start, within bounded retries/deadlines. The tier vector is not globally
+atomic. An authorized write may finish after a concurrent cross-repository
+revocation; a new candidate or conflict retry must capture authority again.
+There is no global commit fence or distributed Git intent protocol. A
+candidate cannot authorize itself. When unconditional full permission
+coverage cannot be proved, bind/escalate must be granted explicitly; an
+absent role target requires bind.
+
+Release-owned roles/system bindings are immutable virtual resources with
+deterministic identities and release digests. Initial administrator bootstrap
+instead creates one ordinary removable binding and a durable once-only root
+receipt; removal must survive restart. The enrolled primary lifecycle group
+resolves role UIDs through durable acquire-before-publish claims and
+UID/resourceVersion CAS, not name-only attachment. Namespace owner links are
+non-blocking; role owner links block final removal while bindings reference
+that UID. Terminating resources stop granting before finalization.
+
+Live Staff USER namespace owners receive only the verified deterministic
+`namespace-owner-access` template referencing `namespace-full-control`.
+The subject is the trusted immutable owner subject, not a substituted username.
+Owners and administrators cannot replace or remove this managed template;
+ordinary collisions fail closed. Namespace removal first persists a UID-bound
+cleanup handoff, then proceeds independently of child finalization. Bounded
+background cleanup is not general orphan sweeping or Git object GC.
+
+Admin `accessReview` adapts a transient SubjectAccessReview, with independently
+authorized reviewer and target, strict trusted membership when groups are
+omitted, explicit hypothetical inputs and exact evaluated revision identities.
+It adds no SelfSubjectAccessReview or durable resource lifecycle. Opt-in
+resource source diagnostics use bounded signed first-parent history at the
+admitted revision; Git authors are metadata, not authenticated actors. Virtual
+built-ins identify their release definition instead.
+
+Production OPA construction remains refused pending deployed functional,
+replica/rolling, bootstrap, load/fault and large-catalog acceptance. Provider
+cutover requires grant parity, write freeze, traffic drain and snapshot-ready
+admission; stale static rollback is unsafe. ADR 0018 remains Proposed: this
+scoped UID/CAS/claim coordination implements neither platform-wide controller
+leases nor external side-effect fencing. A future implementation of that core
+requires its own explicit status-flip/index task. Git remains singleton-only
+with non-overlapping replacement and retained storage.
+
 ## Consequences
 
 - One closed vocabulary is shared by policy, API, Git service and tooling.
@@ -336,8 +408,9 @@ storage and activation barriers before claiming replica consistency.
   missing facts fail closed.
 - Operators update policy/configuration/enrollment together. No mixed-version
   compatibility promise or automatic data conversion is provided.
-- Production OPA/ReBAC, persisted IAM entities, group-directory sourcing,
-  GraphQL directives and Admin/Storefront splitting remain out of scope.
+- Production OPA activation, ReBAC, generic IAM entities, GraphQL directives
+  and publication-aware Storefront query plans remain outside this amendment.
+  The gated RBAC resource implementation is not acceptance of those proposals.
 - Architectural acceptance does not establish capacity acceptance; #451 retains
   the sustained-load and deployed replacement/fault requirements.
 

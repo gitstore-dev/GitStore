@@ -2759,7 +2759,7 @@ func (s *scyllaDatastore) UpdateNamespace(ctx context.Context, ns *datastore.Nam
 		(current.DeletionTimestamp != nil && ns.DeletionTimestamp == nil) {
 		return datastore.ErrConflict
 	}
-	ns.Status, err = datastore.MergeInfrastructureStatus(current.Status, ns.Status)
+	ns.Status, err = datastore.MergeNamespaceInfrastructureStatus(current, ns)
 	if err != nil {
 		return err
 	}
@@ -2935,20 +2935,8 @@ func (s *scyllaDatastore) DeleteNamespaceWithResourceVersion(ctx context.Context
 	if blocked {
 		return datastore.ErrNamespaceNotEmpty
 	}
-	// Retain the intent/finalizer until cleanup succeeds. On an ordinary
-	// failure restore list visibility so another controller can resume.
-	restore := func() error {
-		restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), namespaceProjectionCleanupTimeout)
-		defer cancel()
-		err := s.session.Query("INSERT INTO namespaces_by_bucket (bucket,creation_timestamp,uid) VALUES (?,?,?)", nil).
-			WithContext(restoreCtx).Bind(namespaceBucket(ns.CreationTimestamp), ns.CreationTimestamp, mustParseUUID(uidString)).ExecRelease()
-		_, nameErr := s.session.Query("INSERT INTO namespaces_by_name (name,uid) VALUES (?,?) IF NOT EXISTS", nil).
-			WithContext(restoreCtx).Bind(ns.Name, mustParseUUID(uidString)).ExecCASRelease()
-		return errors.Join(err, nameErr)
-	}
-	if err := s.deleteNamespaceIndexes(ctx, ns); err != nil {
-		return errors.Join(err, restore())
-	}
+	// A losing controller must never restore indexes after a peer commits the
+	// delete. Commit the UID CAS first; CDC resumes interrupted index cleanup.
 	const statement = "DELETE FROM namespaces_by_uid WHERE uid=? IF resource_version=?"
 	applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(
 		mustParseUUID(uidString), expectedResourceVersion,
@@ -2960,14 +2948,14 @@ func (s *scyllaDatastore) DeleteNamespaceWithResourceVersion(ctx context.Context
 			return resolveErr
 		}
 		if !committed {
-			return errors.Join(primary, restore())
+			return primary
 		}
-		return nil
+		return s.completeNamespaceDeleteCleanup(ctx, ns)
 	}
 	if !applied {
-		return errors.Join(datastore.ErrConflict, restore())
+		return datastore.ErrConflict
 	}
-	return nil
+	return s.completeNamespaceDeleteCleanup(ctx, ns)
 }
 
 func (s *scyllaDatastore) resolveNamespaceDeleteCommit(

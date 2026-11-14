@@ -65,6 +65,9 @@ const (
 	ResourceWatchModified ResourceWatchEventType = "MODIFIED"
 	ResourceWatchDeleted  ResourceWatchEventType = "DELETED"
 	ResourceWatchBookmark ResourceWatchEventType = "BOOKMARK"
+	// ResourceWatchProgress is internal source progress, not an API resource.
+	// Public subscribers project it to an opaque, payload-free bookmark.
+	ResourceWatchProgress ResourceWatchEventType = "PROGRESS"
 )
 
 // ResourceWatchCursor identifies one ordered event inside a journal epoch.
@@ -75,8 +78,9 @@ type ResourceWatchCursor struct {
 }
 
 // ResourceWatchEvent is the backend-neutral durable journal record. Payload
-// is a full committed resource postimage for ADDED/MODIFIED and nil for
-// DELETED/BOOKMARK. SelectorLabels preserves the postimage labels (or the
+// is a full committed resource postimage for ADDED/MODIFIED, source-supplied
+// identity for DELETED, internal progress for PROGRESS and nil for BOOKMARK.
+// SelectorLabels preserves the postimage labels (or the
 // last-known labels for DELETED), while PreviousSelectorLabels preserves the
 // MODIFIED preimage labels. Together they let filtered watches express a
 // resource entering or leaving a selector without exposing deleted payloads.

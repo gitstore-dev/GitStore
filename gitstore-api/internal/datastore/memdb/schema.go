@@ -44,6 +44,40 @@ func (index repositoryNamespaceOrderIndex) PrefixFromArgs(args ...interface{}) (
 
 var schema = &memdb.DBSchema{
 	Tables: map[string]*memdb.TableSchema{
+		"rbac_namespace_cleanup": {
+			Name: "rbac_namespace_cleanup",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {Name: "id", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "ID"}},
+			},
+		},
+		"rbac_resource": {
+			Name: "rbac_resource",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id":       {Name: "id", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "ID"}},
+				"uid":      {Name: "uid", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "UID"}},
+				"tier":     {Name: "tier", Indexer: &memdb.StringFieldIndex{Field: "TierID"}},
+				"role_uid": optionalStringIndex("role_uid", "RoleUID"),
+			},
+		},
+		"rbac_tier": {
+			Name: "rbac_tier",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {Name: "id", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "TierID"}},
+			},
+		},
+		"rbac_guard": {
+			Name: "rbac_guard",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {Name: "id", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "RoleUID"}},
+			},
+		},
+		"rbac_claim": {
+			Name: "rbac_claim",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id":       {Name: "id", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "ID"}},
+				"role_uid": {Name: "role_uid", Indexer: &memdb.StringFieldIndex{Field: "RoleUID"}},
+			},
+		},
 		"product": resourceTableSchema("product", map[string]*memdb.IndexSchema{
 			"repository_id": optionalStringIndex("repository_id", "RepositoryID"),
 		}),

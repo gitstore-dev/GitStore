@@ -95,6 +95,17 @@ provider = "static-users"
 [api.auth.rbac_local]
 policy_file = "/etc/gitstore/policy.yaml"
 
+[api.auth.opa]
+writes_enabled = false
+initial_admin_subject = ""
+max_staleness = "5s"
+validation_timeout = "30s"
+rebuild_workers = 4
+dirty_queue_capacity = 1024 # Maximum distinct dirty-tier entries, not bytes.
+snapshot_retries = 3
+snapshot_memory_size = "512MiB"
+rebuild_memory_size = "64MiB"
+
 [controller]
 port = 5001
 api_uri = "http://api:4000/admin/graphql"

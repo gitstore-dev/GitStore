@@ -564,6 +564,272 @@
       "verb": "update"
     },
     {
+      "action": "role.create",
+      "kind": "role",
+      "scope": "namespace",
+      "resource": "role",
+      "verb": "create"
+    },
+    {
+      "action": "role.read",
+      "kind": "role",
+      "scope": "namespace",
+      "resource": "role",
+      "verb": "read"
+    },
+    {
+      "action": "role.list",
+      "kind": "role",
+      "scope": "namespace",
+      "resource": "role",
+      "verb": "list"
+    },
+    {
+      "action": "role.watch",
+      "kind": "role",
+      "scope": "namespace",
+      "resource": "role",
+      "verb": "watch"
+    },
+    {
+      "action": "role.update",
+      "kind": "role",
+      "scope": "namespace",
+      "resource": "role",
+      "verb": "update"
+    },
+    {
+      "action": "role.delete",
+      "kind": "role",
+      "scope": "namespace",
+      "resource": "role",
+      "verb": "delete"
+    },
+    {
+      "action": "role.purge",
+      "kind": "role",
+      "scope": "namespace",
+      "resource": "role",
+      "verb": "purge"
+    },
+    {
+      "action": "role.status.write",
+      "kind": "role",
+      "scope": "namespace",
+      "resource": "role/status",
+      "verb": "write"
+    },
+    {
+      "action": "role.escalate",
+      "kind": "role",
+      "scope": "namespace",
+      "resource": "role",
+      "verb": "escalate"
+    },
+    {
+      "action": "role.access-review.create",
+      "kind": "role",
+      "scope": "namespace",
+      "resource": "role/access-review",
+      "verb": "create"
+    },
+    {
+      "action": "roleBinding.create",
+      "kind": "roleBinding",
+      "scope": "namespace",
+      "resource": "roleBinding",
+      "verb": "create"
+    },
+    {
+      "action": "roleBinding.read",
+      "kind": "roleBinding",
+      "scope": "namespace",
+      "resource": "roleBinding",
+      "verb": "read"
+    },
+    {
+      "action": "roleBinding.list",
+      "kind": "roleBinding",
+      "scope": "namespace",
+      "resource": "roleBinding",
+      "verb": "list"
+    },
+    {
+      "action": "roleBinding.watch",
+      "kind": "roleBinding",
+      "scope": "namespace",
+      "resource": "roleBinding",
+      "verb": "watch"
+    },
+    {
+      "action": "roleBinding.update",
+      "kind": "roleBinding",
+      "scope": "namespace",
+      "resource": "roleBinding",
+      "verb": "update"
+    },
+    {
+      "action": "roleBinding.delete",
+      "kind": "roleBinding",
+      "scope": "namespace",
+      "resource": "roleBinding",
+      "verb": "delete"
+    },
+    {
+      "action": "roleBinding.purge",
+      "kind": "roleBinding",
+      "scope": "namespace",
+      "resource": "roleBinding",
+      "verb": "purge"
+    },
+    {
+      "action": "roleBinding.status.write",
+      "kind": "roleBinding",
+      "scope": "namespace",
+      "resource": "roleBinding/status",
+      "verb": "write"
+    },
+    {
+      "action": "roleBinding.bind",
+      "kind": "roleBinding",
+      "scope": "namespace",
+      "resource": "roleBinding",
+      "verb": "bind"
+    },
+    {
+      "action": "clusterRole.create",
+      "kind": "clusterRole",
+      "scope": "cluster",
+      "resource": "clusterRole",
+      "verb": "create"
+    },
+    {
+      "action": "clusterRole.read",
+      "kind": "clusterRole",
+      "scope": "cluster",
+      "resource": "clusterRole",
+      "verb": "read"
+    },
+    {
+      "action": "clusterRole.list",
+      "kind": "clusterRole",
+      "scope": "cluster",
+      "resource": "clusterRole",
+      "verb": "list"
+    },
+    {
+      "action": "clusterRole.watch",
+      "kind": "clusterRole",
+      "scope": "cluster",
+      "resource": "clusterRole",
+      "verb": "watch"
+    },
+    {
+      "action": "clusterRole.update",
+      "kind": "clusterRole",
+      "scope": "cluster",
+      "resource": "clusterRole",
+      "verb": "update"
+    },
+    {
+      "action": "clusterRole.delete",
+      "kind": "clusterRole",
+      "scope": "cluster",
+      "resource": "clusterRole",
+      "verb": "delete"
+    },
+    {
+      "action": "clusterRole.purge",
+      "kind": "clusterRole",
+      "scope": "cluster",
+      "resource": "clusterRole",
+      "verb": "purge"
+    },
+    {
+      "action": "clusterRole.status.write",
+      "kind": "clusterRole",
+      "scope": "cluster",
+      "resource": "clusterRole/status",
+      "verb": "write"
+    },
+    {
+      "action": "clusterRole.escalate",
+      "kind": "clusterRole",
+      "scope": "cluster",
+      "resource": "clusterRole",
+      "verb": "escalate"
+    },
+    {
+      "action": "clusterRole.access-review.create",
+      "kind": "clusterRole",
+      "scope": "cluster",
+      "resource": "clusterRole/access-review",
+      "verb": "create"
+    },
+    {
+      "action": "clusterRoleBinding.create",
+      "kind": "clusterRoleBinding",
+      "scope": "cluster",
+      "resource": "clusterRoleBinding",
+      "verb": "create"
+    },
+    {
+      "action": "clusterRoleBinding.read",
+      "kind": "clusterRoleBinding",
+      "scope": "cluster",
+      "resource": "clusterRoleBinding",
+      "verb": "read"
+    },
+    {
+      "action": "clusterRoleBinding.list",
+      "kind": "clusterRoleBinding",
+      "scope": "cluster",
+      "resource": "clusterRoleBinding",
+      "verb": "list"
+    },
+    {
+      "action": "clusterRoleBinding.watch",
+      "kind": "clusterRoleBinding",
+      "scope": "cluster",
+      "resource": "clusterRoleBinding",
+      "verb": "watch"
+    },
+    {
+      "action": "clusterRoleBinding.update",
+      "kind": "clusterRoleBinding",
+      "scope": "cluster",
+      "resource": "clusterRoleBinding",
+      "verb": "update"
+    },
+    {
+      "action": "clusterRoleBinding.delete",
+      "kind": "clusterRoleBinding",
+      "scope": "cluster",
+      "resource": "clusterRoleBinding",
+      "verb": "delete"
+    },
+    {
+      "action": "clusterRoleBinding.purge",
+      "kind": "clusterRoleBinding",
+      "scope": "cluster",
+      "resource": "clusterRoleBinding",
+      "verb": "purge"
+    },
+    {
+      "action": "clusterRoleBinding.status.write",
+      "kind": "clusterRoleBinding",
+      "scope": "cluster",
+      "resource": "clusterRoleBinding/status",
+      "verb": "write"
+    },
+    {
+      "action": "clusterRoleBinding.bind",
+      "kind": "clusterRoleBinding",
+      "scope": "cluster",
+      "resource": "clusterRoleBinding",
+      "verb": "bind"
+    },
+    {
       "action": "workflow.definition.manage",
       "kind": "workflow",
       "scope": "namespace",

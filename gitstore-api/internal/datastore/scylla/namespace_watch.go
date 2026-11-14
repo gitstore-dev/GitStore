@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -795,6 +796,52 @@ func (s *scyllaDatastore) SaveProgress(ctx context.Context, lease datastore.Name
 	}
 	if !applied {
 		return datastore.ErrStaleWatchLease
+	}
+	return nil
+}
+
+func (s *scyllaDatastore) saveCDCProgressBatch(ctx context.Context, lease datastore.ResourceWatchLease, source string, progress map[string]gocql.UUID) error {
+	keys := slices.Sorted(maps.Keys(progress))
+	for len(keys) > 0 {
+		batch := s.session.Batch(gocql.LoggedBatch)
+		size, count := 0, 0
+		for count < len(keys) && count < namespaceWatchBatchMaxStatements {
+			key := keys[count]
+			if key == "" || len(key) > 1024 {
+				return fmt.Errorf("invalid CDC checkpoint key")
+			}
+			if source != "" && source != "Namespace" {
+				key = source + ":" + key
+			}
+			entryBytes := len(key) + 128
+			if size+entryBytes > namespaceWatchBatchMaxBytes {
+				break
+			}
+			point := progress[keys[count]]
+			statement := "UPDATE resource_watch_clock USING TTL ? SET position=?,progress_update_timestamp=? WHERE journal=? AND stream_id=?"
+			values := []any{namespaceCDCProgressTTLSeconds, point.Bytes(), point.Time().UTC(), namespaceWatchJournalName, key}
+			if count == 0 {
+				statement += " IF lease_holder=? AND fencing_token=? AND lease_expiration_timestamp>?"
+				values = append(values, lease.Holder, int64(lease.FencingToken), time.Now().UTC())
+			}
+			batch.Query(statement, values...)
+			size += entryBytes
+			count++
+		}
+		batch.Batch = batch.Batch.WithContext(ctx)
+		applied, iter, err := s.session.MapExecuteBatchCAS(batch, make(map[string]any))
+		if iter != nil {
+			if closeErr := iter.Close(); err == nil {
+				err = closeErr
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("scylla: save CDC checkpoint batch: %w", err)
+		}
+		if !applied {
+			return datastore.ErrStaleWatchLease
+		}
+		keys = keys[count:]
 	}
 	return nil
 }

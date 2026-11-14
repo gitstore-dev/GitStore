@@ -11,13 +11,17 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
 
 // ErrNotSupported is returned by providers for operations they do not implement.
 var ErrNotSupported = errors.New("auth: operation not supported by this provider")
+var ErrAuthorizationUnavailable = errors.New("auth: authorization snapshot unavailable")
 
 var ErrProfileNotFound = errors.New("auth: directory profile not found")
 var ErrDirectoryUnavailable = errors.New("auth: directory unavailable")
@@ -143,7 +147,8 @@ type Decision struct {
 	At        time.Time `json:"at"`
 	Provider  string    `json:"provider"`
 	// PolicyDigest identifies the immutable policy used, not a later snapshot.
-	PolicyDigest string `json:"policy_digest,omitempty"`
+	PolicyDigest          string                 `json:"policy_digest,omitempty"`
+	AuthorizationSnapshot *AuthorizationSnapshot `json:"authorization_snapshot,omitempty"`
 }
 
 func Allow(provider, reason string) Decision {
@@ -229,6 +234,135 @@ type AuthZProvider interface {
 	Name() string
 	// Authorize returns Allow or Deny for a registered action, e.g. "namespace.delete".
 	Authorize(ctx context.Context, p *Principal, action string, res ResourceContext) (Decision, error)
+}
+
+// AuthorizationModel contains authoritative validation-start data, never an
+// ordinary serving-cache hint. Providers must validate and privately own the
+// selected data before returning an evaluation.
+type AuthorizationModel struct {
+	ModelVersion string
+	Cluster      AuthorizationTier
+	Namespace    *AuthorizationTier
+}
+
+type AuthorizationTier struct {
+	Namespace        string
+	NamespaceVersion string
+	Active           bool
+	State            datastore.RBACTierState
+	CatalogDigest    string
+	BuiltinDigest    string
+	ContentDigest    string
+	Resources        []*datastore.RBACResource
+}
+
+// PinnedAuthorization cannot switch models or perform source I/O. Close is
+// idempotent and releases the evaluation's accounted model memory.
+type PinnedAuthorization interface {
+	AuthZProvider
+	AuthorizationSnapshotProvider
+	Close()
+}
+
+type AuthorizationPinProvider interface {
+	PinAuthorization(context.Context, AuthorizationModel) (PinnedAuthorization, error)
+}
+
+type servingCaptureKey struct{}
+
+// ServingAuthorizationCapture retains one field's first complete serving model,
+// not an authoritative validation model or authority for another namespace.
+type ServingAuthorizationCapture struct {
+	mu         sync.Mutex
+	provider   AuthZProvider
+	evaluation PinnedAuthorization
+	namespace  string
+	closed     bool
+}
+
+func ContextWithServingAuthorizationCapture(ctx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	capture := &ServingAuthorizationCapture{}
+	return context.WithValue(ctx, servingCaptureKey{}, capture), func() {
+		cancel()
+		capture.mu.Lock()
+		defer capture.mu.Unlock()
+		capture.closed = true
+		if capture.evaluation != nil {
+			capture.evaluation.Close()
+		}
+	}
+}
+
+func ServingAuthorizationCaptureFromContext(ctx context.Context) *ServingAuthorizationCapture {
+	capture, _ := ctx.Value(servingCaptureKey{}).(*ServingAuthorizationCapture)
+	return capture
+}
+
+func (c *ServingAuthorizationCapture) Authorize(ctx context.Context, provider AuthZProvider,
+	principal *Principal, action string, resource ResourceContext,
+	pin func() (PinnedAuthorization, error)) (Decision, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return Decision{}, err
+	}
+	namespace, _ := resource.Attrs["namespace"].(string)
+	if namespace == "gitstore-system" {
+		namespace = ""
+	}
+	if c.closed || c.evaluation != nil && (c.provider != provider || namespace != "" && namespace != c.namespace) {
+		return Deny(provider.Name(), "captured scope unavailable"), ErrAuthorizationUnavailable
+	}
+	if c.evaluation == nil {
+		evaluation, err := pin()
+		if err != nil {
+			if evaluation != nil {
+				evaluation.Close()
+			}
+			return Deny(provider.Name(), "capture unavailable"), err
+		}
+		if evaluation == nil {
+			return Deny(provider.Name(), "capture unavailable"), ErrAuthorizationUnavailable
+		}
+		c.provider, c.evaluation, c.namespace = provider, evaluation, namespace
+	}
+	return c.evaluation.Authorize(ctx, principal, action, resource)
+}
+
+// An empty namespace UID requests cluster-wide proof. Named-resource sets
+// must be supersets for every finite action; conditional caller grants are
+// not evidence of another subject's complete authority.
+type AuthorizationCoverageRequest struct {
+	NamespaceUID string
+	Namespace    string
+	Permissions  []AuthorizationPermission
+}
+
+type AuthorizationPermission struct {
+	Action        string
+	ResourceNames []string
+}
+
+type AuthorizationCoverage struct {
+	Covered      bool
+	Reason       string
+	PolicyDigest string
+}
+
+type AuthorizationCoverageProvider interface {
+	Covers(context.Context, *Principal, AuthorizationCoverageRequest) (AuthorizationCoverage, error)
+}
+
+type AuthorizationReadiness struct {
+	Ready  bool   `json:"ready"`
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// AuthorizationReadinessProvider reports bounded metadata without source I/O.
+type AuthorizationReadinessProvider interface {
+	AuthorizationReadiness(tierID string) (AuthorizationReadiness, bool)
 }
 
 // UserProfile is a provider-agnostic user record.

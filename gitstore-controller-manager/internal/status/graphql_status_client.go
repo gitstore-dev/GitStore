@@ -83,7 +83,7 @@ func toUpdateCategoryStatusInput(key types.WorkItemKey, patch *StatusPatch) (map
 		input["lastAppliedRevision"] = *patch.LastAppliedRevision
 	}
 	if patch.Conditions != nil {
-		input["conditions"] = toConditionInputs(patch.Conditions)
+		input["conditions"] = ToConditionInputs(patch.Conditions)
 	}
 	if patch.Resolved != nil {
 		var resolved map[string]any
@@ -95,7 +95,7 @@ func toUpdateCategoryStatusInput(key types.WorkItemKey, patch *StatusPatch) (map
 	return input, nil
 }
 
-func toConditionInputs(conditions []*Condition) []map[string]any {
+func ToConditionInputs(conditions []*Condition) []map[string]any {
 	out := make([]map[string]any, 0, len(conditions))
 	for _, c := range conditions {
 		out = append(out, map[string]any{

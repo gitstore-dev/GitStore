@@ -75,6 +75,161 @@ func (i *windowIterator) Close() error {
 	return i.closeErr
 }
 
+func TestStreamBatchCatchupProvesWiderEmptyWindows(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	start := gocql.MinTimeUUID(time.Now().Add(-24 * time.Hour))
+	consumer, quiet := &windowConsumer{}, &windowConsumer{}
+	reader := newStreamBatchReader(&ReaderConfig{
+		Logger: noLogger{}, ProgressManager: noProgressManager{},
+		ChangeConsumerFactory: windowFactory{string([]byte{1}): consumer, string([]byte{2}): quiet},
+		Advanced: AdvancedReaderConfig{
+			QueryTimeWindowSize: 30 * time.Second, MaxEmptyQueryTimeWindowSize: time.Hour,
+			ConfidenceWindowSize: time.Second,
+		},
+	}, start.Time().Add(-time.Hour), []StreamID{{1}, {2}}, "owned", "resources", start)
+	widths := []time.Duration{30 * time.Second, time.Minute, 2 * time.Minute, 4 * time.Minute,
+		8 * time.Minute, 16 * time.Minute, 32 * time.Minute, time.Hour, time.Hour}
+	var ends []gocql.UUID
+	reader.queryRangeFunc = func(begin, end gocql.UUID) (cdcIterator, error) {
+		index := len(ends)
+		if index >= len(widths) {
+			t.Fatal("reader failed to stop at the proved frontier")
+		}
+		if width := end.Time().Sub(begin.Time()); width != widths[index] {
+			t.Fatalf("query %d width = %s, want %s", index, width, widths[index])
+		}
+		if index > 0 && begin != ends[index-1] {
+			t.Fatal("empty-range catch-up skipped an unqueried interval")
+		}
+		ends = append(ends, end)
+		if len(ends) == len(widths) {
+			reader.close(end)
+		}
+		return &windowIterator{}, nil
+	}
+	if err := reader.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, current := range []*windowConsumer{consumer, quiet} {
+		if len(current.completed) != len(ends) || current.consumed != 0 {
+			t.Fatalf("unexpected empty-range delivery: completed=%d consumed=%d", len(current.completed), current.consumed)
+		}
+		for i, end := range ends {
+			if current.completed[i] != end {
+				t.Fatal("completion did not match a successfully closed empty query")
+			}
+		}
+	}
+}
+
+func TestStreamBatchCatchupDoesNotConsumeOrPublishUnprovedProbe(t *testing.T) {
+	for _, mode := range []string{"hot", "generation-hot", "query-error", "close-error"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			start := gocql.MinTimeUUID(time.Now().Add(-time.Hour))
+			firstEnd := gocql.MinTimeUUID(start.Time().Add(30 * time.Second))
+			fallbackEnd := gocql.MinTimeUUID(firstEnd.Time().Add(30 * time.Second))
+			generationEnd := gocql.MaxTimeUUID(firstEnd.Time().Add(15 * time.Second))
+			consumer := &windowConsumer{}
+			reader := newStreamBatchReader(&ReaderConfig{
+				Logger: noLogger{}, ProgressManager: noProgressManager{},
+				ChangeConsumerFactory: windowFactory{string([]byte{1}): consumer},
+				Advanced: AdvancedReaderConfig{
+					QueryTimeWindowSize: 30 * time.Second, MaxEmptyQueryTimeWindowSize: time.Hour,
+					ConfidenceWindowSize: time.Second, PostFailedQueryDelay: time.Hour, MaxPostFailedQueryDelay: time.Hour,
+				},
+			}, start.Time().Add(-time.Hour), []StreamID{{1}}, "owned", "resources", start)
+			queries := 0
+			reader.queryRangeFunc = func(begin, end gocql.UUID) (cdcIterator, error) {
+				queries++
+				if queries == 1 {
+					iter := &windowIterator{}
+					if mode == "generation-hot" {
+						iter.cancel = func() { reader.close(generationEnd) }
+					}
+					return iter, nil
+				}
+				if queries == 2 {
+					expected := gocql.MinTimeUUID(firstEnd.Time().Add(time.Minute))
+					if mode == "generation-hot" {
+						expected = generationEnd
+					}
+					if begin != firstEnd || end != expected {
+						t.Fatal("historical empty range was not followed by a wider probe")
+					}
+					if mode == "query-error" {
+						cancel()
+						return nil, errors.New("probe query failed")
+					}
+				} else if queries != 3 || begin != firstEnd || end != fallbackEnd {
+					t.Fatal("nonempty probe was not reread within the ordinary query bound")
+				}
+				iter := &windowIterator{
+					batch: cdcChangeBatchCols{streamID: []byte{1}, time: gocql.MinTimeUUID(firstEnd.Time().Add(time.Second))},
+					row:   &ChangeRow{cdcCols: cdcChangeRowCols{operation: int8(PostImage), endOfBatch: true}},
+				}
+				if mode == "close-error" {
+					iter.closeErr, iter.cancel = errors.New("probe close failed"), cancel
+				} else if queries == 3 && mode != "generation-hot" {
+					reader.close(end)
+				}
+				return iter, nil
+			}
+			err := reader.run(ctx)
+			if mode == "hot" || mode == "generation-hot" {
+				if err != nil || queries != 3 || consumer.consumed != 1 ||
+					len(consumer.completed) != 2 || consumer.completed[1] != fallbackEnd {
+					t.Fatalf("nonempty fallback: err=%v queries=%d consumed=%d completed=%v",
+						err, queries, consumer.consumed, consumer.completed)
+				}
+			} else if !errors.Is(err, context.Canceled) || queries != 2 || consumer.consumed != 0 ||
+				len(consumer.completed) != 1 || reader.perStreamProgress[string([]byte{1})] != firstEnd {
+				t.Fatalf("failed probe advanced progress: err=%v queries=%d consumed=%d completed=%v",
+					err, queries, consumer.consumed, consumer.completed)
+			}
+		})
+	}
+}
+
+func TestStreamBatchCatchupDoesNotPublishPastGenerationDiscoveredDuringProbe(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	start := gocql.MinTimeUUID(time.Now().Add(-time.Hour))
+	boundary := gocql.MaxTimeUUID(start.Time().Add(45 * time.Second))
+	consumer := &windowConsumer{}
+	reader := newStreamBatchReader(&ReaderConfig{
+		Logger: noLogger{}, ProgressManager: noProgressManager{},
+		ChangeConsumerFactory: windowFactory{string([]byte{1}): consumer},
+		Advanced: AdvancedReaderConfig{
+			QueryTimeWindowSize: 30 * time.Second, MaxEmptyQueryTimeWindowSize: time.Hour,
+			ConfidenceWindowSize: time.Second,
+		},
+	}, start.Time().Add(-time.Hour), []StreamID{{1}}, "owned", "resources", start)
+	queries := 0
+	reader.queryRangeFunc = func(_, end gocql.UUID) (cdcIterator, error) {
+		queries++
+		iter := &windowIterator{}
+		if queries == 2 {
+			if CompareTimeUUID(end, boundary) <= 0 {
+				t.Fatal("test did not probe beyond the newly discovered generation end")
+			}
+			iter.cancel = func() { reader.close(boundary) }
+		} else if queries > 2 {
+			t.Fatal("reader continued past the completed generation")
+		}
+		return iter, nil
+	}
+	if err := reader.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(consumer.completed) != 2 || consumer.completed[1] != boundary ||
+		reader.perStreamProgress[string([]byte{1})] != boundary {
+		t.Fatalf("probe acknowledged the next generation: %v", consumer.completed)
+	}
+}
+
 func TestStreamBatchPublishesOnlyCompletedQueryWindows(t *testing.T) {
 	for _, mode := range []string{"hot", "empty", "legacy-hot", "legacy-empty", "query-error", "iteration-error", "consumer-error", "completion-error"} {
 		t.Run(mode, func(t *testing.T) {

@@ -46,6 +46,7 @@ type PolicyCheck struct {
 	Name             string
 	Tier             datastore.NamespaceTier
 	Actor            string
+	Principal        *auth.Principal
 	Annotations      map[string]string
 	CapturePreflight bool
 }
@@ -82,7 +83,53 @@ func ValidateIdentity(check PolicyCheck, existing *datastore.Namespace) *Decisio
 		(existing != nil && (existing.Name != check.Name || existing.EffectiveOwnerSub() != owner)) {
 		return &Decision{Reason: ReasonUserNamespaceIdentity, Field: "metadata.name", Message: ErrUserNamespaceIdentity.Error()}
 	}
-	return nil
+	_, decision := OwnerIdentityAnnotations(check, existing)
+	return decision
+}
+
+// OwnerIdentityAnnotations preserves server-verified USER owner provenance when
+// authored manifests omit it. Only the authenticated owner can establish it.
+func OwnerIdentityAnnotations(check PolicyCheck, existing *datastore.Namespace) (map[string]string, *Decision) {
+	annotations := cloneStringMap(check.Annotations)
+	if check.Tier != datastore.NamespaceTierUser {
+		return annotations, nil
+	}
+	invalid := func() (map[string]string, *Decision) {
+		return nil, &Decision{Reason: ReasonUserNamespaceIdentity, Field: "metadata.annotations",
+			Message: "owner authentication annotations must match the verified owner and cannot be changed"}
+	}
+	owner := check.Actor
+	method, issuer := "", ""
+	if existing != nil {
+		owner = existing.EffectiveOwnerSub()
+		method = existing.Annotations[datastore.OwnerAuthMethodAnnotationKey]
+		issuer = existing.Annotations[datastore.OwnerIssuerAnnotationKey]
+		if (method == "") != (issuer == "") {
+			return invalid()
+		}
+	}
+	if method == "" {
+		principal := check.Principal
+		if auth.ValidTrustedPrincipal(principal) && principal.Subject == owner && check.Actor == owner &&
+			principal.AuthMethod != "none" && principal.Issuer != "" {
+			method, issuer = principal.AuthMethod, principal.Issuer
+		}
+	}
+	for key, expected := range map[string]string{
+		datastore.OwnerAuthMethodAnnotationKey: method,
+		datastore.OwnerIssuerAnnotationKey:     issuer,
+	} {
+		if value, present := check.Annotations[key]; present && (expected == "" || value != expected) {
+			return invalid()
+		}
+		if expected != "" {
+			if annotations == nil {
+				annotations = make(map[string]string, 2)
+			}
+			annotations[key] = expected
+		}
+	}
+	return annotations, nil
 }
 
 type PolicyEvaluator interface {
@@ -98,6 +145,7 @@ func NewPolicyEvaluator(store datastore.Datastore) PolicyEvaluator {
 }
 
 func (e *datastorePolicyEvaluator) Evaluate(ctx context.Context, check PolicyCheck) (*Decision, Preflight, error) {
+	check.Principal = auth.PrincipalFromContext(ctx)
 	preflight := Preflight{}
 	if check.CapturePreflight {
 		preflight.Captured = true
@@ -288,7 +336,12 @@ func ApplyManifestOrdered(
 				return nil, false, ErrNamespaceTerminating
 			}
 		}
-		if decision := ValidateIdentity(PolicyCheck{Name: name, Tier: tier, Actor: actor, Annotations: resource.Metadata.Annotations}, existing); decision != nil {
+		check := PolicyCheck{Name: name, Tier: tier, Actor: actor, Principal: auth.PrincipalFromContext(ctx), Annotations: resource.Metadata.Annotations}
+		if decision := ValidateIdentity(check, existing); decision != nil {
+			return nil, false, decision
+		}
+		annotations, decision := OwnerIdentityAnnotations(check, existing)
+		if decision != nil {
 			return nil, false, decision
 		}
 
@@ -304,7 +357,7 @@ func ApplyManifestOrdered(
 				Title:             resource.Spec.Title,
 				Tier:              tier,
 				Labels:            cloneStringMap(resource.Metadata.Labels),
-				Annotations:       cloneStringMap(resource.Metadata.Annotations),
+				Annotations:       annotations,
 				OwnerReferences:   ownerReferences,
 				Spec:              specJSON,
 				Body:              body,
@@ -329,7 +382,7 @@ func ApplyManifestOrdered(
 				!bytes.Equal(candidate.Spec, specJSON) ||
 				candidate.Body != body
 			metadataChanged := !stringMapsEqual(candidate.Labels, resource.Metadata.Labels) ||
-				!stringMapsEqual(candidate.Annotations, resource.Metadata.Annotations) ||
+				!stringMapsEqual(candidate.Annotations, annotations) ||
 				!bytes.Equal(candidate.OwnerReferences, ownerReferences)
 			provenanceChanged := candidate.Revision != revision ||
 				candidate.SourcePath != options.SourcePath ||
@@ -345,7 +398,7 @@ func ApplyManifestOrdered(
 			candidate.APIVersion = resource.APIVersion
 			candidate.Kind = resource.Kind
 			candidate.Labels = cloneStringMap(resource.Metadata.Labels)
-			candidate.Annotations = cloneStringMap(resource.Metadata.Annotations)
+			candidate.Annotations = annotations
 			candidate.OwnerReferences = ownerReferences
 			candidate.Title = resource.Spec.Title
 			candidate.Tier = tier

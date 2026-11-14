@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use tracing::{error, info};
 
 use super::{
-    collect_changed_resource_blobs, with_quarantine_repo, AdmissionDecision, HookContext,
-    RefUpdate, ResourceBlob, ValidationHandler,
+    collect_changed_resource_blobs, is_rbac_resource_path, with_quarantine_repo, AdmissionDecision,
+    HookContext, RefUpdate, ResourceBlob, ValidationHandler,
 };
 
 // Re-export catalog proto types for use in this module.
@@ -21,7 +21,97 @@ pub mod catalog_proto {
 }
 
 use catalog_proto::catalog_service_client::CatalogServiceClient;
-use catalog_proto::{ResourceBlob as ProtoBlob, ResourceValidationTree, ValidateResourcesRequest};
+use catalog_proto::{
+    RbacValidationTree, ResourceBlob as ProtoBlob, ResourceValidationTree, ValidateResourcesRequest,
+};
+
+pub(crate) fn rbac_blob_size(repo: &gix::Repository, id: gix::ObjectId) -> Result<u64, String> {
+    let header = repo
+        .find_header(id)
+        .map_err(|_| "RBAC blob header is unavailable")?;
+    if header.kind() != gix::objs::Kind::Blob || header.size() > 64 * 1024 {
+        return Err("RBAC tree exceeds resource or byte bounds".into());
+    }
+    Ok(header.size())
+}
+
+pub(crate) fn collect_rbac_tree(
+    repo: &gix::Repository,
+    commit: gix::ObjectId,
+) -> Result<Vec<ResourceBlob>, String> {
+    let root = super::super::tree_diff::get_tree_id(repo, commit)
+        .ok_or("validation commit is unavailable")?;
+    let tree = repo
+        .find_tree(root)
+        .map_err(|_| "validation tree is unavailable")?;
+    let decoded = tree.decode().map_err(|_| "validation tree is invalid")?;
+    let Some(entry) = decoded
+        .entries
+        .iter()
+        .find(|entry| entry.filename == "rbac")
+    else {
+        return Ok(Vec::new());
+    };
+    if entry.mode.kind() != gix::object::tree::EntryKind::Tree {
+        return Err("RBAC root must be a directory".into());
+    }
+    let mut stack = vec![(entry.oid.to_owned(), "rbac".to_owned())];
+    let mut count = 0usize;
+    let mut bytes = 0usize;
+    let mut blobs = Vec::new();
+    while let Some((id, prefix)) = stack.pop() {
+        let tree = repo.find_tree(id).map_err(|_| "RBAC tree is unavailable")?;
+        let decoded = tree.decode().map_err(|_| "RBAC tree is invalid")?;
+        if decoded.entries.len() > 5_500 {
+            return Err("RBAC tree exceeds resource bounds".into());
+        }
+        for entry in decoded.entries {
+            let name = entry.filename.to_string();
+            let path = format!("{prefix}/{name}");
+            if path.len() > 1024 {
+                return Err("RBAC path exceeds byte bounds".into());
+            }
+            if prefix == "rbac" {
+                if !matches!(
+                    name.as_str(),
+                    "roles" | "rolebindings" | "clusterroles" | "clusterrolebindings"
+                ) || entry.mode.kind() != gix::object::tree::EntryKind::Tree
+                {
+                    return Err("RBAC resources require canonical directories".into());
+                }
+                stack.push((entry.oid.to_owned(), path));
+                continue;
+            }
+            if !matches!(
+                entry.mode.kind(),
+                gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable
+            ) {
+                return Err("RBAC resources must be regular files".into());
+            }
+            count += 1;
+            if count > 5_500 {
+                return Err("RBAC tree exceeds resource or byte bounds".into());
+            }
+            bytes += rbac_blob_size(repo, entry.oid.to_owned())? as usize;
+            if bytes > 64 * 1024 * 1024 {
+                return Err("RBAC tree exceeds resource or byte bounds".into());
+            }
+            let blob = repo
+                .find_blob(entry.oid.to_owned())
+                .map_err(|_| "RBAC blob is unavailable")?;
+            blobs.push(ResourceBlob {
+                path,
+                blob_oid: entry.oid.to_string(),
+                content: blob.data.clone(),
+            });
+        }
+    }
+    Ok(blobs)
+}
+
+fn validate_rbac_tree(repo: &gix::Repository, commit: gix::ObjectId) -> Result<(), String> {
+    collect_rbac_tree(repo, commit).map(|_| ())
+}
 
 /// Calls `CatalogService.ValidateResources` gRPC with timeout.
 /// On `accepted=false`: aggregates all `ValidationError.message` fields into rejection.
@@ -41,7 +131,7 @@ impl SchemaValidationHandler {
     ) -> Self {
         Self {
             service_token: String::new(),
-            client,
+            client: client.max_encoding_message_size(96 * 1024 * 1024),
             timeout,
             repository_id,
         }
@@ -83,6 +173,7 @@ impl ValidationHandler for SchemaValidationHandler {
                 old_blobs: vec![],
                 proposed_blobs: blobs.iter().cloned().map(to_proto_blob).collect(),
                 r#ref: None,
+                rbac_tree: None,
             }],
             authorization: Some(hook_ctx.callback_authorization(vec![])),
         };
@@ -96,6 +187,11 @@ impl ValidationHandler for SchemaValidationHandler {
         quarantine_dir: Option<&std::path::Path>,
         hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
+        if updates.is_empty() || updates.len() > 256 {
+            return Ok(AdmissionDecision::Reject(
+                "unsupported receive ref count".into(),
+            ));
+        }
         let trees = with_quarantine_repo(git_dir, quarantine_dir, |repo| {
             let mut trees = Vec::new();
             for update in updates {
@@ -115,21 +211,82 @@ impl ValidationHandler for SchemaValidationHandler {
                             .map_err(|e| format!("parse proposed commit: {e}"))?,
                     )
                 };
-                let (old_blobs, proposed_blobs) =
+                let branch = update.ref_name.starts_with("refs/heads/");
+                let final_rbac = if branch {
+                    if let Some(commit) = old {
+                        validate_rbac_tree(repo, commit)?;
+                    }
+                    if let Some(commit) = proposed {
+                        collect_rbac_tree(repo, commit)?
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                };
+                let (mut old_blobs, mut proposed_blobs) =
                     collect_changed_resource_blobs(repo, old, proposed);
-                if !old_blobs.is_empty() || !proposed_blobs.is_empty() {
-                    trees.push(ResourceValidationTree {
-                        old_blobs: old_blobs.into_iter().map(to_proto_blob).collect(),
-                        proposed_blobs: proposed_blobs.into_iter().map(to_proto_blob).collect(),
-                        r#ref: Some(update.into()),
-                    });
+                if !branch {
+                    old_blobs.retain(|blob| !is_rbac_resource_path(&blob.path));
+                    proposed_blobs.retain(|blob| !is_rbac_resource_path(&blob.path));
                 }
+                let changes_rbac = old_blobs
+                    .iter()
+                    .chain(&proposed_blobs)
+                    .any(|blob| is_rbac_resource_path(&blob.path));
+                if updates.len() != 1 && changes_rbac {
+                    return Err("RBAC-changing multi-ref receives are unsupported".into());
+                }
+                trees.push(ResourceValidationTree {
+                    old_blobs: old_blobs.into_iter().map(to_proto_blob).collect(),
+                    proposed_blobs: proposed_blobs.into_iter().map(to_proto_blob).collect(),
+                    r#ref: Some(update.into()),
+                    rbac_tree: changes_rbac.then(|| RbacValidationTree {
+                        blobs: final_rbac.into_iter().map(to_proto_blob).collect(),
+                    }),
+                });
             }
             Ok(trees)
-        })
-        .map_err(anyhow::Error::msg)?;
+        });
+        let trees = match trees {
+            Ok(trees) => trees,
+            Err(reason) => return Ok(AdmissionDecision::Reject(reason)),
+        };
 
-        if trees.is_empty() {
+        let rbac_blobs: Vec<_> = trees
+            .iter()
+            .flat_map(|tree| tree.old_blobs.iter().chain(&tree.proposed_blobs))
+            .filter(|blob| is_rbac_resource_path(&blob.path))
+            .collect();
+        if !rbac_blobs.is_empty() {
+            if updates.len() != 1 {
+                return Ok(AdmissionDecision::Reject(
+                    "RBAC-changing multi-ref receives are unsupported".into(),
+                ));
+            }
+            let paths: std::collections::HashSet<_> =
+                rbac_blobs.iter().map(|blob| &blob.path).collect();
+            if paths.len() > 256
+                || rbac_blobs
+                    .iter()
+                    .any(|blob| blob.path.len() > 1024 || blob.content.len() > 64 * 1024)
+                || trees
+                    .iter()
+                    .flat_map(|tree| &tree.proposed_blobs)
+                    .filter(|blob| is_rbac_resource_path(&blob.path))
+                    .map(|blob| blob.content.len())
+                    .sum::<usize>()
+                    > 8 * 1024 * 1024
+            {
+                return Ok(AdmissionDecision::Reject(
+                    "RBAC candidate exceeds resource or byte bounds".into(),
+                ));
+            }
+        }
+        if trees
+            .iter()
+            .all(|tree| tree.old_blobs.is_empty() && tree.proposed_blobs.is_empty())
+        {
             return Ok(AdmissionDecision::Accept);
         }
         self.validate_trees(trees, hook_ctx).await
@@ -168,12 +325,36 @@ impl SchemaValidationHandler {
         start: std::time::Instant,
     ) -> anyhow::Result<AdmissionDecision> {
         let mut client = self.client.clone();
-        let request = crate::auth::interceptor::callback_request(
-            req,
-            &self.service_token,
-            "/gitstore.catalog.v1.CatalogService/ValidateResources",
-        )?;
-        let result = tokio::time::timeout(self.timeout, client.validate_resources(request)).await;
+        let rbac_receive = req.trees.iter().any(|tree| tree.rbac_tree.is_some());
+        let result = if rbac_receive {
+            let request = crate::auth::interceptor::callback_request(
+                catalog_proto::ValidateRbacReceiveRequest {
+                    repository_id: req.repository_id,
+                    trees: req.trees,
+                    authorization: req.authorization,
+                },
+                &self.service_token,
+                "/gitstore.catalog.v1.CatalogService/ValidateRBACReceive",
+            )?;
+            tokio::time::timeout(self.timeout, client.validate_rbac_receive(request))
+                .await
+                .map(|result| {
+                    result.map(|response| {
+                        let response = response.into_inner();
+                        tonic::Response::new(catalog_proto::ValidateResourcesResponse {
+                            accepted: response.accepted,
+                            errors: response.errors,
+                        })
+                    })
+                })
+        } else {
+            let request = crate::auth::interceptor::callback_request(
+                req,
+                &self.service_token,
+                "/gitstore.catalog.v1.CatalogService/ValidateResources",
+            )?;
+            tokio::time::timeout(self.timeout, client.validate_resources(request)).await
+        };
         let duration_ms = start.elapsed().as_millis() as u64;
         match result {
             Err(_) => {
@@ -269,10 +450,32 @@ mod tests {
 
     struct MockCatalogService {
         validate_fn: ValidateFn,
+        supports_rbac: bool,
     }
 
     #[tonic::async_trait]
     impl CatalogService for MockCatalogService {
+        async fn validate_rbac_receive(
+            &self,
+            req: Request<catalog_proto::ValidateRbacReceiveRequest>,
+        ) -> Result<Response<catalog_proto::ValidateRbacReceiveResponse>, Status> {
+            if !self.supports_rbac {
+                return Err(Status::unimplemented("older API binary"));
+            }
+            let req = req.into_inner();
+            (self.validate_fn)(ValidateResourcesRequest {
+                repository_id: req.repository_id,
+                trees: req.trees,
+                authorization: req.authorization,
+            })
+            .map(|response| {
+                Response::new(catalog_proto::ValidateRbacReceiveResponse {
+                    accepted: response.accepted,
+                    errors: response.errors,
+                })
+            })
+        }
+
         async fn validate_resources(
             &self,
             req: Request<ValidateResourcesRequest>,
@@ -304,14 +507,27 @@ mod tests {
             + Sync
             + 'static,
     ) -> String {
+        start_mock_server_with_rbac_support(validate_fn, true).await
+    }
+
+    async fn start_mock_server_with_rbac_support(
+        validate_fn: impl Fn(ValidateResourcesRequest) -> Result<ValidateResourcesResponse, Status>
+            + Send
+            + Sync
+            + 'static,
+        supports_rbac: bool,
+    ) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let svc = MockCatalogService {
             validate_fn: Arc::new(validate_fn),
+            supports_rbac,
         };
         tokio::spawn(async move {
             Server::builder()
-                .add_service(CatalogServiceServer::new(svc))
+                .add_service(
+                    CatalogServiceServer::new(svc).max_decoding_message_size(96 * 1024 * 1024),
+                )
                 .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
                 .await
                 .unwrap();
@@ -660,6 +876,366 @@ mod tests {
             matches!(result, AdmissionDecision::Reject(_)),
             "expected Reject when server is unreachable"
         );
+    }
+
+    #[tokio::test]
+    async fn rbac_receive_preserves_plain_yaml_deletions_renames_and_actor() {
+        use super::super::tests::{commit_files, make_repo_with_files};
+        let role = b"apiVersion: rbac.authorization.gitstore.dev/v1beta1\nkind: Role\nmetadata: {name: reader, namespace: shop}\nspec: {rules: []}\n";
+        let unchanged = b"kind: RoleBinding\n";
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, old) = make_repo_with_files(
+            dir.path(),
+            &[
+                ("rbac/roles/reader.yaml", role),
+                ("rbac/rolebindings/unchanged.yaml", unchanged),
+            ],
+        );
+        let new = commit_files(
+            &repo,
+            &[
+                ("rbac/roles/renamed.yaml", role),
+                ("rbac/rolebindings/unchanged.yaml", unchanged),
+            ],
+            Some(old),
+        );
+        let expected_old = old.to_string();
+        let expected_new = new.to_string();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        let addr = start_mock_server(move |req| {
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let authorization = req.authorization.as_ref().unwrap();
+            assert_eq!(authorization.actor.as_ref().unwrap().subject, "alice");
+            assert_eq!(authorization.receive_id, "receive-rbac");
+            assert_eq!(authorization.refs.len(), 1);
+            assert_eq!(authorization.refs[0].old_commit_sha, expected_old);
+            assert_eq!(authorization.refs[0].new_commit_sha, expected_new);
+            assert_eq!(authorization.refs[0].ref_name, "refs/heads/review");
+            assert_eq!(req.trees.len(), 1);
+            let tree = &req.trees[0];
+            assert_eq!(tree.old_blobs.len(), 1);
+            assert_eq!(tree.old_blobs[0].path, "rbac/roles/reader.yaml");
+            assert_eq!(tree.old_blobs[0].content, role);
+            assert_eq!(tree.proposed_blobs.len(), 1);
+            assert_eq!(tree.proposed_blobs[0].path, "rbac/roles/renamed.yaml");
+            assert_eq!(tree.proposed_blobs[0].content, role);
+            assert_eq!(tree.proposed_blobs[0].blob_oid, tree.old_blobs[0].blob_oid);
+            let final_tree = tree.rbac_tree.as_ref().unwrap();
+            assert_eq!(final_tree.blobs.len(), 2);
+            assert!(final_tree
+                .blobs
+                .iter()
+                .any(|blob| blob.path == "rbac/rolebindings/unchanged.yaml"
+                    && blob.content == unchanged));
+            Ok(ValidateResourcesResponse {
+                accepted: true,
+                errors: vec![],
+            })
+        })
+        .await;
+        let handler =
+            SchemaValidationHandler::connect(&addr, Duration::from_secs(5), "repo".into())
+                .await
+                .unwrap()
+                .with_service_token("fixture-key");
+        let ctx = HookContext {
+            repository_id: "repo".into(),
+            actor_subject: "alice".into(),
+            actor_auth_method: "static-users".into(),
+            receive_id: "receive-rbac".into(),
+            ..HookContext::default()
+        };
+        let decision = handler
+            .validate_receive(
+                dir.path(),
+                &[RefUpdate {
+                    ref_name: "refs/heads/review".into(),
+                    old_oid: old.to_string(),
+                    new_oid: new.to_string(),
+                }],
+                None,
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(decision, AdmissionDecision::Accept));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn rbac_receive_keeps_empty_files_distinct_from_deletions() {
+        use super::super::tests::{commit_files, make_repo_with_files};
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, old) =
+            make_repo_with_files(dir.path(), &[("rbac/roles/reader.yaml", b"kind: Role\n")]);
+        let new = commit_files(&repo, &[("rbac/roles/reader.yaml", b"")], Some(old));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        let addr = start_mock_server(move |req| {
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(req.trees[0].old_blobs.len(), 1);
+            assert_eq!(req.trees[0].proposed_blobs.len(), 1);
+            assert!(req.trees[0].proposed_blobs[0].content.is_empty());
+            Ok(ValidateResourcesResponse {
+                accepted: false,
+                errors: vec![ValidationError {
+                    constraint: "RBAC_MANIFEST_INVALID".into(),
+                    message: "invalid RBAC manifest".into(),
+                    ..Default::default()
+                }],
+            })
+        })
+        .await;
+        let handler =
+            SchemaValidationHandler::connect(&addr, Duration::from_secs(5), "repo".into())
+                .await
+                .unwrap()
+                .with_service_token("fixture-key");
+        let decision = handler
+            .validate_receive(
+                dir.path(),
+                &[RefUpdate {
+                    ref_name: "refs/heads/main".into(),
+                    old_oid: old.to_string(),
+                    new_oid: new.to_string(),
+                }],
+                None,
+                &HookContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(decision, AdmissionDecision::Reject(_)));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn rbac_tree_rejects_oversize_and_wrong_directories() {
+        use super::super::tests::make_repo_with_files;
+        for (path, content) in [
+            ("rbac/roles/reader.yaml", vec![b'x'; 64 * 1024 + 1]),
+            ("rbac/wrong/reader.yaml", b"kind: Role\n".to_vec()),
+            ("rbac", b"not a directory".to_vec()),
+            ("rbac/roles/nested/reader.yaml", b"kind: Role\n".to_vec()),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (repo, commit) = make_repo_with_files(dir.path(), &[(path, &content)]);
+            assert!(validate_rbac_tree(&repo, commit).is_err());
+        }
+    }
+
+    #[test]
+    fn rbac_tree_rejects_oversize_header_before_inflating_truncated_body() {
+        use super::super::tests::make_repo_with_files;
+        let dir = tempfile::tempdir().unwrap();
+        let content = vec![b'x'; 4 * 1024 * 1024];
+        let (repo, commit) =
+            make_repo_with_files(dir.path(), &[("rbac/roles/reader.yaml", &content)]);
+        let oid = repo.write_blob(&content).unwrap().detach().to_string();
+        let object = repo.path().join("objects").join(&oid[..2]).join(&oid[2..]);
+        let compressed = std::fs::read(&object).unwrap();
+        std::fs::remove_file(&object).unwrap();
+        std::fs::write(&object, &compressed[..64]).unwrap();
+        let repo = gix::open(dir.path()).unwrap();
+        assert_eq!(
+            collect_rbac_tree(&repo, commit).unwrap_err(),
+            "RBAC tree exceeds resource or byte bounds"
+        );
+    }
+
+    #[test]
+    fn rbac_tree_rejects_symlink_and_submodule_entries() {
+        use super::super::tests::make_repo_with_files;
+        for mode in [
+            gix::object::tree::EntryKind::Link,
+            gix::object::tree::EntryKind::Commit,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let (repo, parent) =
+                make_repo_with_files(dir.path(), &[("rbac/roles/reader.yaml", b"kind: Role\n")]);
+            let root = super::super::super::tree_diff::get_tree_id(&repo, parent).unwrap();
+            let object = if mode == gix::object::tree::EntryKind::Commit {
+                parent
+            } else {
+                repo.write_blob(b"outside.yaml").unwrap().detach()
+            };
+            let tree = repo
+                .edit_tree(root)
+                .unwrap()
+                .upsert("rbac/roles/reader.yaml", mode, object)
+                .unwrap()
+                .write()
+                .unwrap()
+                .detach();
+            let signature = gix::actor::Signature {
+                name: "test".into(),
+                email: "test@test.com".into(),
+                time: gix::date::Time::now_local_or_utc(),
+            };
+            let mut buffer = gix::date::parse::TimeBuf::default();
+            let signature = signature.to_ref(&mut buffer);
+            let commit = repo
+                .commit_as(
+                    signature,
+                    signature,
+                    "HEAD",
+                    "invalid entry mode",
+                    tree,
+                    Some(parent),
+                )
+                .unwrap()
+                .detach();
+            assert!(validate_rbac_tree(&repo, commit).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn rbac_branch_deletion_attests_to_an_empty_final_tree() {
+        use super::super::tests::make_repo_with_files;
+        let dir = tempfile::tempdir().unwrap();
+        let (_, old) =
+            make_repo_with_files(dir.path(), &[("rbac/roles/reader.yaml", b"kind: Role\n")]);
+        let addr = start_mock_server(|request| {
+            let tree = &request.trees[0];
+            assert_eq!(tree.old_blobs.len(), 1);
+            assert!(tree.proposed_blobs.is_empty());
+            assert!(tree.rbac_tree.as_ref().unwrap().blobs.is_empty());
+            Ok(ValidateResourcesResponse {
+                accepted: true,
+                errors: vec![],
+            })
+        })
+        .await;
+        let handler =
+            SchemaValidationHandler::connect(&addr, Duration::from_secs(5), "repo".into())
+                .await
+                .unwrap()
+                .with_service_token("fixture-key");
+        let decision = handler
+            .validate_receive(
+                dir.path(),
+                &[RefUpdate {
+                    ref_name: "refs/heads/review".into(),
+                    old_oid: old.to_string(),
+                    new_oid: "0".repeat(40),
+                }],
+                None,
+                &HookContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(decision, AdmissionDecision::Accept));
+    }
+
+    #[tokio::test]
+    async fn rbac_receive_rejects_non_atomic_multiref_before_callout() {
+        use super::super::tests::make_repo_with_files;
+        let dir = tempfile::tempdir().unwrap();
+        let (_, new) =
+            make_repo_with_files(dir.path(), &[("rbac/roles/reader.yaml", b"kind: Role\n")]);
+        let addr =
+            start_mock_server(|_| panic!("unsupported RBAC multi-ref must not reach validation"))
+                .await;
+        let handler =
+            SchemaValidationHandler::connect(&addr, Duration::from_secs(5), "repo".into())
+                .await
+                .unwrap()
+                .with_service_token("fixture-key");
+        let updates = vec![
+            RefUpdate {
+                ref_name: "refs/heads/main".into(),
+                old_oid: "0".repeat(40),
+                new_oid: new.to_string(),
+            },
+            RefUpdate {
+                ref_name: "refs/heads/review".into(),
+                old_oid: "0".repeat(40),
+                new_oid: new.to_string(),
+            },
+        ];
+        let decision = handler
+            .validate_receive(dir.path(), &updates, None, &HookContext::default())
+            .await
+            .unwrap();
+        assert!(
+            matches!(decision, AdmissionDecision::Reject(message) if message.contains("multi-ref"))
+        );
+    }
+
+    #[tokio::test]
+    async fn rbac_receive_has_no_legacy_api_fallback() {
+        use super::super::tests::make_repo_with_files;
+        let dir = tempfile::tempdir().unwrap();
+        let (_, new) =
+            make_repo_with_files(dir.path(), &[("rbac/roles/reader.yaml", b"kind: Role\n")]);
+        let addr = start_mock_server_with_rbac_support(
+            |_| panic!("RBAC receives must not fall back to legacy validation"),
+            false,
+        )
+        .await;
+        let handler =
+            SchemaValidationHandler::connect(&addr, Duration::from_secs(5), "repo".into())
+                .await
+                .unwrap()
+                .with_service_token("fixture-key");
+        let decision = handler
+            .validate_receive(
+                dir.path(),
+                &[RefUpdate {
+                    ref_name: "refs/heads/main".into(),
+                    old_oid: "0".repeat(40),
+                    new_oid: new.to_string(),
+                }],
+                None,
+                &HookContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(decision, AdmissionDecision::Reject(_)));
+    }
+
+    #[tokio::test]
+    async fn rbac_receive_transmits_bounded_candidates_above_default_grpc_limit() {
+        use super::super::tests::make_repo_with_files;
+        let dir = tempfile::tempdir().unwrap();
+        let content = vec![b'x'; 64 * 1024];
+        let paths: Vec<_> = (0..65)
+            .map(|index| format!("rbac/roles/reader-{index}.yaml"))
+            .collect();
+        let files: Vec<_> = paths
+            .iter()
+            .map(|path| (path.as_str(), content.as_slice()))
+            .collect();
+        let (_, new) = make_repo_with_files(dir.path(), &files);
+        let addr = start_mock_server(|request| {
+            let tree = &request.trees[0];
+            assert_eq!(tree.proposed_blobs.len(), 65);
+            assert_eq!(tree.rbac_tree.as_ref().unwrap().blobs.len(), 65);
+            Ok(ValidateResourcesResponse {
+                accepted: true,
+                errors: vec![],
+            })
+        })
+        .await;
+        let handler =
+            SchemaValidationHandler::connect(&addr, Duration::from_secs(5), "repo".into())
+                .await
+                .unwrap()
+                .with_service_token("fixture-key");
+        let decision = handler
+            .validate_receive(
+                dir.path(),
+                &[RefUpdate {
+                    ref_name: "refs/heads/main".into(),
+                    old_oid: "0".repeat(40),
+                    new_oid: new.to_string(),
+                }],
+                None,
+                &HookContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(decision, AdmissionDecision::Accept));
     }
 
     /// The push rejection text must stay byte-identical to the API's

@@ -3,7 +3,7 @@
 //
 // CatalogService — hook pipeline callout contract (spec#018)
 //
-// Two RPCs:
+// Hook callouts:
 //   ValidateResources — blocking pre-receive validation callout.
 //     Called by gitstore-git-service before any refs are updated.
 //     Returns all field-level violations across all submitted blobs.
@@ -36,6 +36,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	CatalogService_ValidateResources_FullMethodName         = "/gitstore.catalog.v1.CatalogService/ValidateResources"
+	CatalogService_ValidateRBACReceive_FullMethodName       = "/gitstore.catalog.v1.CatalogService/ValidateRBACReceive"
 	CatalogService_ValidateResourceDeletions_FullMethodName = "/gitstore.catalog.v1.CatalogService/ValidateResourceDeletions"
 	CatalogService_AdmitResources_FullMethodName            = "/gitstore.catalog.v1.CatalogService/AdmitResources"
 )
@@ -48,6 +49,9 @@ type CatalogServiceClient interface {
 	// The git service calls this in the pre-receive phase (blocking).
 	// The response carries all violations across all blobs in a single call.
 	ValidateResources(ctx context.Context, in *ValidateResourcesRequest, opts ...grpc.CallOption) (*ValidateResourcesResponse, error)
+	// RBAC receives require a complete proposed tree. A distinct method makes
+	// older API binaries fail closed rather than ignore that security input.
+	ValidateRBACReceive(ctx context.Context, in *ValidateRBACReceiveRequest, opts ...grpc.CallOption) (*ValidateRBACReceiveResponse, error)
 	// ValidateResourceDeletions validates all supported resource deletions
 	// against proposed trees before refs are updated. It is read-only and is
 	// invoked only when a push derives one or more OperationDelete transitions.
@@ -70,6 +74,16 @@ func (c *catalogServiceClient) ValidateResources(ctx context.Context, in *Valida
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ValidateResourcesResponse)
 	err := c.cc.Invoke(ctx, CatalogService_ValidateResources_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *catalogServiceClient) ValidateRBACReceive(ctx context.Context, in *ValidateRBACReceiveRequest, opts ...grpc.CallOption) (*ValidateRBACReceiveResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateRBACReceiveResponse)
+	err := c.cc.Invoke(ctx, CatalogService_ValidateRBACReceive_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -104,6 +118,9 @@ type CatalogServiceServer interface {
 	// The git service calls this in the pre-receive phase (blocking).
 	// The response carries all violations across all blobs in a single call.
 	ValidateResources(context.Context, *ValidateResourcesRequest) (*ValidateResourcesResponse, error)
+	// RBAC receives require a complete proposed tree. A distinct method makes
+	// older API binaries fail closed rather than ignore that security input.
+	ValidateRBACReceive(context.Context, *ValidateRBACReceiveRequest) (*ValidateRBACReceiveResponse, error)
 	// ValidateResourceDeletions validates all supported resource deletions
 	// against proposed trees before refs are updated. It is read-only and is
 	// invoked only when a push derives one or more OperationDelete transitions.
@@ -124,6 +141,9 @@ type UnimplementedCatalogServiceServer struct{}
 
 func (UnimplementedCatalogServiceServer) ValidateResources(context.Context, *ValidateResourcesRequest) (*ValidateResourcesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ValidateResources not implemented")
+}
+func (UnimplementedCatalogServiceServer) ValidateRBACReceive(context.Context, *ValidateRBACReceiveRequest) (*ValidateRBACReceiveResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ValidateRBACReceive not implemented")
 }
 func (UnimplementedCatalogServiceServer) ValidateResourceDeletions(context.Context, *ValidateResourceDeletionsRequest) (*ValidateResourceDeletionsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ValidateResourceDeletions not implemented")
@@ -166,6 +186,24 @@ func _CatalogService_ValidateResources_Handler(srv interface{}, ctx context.Cont
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CatalogServiceServer).ValidateResources(ctx, req.(*ValidateResourcesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CatalogService_ValidateRBACReceive_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateRBACReceiveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CatalogServiceServer).ValidateRBACReceive(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CatalogService_ValidateRBACReceive_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CatalogServiceServer).ValidateRBACReceive(ctx, req.(*ValidateRBACReceiveRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -216,6 +254,10 @@ var CatalogService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ValidateResources",
 			Handler:    _CatalogService_ValidateResources_Handler,
+		},
+		{
+			MethodName: "ValidateRBACReceive",
+			Handler:    _CatalogService_ValidateRBACReceive_Handler,
 		},
 		{
 			MethodName: "ValidateResourceDeletions",
