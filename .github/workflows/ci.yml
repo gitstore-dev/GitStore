@@ -2,61 +2,63 @@ name: CI
 
 on:
   push:
-    branches: [ main, 'feature/**', '[0-9]+-*' ]
+    branches: [ main ]
   pull_request:
     branches: [ main, 'codex/**' ]
   merge_group:
     branches: [ main ]
+  workflow_dispatch:
 
 permissions:
   contents: read
   security-events: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
-  observability-test:
-    name: Shared Go Module Tests (${{ matrix.module }})
+  shared-module-test:
+    name: Shared Go Module Tests
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        module: [observability, scylla-cdc-go]
-    defaults:
-      run:
-        working-directory: ./shared/${{ matrix.module }}
     env:
       GOWORK: 'off'
     steps:
     - uses: actions/checkout@v6
+      id: checkout
     - uses: actions/setup-go@v6
+      id: go_observability
       with:
-        go-version-file: shared/${{ matrix.module }}/go.mod
-        cache: false
-    - name: Check, build and test independently
+        go-version-file: shared/observability/go.mod
+        cache-dependency-path: shared/observability/go.sum
+    - name: Check observability independently
+      if: ${{ !cancelled() && steps.go_observability.outcome == 'success' }}
+      working-directory: ./shared/observability
       run: test -z "$(gofmt -l .)" && go build ./... && go vet ./... && go test -race -count=1 ./...
-
-  secret-material-test:
-    name: Shared Secret Material Tests
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./shared/secretmaterial
-    env:
-      GOWORK: 'off'
-    steps:
-    - uses: actions/checkout@v6
     - uses: actions/setup-go@v6
+      id: go_secretmaterial
+      if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
       with:
         go-version-file: shared/secretmaterial/go.mod
-        cache: false
-    - name: Check formatting
-      run: test -z "$(gofmt -l .)"
-    - name: Build and vet independently
-      run: go build ./... && go vet ./...
-    - name: Test contracts with race detection
-      run: go test -race -count=1 ./...
+        cache-dependency-path: shared/secretmaterial/go.sum
+    - name: Check secret material independently
+      if: ${{ !cancelled() && steps.go_secretmaterial.outcome == 'success' }}
+      working-directory: ./shared/secretmaterial
+      run: test -z "$(gofmt -l .)" && go build ./... && go vet ./... && go test -race -count=1 ./...
+    - uses: actions/setup-go@v6
+      id: go_scylla_cdc
+      if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+      with:
+        go-version-file: shared/scylla-cdc-go/go.mod
+        cache-dependency-path: shared/scylla-cdc-go/go.sum
+    - name: Check Scylla CDC reader independently
+      if: ${{ !cancelled() && steps.go_scylla_cdc.outcome == 'success' }}
+      working-directory: ./shared/scylla-cdc-go
+      run: test -z "$(gofmt -l .)" && go build ./... && go vet ./... && go test -race -count=1 ./...
 
   git-service-test:
     name: Git Service Tests
@@ -102,12 +104,14 @@ jobs:
       run: cargo test --verbose
 
     - name: Generate test coverage
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       run: |
         cargo install cargo-tarpaulin || true
         cargo tarpaulin --out Xml --output-dir ./coverage
       continue-on-error: true
 
     - name: Upload coverage to Codecov
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
       uses: codecov/codecov-action@v7
       with:
         files: ./gitstore-git-service/coverage/cobertura.xml
@@ -270,20 +274,3 @@ jobs:
         go install github.com/sonatype-nexus-community/nancy@latest
         go list -json -m all | nancy sleuth
       continue-on-error: true
-
-  build-status:
-    name: Build Status
-    runs-on: ubuntu-latest
-    needs: [git-service-test, api-test, controller-manager-test, security-scan]
-    if: always()
-
-    steps:
-    - name: Check build status
-      run: |
-        if [ "${{ needs.git-service-test.result }}" != "success" ] || \
-           [ "${{ needs.api-test.result }}" != "success" ] || \
-           [ "${{ needs.controller-manager-test.result }}" != "success" ]; then
-          echo "Build failed!"
-          exit 1
-        fi
-        echo "All checks passed! ✅"

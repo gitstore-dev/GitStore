@@ -82,6 +82,32 @@ done < "${repo_root}/.github/workflows/ci-integration.yml"
 [[ "${ci_bootstrap_count}" -eq 2 ]]
 [[ "${ci_git_auth_count}" -eq 2 ]]
 
+for workflow in ci ci-proto pr-title-lint; do
+  workflow_file="${repo_root}/.github/workflows/${workflow}.yml"
+  concurrency="$(awk '/^concurrency:/ { capture=1; next } capture && /^[^[:space:]]/ { exit } capture { print }' "${workflow_file}")"
+  [[ "${concurrency}" == *'${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}'* ]]
+  printf '%s\n' "${concurrency}" | grep -Eq '^  cancel-in-progress: \$\{\{ github.event_name == .pull_request. \}\}$'
+done
+core_ci="${repo_root}/.github/workflows/ci.yml"
+rg -q '^  merge_group:' "${core_ci}"
+rg -q '^  workflow_dispatch:' "${core_ci}"
+! rg -q "feature/|\\[0-9\\]" "${core_ci}"
+! rg -q '^  build-status:' "${core_ci}"
+for check_name in 'API Tests' 'Controller Manager Tests' 'Git Service Tests'; do
+  rg -q "^    name: ${check_name}$" "${core_ci}"
+done
+for module in observability secretmaterial scylla-cdc-go; do
+  rg -Fq "go-version-file: shared/${module}/go.mod" "${core_ci}"
+  rg -Fq "cache-dependency-path: shared/${module}/go.sum" "${core_ci}"
+  rg -Fq "working-directory: ./shared/${module}" "${core_ci}"
+done
+rg -q "^      GOWORK: 'off'$" "${core_ci}"
+for setup in go_observability go_secretmaterial go_scylla_cdc; do
+  rg -Fq "if: \${{ !cancelled() && steps.${setup}.outcome == 'success' }}" "${core_ci}"
+done
+[[ "$(rg -Fc "if: \${{ !cancelled() && steps.checkout.outcome == 'success' }}" "${core_ci}")" -eq 2 ]]
+[[ "$(rg -Fc "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" "${core_ci}")" -eq 2 ]]
+
 for target in controller dev enroll-controller-serviceaccount; do
   output="$(make --no-print-directory -C "${repo_root}" -n "${target}")"
   [[ "${output}" != *"--namespace"* && "${output}" != *"SERVICEACCOUNT__NAMESPACE"* ]]

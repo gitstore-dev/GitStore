@@ -619,6 +619,25 @@ see [license checker rules](../scripts/README.md#check-license-headerssh).
 
 Use Conventional Commits.
 
+### GitHub Actions scheduling
+
+Core CI runs for pull requests, merge-queue groups and pushes to main. Branches
+without a PR can use the CI workflow's manual dispatch; feature pushes do not
+start a second copy alongside PR validation. A newer PR run cancels an older
+run for the same workflow and PR, without cancelling another PR, main or a
+merge group.
+
+The three shared Go modules run sequentially in one job, each with its pinned
+toolchain, dependency cache and `GOWORK=off` checks. Required API, controller,
+Git service and PR-title check names are unchanged. Git service formatting,
+Clippy, builds and tests still run on every core CI event; the optional Rust
+coverage rerun and upload run only after a push to main. Security scans retain
+their existing event coverage.
+
+These settings reduce redundant jobs, not the account-wide runner limit.
+Repository merge-queue concurrency and GitHub-managed CodeQL scheduling are
+configured separately.
+
 ## Configuration Highlights
 
 ### API
