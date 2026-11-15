@@ -34,9 +34,10 @@ type rbacRuntime struct {
 }
 
 type rbacRuntimeOptions struct {
-	provider     *opa.Provider
-	prepare      func(context.Context) error
-	initializing bool
+	provider        *opa.Provider
+	prepare         func(context.Context) error
+	initializing    bool
+	observeSnapshot func(context.Context, rbac.Snapshot) error
 }
 
 func newCanonicalRBACRuntime(ctx context.Context, store datastore.Datastore, journal datastore.ResourceWatchJournal, git rbac.OriginGitReader,
@@ -112,16 +113,19 @@ func newRBACRuntime(ctx context.Context, store datastore.Datastore, journal data
 			snapshot, err := reader.Read(ctx, tier)
 			needsRepair := errors.Is(err, rbac.ErrSnapshotProjectionMismatch) ||
 				err == nil && snapshot.State.ProjectionPending
-			if !needsRepair || repair == nil {
-				return snapshot, err
+			if needsRepair && repair != nil {
+				if ctx.Err() != nil {
+					return rbac.Snapshot{}, ctx.Err()
+				}
+				if err := repair(ctx, tier); err != nil {
+					return rbac.Snapshot{}, err
+				}
+				snapshot, err = reader.Read(ctx, tier)
 			}
-			if ctx.Err() != nil {
-				return rbac.Snapshot{}, ctx.Err()
+			if err == nil && option.observeSnapshot != nil {
+				err = option.observeSnapshot(ctx, snapshot)
 			}
-			if err := repair(ctx, tier); err != nil {
-				return rbac.Snapshot{}, err
-			}
-			return reader.Read(ctx, tier)
+			return snapshot, err
 		},
 		CheckOrigin: checkOrigin, RecordOrigin: recordOrigin,
 		Workers: limits.RebuildWorkers, QueueSize: limits.DirtyQueueCapacity,

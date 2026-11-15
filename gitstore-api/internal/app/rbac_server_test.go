@@ -5,12 +5,14 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -75,7 +77,14 @@ func TestRBACNativeProcess(t *testing.T) {
 		defer cancel()
 		require.NoError(t, stopProfiler(shutdown))
 	}()
-	server, err := newServer(cfg, log, true)
+	var option rbacRuntimeOptions
+	if path := os.Getenv("GITSTORE_RBAC_NATIVE_TEST_MODELS_FILE"); path != "" {
+		capture, err := newNativeRBACSourceCapture(path)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, capture.close()) })
+		option.observeSnapshot = capture.observe
+	}
+	server, err := newServer(cfg, log, true, option)
 	require.NoError(t, err)
 	defer server.Close()
 	server.Start()
@@ -83,6 +92,129 @@ func TestRBACNativeProcess(t *testing.T) {
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	server.Shutdown(shutdown)
+}
+
+type nativeRBACSourceCapture struct {
+	file      *os.File
+	remaining int64
+	lock      chan struct{}
+	err       error
+}
+
+func newNativeRBACSourceCapture(path string) (*nativeRBACSourceCapture, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return nil, errors.New("source capture requires a clean absolute private file")
+	}
+	parent, err := os.Lstat(filepath.Dir(path))
+	if err != nil {
+		return nil, err
+	}
+	if !parent.IsDir() || parent.Mode().Perm()&0077 != 0 {
+		return nil, errors.New("source capture requires a private non-symlink parent")
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return nil, err
+	}
+	return &nativeRBACSourceCapture{file: file, remaining: 1 << 30, lock: make(chan struct{}, 1)}, nil
+}
+
+func (c *nativeRBACSourceCapture) Write(data []byte) (int, error) {
+	if c.err != nil {
+		return 0, c.err
+	}
+	if int64(len(data)) > c.remaining {
+		c.err = errors.New("native source capture exceeds its one-GiB evidence bound")
+		return 0, c.err
+	}
+	n, err := c.file.Write(data)
+	c.remaining -= int64(n)
+	c.err = err
+	return n, err
+}
+
+func (c *nativeRBACSourceCapture) observe(ctx context.Context, snapshot rbac.Snapshot) error {
+	select {
+	case c.lock <- struct{}{}:
+		defer func() { <-c.lock }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	resources := snapshot.Resources
+	snapshot.Resources = nil
+	encoder := json.NewEncoder(c)
+	if err := encoder.Encode(struct {
+		Type          string        `json:"type"`
+		Snapshot      rbac.Snapshot `json:"snapshot"`
+		ResourceCount int           `json:"resourceCount"`
+		ObservedAt    time.Time     `json:"observedAt"`
+	}{"begin", snapshot, len(resources), time.Now().UTC()}); err != nil {
+		return err
+	}
+	for _, resource := range resources {
+		if err := ctx.Err(); err != nil {
+			c.err = err
+			return err
+		}
+		if err := encoder.Encode(struct {
+			Type     string         `json:"type"`
+			Resource *rbac.Resource `json:"resource"`
+		}{"resource", resource}); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		c.err = err
+		return err
+	}
+	if err := encoder.Encode(struct {
+		Type   string `json:"type"`
+		Digest string `json:"digest"`
+	}{"end", snapshot.ContentDigest}); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func (c *nativeRBACSourceCapture) close() error {
+	return errors.Join(c.err, c.file.Sync(), c.file.Close())
+}
+
+func TestRBACNativeSourceCaptureRequiresPrivateExclusiveBoundedEvidence(t *testing.T) {
+	directory := t.TempDir()
+	require.NoError(t, os.Chmod(directory, 0700))
+	path := filepath.Join(directory, "source-models.jsonl")
+	capture, err := newNativeRBACSourceCapture(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = capture.close() })
+	_, err = newNativeRBACSourceCapture(path)
+	require.ErrorIs(t, err, os.ErrExist)
+	public := filepath.Join(directory, "public")
+	require.NoError(t, os.Mkdir(public, 0755))
+	_, err = newNativeRBACSourceCapture(filepath.Join(public, "models"))
+	require.ErrorContains(t, err, "private non-symlink")
+	link := filepath.Join(directory, "link")
+	require.NoError(t, os.Symlink(directory, link))
+	_, err = newNativeRBACSourceCapture(filepath.Join(link, "models"))
+	require.ErrorContains(t, err, "private non-symlink")
+	source := rbac.Snapshot{ContentDigest: strings.Repeat("a", 64),
+		Resources: []*rbac.Resource{{Kind: rbac.Role, Metadata: rbac.Metadata{Name: "source-role"}}}}
+	require.NoError(t, capture.observe(t.Context(), source))
+	require.Len(t, source.Resources, 1, "source evidence must not consume the provider's source")
+	content, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(content), `"name":"source-role"`)
+	require.True(t, strings.HasSuffix(string(content), `"digest":"`+source.ContentDigest+`"}`+"\n"),
+		"only an explicit completed record can be checked by the independent oracle")
+	capture.remaining = 1
+	require.ErrorContains(t, capture.observe(t.Context(), source), "evidence bound")
+	require.ErrorContains(t, capture.observe(t.Context(), source), "evidence bound", "a failed stream must never resume with hidden gaps")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	require.ErrorIs(t, capture.observe(ctx, source), context.Canceled)
 }
 
 type bootstrapRPCServer struct {
