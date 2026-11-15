@@ -524,20 +524,13 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			tier = "USER"
 		}
 		name, _ := nestedStringPath(fc.Args, "input", "metadata", "name")
-		if authz == nil {
-			return nil, gqlerror.Errorf("authorization service unavailable")
-		}
-		decision, err := authz.Authorize(ctx, principal, auth.ActionNamespaceCreate, auth.ResourceContext{
+		if err := authorizeCategoryAction(ctx, authz, principal, auth.ActionNamespaceCreate, auth.ResourceContext{
 			Kind: "namespace", Name: name,
 			Attrs: map[string]any{
 				"tier": tier,
 			},
-		})
-		if err != nil {
-			return nil, authorizationGraphQLError(err)
-		}
-		if decision.Outcome != auth.OutcomeAllow {
-			return nil, gqlerror.Errorf("permission denied: %s", decision.Reason)
+		}); err != nil {
+			return nil, err
 		}
 	case "deleteNamespace":
 		encodedID, ok := nestedStringArg(fc.Args, "input", "id")
