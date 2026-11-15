@@ -517,6 +517,48 @@ Historical receipts without these fields cannot supply propagation timing.
 Topology regressions now accept the retained multi-peer Scylla shape without
 changing exact replica counts, singleton Git or private-checkpoint constraints.
 These are prerequisites, not completion of the deployed oracle or workload.
+The existing scheduler is now also connected to ordinary authenticated
+Product/Role list requests behind an optional diagnostic seed-fixture field.
+Requests and per-API 60/30/10 expectations are declared before execution;
+denials exclude every declared Group member and direct/built-in grantee.
+Local rotation tests cover all 1,000 Namespace positions, including Group/direct
+grant overlap. HTTP/source-join regressions pass for exact actions, real
+FORBIDDEN, infrastructure unavailability, malformed/oversized replies and
+partial-data leakage. The static native hook requires both replica source/log
+joins and caps its diagnostic request set. Its fresh two-Namespace execution
+passes all 120 requests (72 allows, 36 denials, twelve isolation denials) with
+zero wrong, dropped or unavailable outcomes and both APIs' source/root joins.
+This six-second diagnostic does not close T090-T092, implement
+dynamic committed-policy history or replace the full healthy/fault workloads.
+A further optional diagnostic phase now revokes and restores one owned direct
+organization grant through Role-rule edits in real signed Git pushes. Its concurrent two-API
+observer uses the original successful-push clocks, bounded polling and the
+unchanged five-second deadline; malformed/unavailable/late replies cannot become
+successful revocations. Group overlap and the protected personal owner are
+excluded before mutations. Local race regressions pass and private receipts
+retain partial failures. An earlier binding-subject diagnostic failed on
+authorization unavailability about 750 ms after acknowledgement. Bounded
+stable-identity replacement now preserves the existing publication's original
+freshness proof without renewal; fault, expiry and lifecycle guards remain
+fail-closed and all auth/RBAC/app race suites pass. A native binding-edit
+follow-up then passed both actual HTTP propagation phases, but the strict
+source join correctly rejected its not-yet-observed binding generation.
+That failed evidence remains preserved. The fresh Role-rule variant now passes
+its complete native source/history join: both APIs revoke in about 1.30-1.41 s
+and restore in about 1.15 s, with original Role/binding UIDs and restored specs.
+The static 120-request phase also passes. Two observations per mutation do not
+establish percentiles, binding-edit joins or sustained acceptance, and the
+five-second deadline is unchanged. Captured-source test processes use unsampled decision
+logs after a separate run exposed missing sampled receipts. Both replicas clean
+up without forced stops, all owned listeners close and the foundation remains
+unchanged. The bounded phase now registers the independently authored
+Namespace grant/revoke/regrant history, verifies complete captured models and
+immutable UIDs, and joins each observed HTTP result's actual decision vector to
+the committed oracle under fixed root intent. Sealed replay rejects pending
+source aliases and matching HTTP/server verdicts that contradict authored
+policy; verified aliases cannot restart clocks or conceal intermediate
+revocations. General dynamic root history, a passing native dynamic execution
+and sustained drivers remain unfinished, so T090-T092 remain open.
 At the default principal budget, one complete paced readback of all one thousand
 Namespaces alone requires more than one hour per replica; the earlier arbitrary
 one-hour whole-test guard could not prepare the declared dataset. Shared
@@ -579,6 +621,22 @@ without forced termination, closed their owned listeners and preserved the
 foundation. Tier revision conflicts, pending projection repair and authorization
 unavailability are observed; no single underlying cause is proven. No full native
 dataset or acceptance task is checked complete.
+
+A fresh one-writer control completes eighty Namespaces, 800 Roles and 4,000
+bindings with the original thirty-second per-API bound, complete terminal
+receipts, no forced stops, closed listeners and an unchanged foundation. It
+uses the pre-review bounded-replacement runtime without source/profile captures.
+No image/full-suite build overlaps it, though bounded single-host-core Go
+regressions do. This is not a cause-isolating comparison, verification of the
+subsequent retry/memory fixes at that scale, or full-scale/sustained acceptance;
+T090-T092 remain open.
+
+The subsequent retry/memory review fixes pass a fresh two-API Role-rule
+diagnostic with all 120 ordinary outcomes and complete dynamic source joins:
+revocation is about 2.47 seconds on both APIs and restoration about 1.26 seconds.
+Manager/application race cases and final isolated default checks pass. These
+individual observations pass five seconds, not the separate two-second p95 gate
+or a full-scale/healthy/fault acceptance task.
 
 The representative provider reservation regression now uses the seeded
 conditional, multi-resource rules and binding mix. It exposed a separate

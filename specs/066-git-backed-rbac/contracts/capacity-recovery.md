@@ -38,6 +38,70 @@ or a propagation-latency result. Local topology validation also accepts a shared
 multi-peer Scylla cluster while retaining exact API/controller counts, singleton
 Git, ownership and independent-checkpoint requirements.
 
+A further diagnostic-only extension connects the existing bounded scheduler to
+ordinary authenticated Product/Role list requests. It predeclares each request,
+rotates the owned working set and preserves a 60/30/10 allow/deny/owner-isolation
+mix separately on each API. Denial principals exclude all independently declared
+Group memberships as well as direct and built-in grants; an unresolved binding
+alone does not prove a subject has no other permission. HTTP regressions separate
+authorization unavailability and transport failures from actual denials, reject
+partial-data leakage and bound response reads. Source joins now require the
+declared action and resource kind for both request families.
+The static native hook requires captured source/decision evidence and is bounded
+to 240 predeclared requests; it is not the sustained or dynamic propagation driver.
+Local race/HTTP contracts pass, but fresh native execution of this extension
+now also passes its static slice: two Namespaces, twenty Roles, one hundred
+bindings and eight real Staff principals complete all 120 scheduled ordinary
+requests with 72 allows, 36 denials, twelve owner-isolation denials and zero
+wrong, dropped or unavailable outcomes. Both APIs' exact action, source and
+fixed-root joins pass. This six-second diagnostic is not sustained acceptance.
+
+The diagnostic hook can additionally revoke and restore one independently
+selected organization User grant by editing its Role's list permission through
+two real signed Git pushes. It excludes
+personal owners and principals with overlapping Group grants, observes both APIs
+concurrently from each successful-push acknowledgement, and preserves the
+five-second bound without substituting a later ref/readback clock. Unavailability,
+malformed responses and late successes fail rather than count as revocation.
+Exclusive private receipts retain both admissions and incomplete failures.
+The hook now also verifies the three independently authored Namespace states
+against complete captured source models, immutable UIDs and fixed root intent,
+and joins each HTTP observation through its actual decision vector to the
+committed oracle. Pending source aliases cannot become evaluated evidence;
+verified aliases retain their original admission clocks and intermediate
+revocations. Local race and sealed-replay contracts pass.
+
+An earlier binding-subject mutation exposed immediate tier invalidation:
+ordinary decisions became unavailable about 750 ms after acknowledgement.
+Replacement work now retains only an already complete publication's existing
+origin proof for stable-identity revisions, never renewing its clock. Expiry,
+source gaps, lifecycle changes, repository replacement and overload remain
+fail-closed; race tests cover these boundaries. A native binding-edit follow-up
+then observed revocation in about 744 ms and restoration in about 2.84-2.95 s
+without unavailable HTTP results, but still failed the strict source join:
+the revoked binding's reference status had not caught up before restoration.
+That failure is preserved, not reclassified as a complete propagation pass.
+The current Role-rule diagnostic leaves resolved binding generations unchanged.
+Its fresh native run passes the full diagnostic: the 120-request static phase,
+both APIs' source/root joins, revocation in about 1.30-1.41 s, restoration in
+about 1.15 s, exact Role/binding incarnation and restored-spec checks, and every
+observed dynamic decision's committed-history join. These are two observations
+per mutation phase, not propagation percentiles or a sustained workload.
+Captured-source diagnostics now
+disable decision-log sampling in their test process so missing receipts cannot
+silently disappear. This is diagnostic overhead, not production logging behavior
+or unprofiled acceptance. All completed fixtures close owned listeners without
+forced stops and preserve the foundation. Dynamic root history, binding-edit
+source joins, propagation distributions and sustained acceptance remain unproven.
+
+The review-fixed runtime also passes a fresh complete Role-rule diagnostic:
+all 120 ordinary outcomes and static/dynamic source joins pass, with revocation
+about 2.47 seconds on each API and restoration about 1.26 seconds. Retry-backoff,
+actual replacement-memory recovery and renewed-proof regressions pass under race
+detection, as do the coupled application readiness cases and final isolated
+default checks. The five-second diagnostic bound passes; two observations per
+phase do not establish the separate two-second propagation p95 acceptance gate.
+
 Bounded native seeding now passes a diagnostic with two Namespaces, twenty Roles
 and one hundred bindings, including the personal-owner template. Both APIs
 verify exact authored policies, unique UIDs and resolved Role links. Four real
@@ -119,6 +183,28 @@ control with that subject pool and source observation disabled passes, so those
 settings alone do not reproduce the failure. The failed fixture is preserved;
 all owned listeners closed without forced stops and the foundation is unchanged.
 No single underlying availability cause or full-scale pass is established.
+
+A subsequent source-observation-disabled full-count attempt reached sixty-eight
+complete Namespace receipts, 680 Roles and 3,400 bindings before failing after
+4,187.04 seconds. One further Namespace remained partial, last recording ten
+Roles and forty bindings. Replica zero remained authorization-unavailable beyond
+the unchanged thirty-second readback bound. Both supported binary failure
+profiles decode; they show RBAC origin/watch work waiting in CQL calls, not a
+proven underlying cause. The owned backend did not restart, all fixture listeners
+closed without forced stops, and the foundation identities remained unchanged.
+These frozen-build receipts predate the new acknowledgement-clock fields and
+cannot supply propagation or source-vector acceptance. Preserve the partial
+fixture and failure; no full-scale pass or automatic full retry is implied.
+
+A fresh one-writer control subsequently completes eighty Namespaces, 800 Roles
+and 4,000 bindings with the unchanged thirty-second per-API readback bound.
+Its terminal receipt verifies normal shutdown, closed owned listeners and an
+unchanged foundation. It uses the pre-review bounded-replacement runtime with
+source/profile captures disabled. No image or full-suite build overlaps its
+workload; bounded single-host-core Go regressions do run alongside it. This
+surpasses the earlier diagnostic's cardinality but does not isolate its cause,
+verify the subsequent retry/memory fixes at that scale, or establish full-scale
+or sustained acceptance.
 
 ## Current verification boundary
 
