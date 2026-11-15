@@ -62,15 +62,16 @@ wrong, dropped or unavailable outcomes. Both APIs' exact action, source and
 fixed-root joins pass. This six-second diagnostic is not sustained acceptance.
 
 The diagnostic hook can additionally revoke and restore one independently
-selected organization User grant by editing its Role's list permission through
-two real signed Git pushes. It excludes
+selected organization User grant by editing its Role's list permission and then
+its binding's subjects through four real signed Git pushes. It excludes
 personal owners and principals with overlapping Group grants, observes both APIs
 concurrently from each successful-push acknowledgement, and preserves the
 five-second bound without substituting a later ref/readback clock. Unavailability,
 malformed responses and late successes fail rather than count as revocation.
-Exclusive private receipts retain both admissions and incomplete failures.
-The hook now also verifies the three independently authored Namespace states
-against complete captured source models, immutable UIDs and fixed root intent,
+Exclusive private receipts retain all four admissions and incomplete failures.
+The hook also verifies the five independently authored Namespace states
+against complete captured source models, immutable UIDs, exact mutation
+generations, pinned reference-resolution generations and fixed root intent,
 and joins each HTTP observation through its actual decision vector to the
 committed oracle. Pending source aliases cannot become evaluated evidence;
 verified aliases retain their original admission clocks and intermediate
@@ -83,11 +84,12 @@ origin proof for stable-identity revisions, never renewing its clock. Expiry,
 source gaps, lifecycle changes, repository replacement and overload remain
 fail-closed; race tests cover these boundaries. A native binding-edit follow-up
 then observed revocation in about 744 ms and restoration in about 2.84-2.95 s
-without unavailable HTTP results, but still failed the strict source join:
-the revoked binding's reference status had not caught up before restoration.
+without unavailable HTTP results, but still failed the strict source join.
+That verifier incorrectly required the immutable reference's resolution
+generation to advance with subject-only edits to the binding.
 That failure is preserved, not reclassified as a complete propagation pass.
-The current Role-rule diagnostic leaves resolved binding generations unchanged.
-Its fresh native run passes the full diagnostic: the 120-request static phase,
+An earlier Role-rule-only diagnostic leaves binding generations unchanged.
+Its native run passes its full diagnostic: the 120-request static phase,
 both APIs' source/root joins, revocation in about 1.30-1.41 s, restoration in
 about 1.15 s, exact Role/binding incarnation and restored-spec checks, and every
 observed dynamic decision's committed-history join. These are two observations
@@ -96,8 +98,21 @@ Captured-source diagnostics now
 disable decision-log sampling in their test process so missing receipts cannot
 silently disappear. This is diagnostic overhead, not production logging behavior
 or unprofiled acceptance. All completed fixtures close owned listeners without
-forced stops and preserve the foundation. Dynamic root history, binding-edit
-source joins, propagation distributions and sustained acceptance remain unproven.
+forced stops and preserve the foundation. Dynamic root history, propagation
+distributions and sustained acceptance remain unproven.
+
+The expanded native diagnostic passes in 71.10 seconds with two APIs, two
+controllers, singleton Git and all 120 expected static outcomes. Both APIs join
+Role-rule and binding-subject revocation/restoration to the five authored source
+states, preserving immutable UIDs. Binding generations advance from one to two
+and three while their originally resolved reference remains pinned to generation
+one. Regressions reject both a self-consistent older binding generation and a
+forged replacement reference generation; pending status remains ineligible.
+Binding revocation takes about 2.47-2.57 seconds and restoration about
+2.63-2.74 seconds. These pass five seconds, not the separate two-second p95 gate.
+The failed first expanded fixture remains preserved; its source join conflated
+the binding and reference generations. The correction changes only verification,
+not runtime status semantics, propagation deadlines or outcome handling.
 
 The review-fixed runtime also passes a fresh complete Role-rule diagnostic:
 all 120 ordinary outcomes and static/dynamic source joins pass, with revocation
@@ -228,7 +243,16 @@ root replacement and prioritizes root rebuilds over Namespace rebuilds.
 The regression fails before the correction and passes under race detection,
 including real origin-failure invalidation and eventual queued-scan recovery.
 The configured worker count and all freshness, retry, timeout and memory bounds
-are unchanged. This does not yet establish native recovery or scale acceptance.
+are unchanged. The local regression alone does not establish native recovery.
+
+The corrected reviewed-source runtime subsequently completes eighty Namespaces,
+800 Roles and 4,000 bindings in 3,220.25 seconds, with all six acknowledged
+canonical imports complete per Namespace. The one-writer, eight-principal
+control disables source/request/propagation/startup-profile captures and has no
+overlapping local builds or tests. Normal cleanup closes all owned listeners
+without forced stops and preserves the foundation. This is current-source
+medium-scale evidence, not one-thousand-Namespace, sustained-load or fault
+acceptance; the earlier failed control remains preserved.
 
 ## Current verification boundary
 

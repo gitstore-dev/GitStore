@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"math/bits"
 	"net"
@@ -573,7 +574,7 @@ func walkRBACCapacitySourceModels(reader io.Reader, visit func(rbacCapacitySourc
 	return nil
 }
 
-func rbacCapacitySeedBindingResolved(encoded json.RawMessage, roles map[string]string) (bool, error) {
+func rbacCapacitySeedBindingResolved(encoded json.RawMessage, roles map[string]string, referenceGeneration int64) (bool, error) {
 	var resource struct {
 		Metadata struct{ Generation int64 }
 		Spec     struct{ RoleRef struct{ Kind, Name string } }
@@ -599,7 +600,7 @@ func rbacCapacitySeedBindingResolved(encoded json.RawMessage, roles map[string]s
 			resolved.RoleRef.Name != resource.Spec.RoleRef.Name {
 			return false, errors.New("RBAC source resolved a different authored role reference")
 		}
-		if resolved.RoleRef.ObservedGeneration != resource.Metadata.Generation || resolved.RoleRef.UID == "" {
+		if referenceGeneration < 1 || resolved.RoleRef.ObservedGeneration != referenceGeneration || resolved.RoleRef.UID == "" {
 			return false, nil
 		}
 	}
@@ -643,7 +644,7 @@ func verifyRBACCapacitySeedSources(t *testing.T, path string, plan rbacCapacityS
 		if !owned || origin.GitRevision != receipts[origin.Namespace].GitRevision {
 			return nil
 		}
-		complete := checkRBACCapacityNamespaceSource(t, header, resources, plan.namespace(index), receipts[origin.Namespace])
+		complete := checkRBACCapacityNamespaceSource(t, header, resources, plan.namespace(index), receipts[origin.Namespace], nil, nil)
 		seen[origin.Namespace] = seen[origin.Namespace] || complete
 		return nil
 	})
@@ -656,7 +657,7 @@ func verifyRBACCapacitySeedSources(t *testing.T, path string, plan rbacCapacityS
 }
 
 func checkRBACCapacityNamespaceSource(t *testing.T, header rbacCapacitySourceHeader, resources []json.RawMessage,
-	namespace rbacCapacitySeedNamespace, receipt rbacCapacitySeedReceipt,
+	namespace rbacCapacitySeedNamespace, receipt rbacCapacitySeedReceipt, generations, references map[string]int64,
 ) bool {
 	t.Helper()
 	var origin struct{ NamespaceUID, Namespace, GitRevision string }
@@ -687,6 +688,15 @@ func checkRBACCapacityNamespaceSource(t *testing.T, header rbacCapacitySourceHea
 			"subjects": []any{map[string]any{"kind": "User", "name": namespace.Name}},
 		}
 	}
+	for key, generation := range generations {
+		require.Contains(t, expected, key, "generation pins must identify independently authored resources")
+		require.Positive(t, generation)
+	}
+	for key, generation := range references {
+		require.Contains(t, generations, key)
+		require.Positive(t, generation)
+		require.LessOrEqual(t, generation, generations[key])
+	}
 	require.Len(t, resources, len(expected), "a source model must contain the complete independently authored policy")
 	identities := make(map[string]bool)
 	complete := true
@@ -700,10 +710,17 @@ func checkRBACCapacityNamespaceSource(t *testing.T, header rbacCapacitySourceHea
 		identities[key] = true
 		require.Equal(t, origin.Namespace, resource.Metadata.Namespace)
 		require.Equal(t, rbacCapacitySeedSpec(t, spec, true), rbacCapacitySeedSpec(t, resource.Spec, true))
+		if generation, pinned := generations[key]; pinned && resource.Metadata.Generation != generation {
+			complete = false
+		}
 		uids := receipt.Roles
 		if resource.Kind == "RoleBinding" {
 			uids = receipt.Bindings
-			resolved, err := rbacCapacitySeedBindingResolved(encoded, receipt.Roles)
+			referenceGeneration := resource.Metadata.Generation
+			if pinned, found := references[key]; found {
+				referenceGeneration = pinned
+			}
+			resolved, err := rbacCapacitySeedBindingResolved(encoded, receipt.Roles, referenceGeneration)
 			require.NoError(t, err)
 			complete = complete && resolved
 		}
@@ -789,7 +806,7 @@ func checkRBACCapacityRootSource(header rbacCapacitySourceHeader, resources []js
 		!reflect.DeepEqual(spec, rbacCapacityInitialRootManifest(expected.AdminSubject)["spec"]) {
 		return false, errors.New("RBAC root source changed the authored administrator grant or binding incarnation")
 	}
-	return rbacCapacitySeedBindingResolved(resources[0], nil)
+	return rbacCapacitySeedBindingResolved(resources[0], nil, 1)
 }
 
 func checkRBACCapacityProbeTraces(reader io.Reader, expected map[string]rbacCapacityProbeExpectation, models map[rbacCapacityPolicyRevision]rbacCapacityProbeSource) error {
@@ -914,7 +931,7 @@ func verifyRBACCapacityProbeTraces(t *testing.T, sourcePath, decisionPath string
 			}
 			index, found := indexes[origin.Namespace]
 			require.True(t, found)
-			if !checkRBACCapacityNamespaceSource(t, header, resources, plan.namespace(index), receipt) {
+			if !checkRBACCapacityNamespaceSource(t, header, resources, plan.namespace(index), receipt, nil, nil) {
 				return nil
 			}
 		} else {
@@ -1484,11 +1501,14 @@ func runRBACCapacityPropagationDiagnostic(t *testing.T, fixture rbacNativeFixtur
 	subject := plan.Subjects[index%len(plan.Subjects)]
 	require.NotEmpty(t, tokens[subject])
 	type admission struct {
-		GitRevision    string
-		AcknowledgedAt time.Time
-		Allowed        bool
-		Latencies      [2]time.Duration
-		Complete       bool
+		Kind, Name          string
+		GitRevision         string
+		AcknowledgedAt      time.Time
+		Generation          int64
+		ReferenceGeneration int64
+		Allowed             bool
+		Latencies           [2]time.Duration
+		Complete            bool
 	}
 	record := struct {
 		Namespace, Subject string
@@ -1506,9 +1526,33 @@ func runRBACCapacityPropagationDiagnostic(t *testing.T, fixture rbacNativeFixtur
 	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	defer client.CloseIdleConnections()
 	probes := [2]map[string]rbacCapacityProbeExpectation{{}, {}}
+	generations := make(map[string]int64)
+	references := make(map[string]int64)
+	for _, kind := range []string{"Role", "RoleBinding"} {
+		name, uid := "capacity-role-00", seed.Roles["capacity-role-00"]
+		if kind == "RoleBinding" {
+			name, uid = "capacity-binding-00", seed.Bindings["capacity-binding-00"]
+		}
+		for _, api := range fixture.apis {
+			resource, response := fixture.lookup(t, api, kind, name)
+			require.Empty(t, response.Errors)
+			require.Equal(t, uid, resource.Metadata.UID)
+			require.Positive(t, resource.Metadata.Generation)
+			key := kind + "/" + name
+			if previous, found := generations[key]; found {
+				require.Equal(t, previous, resource.Metadata.Generation)
+			}
+			generations[key] = resource.Metadata.Generation
+			if kind == "RoleBinding" {
+				references[key] = resource.Metadata.Generation
+			}
+		}
+	}
 	history := []rbacCapacityAuthoredAdmission{{
 		Namespace: namespace, Receipt: seed, AcknowledgedAt: seed.Admissions[5].AcknowledgedAt,
-		Cases: map[string]bool{subject + "/product.list": true},
+		Cases:       map[string]bool{subject + "/product.list": true},
+		Generations: maps.Clone(generations),
+		References:  maps.Clone(references),
 	}}
 	for replica, api := range fixture.apis {
 		request := rbacCapacityRequest{
@@ -1525,25 +1569,43 @@ func runRBACCapacityPropagationDiagnostic(t *testing.T, fixture rbacNativeFixtur
 	require.NoError(t, err)
 	require.Equal(t, seed.GitRevision, "main@sha1:"+strings.TrimSpace(string(tip)),
 		"mutate only the exact independently seeded canonical repository")
-	for step, allowed := range []bool{false, true} {
-		role := plan.namespace(index).Resources[0]
-		if !allowed {
-			role["spec"].(map[string]any)["rules"].([]any)[0].(map[string]any)["verbs"] = []string{"read"}
+	for step, mutation := range []struct {
+		kind     string
+		resource int
+		allowed  bool
+	}{
+		{"Role", 0, false}, {"Role", 0, true},
+		{"RoleBinding", 10, false}, {"RoleBinding", 10, true},
+	} {
+		authored := plan.namespace(index)
+		resource := authored.Resources[mutation.resource]
+		if !mutation.allowed {
+			spec := resource["spec"].(map[string]any)
+			if mutation.kind == "Role" {
+				spec["rules"].([]any)[0].(map[string]any)["verbs"] = []string{"read"}
+			} else {
+				spec["subjects"] = []any{map[string]any{"kind": "User", "name": plan.Prefix + "-filler-propagation"}}
+			}
 		}
-		git.write(t, "rbac/roles/capacity-role-00.yaml", role)
+		name := resource["metadata"].(map[string]any)["name"].(string)
+		git.write(t, "rbac/"+strings.ToLower(mutation.kind)+"s/"+name+".yaml", resource)
 		sha := git.commit(t)
 		git.push(t)
 		acknowledgedAt := time.Now()
+		key := mutation.kind + "/" + name
+		generations[key]++
 		record.Admissions = append(record.Admissions, admission{
-			GitRevision: "main@sha1:" + sha, AcknowledgedAt: acknowledgedAt, Allowed: allowed,
+			Kind: mutation.kind, Name: name, Generation: generations[key],
+			ReferenceGeneration: references[key],
+			GitRevision:         "main@sha1:" + sha, AcknowledgedAt: acknowledgedAt, Allowed: mutation.allowed,
 		})
 		admitted := seed
 		admitted.GitRevision = "main@sha1:" + sha
-		authored := plan.namespace(index)
-		authored.Resources[0] = role
 		history = append(history, rbacCapacityAuthoredAdmission{
 			Namespace: authored, Receipt: admitted, AcknowledgedAt: acknowledgedAt,
-			Cases: map[string]bool{subject + "/product.list": allowed},
+			Cases:       map[string]bool{subject + "/product.list": mutation.allowed},
+			Generations: maps.Clone(generations),
+			References:  maps.Clone(references),
 		})
 		type observation struct {
 			replica int
@@ -1551,7 +1613,7 @@ func runRBACCapacityPropagationDiagnostic(t *testing.T, fixture rbacNativeFixtur
 			probe   rbacCapacityProbeExpectation
 		}
 		observations := make(chan observation, 102)
-		latencies, err := observeRBACCapacityPropagation(t.Context(), acknowledgedAt, allowed,
+		latencies, err := observeRBACCapacityPropagation(t.Context(), acknowledgedAt, mutation.allowed,
 			func(ctx context.Context, replica, attempt int) string {
 				request := rbacCapacityRequest{
 					ID:      fmt.Sprintf("%s-propagation-%d-%d-%02d", plan.Owner, step, replica, attempt),
@@ -1572,10 +1634,21 @@ func runRBACCapacityPropagationDiagnostic(t *testing.T, fixture rbacNativeFixtur
 		}
 		record.Admissions[step].Latencies = latencies
 		require.NoError(t, err, "both APIs must deliver the committed change within the unchanged five-second bound")
-		record.Admissions[step].Complete = true
 		tip := strings.Fields(git.remoteTip(t))
 		require.Len(t, tip, 2)
 		require.Equal(t, sha, tip[0], "the observed propagation must retain its admitted canonical commit")
+		for _, api := range fixture.apis {
+			current, response := fixture.lookup(t, api, mutation.kind, name)
+			require.Empty(t, response.Errors)
+			uids := seed.Roles
+			if mutation.kind == "RoleBinding" {
+				uids = seed.Bindings
+			}
+			require.Equal(t, uids[name], current.Metadata.UID)
+			require.Equal(t, generations[key], current.Metadata.Generation)
+			require.Equal(t, rbacCapacitySeedSpec(t, resource["spec"], true), rbacCapacitySeedSpec(t, current.Spec, false))
+		}
+		record.Admissions[step].Complete = true
 	}
 	for _, api := range fixture.apis {
 		role, roleResponse := fixture.lookup(t, api, "Role", "capacity-role-00")
@@ -1595,7 +1668,7 @@ func runRBACCapacityPropagationDiagnostic(t *testing.T, fixture rbacNativeFixtur
 		require.NoError(t, verifyRBACCapacityDynamicTraces(t, sourcePaths[replica], decisionPaths[replica], history, root, probes[replica]))
 	}
 	record.Complete = true
-	t.Log("bounded Role-rule grant/revoke diagnostic joined to authored Namespace history and fixed root intent; binding-edit joins, distributions, dynamic root history and sustained acceptance remain unverified")
+	t.Log("bounded Role-rule and binding-subject grant/revoke diagnostics joined to authored Namespace history, mutation generations and fixed root intent; distributions, dynamic root history and sustained acceptance remain unverified")
 }
 
 type rbacCapacityAuthoredAdmission struct {
@@ -1603,6 +1676,8 @@ type rbacCapacityAuthoredAdmission struct {
 	Receipt        rbacCapacitySeedReceipt
 	AcknowledgedAt time.Time
 	Cases          map[string]bool
+	Generations    map[string]int64
+	References     map[string]int64
 }
 
 func verifyRBACCapacityDynamicTraces(t *testing.T, sourcePath, decisionPath string, history []rbacCapacityAuthoredAdmission,
@@ -1616,6 +1691,8 @@ func verifyRBACCapacityDynamicTraces(t *testing.T, sourcePath, decisionPath stri
 		_, duplicate := indexes[admission.Receipt.GitRevision]
 		require.False(t, duplicate, "independent admissions cannot reinterpret a previous Git revision")
 		require.False(t, admission.AcknowledgedAt.IsZero())
+		require.NotEmpty(t, admission.Generations, "dynamic source aliases require independently pinned mutation generations")
+		require.NotEmpty(t, admission.References, "subject edits must retain the original immutable reference resolution generation")
 		if index > 0 {
 			require.True(t, admission.AcknowledgedAt.After(history[index-1].AcknowledgedAt))
 			require.Equal(t, history[0].Receipt.NamespaceNodeUID, admission.Receipt.NamespaceNodeUID)
@@ -1652,7 +1729,8 @@ func verifyRBACCapacityDynamicTraces(t *testing.T, sourcePath, decisionPath stri
 				return nil
 			}
 			admission := history[index]
-			if !checkRBACCapacityNamespaceSource(t, header, resources, admission.Namespace, admission.Receipt) {
+			if !checkRBACCapacityNamespaceSource(t, header, resources, admission.Namespace, admission.Receipt,
+				admission.Generations, admission.References) {
 				return nil
 			}
 			admissions[revision], seen[index] = index, true
