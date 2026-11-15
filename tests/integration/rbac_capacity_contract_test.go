@@ -7,19 +7,119 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestRBACCapacityPropagationUsesTheOriginalAcknowledgementAndBothReplicas(t *testing.T) {
+	for _, allowed := range []bool{false, true} {
+		t.Run(fmt.Sprint(allowed), func(t *testing.T) {
+			var calls [2]atomic.Int64
+			acknowledgedAt := time.Now().Add(-time.Second)
+			latencies, err := observeRBACCapacityPropagation(t.Context(), acknowledgedAt, allowed,
+				func(_ context.Context, replica, attempt int) string {
+					calls[replica].Add(1)
+					if (attempt >= replica) == allowed {
+						return "allow"
+					}
+					return "deny"
+				})
+			require.NoError(t, err)
+			require.EqualValues(t, 1, calls[0].Load())
+			require.EqualValues(t, 2, calls[1].Load(), "one converged replica must not hide another replica's stale verdict")
+			for _, latency := range latencies {
+				require.GreaterOrEqual(t, latency, time.Second, "readback must not restart the successful-push clock")
+				require.LessOrEqual(t, latency, 5*time.Second)
+			}
+		})
+	}
+}
+
+func TestRBACCapacityPropagationRejectsLateSuccessAndUnavailableDenials(t *testing.T) {
+	for _, outcome := range []string{"unavailable", "wrong", "unknown"} {
+		t.Run(outcome, func(t *testing.T) {
+			_, err := observeRBACCapacityPropagation(t.Context(), time.Now(), false,
+				func(context.Context, int, int) string { return outcome })
+			require.Error(t, err, "transport, malformed and fail-closed responses are not successful revocations")
+		})
+	}
+	t.Run("expired-original-clock", func(t *testing.T) {
+		_, err := observeRBACCapacityPropagation(t.Context(), time.Now().Add(-6*time.Second), true,
+			func(context.Context, int, int) string {
+				t.Error("expired propagation work must not start another observation")
+				return "allow"
+			})
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+	t.Run("late-success", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		_, err := observeRBACCapacityPropagation(ctx, time.Now(), true,
+			func(context.Context, int, int) string {
+				cancel()
+				return "allow"
+			})
+		require.ErrorIs(t, err, context.Canceled)
+	})
+	t.Run("one-replica-never-converges", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+		defer cancel()
+		var calls [2]atomic.Int64
+		_, err := observeRBACCapacityPropagation(ctx, time.Now(), true,
+			func(_ context.Context, replica, attempt int) string {
+				calls[replica].Add(1)
+				if replica == 0 {
+					return "allow"
+				}
+				return "deny"
+			})
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.EqualValues(t, 1, calls[0].Load())
+		require.EqualValues(t, 1, calls[1].Load())
+	})
+	for _, acknowledgedAt := range []time.Time{{}, time.Now().Add(time.Hour)} {
+		_, err := observeRBACCapacityPropagation(t.Context(), acknowledgedAt, true,
+			func(context.Context, int, int) string {
+				t.Error("unattributable admission clocks must fail before observation")
+				return "allow"
+			})
+		require.Error(t, err)
+	}
+}
+
+func TestRBACCapacityPropagationSelectsAnIndependentOrganizationGrant(t *testing.T) {
+	plan := rbacCapacitySeedPlan{
+		Owner: "owned-fixture", Prefix: "rbac-propagation", PersonalSubject: "personal-owner",
+		Subjects: []string{"reader-a", "reader-b", "reader-c", "reader-d"}, Group: "capacity-readers",
+	}
+	index, err := rbacCapacityPropagationNamespace(plan, 4, []string{"reader-a", "reader-b"})
+	require.NoError(t, err)
+	require.Equal(t, 2, index, "skip the protected personal owner and every overlapping Group grantee")
+	for _, tc := range []struct {
+		count  int
+		groups []string
+	}{
+		{1, nil}, {1001, nil}, {2, []string{"reader-b"}},
+		{4, plan.Subjects}, {4, []string{"unknown"}}, {4, []string{"reader-a", "reader-a"}},
+	} {
+		_, err := rbacCapacityPropagationNamespace(plan, tc.count, tc.groups)
+		require.Error(t, err, "a revocation must not assume removal of an independent or protected grant")
+	}
+}
 
 func TestRBACCapacitySourceModelsRejectTamperingGapsAndUncommittedTails(t *testing.T) {
 	resource := json.RawMessage(`{"kind":"Role","metadata":{"name":"owned-role"},"spec":{"rules":[]}}`)
@@ -190,7 +290,7 @@ func TestRBACCapacitySourceBindingRequiresTheAdmittedRoleIncarnation(t *testing.
 
 func TestRBACCapacityNativeProbeTracesRequireExactRequestAndSourceJoins(t *testing.T) {
 	expected := map[string]rbacCapacityProbeExpectation{
-		"owned-request": {Subject: "ordinary-reader", Namespace: "owned-namespace", Allowed: true},
+		"owned-request": {Subject: "ordinary-reader", Namespace: "owned-namespace", Action: "product.list", Allowed: true},
 	}
 	models := map[rbacCapacityPolicyRevision]rbacCapacityProbeSource{
 		{TierUID: "root-uid", GitRevision: "root-commit", Digest: "root-digest"}:                {Namespace: "root", Root: true},
@@ -227,10 +327,235 @@ func TestRBACCapacityNativeProbeTracesRequireExactRequestAndSourceJoins(t *testi
 		})
 	}
 	denied := map[string]rbacCapacityProbeExpectation{
-		"owned-request": {Subject: "ordinary-reader", Namespace: "owned-namespace"},
+		"owned-request": {Subject: "ordinary-reader", Namespace: "owned-namespace", Action: "product.list"},
 	}
 	require.NoError(t, checkRBACCapacityProbeTraces(strings.NewReader(
 		strings.Replace(decision, `"outcome":"allow"`, `"outcome":"deny"`, 1)), denied, models))
+	role := map[string]rbacCapacityProbeExpectation{
+		"owned-request": {Subject: "ordinary-reader", Namespace: "owned-namespace", Action: "role.list", Allowed: true},
+	}
+	require.NoError(t, checkRBACCapacityProbeTraces(strings.NewReader(strings.ReplaceAll(
+		strings.ReplaceAll(decision, "product.list", "role.list"), `"resource_kind":"product"`, `"resource_kind":"role"`)), role, models))
+}
+
+func TestRBACCapacityObservedTracesCannotRedefineCommittedPolicyOrRestartClocks(t *testing.T) {
+	now := time.Unix(1000, 0)
+	root := rbacCapacityPolicyRevision{TierUID: "cluster", GitRevision: "root-commit", Digest: "verified-root"}
+	grant := rbacCapacityPolicyRevision{TierUID: "namespace-uid", GitRevision: "grant", Digest: "verified-grant"}
+	revoke := rbacCapacityPolicyRevision{TierUID: "namespace-uid", GitRevision: "revoke", Digest: "verified-revoke"}
+	regrant := rbacCapacityPolicyRevision{TierUID: "namespace-uid", GitRevision: "regrant", Digest: "verified-regrant"}
+	alias := grant
+	alias.Digest = "verified-status-alias"
+	oracle := newRBACCapacityOracle(5 * time.Second)
+	for index, revision := range []rbacCapacityPolicyRevision{grant, revoke, regrant} {
+		require.NoError(t, oracle.commit(rbacCapacityPolicyVector{Cluster: root, Namespace: revision},
+			now.Add(time.Duration(index)*time.Second), map[string]bool{"reader/product.list": index != 1}))
+	}
+	require.NoError(t, oracle.commit(rbacCapacityPolicyVector{Cluster: root, Namespace: alias}, now,
+		map[string]bool{"reader/product.list": true}))
+	models := map[rbacCapacityPolicyRevision]rbacCapacityProbeSource{root: {Namespace: "root", Root: true}}
+	for _, revision := range []rbacCapacityPolicyRevision{grant, revoke, regrant, alias} {
+		models[revision] = rbacCapacityProbeSource{Namespace: "owned-namespace"}
+	}
+	for _, tc := range []struct {
+		name     string
+		revision rbacCapacityPolicyRevision
+		allowed  bool
+		at       time.Time
+		valid    bool
+	}{
+		{"original-grant", grant, true, now, true},
+		{"bounded-old-alias", alias, true, now.Add(3 * time.Second), true},
+		{"revoke", revoke, false, now.Add(time.Second), true},
+		{"regrant", regrant, true, now.Add(3 * time.Second), true},
+		{"wrong-verdict-with-matching-HTTP", revoke, true, now.Add(3 * time.Second), false},
+		{"late-original-alias", alias, true, now.Add(7 * time.Second), false},
+		{"future-policy", regrant, true, now, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outcome := "deny"
+			if tc.allowed {
+				outcome = "allow"
+			}
+			decision, err := json.Marshal(map[string]any{
+				"request_id": "observed", "action": "product.list", "subject": "reader",
+				"resource_namespace": "owned-namespace", "resource_kind": "product", "outcome": outcome, "provider": "opa",
+				"authorization_tiers": []map[string]string{
+					{"tierID": root.TierUID, "gitRevision": root.GitRevision, "contentDigest": root.Digest},
+					{"tierID": tc.revision.TierUID, "gitRevision": tc.revision.GitRevision, "contentDigest": tc.revision.Digest},
+				},
+			})
+			require.NoError(t, err)
+			expected := map[string]rbacCapacityProbeExpectation{"observed": {
+				Subject: "reader", Namespace: "owned-namespace", Action: "product.list", Allowed: tc.allowed, ObservedAt: tc.at,
+			}}
+			called := 0
+			err = checkRBACCapacityObservedTraces(bytes.NewReader(append(decision, '\n')), expected, models,
+				func(vector rbacCapacityPolicyVector, id string, allowed bool) error {
+					called++
+					probe := expected[id]
+					return oracle.check(vector, probe.Subject+"/"+probe.Action, allowed, probe.ObservedAt)
+				})
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err, "matching server and HTTP outcomes cannot author their own expected policy")
+			}
+			require.Equal(t, 1, called, "every joined ordinary response must reach the independent committed oracle")
+		})
+	}
+}
+
+func TestRBACCapacityDynamicHistoryJoinsSealedSourcesAndSkipsPendingAliases(t *testing.T) {
+	plan := rbacCapacitySeedPlan{
+		Owner: "owned-fixture", Prefix: "rbac-history", PersonalSubject: "personal-owner",
+		Subjects: []string{"reader-a", "reader-b", "reader-c", "reader-d"}, Group: "capacity-readers",
+	}
+	receipt := rbacCapacitySeedReceipt{
+		Namespace: plan.namespaceName(1), NamespaceNodeUID: base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Namespace/namespace-uid")),
+		Roles: make(map[string]string), Bindings: make(map[string]string),
+	}
+	for _, resource := range plan.namespace(1).Resources {
+		name := resource["metadata"].(map[string]any)["name"].(string)
+		uids := receipt.Roles
+		if resource["kind"] == "RoleBinding" {
+			uids = receipt.Bindings
+		}
+		uids[name] = "uid-" + name
+	}
+	var sources, decisions bytes.Buffer
+	sourceEncoder := json.NewEncoder(&sources)
+	writeSource := func(origin, state map[string]any, resources []json.RawMessage) rbacCapacityPolicyRevision {
+		header := rbacCapacitySourceHeader{ModelVersion: "v1"}
+		var err error
+		header.Origin, err = json.Marshal(origin)
+		require.NoError(t, err)
+		header.State, err = json.Marshal(state)
+		require.NoError(t, err)
+		canonical, err := json.Marshal(header)
+		require.NoError(t, err)
+		hash := sha256.New()
+		_, _ = hash.Write(canonical)
+		for _, resource := range resources {
+			_, _ = hash.Write([]byte{0})
+			_, _ = hash.Write(resource)
+		}
+		header.ContentDigest = hex.EncodeToString(hash.Sum(nil))
+		require.NoError(t, sourceEncoder.Encode(map[string]any{"type": "begin", "snapshot": header, "resourceCount": len(resources)}))
+		for _, resource := range resources {
+			require.NoError(t, sourceEncoder.Encode(map[string]any{"type": "resource", "resource": resource}))
+		}
+		require.NoError(t, sourceEncoder.Encode(map[string]any{"type": "end", "digest": header.ContentDigest}))
+		return rbacCapacityPolicyRevision{
+			TierUID: state["tierID"].(string), GitRevision: origin["gitRevision"].(string), Digest: header.ContentDigest,
+		}
+	}
+	root := rbacCapacityRootPolicy{NamespaceUID: "root-uid", BindingUID: "admin-binding-uid", AdminSubject: "bootstrap-admin"}
+	var err error
+	root.TreeDigest, err = rbacCapacityRootTreeDigest(root.AdminSubject)
+	require.NoError(t, err)
+	binding := rbacCapacityInitialRootManifest(root.AdminSubject)
+	binding["metadata"].(map[string]any)["uid"] = root.BindingUID
+	binding["metadata"].(map[string]any)["generation"] = 1
+	binding["status"] = map[string]any{"observedGeneration": 1, "resolved": map[string]any{
+		"roleRef": map[string]any{"kind": "ClusterRole", "name": "cluster-admin", "uid": "builtin-admin", "observedGeneration": 1},
+	}}
+	encoded, err := json.Marshal(binding)
+	require.NoError(t, err)
+	cluster := writeSource(map[string]any{
+		"namespace": "gitstore-system", "namespaceUID": root.NamespaceUID, "gitRevision": "root-commit",
+		"root": true, "active": true, "treeDigest": root.TreeDigest,
+	}, map[string]any{"tierID": "cluster", "roleCount": 0, "bindingCount": 1}, []json.RawMessage{encoded})
+	var history []rbacCapacityAuthoredAdmission
+	var pendingRevision, resolvedRevocation rbacCapacityPolicyRevision
+	expected := make(map[string]rbacCapacityProbeExpectation)
+	for step, allowed := range []bool{true, false, true} {
+		namespace := plan.namespace(1)
+		if !allowed {
+			namespace.Resources[10]["spec"].(map[string]any)["subjects"] = []any{
+				map[string]any{"kind": "User", "name": plan.Prefix + "-filler-propagation"},
+			}
+		}
+		admitted := receipt
+		admitted.GitRevision = fmt.Sprintf("main@sha1:%040d", step+1)
+		at := time.Unix(1000+int64(step), 0)
+		history = append(history, rbacCapacityAuthoredAdmission{
+			Namespace: namespace, Receipt: admitted, AcknowledgedAt: at,
+			Cases: map[string]bool{"reader-b/product.list": allowed},
+		})
+		var resources []json.RawMessage
+		for _, resource := range namespace.Resources {
+			data, err := json.Marshal(resource)
+			require.NoError(t, err)
+			var source map[string]any
+			require.NoError(t, json.Unmarshal(data, &source))
+			metadata := source["metadata"].(map[string]any)
+			name := metadata["name"].(string)
+			generation := 1
+			uids := receipt.Roles
+			if resource["kind"] == "RoleBinding" {
+				uids = receipt.Bindings
+				if name == "capacity-binding-00" {
+					generation += step
+				}
+				status := map[string]any{"observedGeneration": generation}
+				ref := source["spec"].(map[string]any)["roleRef"].(map[string]any)
+				if ref["name"] != "capacity-unresolved" {
+					roleUID := receipt.Roles[ref["name"].(string)]
+					if ref["kind"] == "ClusterRole" {
+						roleUID = "builtin-view"
+					}
+					status["resolved"] = map[string]any{"roleRef": map[string]any{
+						"kind": ref["kind"], "name": ref["name"], "uid": roleUID, "observedGeneration": generation,
+					}}
+				}
+				source["status"] = status
+			}
+			metadata["uid"], metadata["generation"] = uids[name], generation
+			encoded, err := json.Marshal(source)
+			require.NoError(t, err)
+			resources = append(resources, encoded)
+		}
+		origin := map[string]any{"namespace": namespace.Name, "namespaceUID": "namespace-uid", "gitRevision": admitted.GitRevision}
+		state := map[string]any{"tierID": "namespace-uid", "roleCount": 10, "bindingCount": 50,
+			"projection": map[string]any{"gitRevision": admitted.GitRevision}}
+		revision := writeSource(origin, state, resources)
+		if step == 1 {
+			pending := append([]json.RawMessage(nil), resources...)
+			var unresolved map[string]any
+			require.NoError(t, json.Unmarshal(pending[10], &unresolved))
+			unresolved["status"].(map[string]any)["observedGeneration"] = 1
+			pending[10], err = json.Marshal(unresolved)
+			require.NoError(t, err)
+			pendingRevision = writeSource(origin, state, pending)
+			resolvedRevocation = revision
+		}
+		id := fmt.Sprintf("request-%d", step)
+		expected[id] = rbacCapacityProbeExpectation{
+			Subject: "reader-b", Namespace: namespace.Name, Action: "product.list", Allowed: allowed, ObservedAt: at.Add(time.Millisecond),
+		}
+		outcome := "deny"
+		if allowed {
+			outcome = "allow"
+		}
+		require.NoError(t, json.NewEncoder(&decisions).Encode(map[string]any{
+			"request_id": id, "action": "product.list", "subject": "reader-b", "resource_namespace": namespace.Name,
+			"resource_kind": "product", "provider": "opa", "outcome": outcome, "authorization_tiers": []map[string]string{
+				{"tierID": cluster.TierUID, "gitRevision": cluster.GitRevision, "contentDigest": cluster.Digest},
+				{"tierID": revision.TierUID, "gitRevision": revision.GitRevision, "contentDigest": revision.Digest},
+			},
+		}))
+	}
+	directory := t.TempDir()
+	sourcePath, decisionPath := filepath.Join(directory, "sources.jsonl"), filepath.Join(directory, "decisions.jsonl")
+	require.NoError(t, os.WriteFile(sourcePath, sources.Bytes(), 0600))
+	require.NoError(t, os.WriteFile(decisionPath, decisions.Bytes(), 0600))
+	require.NoError(t, verifyRBACCapacityDynamicTraces(t, sourcePath, decisionPath, history, root, expected))
+	changed := strings.Replace(decisions.String(), resolvedRevocation.Digest, pendingRevision.Digest, 1)
+	require.NotEqual(t, decisions.String(), changed)
+	require.NoError(t, os.WriteFile(decisionPath, []byte(changed), 0600))
+	require.Error(t, verifyRBACCapacityDynamicTraces(t, sourcePath, decisionPath, history, root, expected),
+		"a matching Git commit and HTTP denial cannot promote a pending source candidate into a verified policy")
 }
 
 func TestRBACCapacityRootSourceRequiresAuthoredGrantAndPinnedIncarnations(t *testing.T) {
@@ -409,6 +734,104 @@ func TestRBACCapacitySeedReadbackKeepsIndependentPolicySemantics(t *testing.T) {
 		json.RawMessage(`{"roleRef":{"kind":"ROLE","name":"reader"},"subjects":[{"kind":"USER","name":"different-subject"}]}`), false))
 }
 
+func TestRBACCapacityRequestPlanPreservesReplicaMixAndExcludesOtherGrants(t *testing.T) {
+	plan := rbacCapacitySeedPlan{
+		Owner: "owned-fixture", Prefix: "rbac-seed-fixture", PersonalSubject: "personal-owner",
+		Subjects: []string{"reader-a", "reader-b", "reader-c", "reader-d", "reader-e", "reader-f", "reader-g", "reader-h"},
+		Group:    "capacity-readers",
+	}
+	groups := []string{"reader-a", "reader-e"}
+	counts := [2]map[string]int{{}, {}}
+	namespaces, subjects, actions, requests := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for offer := int64(0); offer < 1000*20; offer++ {
+		request, err := plan.request(offer, 1000, groups)
+		require.NoError(t, err)
+		require.False(t, requests[request.ID])
+		requests[request.ID] = true
+		counts[request.Replica][request.Expected]++
+		namespaces[request.Namespace], subjects[request.Subject], actions[request.Action] = true, true, true
+		if request.Expected == "deny" {
+			index, _ := rbacCapacityCase(offer/2, 1000)
+			require.NotEqual(t, plan.Subjects[index%len(plan.Subjects)], request.Subject)
+			require.NotEqual(t, plan.Subjects[(index+1)%len(plan.Subjects)], request.Subject)
+			require.NotContains(t, groups, request.Subject, "an unresolved or unbound User can still have a Group grant")
+		}
+		if request.Expected == "isolation" {
+			require.Equal(t, plan.PersonalSubject, request.Subject)
+			require.NotEqual(t, plan.PersonalSubject, request.Namespace)
+		}
+	}
+	for _, actual := range counts {
+		require.Equal(t, map[string]int{"allow": 6000, "deny": 3000, "isolation": 1000}, actual)
+	}
+	require.Len(t, namespaces, 1000)
+	require.Len(t, subjects, 9)
+	require.Equal(t, map[string]bool{"product.list": true, "role.list": true}, actions)
+	_, err := plan.request(-1, 1000, groups)
+	require.Error(t, err)
+	_, err = plan.request(0, 1, groups)
+	require.Error(t, err, "isolation probes require another owned Namespace")
+	_, err = plan.request(0, 1000, []string{"not-an-authored-principal"})
+	require.Error(t, err)
+	_, err = plan.request(12, 1000, plan.Subjects)
+	require.Error(t, err, "a fixture without an independently ungranted principal cannot produce expected denials")
+}
+
+func TestRBACCapacityOrdinaryRequestsNeverCountInfrastructureOrPartialDataAsDenial(t *testing.T) {
+	for _, tc := range []struct {
+		name, expected, body, outcome string
+		status                        int
+	}{
+		{"allow", "allow", `{"data":{"products":{"edges":[]}}}`, "allow", 200},
+		{"deny", "deny", `{"data":{"products":null},"errors":[{"extensions":{"code":"FORBIDDEN"}}]}`, "deny", 200},
+		{"isolation", "isolation", `{"errors":[{"extensions":{"code":"FORBIDDEN"}}]}`, "isolation", 200},
+		{"wrong-allow", "deny", `{"data":{"products":{"edges":[]}}}`, "wrong", 200},
+		{"wrong-denial", "allow", `{"errors":[{"extensions":{"code":"FORBIDDEN"}}]}`, "wrong", 200},
+		{"unavailable", "deny", `{"errors":[{"extensions":{"code":"AUTHORIZATION_UNAVAILABLE"}}]}`, "unavailable", 200},
+		{"partial-data", "deny", `{"data":{"products":{"edges":[]}},"errors":[{"extensions":{"code":"FORBIDDEN"}}]}`, "wrong", 200},
+		{"mixed-errors", "deny", `{"errors":[{"extensions":{"code":"FORBIDDEN"}},{"extensions":{"code":"INTERNAL"}}]}`, "wrong", 200},
+		{"transport-forbidden", "deny", "", "unavailable", 403},
+		{"transport-unavailable", "deny", "", "unavailable", 503},
+		{"missing-envelope", "allow", `{"data":{}}`, "wrong", 200},
+		{"missing-node", "allow", `{"data":{"products":{"edges":[{}]}}}`, "wrong", 200},
+		{"malformed", "allow", `not-json`, "wrong", 200},
+		{"bounded-body", "allow", strings.Repeat("x", 65537), "wrong", 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				require.Equal(t, "/admin/graphql", r.URL.Path)
+				require.Equal(t, "Bearer private-test-token", r.Header.Get("Authorization"))
+				require.Equal(t, "owned-request", r.Header.Get("X-Request-ID"))
+				var document struct {
+					Query     string
+					Variables map[string]string
+				}
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&document))
+				require.Contains(t, document.Query, "products(namespace:$namespace,first:1)")
+				require.Equal(t, "owned-namespace", document.Variables["namespace"])
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+			request := rbacCapacityRequest{
+				ID: "owned-request", Namespace: "owned-namespace", Action: "product.list", Expected: tc.expected,
+			}
+			require.Equal(t, tc.outcome, executeRBACCapacityRequest(t.Context(), server.Client(), server.URL, "private-test-token", request))
+		})
+	}
+	t.Run("ordinary-role-list", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			content, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			require.Contains(t, string(content), "roles(namespace:$namespace,first:1)")
+			_, _ = io.WriteString(w, `{"data":{"roles":{"edges":[]}}}`)
+		}))
+		defer server.Close()
+		require.Equal(t, "allow", executeRBACCapacityRequest(t.Context(), server.Client(), server.URL, "private-test-token",
+			rbacCapacityRequest{ID: "owned-request", Namespace: "owned-namespace", Action: "role.list", Expected: "allow"}))
+	})
+}
+
 func TestRBACCapacityScheduledOffersAndRotation(t *testing.T) {
 	require.EqualValues(t, 900000, rbacCapacityScheduledOffers(30*time.Minute, 500))
 	require.EqualValues(t, 1, rbacCapacityScheduledOffers(3*time.Millisecond, 500))
@@ -427,15 +850,17 @@ func TestRBACCapacityScheduledOffersAndRotation(t *testing.T) {
 func TestRBACCapacityBoundedScheduler(t *testing.T) {
 	cfg := rbacCapacityScheduleConfig{Duration: 100 * time.Millisecond, Rate: 1000, Workers: 2, Pending: 16, Drain: time.Second}
 	t.Run("accounts for every scheduled completion", func(t *testing.T) {
-		accounting, err := runRBACCapacitySchedule(t.Context(), cfg, func(_ context.Context, offer int64) string {
+		healthy := cfg
+		healthy.Duration, healthy.Rate, healthy.Pending = time.Second, 10, 10
+		accounting, err := runRBACCapacitySchedule(t.Context(), healthy, func(_ context.Context, offer int64) string {
 			_, probe := rbacCapacityCase(offer, 1000)
 			return probe
 		})
 		require.NoError(t, err)
-		require.NoError(t, accounting.validate(100, false))
-		require.EqualValues(t, 60, accounting.Allowed)
-		require.EqualValues(t, 30, accounting.Denied)
-		require.EqualValues(t, 10, accounting.Invalid)
+		require.NoError(t, accounting.validate(10, false))
+		require.EqualValues(t, 6, accounting.Allowed)
+		require.EqualValues(t, 3, accounting.Denied)
+		require.EqualValues(t, 1, accounting.Invalid)
 	})
 	t.Run("queue saturation reports all offers without stretching scheduling", func(t *testing.T) {
 		started := time.Now()

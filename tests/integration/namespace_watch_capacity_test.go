@@ -96,10 +96,10 @@ func (p rbacCapacitySeedPlan) validate() error {
 }
 
 func (p rbacCapacitySeedPlan) namespace(index int) rbacCapacitySeedNamespace {
-	result := rbacCapacitySeedNamespace{Name: fmt.Sprintf("%s-%04d", p.Prefix, index), Tier: "ORGANIZATION"}
+	result := rbacCapacitySeedNamespace{Name: p.namespaceName(index), Tier: "ORGANIZATION"}
 	bindings := 50
 	if index == 0 {
-		result.Name, result.Tier, bindings = p.PersonalSubject, "USER", 49
+		result.Tier, bindings = "USER", 49
 	}
 	manifest := func(kind, name string, spec map[string]any) map[string]any {
 		return map[string]any{
@@ -138,6 +138,238 @@ func (p rbacCapacitySeedPlan) namespace(index int) rbacCapacitySeedNamespace {
 			map[string]any{"roleRef": role, "subjects": []any{subject}}))
 	}
 	return result
+}
+
+func (p rbacCapacitySeedPlan) namespaceName(index int) string {
+	if index == 0 {
+		return p.PersonalSubject
+	}
+	return fmt.Sprintf("%s-%04d", p.Prefix, index)
+}
+
+type rbacCapacityRequest struct {
+	ID, Subject, Namespace, Action, Expected string
+	Replica                                  int
+}
+
+func (p rbacCapacitySeedPlan) request(offer int64, count int, groupMembers []string) (rbacCapacityRequest, error) {
+	if offer < 0 || count < 2 || count > 1000 || len(p.Subjects) < 4 || len(p.Subjects) > 128 ||
+		len(groupMembers) == 0 || len(groupMembers) > len(p.Subjects) {
+		return rbacCapacityRequest{}, errors.New("RBAC requests require bounded owned namespaces and independently declared principal groups")
+	}
+	groups := make(map[string]bool, len(groupMembers))
+	for _, member := range groupMembers {
+		known := false
+		for _, subject := range p.Subjects {
+			known = known || subject == member
+		}
+		if !known || groups[member] {
+			return rbacCapacityRequest{}, errors.New("RBAC group membership differs from the declared principal working set")
+		}
+		groups[member] = true
+	}
+	index, expected := rbacCapacityCase(offer/2, count)
+	direct, builtin := p.Subjects[index%len(p.Subjects)], p.Subjects[(index+1)%len(p.Subjects)]
+	request := rbacCapacityRequest{
+		ID: fmt.Sprintf("%s-ordinary-%012d", p.Owner, offer), Replica: int(offer % 2),
+		Namespace: p.namespaceName(index), Subject: direct, Action: "product.list", Expected: expected,
+	}
+	switch expected {
+	case "allow":
+		switch offer / 2 % 6 {
+		case 1:
+			request.Subject = builtin
+		case 2:
+			request.Subject = groupMembers[index%len(groupMembers)]
+		case 3:
+			request.Action = "role.list"
+		case 4:
+			request.Subject, request.Action = groupMembers[index%len(groupMembers)], "role.list"
+		}
+	case "deny":
+		request.Subject = ""
+		for offset := range len(p.Subjects) {
+			candidate := p.Subjects[(index+2+offset)%len(p.Subjects)]
+			if candidate != direct && candidate != builtin && !groups[candidate] {
+				request.Subject = candidate
+				break
+			}
+		}
+		if request.Subject == "" {
+			return rbacCapacityRequest{}, errors.New("RBAC expected denials require a principal without an independently authored grant")
+		}
+		if offer/2%2 == 0 {
+			request.Action = "role.list"
+		}
+	case "isolation":
+		request.Subject = p.PersonalSubject
+		if index == 0 {
+			request.Namespace = p.namespaceName(1)
+		}
+	}
+	return request, nil
+}
+
+func executeRBACCapacityRequest(ctx context.Context, client *http.Client, api, token string, request rbacCapacityRequest) string {
+	outcome := observeRBACCapacityRequest(ctx, client, api, token, request)
+	if outcome == "deny" && (request.Expected == "deny" || request.Expected == "isolation") {
+		return request.Expected
+	}
+	if outcome == "allow" && request.Expected != "allow" || outcome == "deny" {
+		return "wrong"
+	}
+	return outcome
+}
+
+func observeRBACCapacityRequest(ctx context.Context, client *http.Client, api, token string, request rbacCapacityRequest) string {
+	field := "products"
+	if request.Action == "role.list" {
+		field = "roles"
+	} else if request.Action != "product.list" {
+		return "wrong"
+	}
+	content, err := json.Marshal(map[string]any{
+		"query":     `query($namespace:String!){` + field + `(namespace:$namespace,first:1){edges{node{id}}}}`,
+		"variables": map[string]string{"namespace": request.Namespace},
+	})
+	if err != nil {
+		return "wrong"
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(api, "/")+"/admin/graphql", bytes.NewReader(content))
+	if err != nil || token == "" || request.ID == "" {
+		return "wrong"
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Authorization", "Bearer "+token)
+	httpRequest.Header.Set("X-Request-ID", request.ID)
+	response, err := client.Do(httpRequest)
+	if err != nil {
+		return "unavailable"
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "unavailable"
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, 65537))
+	if err != nil {
+		return "unavailable"
+	}
+	if len(body) > 65536 {
+		return "wrong"
+	}
+	var data struct {
+		Data   map[string]json.RawMessage
+		Errors []struct{ Extensions struct{ Code string } }
+	}
+	if json.Unmarshal(body, &data) != nil {
+		return "wrong"
+	}
+	if len(data.Errors) != 0 {
+		code := data.Errors[0].Extensions.Code
+		for _, failure := range data.Errors {
+			if failure.Extensions.Code != code {
+				return "wrong"
+			}
+		}
+		for _, value := range data.Data {
+			if string(value) != "null" {
+				return "wrong"
+			}
+		}
+		if code == "AUTHORIZATION_UNAVAILABLE" {
+			return "unavailable"
+		}
+		if code == "FORBIDDEN" {
+			return "deny"
+		}
+		return "wrong"
+	}
+	var connection struct {
+		Edges []struct{ Node *struct{ ID string } }
+	}
+	if json.Unmarshal(data.Data[field], &connection) != nil ||
+		connection.Edges == nil || len(connection.Edges) > 1 {
+		return "wrong"
+	}
+	for _, edge := range connection.Edges {
+		if edge.Node == nil || edge.Node.ID == "" {
+			return "wrong"
+		}
+	}
+	return "allow"
+}
+
+func observeRBACCapacityPropagation(ctx context.Context, acknowledgedAt time.Time, allowed bool,
+	observe func(context.Context, int, int) string,
+) ([2]time.Duration, error) {
+	var latencies [2]time.Duration
+	if acknowledgedAt.IsZero() || acknowledgedAt.After(time.Now()) || observe == nil {
+		return latencies, errors.New("RBAC propagation requires an independently recorded successful-push clock and observer")
+	}
+	ctx, cancel := context.WithDeadline(ctx, acknowledgedAt.Add(5*time.Second))
+	defer cancel()
+	type result struct {
+		replica int
+		latency time.Duration
+		err     error
+	}
+	results := make(chan result, len(latencies))
+	for replica := range latencies {
+		go func() {
+			finish := func(err error) {
+				latency := time.Since(acknowledgedAt)
+				if err == nil {
+					err = ctx.Err()
+					if err == nil && latency > 5*time.Second {
+						err = context.DeadlineExceeded
+					}
+				}
+				results <- result{replica: replica, latency: latency, err: err}
+			}
+			for attempt := 0; attempt < 51; attempt++ {
+				if err := ctx.Err(); err != nil {
+					finish(err)
+					return
+				}
+				outcome := observe(ctx, replica, attempt)
+				if err := ctx.Err(); err != nil {
+					finish(err)
+					return
+				}
+				switch outcome {
+				case "allow", "deny":
+					if (outcome == "allow") == allowed {
+						finish(nil)
+						return
+					}
+				default:
+					finish(errors.New("RBAC propagation encountered a malformed response or unplanned unavailability"))
+					return
+				}
+				timer := time.NewTimer(100 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					finish(ctx.Err())
+					return
+				case <-timer.C:
+				}
+			}
+			finish(errors.New("RBAC propagation exhausted its bounded observations"))
+		}()
+	}
+	var failure error
+	for range latencies {
+		result := <-results
+		latencies[result.replica] = result.latency
+		if result.err != nil && failure == nil {
+			failure = result.err
+			cancel()
+		}
+	}
+	return latencies, failure
 }
 
 type rbacCapacitySeedReceipt struct {
@@ -403,13 +635,6 @@ func verifyRBACCapacitySeedSources(t *testing.T, path string, plan rbacCapacityS
 	for index := range count {
 		indexes[plan.namespace(index).Name] = index
 	}
-	rawNamespaceUID := func(node string) string {
-		decoded, err := base64.StdEncoding.DecodeString(node)
-		require.NoError(t, err)
-		uid, found := strings.CutPrefix(string(decoded), "gid://GitStore/Namespace/")
-		require.True(t, found, "native source UIDs must identify the same typed GraphQL incarnations")
-		return uid
-	}
 	seen := make(map[string]bool)
 	err = walkRBACCapacitySourceModels(file, func(header rbacCapacitySourceHeader, resources []json.RawMessage) error {
 		var origin struct{ NamespaceUID, Namespace, GitRevision string }
@@ -418,50 +643,7 @@ func verifyRBACCapacitySeedSources(t *testing.T, path string, plan rbacCapacityS
 		if !owned || origin.GitRevision != receipts[origin.Namespace].GitRevision {
 			return nil
 		}
-		receipt := receipts[origin.Namespace]
-		require.Equal(t, rawNamespaceUID(receipt.NamespaceNodeUID), origin.NamespaceUID)
-		var state struct {
-			TierID                  string
-			RoleCount, BindingCount int
-			Projection              struct{ GitRevision string }
-		}
-		require.NoError(t, json.Unmarshal(header.State, &state))
-		require.Equal(t, origin.NamespaceUID, state.TierID)
-		require.Equal(t, receipt.GitRevision, state.Projection.GitRevision)
-		require.Equal(t, 10, state.RoleCount)
-		require.Equal(t, 50, state.BindingCount)
-		expected := make(map[string]map[string]any)
-		for _, resource := range plan.namespace(index).Resources {
-			expected[resource["kind"].(string)+"/"+resource["metadata"].(map[string]any)["name"].(string)] = resource["spec"].(map[string]any)
-		}
-		if index == 0 {
-			expected["RoleBinding/namespace-owner-access"] = map[string]any{
-				"roleRef":  map[string]any{"kind": "ClusterRole", "name": "namespace-full-control"},
-				"subjects": []any{map[string]any{"kind": "User", "name": plan.PersonalSubject}},
-			}
-		}
-		require.Len(t, resources, len(expected), "a source model must contain the complete independently authored policy")
-		identities := make(map[string]bool)
-		complete := true
-		for _, encoded := range resources {
-			var resource rbacNativeResource
-			require.NoError(t, json.Unmarshal(encoded, &resource))
-			key := resource.Kind + "/" + resource.Metadata.Name
-			spec, found := expected[key]
-			require.True(t, found, "source models must not acquire undeclared policy")
-			require.False(t, identities[key])
-			identities[key] = true
-			require.Equal(t, origin.Namespace, resource.Metadata.Namespace)
-			require.Equal(t, rbacCapacitySeedSpec(t, spec, true), rbacCapacitySeedSpec(t, resource.Spec, true))
-			uids := receipt.Roles
-			if resource.Kind == "RoleBinding" {
-				uids = receipt.Bindings
-				resolved, err := rbacCapacitySeedBindingResolved(encoded, receipt.Roles)
-				require.NoError(t, err)
-				complete = complete && resolved
-			}
-			require.Equal(t, uids[resource.Metadata.Name], resource.Metadata.UID)
-		}
+		complete := checkRBACCapacityNamespaceSource(t, header, resources, plan.namespace(index), receipts[origin.Namespace])
 		seen[origin.Namespace] = seen[origin.Namespace] || complete
 		return nil
 	})
@@ -473,9 +655,67 @@ func verifyRBACCapacitySeedSources(t *testing.T, path string, plan rbacCapacityS
 	}
 }
 
+func checkRBACCapacityNamespaceSource(t *testing.T, header rbacCapacitySourceHeader, resources []json.RawMessage,
+	namespace rbacCapacitySeedNamespace, receipt rbacCapacitySeedReceipt,
+) bool {
+	t.Helper()
+	var origin struct{ NamespaceUID, Namespace, GitRevision string }
+	var state struct {
+		TierID                  string
+		RoleCount, BindingCount int
+		Projection              struct{ GitRevision string }
+	}
+	require.NoError(t, json.Unmarshal(header.Origin, &origin))
+	require.NoError(t, json.Unmarshal(header.State, &state))
+	require.Equal(t, namespace.Name, origin.Namespace)
+	require.Equal(t, receipt.GitRevision, origin.GitRevision)
+	decoded, err := base64.StdEncoding.DecodeString(receipt.NamespaceNodeUID)
+	require.NoError(t, err)
+	require.Equal(t, "gid://GitStore/Namespace/"+origin.NamespaceUID, string(decoded))
+	require.NotEmpty(t, origin.NamespaceUID)
+	require.Equal(t, origin.NamespaceUID, state.TierID)
+	require.Equal(t, receipt.GitRevision, state.Projection.GitRevision)
+	require.Equal(t, len(receipt.Roles), state.RoleCount)
+	require.Equal(t, len(receipt.Bindings), state.BindingCount)
+	expected := make(map[string]map[string]any)
+	for _, resource := range namespace.Resources {
+		expected[resource["kind"].(string)+"/"+resource["metadata"].(map[string]any)["name"].(string)] = resource["spec"].(map[string]any)
+	}
+	if namespace.Tier == "USER" {
+		expected["RoleBinding/namespace-owner-access"] = map[string]any{
+			"roleRef":  map[string]any{"kind": "ClusterRole", "name": "namespace-full-control"},
+			"subjects": []any{map[string]any{"kind": "User", "name": namespace.Name}},
+		}
+	}
+	require.Len(t, resources, len(expected), "a source model must contain the complete independently authored policy")
+	identities := make(map[string]bool)
+	complete := true
+	for _, encoded := range resources {
+		var resource rbacNativeResource
+		require.NoError(t, json.Unmarshal(encoded, &resource))
+		key := resource.Kind + "/" + resource.Metadata.Name
+		spec, found := expected[key]
+		require.True(t, found, "source models must not acquire undeclared policy")
+		require.False(t, identities[key])
+		identities[key] = true
+		require.Equal(t, origin.Namespace, resource.Metadata.Namespace)
+		require.Equal(t, rbacCapacitySeedSpec(t, spec, true), rbacCapacitySeedSpec(t, resource.Spec, true))
+		uids := receipt.Roles
+		if resource.Kind == "RoleBinding" {
+			uids = receipt.Bindings
+			resolved, err := rbacCapacitySeedBindingResolved(encoded, receipt.Roles)
+			require.NoError(t, err)
+			complete = complete && resolved
+		}
+		require.Equal(t, uids[resource.Metadata.Name], resource.Metadata.UID)
+	}
+	return complete
+}
+
 type rbacCapacityProbeExpectation struct {
-	Subject, Namespace string
-	Allowed            bool
+	Subject, Namespace, Action string
+	Allowed                    bool
+	ObservedAt                 time.Time
 }
 
 type rbacCapacityProbeSource struct {
@@ -553,11 +793,19 @@ func checkRBACCapacityRootSource(header rbacCapacitySourceHeader, resources []js
 }
 
 func checkRBACCapacityProbeTraces(reader io.Reader, expected map[string]rbacCapacityProbeExpectation, models map[rbacCapacityPolicyRevision]rbacCapacityProbeSource) error {
+	return checkRBACCapacityObservedTraces(reader, expected, models, nil)
+}
+
+func checkRBACCapacityObservedTraces(reader io.Reader, expected map[string]rbacCapacityProbeExpectation,
+	models map[rbacCapacityPolicyRevision]rbacCapacityProbeSource,
+	observe func(rbacCapacityPolicyVector, string, bool) error,
+) error {
 	if len(expected) == 0 || len(expected) > 128 {
 		return errors.New("RBAC native probes require bounded, predeclared request expectations")
 	}
 	for id, probe := range expected {
-		if id == "" || probe.Subject == "" || probe.Namespace == "" {
+		if id == "" || probe.Subject == "" || probe.Namespace == "" ||
+			(probe.Action != "product.list" && probe.Action != "role.list") {
 			return errors.New("RBAC native probe request identity is incomplete")
 		}
 	}
@@ -586,20 +834,23 @@ func checkRBACCapacityProbeTraces(reader io.Reader, expected map[string]rbacCapa
 			continue
 		}
 		probe, tracked := expected[decision.RequestID]
-		if !tracked || decision.Action != "product.list" {
+		if !tracked || decision.Action != probe.Action {
 			continue
 		}
 		outcome := "deny"
 		if probe.Allowed {
 			outcome = "allow"
 		}
+		kind, _, _ := strings.Cut(probe.Action, ".")
 		if seen[decision.RequestID] || decision.Subject != probe.Subject || decision.Namespace != probe.Namespace ||
-			decision.Kind != "product" || decision.Outcome != outcome || decision.Provider != "opa" || len(decision.Authorization) != 2 {
+			decision.Kind != kind || decision.Outcome != outcome || decision.Provider != "opa" || len(decision.Authorization) != 2 {
 			return errors.New("RBAC native probe decision differs from its predeclared request expectation")
 		}
 		var rootVerified, namespaceVerified bool
+		var vector rbacCapacityPolicyVector
 		for _, tier := range decision.Authorization {
-			model, found := models[rbacCapacityPolicyRevision{TierUID: tier.TierID, GitRevision: tier.GitRevision, Digest: tier.ContentDigest}]
+			revision := rbacCapacityPolicyRevision{TierUID: tier.TierID, GitRevision: tier.GitRevision, Digest: tier.ContentDigest}
+			model, found := models[revision]
 			if !found {
 				return errors.New("RBAC native probe evaluated an independently unverified source vector")
 			}
@@ -608,15 +859,22 @@ func checkRBACCapacityProbeTraces(reader io.Reader, expected map[string]rbacCapa
 					return errors.New("RBAC native probe repeated its cluster policy tier")
 				}
 				rootVerified = true
+				vector.Cluster = revision
 			} else {
 				if namespaceVerified || model.Namespace != probe.Namespace {
 					return errors.New("RBAC native probe evaluated a different Namespace policy tier")
 				}
 				namespaceVerified = true
+				vector.Namespace = revision
 			}
 		}
 		if !rootVerified || !namespaceVerified {
 			return errors.New("RBAC native probe is missing an independently captured policy tier")
+		}
+		if observe != nil {
+			if err := observe(vector, decision.RequestID, probe.Allowed); err != nil {
+				return err
+			}
 		}
 		seen[decision.RequestID] = true
 	}
@@ -629,11 +887,17 @@ func checkRBACCapacityProbeTraces(reader io.Reader, expected map[string]rbacCapa
 	return nil
 }
 
-func verifyRBACCapacityProbeTraces(t *testing.T, sourcePath, decisionPath string, receipts map[string]rbacCapacitySeedReceipt, root rbacCapacityRootPolicy, expected map[string]rbacCapacityProbeExpectation) {
+func verifyRBACCapacityProbeTraces(t *testing.T, sourcePath, decisionPath string, plan rbacCapacitySeedPlan, count int,
+	receipts map[string]rbacCapacitySeedReceipt, root rbacCapacityRootPolicy, expected map[string]rbacCapacityProbeExpectation,
+) {
 	t.Helper()
 	source, err := openRBACCapacityPrivateFixture(sourcePath, 1<<30)
 	require.NoError(t, err)
 	defer source.Close()
+	indexes := make(map[string]int, count)
+	for index := range count {
+		indexes[plan.namespaceName(index)] = index
+	}
 	models := make(map[rbacCapacityPolicyRevision]rbacCapacityProbeSource)
 	err = walkRBACCapacitySourceModels(source, func(header rbacCapacitySourceHeader, resources []json.RawMessage) error {
 		var origin struct {
@@ -648,10 +912,11 @@ func verifyRBACCapacityProbeTraces(t *testing.T, sourcePath, decisionPath string
 			if !owned || origin.GitRevision != receipt.GitRevision {
 				return nil
 			}
-			uid, err := base64.StdEncoding.DecodeString(receipt.NamespaceNodeUID)
-			require.NoError(t, err)
-			require.Equal(t, "gid://GitStore/Namespace/"+origin.NamespaceUID, string(uid))
-			require.Equal(t, origin.NamespaceUID, state.TierID)
+			index, found := indexes[origin.Namespace]
+			require.True(t, found)
+			if !checkRBACCapacityNamespaceSource(t, header, resources, plan.namespace(index), receipt) {
+				return nil
+			}
 		} else {
 			complete, err := checkRBACCapacityRootSource(header, resources, root)
 			require.NoError(t, err)
@@ -916,6 +1181,11 @@ func TestRBACCapacityNativeSeed(t *testing.T) {
 		SourceModelFiles                          []string
 		DecisionLogFiles                          []string
 		InitialAdminSubject                       string
+		DecisionWorkload                          *struct {
+			Schedule              rbacCapacityScheduleConfig
+			GroupMembers          []string
+			PropagationDiagnostic bool
+		}
 	}
 	decoder := json.NewDecoder(bytes.NewReader(content))
 	decoder.DisallowUnknownFields()
@@ -983,6 +1253,28 @@ func TestRBACCapacityNativeSeed(t *testing.T) {
 	}
 	personalToken, err := readRBACCapacityPrivateFixture(config.PersonalTokenFile)
 	require.NoError(t, err)
+	var requests []rbacCapacityRequest
+	if workload := config.DecisionWorkload; workload != nil {
+		require.Equal(t, capacityModeDiagnostic, mode, "this bounded static parity driver is not sustained acceptance")
+		require.Len(t, config.DecisionLogFiles, len(fixture.apis), "ordinary workload decisions require independent source and request joins")
+		require.Len(t, config.SourceModelFiles, len(fixture.apis))
+		require.NoError(t, workload.Schedule.validate())
+		scheduled := rbacCapacityScheduledOffers(workload.Schedule.Duration, workload.Schedule.Rate)
+		require.True(t, scheduled >= 20 && scheduled <= 240 && scheduled%20 == 0,
+			"bounded diagnostic traces require complete 60/30/10 cycles on each API")
+		tokens[config.Plan.PersonalSubject] = strings.TrimSpace(string(personalToken))
+		requests = make([]rbacCapacityRequest, scheduled)
+		for offer := range scheduled {
+			request, err := config.Plan.request(offer, config.Count, workload.GroupMembers)
+			require.NoError(t, err)
+			require.NotEmpty(t, tokens[request.Subject], "every ordinary request must use its declared principal's credential")
+			requests[offer] = request
+		}
+		if workload.PropagationDiagnostic {
+			_, err := rbacCapacityPropagationNamespace(config.Plan, config.Count, workload.GroupMembers)
+			require.NoError(t, err, "declare an organization principal without another independent grant before mutating the fixture")
+		}
+	}
 	var next atomic.Int64
 	var failed atomic.Bool
 	var namespaceWriter sync.Mutex
@@ -1086,7 +1378,7 @@ func TestRBACCapacityNativeSeed(t *testing.T) {
 					id := fmt.Sprintf("%s-native-probe-%02d-%d", config.Plan.Owner, index, replica)
 					namespace := config.Plan.namespace(probe.namespace).Name
 					probes[replica][id] = rbacCapacityProbeExpectation{
-						Subject: config.Plan.Subjects[probe.subject], Namespace: namespace, Allowed: probe.allow,
+						Subject: config.Plan.Subjects[probe.subject], Namespace: namespace, Action: "product.list", Allowed: probe.allow,
 					}
 					response := secretTestGraphQLWithHeaders(t, api, caller.token,
 						`query($namespace:String!){products(namespace:$namespace,first:1){edges{node{id}}}}`,
@@ -1100,6 +1392,26 @@ func TestRBACCapacityNativeSeed(t *testing.T) {
 				}
 			})
 		}
+	}
+	if workload := config.DecisionWorkload; workload != nil {
+		scheduled := int64(len(requests))
+		for _, request := range requests {
+			probes[request.Replica][request.ID] = rbacCapacityProbeExpectation{
+				Subject: request.Subject, Namespace: request.Namespace, Action: request.Action, Allowed: request.Expected == "allow",
+			}
+		}
+		client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		defer client.CloseIdleConnections()
+		accounting, err := runRBACCapacitySchedule(t.Context(), workload.Schedule, func(ctx context.Context, offer int64) string {
+			request := requests[offer]
+			return executeRBACCapacityRequest(ctx, client, fixture.apis[request.Replica], tokens[request.Subject], request)
+		})
+		require.NoError(t, err)
+		require.NoError(t, accounting.validate(scheduled, false))
+		require.Equal(t, scheduled*6/10, accounting.Allowed)
+		require.Equal(t, scheduled*3/10, accounting.Denied)
+		require.Equal(t, scheduled/10, accounting.Invalid)
+		t.Logf("bounded ordinary RBAC request parity: %+v; static diagnostic only, not propagation or sustained acceptance", accounting)
 	}
 	if len(config.SourceModelFiles) != 0 {
 		require.Len(t, config.SourceModelFiles, len(fixture.apis))
@@ -1117,14 +1429,271 @@ func TestRBACCapacityNativeSeed(t *testing.T) {
 				if previousLog != nil {
 					require.False(t, os.SameFile(previousLog, currentLog), "replica decisions must come from independent log files")
 				}
-				verifyRBACCapacityProbeTraces(t, path, config.DecisionLogFiles[replica], receipts, root, probes[replica])
+				verifyRBACCapacityProbeTraces(t, path, config.DecisionLogFiles[replica], config.Plan, config.Count,
+					receipts, root, probes[replica])
 				previousLog = currentLog
 			}
 			previous = current
 		}
 	}
+	if workload := config.DecisionWorkload; workload != nil && workload.PropagationDiagnostic {
+		runRBACCapacityPropagationDiagnostic(t, fixture, config.Plan, config.Count, workload.GroupMembers, tokens,
+			config.ReceiptDirectory, receipts, config.SourceModelFiles, config.DecisionLogFiles, root)
+	}
 	t.Logf("native RBAC seeding completed: namespaces=%d roles=%d bindings=%d evidence_class=%s; this is not sustained workload acceptance",
 		config.Count, config.Count*10, config.Count*50, mode)
+}
+
+func rbacCapacityPropagationNamespace(plan rbacCapacitySeedPlan, count int, groupMembers []string) (int, error) {
+	if err := plan.validate(); err != nil {
+		return 0, err
+	}
+	if count < 2 || count > 1000 {
+		return 0, errors.New("RBAC propagation requires a bounded personal and organization working set")
+	}
+	groups := make(map[string]bool, len(groupMembers))
+	subjects := make(map[string]bool, len(plan.Subjects))
+	for _, subject := range plan.Subjects {
+		subjects[subject] = true
+	}
+	for _, subject := range groupMembers {
+		if !subjects[subject] || groups[subject] {
+			return 0, errors.New("RBAC propagation requires distinct independently declared Group members")
+		}
+		groups[subject] = true
+	}
+	for index := 1; index < count; index++ {
+		if !groups[plan.Subjects[index%len(plan.Subjects)]] {
+			return index, nil
+		}
+	}
+	return 0, errors.New("RBAC propagation cannot use a direct grantee with an independent Group grant")
+}
+
+func runRBACCapacityPropagationDiagnostic(t *testing.T, fixture rbacNativeFixture, plan rbacCapacitySeedPlan, count int,
+	groupMembers []string, tokens map[string]string, receiptDirectory string, seeds map[string]rbacCapacitySeedReceipt,
+	sourcePaths, decisionPaths []string, root rbacCapacityRootPolicy,
+) {
+	t.Helper()
+	index, err := rbacCapacityPropagationNamespace(plan, count, groupMembers)
+	require.NoError(t, err)
+	namespace := plan.namespace(index)
+	fixture.namespace = namespace.Name
+	seed := seeds[namespace.Name]
+	require.True(t, seed.Complete)
+	subject := plan.Subjects[index%len(plan.Subjects)]
+	require.NotEmpty(t, tokens[subject])
+	type admission struct {
+		GitRevision    string
+		AcknowledgedAt time.Time
+		Allowed        bool
+		Latencies      [2]time.Duration
+		Complete       bool
+	}
+	record := struct {
+		Namespace, Subject string
+		Admissions         []admission
+		Complete           bool
+	}{Namespace: namespace.Name, Subject: subject}
+	receipt, err := os.OpenFile(filepath.Join(receiptDirectory, "propagation-diagnostic.json"),
+		os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	require.NoError(t, err, "do not replace earlier or partial propagation receipts")
+	defer func() {
+		require.NoError(t, json.NewEncoder(receipt).Encode(record))
+		require.NoError(t, receipt.Sync())
+		require.NoError(t, receipt.Close())
+	}()
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	defer client.CloseIdleConnections()
+	probes := [2]map[string]rbacCapacityProbeExpectation{{}, {}}
+	history := []rbacCapacityAuthoredAdmission{{
+		Namespace: namespace, Receipt: seed, AcknowledgedAt: seed.Admissions[5].AcknowledgedAt,
+		Cases: map[string]bool{subject + "/product.list": true},
+	}}
+	for replica, api := range fixture.apis {
+		request := rbacCapacityRequest{
+			ID: fmt.Sprintf("%s-propagation-baseline-%d", plan.Owner, replica), Subject: subject,
+			Namespace: namespace.Name, Action: "product.list", Expected: "allow",
+		}
+		require.Equal(t, "allow", executeRBACCapacityRequest(t.Context(), client, api, tokens[subject], request))
+		probes[replica][request.ID] = rbacCapacityProbeExpectation{
+			Subject: subject, Namespace: namespace.Name, Action: request.Action, Allowed: true, ObservedAt: time.Now(),
+		}
+	}
+	git := fixture.clone(t, "Role")
+	tip, err := git.command(t, "rev-parse", "HEAD")
+	require.NoError(t, err)
+	require.Equal(t, seed.GitRevision, "main@sha1:"+strings.TrimSpace(string(tip)),
+		"mutate only the exact independently seeded canonical repository")
+	for step, allowed := range []bool{false, true} {
+		role := plan.namespace(index).Resources[0]
+		if !allowed {
+			role["spec"].(map[string]any)["rules"].([]any)[0].(map[string]any)["verbs"] = []string{"read"}
+		}
+		git.write(t, "rbac/roles/capacity-role-00.yaml", role)
+		sha := git.commit(t)
+		git.push(t)
+		acknowledgedAt := time.Now()
+		record.Admissions = append(record.Admissions, admission{
+			GitRevision: "main@sha1:" + sha, AcknowledgedAt: acknowledgedAt, Allowed: allowed,
+		})
+		admitted := seed
+		admitted.GitRevision = "main@sha1:" + sha
+		authored := plan.namespace(index)
+		authored.Resources[0] = role
+		history = append(history, rbacCapacityAuthoredAdmission{
+			Namespace: authored, Receipt: admitted, AcknowledgedAt: acknowledgedAt,
+			Cases: map[string]bool{subject + "/product.list": allowed},
+		})
+		type observation struct {
+			replica int
+			id      string
+			probe   rbacCapacityProbeExpectation
+		}
+		observations := make(chan observation, 102)
+		latencies, err := observeRBACCapacityPropagation(t.Context(), acknowledgedAt, allowed,
+			func(ctx context.Context, replica, attempt int) string {
+				request := rbacCapacityRequest{
+					ID:      fmt.Sprintf("%s-propagation-%d-%d-%02d", plan.Owner, step, replica, attempt),
+					Subject: subject, Namespace: namespace.Name, Action: "product.list",
+				}
+				outcome := observeRBACCapacityRequest(ctx, client, fixture.apis[replica], tokens[subject], request)
+				if outcome == "allow" || outcome == "deny" {
+					observations <- observation{replica: replica, id: request.ID, probe: rbacCapacityProbeExpectation{
+						Subject: subject, Namespace: namespace.Name, Action: request.Action,
+						Allowed: outcome == "allow", ObservedAt: time.Now(),
+					}}
+				}
+				return outcome
+			})
+		close(observations)
+		for observation := range observations {
+			probes[observation.replica][observation.id] = observation.probe
+		}
+		record.Admissions[step].Latencies = latencies
+		require.NoError(t, err, "both APIs must deliver the committed change within the unchanged five-second bound")
+		record.Admissions[step].Complete = true
+		tip := strings.Fields(git.remoteTip(t))
+		require.Len(t, tip, 2)
+		require.Equal(t, sha, tip[0], "the observed propagation must retain its admitted canonical commit")
+	}
+	for _, api := range fixture.apis {
+		role, roleResponse := fixture.lookup(t, api, "Role", "capacity-role-00")
+		require.Empty(t, roleResponse.Errors)
+		require.Equal(t, seed.Roles["capacity-role-00"], role.Metadata.UID,
+			"grant/revoke diagnostics must preserve the admitted Role incarnation")
+		require.Equal(t, rbacCapacitySeedSpec(t, plan.namespace(index).Resources[0]["spec"], true),
+			rbacCapacitySeedSpec(t, role.Spec, false))
+		current, response := fixture.lookup(t, api, "RoleBinding", "capacity-binding-00")
+		require.Empty(t, response.Errors)
+		require.Equal(t, seed.Bindings["capacity-binding-00"], current.Metadata.UID,
+			"grant/revoke diagnostics must preserve the admitted binding incarnation")
+		require.Equal(t, rbacCapacitySeedSpec(t, plan.namespace(index).Resources[10]["spec"], true),
+			rbacCapacitySeedSpec(t, current.Spec, false))
+	}
+	for replica := range probes {
+		require.NoError(t, verifyRBACCapacityDynamicTraces(t, sourcePaths[replica], decisionPaths[replica], history, root, probes[replica]))
+	}
+	record.Complete = true
+	t.Log("bounded Role-rule grant/revoke diagnostic joined to authored Namespace history and fixed root intent; binding-edit joins, distributions, dynamic root history and sustained acceptance remain unverified")
+}
+
+type rbacCapacityAuthoredAdmission struct {
+	Namespace      rbacCapacitySeedNamespace
+	Receipt        rbacCapacitySeedReceipt
+	AcknowledgedAt time.Time
+	Cases          map[string]bool
+}
+
+func verifyRBACCapacityDynamicTraces(t *testing.T, sourcePath, decisionPath string, history []rbacCapacityAuthoredAdmission,
+	root rbacCapacityRootPolicy, expected map[string]rbacCapacityProbeExpectation,
+) error {
+	t.Helper()
+	require.True(t, len(history) >= 2 && len(history) <= 64)
+	indexes := make(map[string]int, len(history))
+	for index, admission := range history {
+		require.NotEmpty(t, admission.Receipt.GitRevision)
+		_, duplicate := indexes[admission.Receipt.GitRevision]
+		require.False(t, duplicate, "independent admissions cannot reinterpret a previous Git revision")
+		require.False(t, admission.AcknowledgedAt.IsZero())
+		if index > 0 {
+			require.True(t, admission.AcknowledgedAt.After(history[index-1].AcknowledgedAt))
+			require.Equal(t, history[0].Receipt.NamespaceNodeUID, admission.Receipt.NamespaceNodeUID)
+			require.Equal(t, history[0].Namespace.Name, admission.Namespace.Name)
+			require.Equal(t, history[0].Receipt.Roles, admission.Receipt.Roles)
+			require.Equal(t, history[0].Receipt.Bindings, admission.Receipt.Bindings)
+		}
+		indexes[admission.Receipt.GitRevision] = index
+	}
+	source, err := openRBACCapacityPrivateFixture(sourcePath, 1<<30)
+	require.NoError(t, err)
+	defer source.Close()
+	models := make(map[rbacCapacityPolicyRevision]rbacCapacityProbeSource)
+	admissions := make(map[rbacCapacityPolicyRevision]int)
+	seen := make([]bool, len(history))
+	err = walkRBACCapacitySourceModels(source, func(header rbacCapacitySourceHeader, resources []json.RawMessage) error {
+		var origin struct {
+			Namespace, GitRevision string
+			Root                   bool
+		}
+		var state struct{ TierID string }
+		require.NoError(t, json.Unmarshal(header.Origin, &origin))
+		require.NoError(t, json.Unmarshal(header.State, &state))
+		revision := rbacCapacityPolicyRevision{TierUID: state.TierID, GitRevision: origin.GitRevision, Digest: header.ContentDigest}
+		if origin.Root {
+			complete, err := checkRBACCapacityRootSource(header, resources, root)
+			require.NoError(t, err)
+			if !complete {
+				return nil
+			}
+		} else {
+			index, found := indexes[origin.GitRevision]
+			if !found || origin.Namespace != history[0].Namespace.Name {
+				return nil
+			}
+			admission := history[index]
+			if !checkRBACCapacityNamespaceSource(t, header, resources, admission.Namespace, admission.Receipt) {
+				return nil
+			}
+			admissions[revision], seen[index] = index, true
+		}
+		models[revision] = rbacCapacityProbeSource{Namespace: origin.Namespace, Root: origin.Root}
+		require.LessOrEqual(t, len(models), 8192, "diagnostic source aliases must remain bounded")
+		return nil
+	})
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		require.NoError(t, err)
+	}
+	for _, captured := range seen {
+		require.True(t, captured, "each admitted policy must have an independently verified complete source")
+	}
+	for _, probe := range expected {
+		require.False(t, probe.ObservedAt.IsZero(), "HTTP observations must retain their own completion clocks")
+	}
+	oracles := make(map[rbacCapacityPolicyRevision]*rbacCapacityOracle)
+	decisions, err := openRBACCapacityPrivateFixture(decisionPath, 1<<30)
+	require.NoError(t, err)
+	defer decisions.Close()
+	return checkRBACCapacityObservedTraces(decisions, expected, models,
+		func(vector rbacCapacityPolicyVector, id string, allowed bool) error {
+			oracle := oracles[vector.Cluster]
+			if oracle == nil {
+				oracle = newRBACCapacityOracle(5 * time.Second)
+				for index, admission := range history {
+					for revision, sourceIndex := range admissions {
+						if sourceIndex == index {
+							if err := oracle.commit(rbacCapacityPolicyVector{Cluster: vector.Cluster, Namespace: revision},
+								admission.AcknowledgedAt, admission.Cases); err != nil {
+								return err
+							}
+						}
+					}
+				}
+				oracles[vector.Cluster] = oracle
+			}
+			probe := expected[id]
+			return oracle.check(vector, probe.Subject+"/"+probe.Action, allowed, probe.ObservedAt)
+		})
 }
 
 func rbacCapacityScheduledOffers(duration time.Duration, rate int64) int64 {
@@ -1163,10 +1732,20 @@ type rbacCapacityScheduleConfig struct {
 	Workers, Pending int
 }
 
+func (c rbacCapacityScheduleConfig) validate() error {
+	if c.Duration <= 0 || c.Duration > time.Hour || c.Drain <= 0 || c.Drain > 30*time.Second ||
+		c.Rate <= 0 || c.Rate > 10000 || c.Workers <= 0 || c.Workers > 256 ||
+		c.Pending <= 0 || c.Pending > 4096 {
+		return errors.New("RBAC scheduler limits exceed the bounded workload envelope")
+	}
+	return nil
+}
+
 func runRBACCapacitySchedule(ctx context.Context, cfg rbacCapacityScheduleConfig, execute func(context.Context, int64) string) (rbacCapacityAccounting, error) {
-	if cfg.Duration <= 0 || cfg.Duration > time.Hour || cfg.Drain <= 0 || cfg.Drain > 30*time.Second ||
-		cfg.Rate <= 0 || cfg.Rate > 10000 || cfg.Workers <= 0 || cfg.Workers > 256 ||
-		cfg.Pending <= 0 || cfg.Pending > 4096 || execute == nil {
+	if err := cfg.validate(); err != nil {
+		return rbacCapacityAccounting{}, err
+	}
+	if execute == nil {
 		return rbacCapacityAccounting{}, errors.New("RBAC scheduler limits exceed the bounded workload envelope")
 	}
 	scheduled := rbacCapacityScheduledOffers(cfg.Duration, cfg.Rate)
