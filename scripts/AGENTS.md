@@ -72,6 +72,11 @@ container wiring and configuration.
   `CAPACITY_IDENTITY_CHAOS=1` additionally requires predeclared bounded fault
   windows, confirmed restart/recovery receipts and process-segmented counters;
   `USER_DIRECTORY_TEST_CHAOS=1` selects that opt-in owned driver.
+- `make chaos CHAOS_RBAC=1` requires an owned target and a predeclared fault
+  window of at most 30 seconds. Controller restart also requires an unchanged
+  owned peer with non-overlapping writable checkpoint mounts. Journal-source
+  pause affects all consumers, not one receiver; injector/restoration receipts
+  never certify domain recovery. See [../tests/chaos/README.md](../tests/chaos/README.md).
 
 ## Infrastructure command instructions
 
