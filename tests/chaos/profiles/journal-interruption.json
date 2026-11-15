@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "description": "Pause one explicitly owned journal-source container; all consumers of that source are affected.",
+  "action": "pause",
+  "duration": "6s",
+  "requiresRBAC": true,
+  "expectedRecovery": "30s",
+  "recoveryContract": "This is a shared-source outage, not receiver-specific packet loss or cursor-loss proof. The active capacity oracle must verify both APIs, freshness, revocation and domain recovery independently."
+}

@@ -434,7 +434,7 @@ supported operating behavior. Tests below must precede runner changes.
 - [ ] T090 Extend the existing namespace/watch harness in `tests/integration/namespace_watch_capacity_test.go` with bounded RBAC fixture seeding and an independent revision-aware decision oracle; verify native counts for 1,000 namespaces, 10,000 roles and 50,000 bindings, rotate subjects/namespaces and avoid catalog-wide scans or a second capacity framework.
 - [ ] T091 Extend `tests/capacity/profiles/api-readiness.js`, `tests/capacity/preflight/api-readiness.sh` and `tests/capacity/verifiers/api-readiness.sh` with an explicit RBAC workload selector under the current Makefile interface; require two directly probed APIs/two controllers/one Git, and preserve the existing health-only and identity scenarios when not selected.
 - [ ] T092 Wire RBAC propagation observers, workload bounds and domain verification into `scripts/run-capacity-target.sh` and `tests/integration/namespace_watch_capacity_test.go`; use existing `TARGET=namespace PROFILE=watch` and `TARGET=api PROFILE=readiness MODE=alpha` families, bounded pending offers and the contract's 60/30/10 outcome mix without suppressing errors or drops.
-- [ ] T093 Extend `scripts/run-chaos.sh` and its existing regression coverage for explicitly owned journal interruption, API restart and controller replacement; declare bounded fault windows, verify ownership/restoration and process epochs, retain independent controller checkpoint volumes and prohibit overlapping singleton Git replacement.
+- [X] T093 Extend `scripts/run-chaos.sh` and its existing regression coverage for explicitly owned journal interruption, API restart and controller replacement; declare bounded fault windows, verify ownership/restoration and process epochs, retain independent controller checkpoint volumes and prohibit overlapping singleton Git replacement.
 - [ ] T094 Add and run `tests/integration/rbac_rolling_upgrade_test.go` for old/new feature-disabled compatibility, additive migration with read-only startup validation, seeded parity, USER-owner catch-up, provider-switch write freeze/traffic drain, snapshot-ready traffic admission, compatible rolling replacements and refusal of stale static-policy rollback.
 - [ ] T095 Measure actual before/after API binary and same-architecture image size, heap/RSS, prepared-evaluation latency and existing SDK telemetry regressions using `docker/api.Dockerfile`, `gitstore-api/internal/auth/metrics_sdk_test.go` and `specs/066-git-backed-rbac/research.md`; distinguish these results from the isolated planning probe and do not claim image-reduction issue #487 is complete.
 - [ ] T096 Run both extended capacity families for the declared unprofiled 30-minute healthy workload and record attributable results in `specs/066-git-backed-rbac/contracts/capacity-recovery.md`: 1,000 requests/s total, 50 admitted RBAC writes/min, at most four writers, decision p99 <=2 ms, propagation p95 <=2 s/p99 <=5 s, zero wrong/dropped decisions and all queue/snapshot/memory limits.
@@ -445,6 +445,24 @@ supported operating behavior. Tests below must precede runner changes.
 - [ ] T101 Run focused suites/race checks, `make build`, `make test`, `make lint`, `make check TARGET=all` and the full default `make pr-ready`; refresh the code graph with `graphify update .`, check generated drift and confirm all source changes behind `shared/schemas/admin/rbac.graphqls` and `gitstore-api/internal/rbac/` retain the declared compatibility and no-secret guarantees.
 - [ ] T102 Validate the supported sequence in `specs/066-git-backed-rbac/quickstart.md`, update `tests/capacity/README.md` and relevant scoped command docs with the implemented selectors/evidence contract, and reconcile traceability in `specs/066-git-backed-rbac/plan.md`; do not add an external quickstart-repository parity gate or a feature-specific public Make target.
 - [ ] T103 After every required functional, native-store, replica/rolling, healthy/fault and large-catalog gate passes, update `specs/066-git-backed-rbac/spec.md` to Closed and finalize the acceptance summary in `specs/066-git-backed-rbac/contracts/capacity-recovery.md` in the implementing PR; retain Draft/pending status when evidence is unavailable and leave unrelated Proposed ADRs, #451, #487 and GraphQL-alignment #548 outside completion claims.
+
+T093's owned injector extension is now implemented and verified independently
+of the unfinished workload drivers. Test-first dispatcher cases rejected the
+old runner's silent RBAC fallback. Regressions now pass for ownership/window
+refusal, independent peers/checkpoints, singleton Git exclusion, observed effects,
+partial failures and bounded timeout restoration. Real Docker/Pumba checks
+through `make chaos` pass API/controller restart and 2.5/6-second shared-source
+pauses using responsive HTTP stand-ins and distinct retained checkpoint-marker
+mounts. All four exact test-owned containers are removed; the foundation and
+retained assets remain unchanged. Two earlier private fixture attempts failed
+on Docker-proxy readiness/ephemeral port mappings and remain failure evidence;
+the passing fixture uses bounded readiness retries and restart-stable mappings.
+These checks prove injector/process behavior only, not API/controller domain
+recovery, selective receiver interruption, cursor-loss resync or T097 acceptance.
+The runner records that distinction and never marks domain recovery verified.
+Final-source aggregate/native/healthy/fault/large-catalog gates remain pending,
+and neither production activation nor spec closure is authorized by these local
+results.
 
 **Checkpoint**: Production readiness is claimed only for actually verified
 code, topology and workloads. Planning or local fixtures do not satisfy the

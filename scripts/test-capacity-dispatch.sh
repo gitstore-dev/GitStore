@@ -171,23 +171,63 @@ set -euo pipefail
 case "$1" in
   inspect)
     id=owned-identity
+    source=/private/checkpoints/controller-a
+    owner="${MOCK_CHAOS_OWNER:-owned-test}"
     running=true
+    paused="${MOCK_CHAOS_PAUSED:-false}"
+    if [[ -e "${MOCK_CHAOS_MARKER}.paused" ]]; then paused=true; fi
+    started=old-epoch
+    if [[ "$2" == *controller-b* ]]; then
+      id=owned-peer
+      source="${MOCK_CHAOS_PEER_CHECKPOINT:-/private/checkpoints/controller-b}"
+      owner="${MOCK_CHAOS_PEER_OWNER:-$owner}"
+      paused="${MOCK_CHAOS_PEER_PAUSED:-$paused}"
+    fi
+    if [[ -n "${MOCK_CHAOS_INJECTOR_ID:-}" && "$2" == "${MOCK_CHAOS_INJECTOR_ID}" ]]; then
+      jq -n --arg id "$2" --arg owner "${owner}" \
+        '[{Id:$id,Config:{Labels:{"dev.gitstore.chaos-owner":$owner,"dev.gitstore.chaos-run":"timeout"}},
+          State:{Running:true,Paused:false,StartedAt:"injector-epoch"}}]'
+      exit
+    fi
     if [[ -e "${MOCK_CHAOS_MARKER}" ]]; then
       if [[ "${MOCK_CHAOS_REPLACEMENT:-0}" == 1 ]]; then id=replacement; fi
       if [[ "${MOCK_CHAOS_FAILURE:-0}" == 1 && ! -e "${MOCK_CHAOS_MARKER}.restored" ]]; then running=false; fi
+      if [[ "${MOCK_CHAOS_RESTART:-0}" == 1 && "$2" != *controller-b* ]]; then started=new-epoch; fi
+      if [[ "${MOCK_CHAOS_PAUSE_FAILURE:-0}" == 1 && ! -e "${MOCK_CHAOS_MARKER}.restored" ]]; then running=true; paused=true; fi
     fi
-    jq -n --arg id "${id}" --arg owner "${MOCK_CHAOS_OWNER:-owned-test}" \
-      --argjson running "${running}" --argjson paused "${MOCK_CHAOS_PAUSED:-false}" \
+    jq -n --arg id "${id}" --arg owner "${owner}" --arg source "${source}" --arg started "${started}" \
+      --argjson running "${running}" --argjson paused "${paused}" \
       '[{Id:$id,Config:{Labels:{"com.docker.compose.project":$owner,"dev.gitstore.test_owner":$owner}},
-        State:{Running:$running,Paused:$paused}}]'
+        State:{Running:$running,Paused:$paused,StartedAt:$started},
+        Mounts:[{Type:"bind",Source:$source,Destination:"/var/lib/gitstore/checkpoints",RW:true}]}]'
     ;;
   run)
     touch "${MOCK_CHAOS_MARKER}"
+    if [[ "${MOCK_CHAOS_HANG:-0}" == 1 ]]; then
+      while [[ "$1" != --cidfile ]]; do shift; done
+      printf '%s' "${MOCK_CHAOS_INJECTOR_ID}" >"$2"
+      touch "${MOCK_CHAOS_MARKER}.paused"
+      exec sleep 3
+    fi
+    if [[ " $* " == *" pause "* && "${MOCK_CHAOS_PAUSE_FAILURE:-0}" != 1 && "${MOCK_CHAOS_NO_PAUSE:-0}" != 1 ]]; then
+      touch "${MOCK_CHAOS_MARKER}.paused"
+      sleep 0.4
+      rm "${MOCK_CHAOS_MARKER}.paused"
+    fi
     exit "${MOCK_CHAOS_FAILURE:-0}"
     ;;
   start)
     [[ "$2" == owned-identity ]]
     touch "${MOCK_CHAOS_MARKER}.restored"
+    ;;
+  unpause)
+    [[ "$2" == owned-identity ]]
+    if [[ -e "${MOCK_CHAOS_MARKER}.paused" ]]; then rm "${MOCK_CHAOS_MARKER}.paused"; fi
+    touch "${MOCK_CHAOS_MARKER}.restored"
+    ;;
+  stop)
+    [[ "$2" == --time && "$3" == 1 && "$4" == "${MOCK_CHAOS_INJECTOR_ID}" ]]
+    touch "${MOCK_CHAOS_MARKER}.injector-stopped"
     ;;
   *) exit 2 ;;
 esac
@@ -232,6 +272,86 @@ jq -e '.restored and (.injected | not) and .exitCode != 0' \
   "${test_dir}/chaos/identity-restart/injector/metadata.json" >/dev/null
 jq -e '(.restored | not) and .injected and .exitCode != 0' \
   "${test_dir}/chaos/identity-restart/replacement/metadata.json" >/dev/null
+
+window_start="$(python3 -c 'import time; print(time.time_ns() // 1000000 - 1000)')"
+window_end="$((window_start + 30000))"
+for rejection in missing-owner owner window expired peer shared-checkpoint nested-checkpoint paused-peer singleton-git; do
+  owner=owned-test; peer=gitstore-controller-b; peer_checkpoint=/private/checkpoints/controller-b
+  peer_paused=false
+  start="${window_start}"; end="${window_end}"; profile=api-restart; target=gitstore-api-a
+  case "${rejection}" in
+    missing-owner) owner="" ;;
+    owner) owner=someone-else ;;
+    window) end="$((start + 30001))" ;;
+    expired) start=1; end=2 ;;
+    peer) profile=controller-restart; target=gitstore-controller-a; peer="" ;;
+    shared-checkpoint) profile=controller-restart; target=gitstore-controller-a; peer_checkpoint=/private/checkpoints/controller-a ;;
+    nested-checkpoint) profile=controller-restart; target=gitstore-controller-a; peer_checkpoint=/private/checkpoints/controller-a/nested ;;
+    paused-peer) profile=controller-restart; target=gitstore-controller-a; peer_paused=true ;;
+    singleton-git) target=gitstore-git-service ;;
+  esac
+  marker="${test_dir}/rbac-reject-${rejection}"
+  if PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM=1 CHAOS_RBAC=1 CHAOS_OWNER="${owner}" \
+    CHAOS_TARGET="${target}" CHAOS_PEER_TARGET="${peer}" MOCK_CHAOS_PEER_CHECKPOINT="${peer_checkpoint}" MOCK_CHAOS_PEER_PAUSED="${peer_paused}" \
+    CHAOS_WINDOW_START_MILLIS="${start}" CHAOS_WINDOW_END_MILLIS="${end}" MOCK_CHAOS_MARKER="${marker}" \
+    CHAOS_EVIDENCE_DIR="${test_dir}/chaos" "${repo_root}/scripts/run-chaos.sh" "${profile}" >/dev/null 2>&1; then
+    echo "RBAC chaos accepted invalid ${rejection} preflight" >&2
+    exit 1
+  fi
+  [[ ! -e "${marker}" ]]
+done
+for profile in api-restart controller-restart journal-interruption; do
+  target=gitstore-api-a
+  case "${profile}" in controller-restart) target=gitstore-controller-a ;; journal-interruption) target=gitstore-scylla-source ;; esac
+  restart=1; if [[ "${profile}" == journal-interruption ]]; then restart=0; fi
+  PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM=1 CHAOS_RBAC=1 CHAOS_OWNER=owned-test \
+    CHAOS_TARGET="${target}" CHAOS_PEER_TARGET=gitstore-controller-b \
+    CHAOS_WINDOW_START_MILLIS="${window_start}" CHAOS_WINDOW_END_MILLIS="${window_end}" \
+    MOCK_CHAOS_RESTART="${restart}" MOCK_CHAOS_MARKER="${test_dir}/rbac-${profile}" \
+    CHAOS_RUN_ID=rbac CHAOS_EVIDENCE_DIR="${test_dir}/chaos" \
+    "${repo_root}/scripts/run-chaos.sh" "${profile}" >/dev/null
+  jq -e '.injected and .restored and .exitCode == 0 and .faultWindow.confirmed and
+    (.processEpochs.before | length > 0) and (.processEpochs.after | length > 0) and
+    (.domainRecoveryVerified == false)' "${test_dir}/chaos/${profile}/rbac/metadata.json" >/dev/null
+done
+if PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM=1 CHAOS_RBAC=1 CHAOS_OWNER=owned-test \
+  CHAOS_TARGET=gitstore-scylla-source CHAOS_WINDOW_START_MILLIS="${window_start}" CHAOS_WINDOW_END_MILLIS="${window_end}" \
+  MOCK_CHAOS_FAILURE=1 MOCK_CHAOS_PAUSE_FAILURE=1 MOCK_CHAOS_MARKER="${test_dir}/rbac-pause-failed" \
+  CHAOS_RUN_ID=failed CHAOS_EVIDENCE_DIR="${test_dir}/chaos" \
+  "${repo_root}/scripts/run-chaos.sh" journal-interruption >/dev/null 2>&1; then
+  echo "failed RBAC pause injector unexpectedly passed" >&2
+  exit 1
+fi
+jq -e '.restored and (.injected | not) and .exitCode != 0' \
+  "${test_dir}/chaos/journal-interruption/failed/metadata.json" >/dev/null
+for profile in api-restart journal-interruption; do
+  target=gitstore-api-a
+  if [[ "${profile}" == journal-interruption ]]; then target=gitstore-scylla-source; fi
+  if PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM=1 CHAOS_RBAC=1 CHAOS_OWNER=owned-test \
+    CHAOS_TARGET="${target}" CHAOS_WINDOW_START_MILLIS="${window_start}" CHAOS_WINDOW_END_MILLIS="${window_end}" \
+    MOCK_CHAOS_NO_PAUSE=1 MOCK_CHAOS_MARKER="${test_dir}/rbac-no-effect-${profile}" \
+    CHAOS_RUN_ID=no-effect CHAOS_EVIDENCE_DIR="${test_dir}/chaos" \
+    "${repo_root}/scripts/run-chaos.sh" "${profile}" >/dev/null 2>&1; then
+    echo "RBAC chaos accepted a successful injector without a real ${profile} effect" >&2
+    exit 1
+  fi
+  jq -e '.restored and (.faultObserved | not) and (.injected | not) and .exitCode != 0' \
+    "${test_dir}/chaos/${profile}/no-effect/metadata.json" >/dev/null
+done
+timeout_start="$(python3 -c 'import time; print(time.time_ns() // 1000000)')"
+if PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM=1 CHAOS_RBAC=1 CHAOS_OWNER=owned-test \
+  CHAOS_TARGET=gitstore-scylla-source CHAOS_DURATION=1ms \
+  CHAOS_WINDOW_START_MILLIS="${timeout_start}" CHAOS_WINDOW_END_MILLIS="$((timeout_start + 6500))" \
+  MOCK_CHAOS_HANG=1 MOCK_CHAOS_INJECTOR_ID="$(printf 'b%.0s' {1..64})" MOCK_CHAOS_MARKER="${test_dir}/rbac-timeout" \
+  CHAOS_RUN_ID=timeout CHAOS_EVIDENCE_DIR="${test_dir}/chaos" \
+  "${repo_root}/scripts/run-chaos.sh" journal-interruption >/dev/null 2>&1; then
+  echo "RBAC chaos accepted a timed-out injector" >&2
+  exit 1
+fi
+[[ -e "${test_dir}/rbac-timeout.injector-stopped" && -e "${test_dir}/rbac-timeout.restored" ]]
+jq -e '.restored and .faultObserved and (.faultWindow.confirmed | not) and .exitCode != 0' \
+  "${test_dir}/chaos/journal-interruption/timeout/metadata.json" >/dev/null
+
 source_revision="$(git -C "${repo_root}" rev-parse HEAD)"
 image_digest="$(printf 'a%.0s' {1..64})"
 write_mock "${test_dir}/readiness-bin/curl" <<'MOCK'
