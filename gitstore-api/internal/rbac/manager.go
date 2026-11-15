@@ -59,6 +59,7 @@ type tierWork struct {
 	retryAt       time.Time
 	origin        SnapshotOrigin
 	projection    ProjectionIdentity
+	originAt      time.Time
 	checkAt       time.Time
 }
 
@@ -147,8 +148,10 @@ func (m *Manager) queueLocked(tier string, revision uint64, replacing bool) erro
 		m.work[tier] = work
 	}
 	work.generation++
+	now := m.deps.Clock.Now()
 	// A replacement does not renew the installed publication's origin proof.
 	preserve := replacing && work.installed && m.deps.CheckOrigin != nil && !work.blocked &&
+		!work.originAt.IsZero() && !now.Before(work.originAt) && now.Sub(work.originAt) <= m.deps.MaxStaleness &&
 		(work.pending || m.pending < m.deps.QueueSize)
 	if !preserve {
 		if work.installed {
@@ -424,7 +427,7 @@ func (m *Manager) take() (string, *tierWork, uint64, bool) {
 		if rebuild == nil && work.pending && !now.Before(work.retryAt) {
 			rebuildTier, rebuild = tier, work
 		}
-		if m.deps.CheckOrigin != nil && work.installed && !work.pending && !now.Before(work.checkAt) &&
+		if m.deps.CheckOrigin != nil && work.installed && !work.pending && work.retryAt.IsZero() && !now.Before(work.checkAt) &&
 			(probe == nil || work.checkAt.Before(probe.checkAt)) {
 			probeTier, probe = tier, work
 		}
@@ -518,6 +521,9 @@ func (m *Manager) probe(ctx context.Context, tier string, work *tierWork, genera
 		if err == nil {
 			err = m.deps.RecordOrigin(tier, projection, checkedAt)
 			if err == nil {
+				if checkedAt.After(work.originAt) {
+					work.originAt = checkedAt
+				}
 				work.checkAt = m.deps.Clock.Now().Add(min(time.Second, m.deps.MaxStaleness/2))
 				return nil
 			}
@@ -560,8 +566,9 @@ func (m *Manager) rebuild(ctx context.Context, tier string, work *tierWork, gene
 	}
 	defer prepared.Close()
 	snapshot.Resources = nil
+	var originAt time.Time
 	if m.deps.CheckOrigin != nil {
-		checkedAt := m.deps.Clock.Now()
+		originAt = m.deps.Clock.Now()
 		checkCtx, cancel := context.WithTimeout(ctx, m.deps.MaxStaleness)
 		err := m.deps.CheckOrigin(checkCtx, tier, snapshot.Origin)
 		checkErr := checkCtx.Err()
@@ -570,7 +577,7 @@ func (m *Manager) rebuild(ctx context.Context, tier string, work *tierWork, gene
 			return ErrUnavailable
 		}
 		proof, ok := prepared.(interface{ SetOriginProgress(time.Time) error })
-		if !ok || proof.SetOriginProgress(checkedAt) != nil {
+		if !ok || proof.SetOriginProgress(originAt) != nil {
 			return ErrUnavailable
 		}
 	}
@@ -588,6 +595,7 @@ func (m *Manager) rebuild(ctx context.Context, tier string, work *tierWork, gene
 				work.namespace, work.revision = snapshot.Origin.Namespace, snapshot.State.Revision
 				work.installed = true
 				work.origin, work.projection = snapshot.Origin, snapshot.State.Projection
+				work.originAt = originAt
 				work.checkAt = m.deps.Clock.Now().Add(min(time.Second, m.deps.MaxStaleness/2))
 				if !work.unavailableAt.IsZero() {
 					auth.ObserveRBACRecovery(ctx, tier == ClusterTierID, m.deps.Clock.Now().Sub(work.unavailableAt))

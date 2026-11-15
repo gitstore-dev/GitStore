@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -78,6 +79,45 @@ func managerSnapshot(t *testing.T, tier, namespace string, revision uint64) rbac
 		CatalogDigest: auth.AuthorizationCatalogDigest(), BuiltinDigest: builtins.Digest(), ContentDigest: fmt.Sprintf("%064x", revision),
 		State: rbac.TierState{TierID: tier, Revision: revision, Projection: rbac.ProjectionIdentity{
 			RepositoryID: origin.RepositoryID, GitRef: origin.GitRef, GitRevision: origin.GitRevision, TreeDigest: origin.TreeDigest, Actor: "fixture"}}}
+}
+
+type managerOriginFacts struct {
+	datastore.Datastore
+	snapshot atomic.Pointer[rbac.Snapshot]
+}
+
+func (f *managerOriginFacts) GetNamespaceByName(context.Context, string) (*datastore.Namespace, error) {
+	origin := f.snapshot.Load().Origin
+	return &datastore.Namespace{UID: origin.NamespaceUID, Name: origin.Namespace, ResourceVersion: origin.NamespaceVersion}, nil
+}
+
+func (f *managerOriginFacts) LookupRepository(context.Context, string, string) (*datastore.NamespaceMapping, error) {
+	origin := f.snapshot.Load().Origin
+	return &datastore.NamespaceMapping{Namespace: origin.Namespace, Name: "gitstore-system", RepositoryID: origin.RepositoryID}, nil
+}
+
+func (f *managerOriginFacts) GetRepository(context.Context, string) (*datastore.Repository, error) {
+	origin := f.snapshot.Load().Origin
+	return &datastore.Repository{UID: origin.RepositoryID, Namespace: origin.Namespace, Name: "gitstore-system", DefaultBranch: "main"}, nil
+}
+
+type managerOriginGit struct {
+	rbac.OriginGitReader
+	facts *managerOriginFacts
+}
+
+func (g managerOriginGit) ResolveRef(context.Context, string, string) (string, error) {
+	return strings.TrimPrefix(g.facts.snapshot.Load().Origin.GitRevision, "main@sha1:"), nil
+}
+
+func nextManagerSnapshot(first rbac.Snapshot) rbac.Snapshot {
+	first.State.Revision++
+	first.Origin.GitRevision = fmt.Sprintf("main@sha1:%040x", first.State.Revision)
+	first.Origin.TreeDigest = fmt.Sprintf("%064x", first.State.Revision)
+	first.State.Projection.GitRevision = first.Origin.GitRevision
+	first.State.Projection.TreeDigest = first.Origin.TreeDigest
+	first.ContentDigest = first.Origin.TreeDigest
+	return first
 }
 
 func startRBACManager(t *testing.T, journal *managerJournal, provider *opa.Provider, read func(context.Context, string) (rbac.Snapshot, error), healthy *atomic.Bool, resolve ...func(context.Context, string) (string, error)) *rbac.Manager {
@@ -311,6 +351,108 @@ func TestManagerCannotRenewOriginProofAcrossASupersededGeneration(t *testing.T) 
 	close(release)
 	require.Eventually(t, func() bool { return providerReady(provider, rbac.ClusterTierID) }, 3*time.Second, 5*time.Millisecond)
 	require.Zero(t, staleRenewals.Load())
+}
+
+func TestManagerAdvancedOriginReplacementRetainsFailureBackoff(t *testing.T) {
+	provider, err := opa.NewProvider(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(provider.Close)
+	require.NoError(t, provider.RequireOriginProgress(5*time.Second))
+	first := managerSnapshot(t, rbac.ClusterTierID, "", 1)
+	second := nextManagerSnapshot(first)
+	facts := new(managerOriginFacts)
+	facts.snapshot.Store(&first)
+	origin := rbac.OriginReader{Store: facts, Git: managerOriginGit{facts: facts}}
+	var failed atomic.Bool
+	var attempts atomic.Uint64
+	started := make(chan struct{})
+	runRBACManager(t, rbac.ManagerDeps{
+		Journal: &managerJournal{epoch: uuid.NewString()}, Workers: 1,
+		Invalidate: provider.InvalidateTier, CheckProgress: func(time.Time) error { return nil },
+		ReadSnapshot: func(context.Context, string) (rbac.Snapshot, error) {
+			if facts.snapshot.Load() == &first {
+				return first, nil
+			}
+			if attempts.Add(1) == 1 {
+				close(started)
+			}
+			if failed.Load() {
+				return rbac.Snapshot{}, rbac.ErrUnavailable
+			}
+			return second, nil
+		},
+		Prepare: func(ctx context.Context, tier auth.AuthorizationTier) (rbac.PreparedPublication, error) {
+			return provider.PrepareTier(ctx, tier)
+		},
+		CheckOrigin: origin.CheckOrigin, RecordOrigin: provider.RecordOriginProgress,
+	})
+	require.Eventually(t, func() bool { return providerReady(provider, rbac.ClusterTierID) }, time.Second, time.Millisecond)
+	failed.Store(true)
+	facts.snapshot.Store(&second)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("canonical advance did not trigger a replacement")
+	}
+	require.Never(t, func() bool { return attempts.Load() > 1 }, 250*time.Millisecond, time.Millisecond,
+		"an overdue origin probe must not bypass a failed replacement's retry deadline")
+	require.Eventually(t, func() bool { return attempts.Load() >= 2 }, 2*time.Second, time.Millisecond)
+	failed.Store(false)
+	require.Eventually(t, func() bool {
+		snapshot, ok := provider.AuthorizationSnapshot()
+		return ok && providerReady(provider, rbac.ClusterTierID) && snapshot.Tiers[0].Revision == 2
+	}, 3*time.Second, time.Millisecond)
+}
+
+func TestManagerExpiredFallbackReleasesReplacementMemory(t *testing.T) {
+	first := managerSnapshot(t, rbac.ClusterTierID, "", 1)
+	second := nextManagerSnapshot(first)
+	source := auth.AuthorizationTier{Active: true, NamespaceVersion: first.Origin.NamespaceVersion,
+		State: first.State, CatalogDigest: first.CatalogDigest, BuiltinDigest: first.BuiltinDigest, ContentDigest: first.ContentDigest}
+	var provider *opa.Provider
+	for limit := int64(1024); limit <= 1<<20; limit *= 2 {
+		candidate, err := opa.NewProviderWithMemoryLimit(t.Context(), limit)
+		require.NoError(t, err)
+		if candidate.PublishTier(t.Context(), source) == nil {
+			provider = candidate
+			break
+		}
+		candidate.Close()
+	}
+	require.NotNil(t, provider, "find the bounded budget needed by one actual translation")
+	t.Cleanup(provider.Close)
+	extra, err := provider.PrepareTier(t.Context(), source)
+	if extra != nil {
+		extra.Close()
+	}
+	require.ErrorIs(t, err, opa.ErrUnavailable, "the calibrated budget must reject two retained translations")
+	provider.InvalidateTier(rbac.ClusterTierID)
+	require.NoError(t, provider.RequireOriginProgress(200*time.Millisecond))
+	facts := new(managerOriginFacts)
+	facts.snapshot.Store(&first)
+	origin := rbac.OriginReader{Store: facts, Git: managerOriginGit{facts: facts}}
+	var failures atomic.Uint64
+	runRBACManager(t, rbac.ManagerDeps{
+		Journal: &managerJournal{epoch: uuid.NewString()}, Workers: 1, MaxStaleness: 200 * time.Millisecond,
+		Invalidate: provider.InvalidateTier, CheckProgress: func(time.Time) error { return nil },
+		ReadSnapshot: func(context.Context, string) (rbac.Snapshot, error) { return *facts.snapshot.Load(), nil },
+		Prepare: func(ctx context.Context, tier auth.AuthorizationTier) (rbac.PreparedPublication, error) {
+			prepared, err := provider.PrepareTier(ctx, tier)
+			if err != nil {
+				failures.Add(1)
+			}
+			return prepared, err
+		},
+		CheckOrigin: origin.CheckOrigin, RecordOrigin: provider.RecordOriginProgress,
+	})
+	require.Eventually(t, func() bool { return providerReady(provider, rbac.ClusterTierID) }, time.Second, time.Millisecond)
+	facts.snapshot.Store(&second)
+	require.Eventually(t, func() bool { return failures.Load() > 0 }, time.Second, time.Millisecond,
+		"the fresh fallback must initially retain its actual memory reservation")
+	require.Eventually(t, func() bool {
+		snapshot, ok := provider.AuthorizationSnapshot()
+		return ok && providerReady(provider, rbac.ClusterTierID) && snapshot.Tiers[0].Revision == 2
+	}, 3*time.Second, time.Millisecond, "expired fallback allocation must not prevent a replacement that fits alone")
 }
 
 func TestManagerReplacesCompletePublicationWithinOriginalFreshnessBound(t *testing.T) {
