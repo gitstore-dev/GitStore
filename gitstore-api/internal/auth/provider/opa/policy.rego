@@ -21,7 +21,8 @@ matches contains [binding.uid, role.uid, rule.index] if {
 	role.kind == binding.role_kind
 	role.name == binding.role_name
 	role_scope(binding, role)
-	some rule in role.actions[input.request.action]
+	some rule_index in role.actions[input.request.action]
+	rule := role.rules[rule_index]
 	instance_matches(rule)
 	every condition in rule.when {
 		condition_matches(condition)
@@ -156,7 +157,8 @@ coverage_rules(action) := {rule |
 	role.kind == binding.role_kind
 	role.name == binding.role_name
 	role_scope(binding, role)
-	some rule in role.actions[action]
+	some rule_index in role.actions[action]
+	rule := role.rules[rule_index]
 	count(rule.when) == 0
 }
 

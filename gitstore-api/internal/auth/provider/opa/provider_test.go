@@ -338,21 +338,44 @@ func declaredNamespaceTier(t testing.TB, namespace string) auth.AuthorizationTie
 		State: rbac.TierState{TierID: tier, Revision: 1, RoleCount: 10, BindingCount: 50,
 			Projection: rbac.ProjectionIdentity{GitRevision: fmt.Sprintf("main@sha1:%040x", 1)}}}
 	for index := range 10 {
-		name := fmt.Sprintf("role-%d", index)
+		name := fmt.Sprintf("capacity-role-%02d", index)
+		rule := rbac.Rule{Resources: []string{"role", "product", "categoryTaxonomy"}, Verbs: []string{"read", "list"}}
+		if index%2 == 1 {
+			rule.When = []rbac.Condition{{Attr: "namespace", Op: "eq", Value: &namespace}}
+		}
+		spec, err := json.Marshal(rbac.RoleSpec{Rules: []rbac.Rule{rule}})
+		require.NoError(t, err)
 		source.Resources = append(source.Resources, &rbac.Resource{APIVersion: rbac.APIVersion,
 			Kind: rbac.Role, NamespaceUID: tier,
 			Metadata: rbac.Metadata{Name: name, Namespace: namespace, UID: testUID(namespace + name)},
-			Spec:     json.RawMessage(`{"rules":[{"resources":["product"],"verbs":["read","create","update","delete"]}]}`)})
+			Spec:     spec})
 	}
 	for index := range 50 {
-		name, roleName := fmt.Sprintf("binding-%d", index), fmt.Sprintf("role-%d", index%10)
-		spec, err := json.Marshal(rbac.BindingSpec{RoleRef: rbac.RoleRef{Kind: rbac.Role, Name: roleName},
-			Subjects: []rbac.Subject{{Kind: "User", Name: fmt.Sprintf("subject-%d", index)}}})
+		name, roleName := fmt.Sprintf("capacity-binding-%02d", index), fmt.Sprintf("capacity-role-%02d", index%10)
+		ref := rbac.RoleRef{Kind: rbac.Role, Name: roleName}
+		subject := rbac.Subject{Kind: "User", Name: fmt.Sprintf("rbac-seed-fixture-filler-0001-%02d", index)}
+		uid := testUID(namespace + roleName)
+		switch index {
+		case 1:
+			subject.Kind, subject.Name = "Group", "system:group:capacity-readers"
+		case 2:
+			ref.Kind, ref.Name = rbac.ClusterRole, "view"
+			role, err := builtins.Get(ref.Kind, ref.Name)
+			require.NoError(t, err)
+			uid = role.Metadata.UID
+		case 3:
+			ref.Name, uid = "capacity-unresolved", ""
+		}
+		spec, err := json.Marshal(rbac.BindingSpec{RoleRef: ref, Subjects: []rbac.Subject{subject}})
 		require.NoError(t, err)
+		var status json.RawMessage
+		if uid != "" {
+			status = json.RawMessage(`{"resolved":{"roleRef":{"uid":"` + uid + `"}}}`)
+		}
 		source.Resources = append(source.Resources, &rbac.Resource{APIVersion: rbac.APIVersion,
 			Kind: rbac.RoleBinding, NamespaceUID: tier,
 			Metadata: rbac.Metadata{Name: name, Namespace: namespace, UID: testUID(namespace + name)},
-			Spec:     spec, Status: json.RawMessage(`{"resolved":{"roleRef":{"uid":"` + testUID(namespace+roleName) + `"}}}`)})
+			Spec:     spec, Status: status})
 	}
 	content, err := json.Marshal(source)
 	require.NoError(t, err)
@@ -367,7 +390,7 @@ func TestProviderDeclaredNamespaceReservationFitsAggregateBudget(t *testing.T) {
 	t.Cleanup(provider.Close)
 	require.NoError(t, provider.PublishTier(t.Context(), servingTier(t, rbac.ClusterTierID, "", 1, false)))
 	clusterBytes := provider.budget.Used()
-	prepared, err := provider.PrepareTier(t.Context(), declaredNamespaceTier(t, "shop"))
+	prepared, err := provider.PrepareTier(t.Context(), declaredNamespaceTier(t, "rbac-seed-fixture-0001"))
 	require.NoError(t, err)
 	defer prepared.Close()
 	namespaceBytes := provider.budget.Used() - clusterBytes
@@ -379,7 +402,7 @@ func BenchmarkProviderDeclaredNamespaceTranslation(b *testing.B) {
 	provider, err := NewProvider(b.Context())
 	require.NoError(b, err)
 	defer provider.Close()
-	source := declaredNamespaceTier(b, "shop")
+	source := declaredNamespaceTier(b, "rbac-seed-fixture-0001")
 	b.ResetTimer()
 	for range b.N {
 		prepared, err := provider.PrepareTier(b.Context(), source)

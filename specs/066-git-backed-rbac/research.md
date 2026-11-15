@@ -121,6 +121,39 @@ verification and the existing config, app and auth suites passed after
 resolution. Prune unused indirect modules when the embedded evaluator is
 linked; adding the module alone does not link OPA into the API.
 
+### Representative translation reservation probe
+
+The aggregate reservation regression now reflects the seeded policy mix:
+ten Roles with read/list permissions on Role, Product and CategoryTaxonomy,
+alternating Namespace conditions, fifty bindings, a group, a built-in role
+reference and a deliberately unresolved reference. The earlier four-action,
+unconditional fixture understated this mix. Before deduplication, its declared
+one-thousand-Namespace reservation with replacement headroom required
+557,909,312 bytes, exceeding the unchanged 536,870,912-byte limit.
+
+Translation now stores each authored rule once per Role and indexes its
+position by action, instead of copying its conditions and resource names into
+every expanded action. Decision matching and conservative coverage use the same
+indexes. The eightfold reservation multiplier, translated-memory limit and
+logical wildcard-expansion bound are unchanged; logical expansion is checked
+separately from shared retained storage.
+
+On 2026-11-15, a local `darwin/arm64` Apple M3 Pro run of
+`BenchmarkProviderDeclaredNamespaceTranslation` used `GOMAXPROCS=2`,
+`-benchtime=100ms` and `-benchmem`, once before and once after the change.
+Retained heap is sampled across sixteen prepared tiers after garbage collection.
+
+| Per-tier measurement | Before | After |
+|---|---:|---:|
+| Reserved bytes | 554,352 | 526,912 |
+| Sampled retained heap bytes | 181,444 | 124,812 |
+| Cumulative allocated bytes per rebuild | 7,264,798 | 7,157,298 |
+
+The representative aggregate reservation regression now passes with unchanged
+headroom and limits. These are local translation measurements, not process RSS,
+provider-call latency, native one-thousand-Namespace execution, sustained
+capacity acceptance or completion of the image-size comparison.
+
 ## 3. Translation and lifecycle ownership
 
 Decision: one provider-neutral RBAC controller group owns lifecycle,

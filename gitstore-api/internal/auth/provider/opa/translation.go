@@ -43,11 +43,12 @@ type translatedTier struct {
 }
 
 type translatedRole struct {
-	UID          string                      `json:"uid"`
-	Name         string                      `json:"name"`
-	Kind         rbac.Kind                   `json:"kind"`
-	NamespaceUID string                      `json:"namespace_uid"`
-	Actions      map[string][]translatedRule `json:"actions"`
+	UID          string           `json:"uid"`
+	Name         string           `json:"name"`
+	Kind         rbac.Kind        `json:"kind"`
+	NamespaceUID string           `json:"namespace_uid"`
+	Rules        []translatedRule `json:"rules"`
+	Actions      map[string][]int `json:"actions"`
 }
 
 type translatedRule struct {
@@ -108,14 +109,15 @@ func translate(tier Tier, reserveAllocation func(int) bool) (*Translation, error
 	}
 	seenUIDs, seenNames := map[string]bool{}, map[string]bool{}
 	roles, bindings, total := 0, 0, 0
-	// Conservative serialized-size reservation precedes expanded action/index
-	// allocation. In particular, a small wildcard manifest may expand greatly.
-	remaining := rbac.MaxSnapshotBytes - 4096
-	reserve := func(size int) bool {
-		if size > remaining || reserveAllocation != nil && !reserveAllocation(size) {
+	// Shared rules reduce retained data, not the permitted logical wildcard expansion.
+	remaining, expandedRemaining := rbac.MaxSnapshotBytes-4096, rbac.MaxSnapshotBytes-4096
+	reserve := func(size, expanded int) bool {
+		if size > remaining || expanded > expandedRemaining ||
+			reserveAllocation != nil && !reserveAllocation(size) {
 			return false
 		}
 		remaining -= size
+		expandedRemaining -= expanded
 		return true
 	}
 	for index, resource := range resources {
@@ -183,7 +185,7 @@ func translate(tier Tier, reserveAllocation func(int) bool) (*Translation, error
 		if !tier.Active || resource.Metadata.DeletionTimestamp != nil {
 			continue
 		}
-		if !reserve(512) {
+		if !reserve(512, 512) {
 			return nil, ErrUnavailable
 		}
 		if resource.Kind.IsRole() {
@@ -192,7 +194,7 @@ func translate(tier Tier, reserveAllocation func(int) bool) (*Translation, error
 				return nil, ErrUnavailable
 			}
 			role := translatedRole{UID: resource.Metadata.UID, Name: resource.Metadata.Name, Kind: resource.Kind,
-				NamespaceUID: resource.NamespaceUID, Actions: map[string][]translatedRule{}}
+				NamespaceUID: resource.NamespaceUID, Rules: []translatedRule{}, Actions: map[string][]int{}}
 			for index, rule := range spec.Rules {
 				value := translatedRule{Index: index, Names: append([]string{}, rule.ResourceNames...), When: []translatedCondition{}}
 				for _, condition := range rule.When {
@@ -210,11 +212,16 @@ func translate(tier Tier, reserveAllocation func(int) bool) (*Translation, error
 				if err != nil {
 					return nil, ErrUnavailable
 				}
+				if !reserve(len(ruleBytes)+32, 0) {
+					return nil, ErrUnavailable
+				}
+				role.Rules = append(role.Rules, value)
 				for _, action := range actions {
-					if !reserve(len(ruleBytes) + len(action.Action)*6 + 32) {
+					size := len(action.Action)*6 + 32
+					if !reserve(size, len(ruleBytes)+size) {
 						return nil, ErrUnavailable
 					}
-					role.Actions[action.Action] = append(role.Actions[action.Action], value)
+					role.Actions[action.Action] = append(role.Actions[action.Action], index)
 				}
 			}
 			model.Roles[role.UID] = role
@@ -235,7 +242,8 @@ func translate(tier Tier, reserveAllocation func(int) bool) (*Translation, error
 				RoleUID: roleUID, RoleKind: spec.RoleRef.Kind, RoleName: spec.RoleRef.Name}
 			for _, subject := range spec.Subjects {
 				key := subjectKey(subject.Kind, subject.Name)
-				if !reserve(len(key)*6 + len(resource.Metadata.UID)*6 + 32) {
+				size := len(key)*6 + len(resource.Metadata.UID)*6 + 32
+				if !reserve(size, size) {
 					return nil, ErrUnavailable
 				}
 				if model.Subjects[key] == nil {
