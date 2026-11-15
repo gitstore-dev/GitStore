@@ -838,6 +838,33 @@ func TestGraphQLFieldAuthorizerCreateNamespaceOrganizationFailsWithoutAuthZ(t *t
 	assert.Contains(t, err.Error(), "authorization service unavailable")
 }
 
+func TestGraphQLFieldAuthorizerCreateNamespaceDenialHasCanonicalCode(t *testing.T) {
+	provider := testutil.NewDenyAllAuthZ(t)
+	middleware := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, provider, nil), &testutil.StubStore{}, zap.NewNop())
+	ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{
+		Subject: "staff-subject", Username: "directory-name", AuthMethod: "static-users", ProfileKind: auth.ProfileStaff,
+	})
+	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+		Object: "Mutation",
+		Field:  graphql.CollectedField{Field: &ast.Field{Name: "createNamespace"}},
+		Args: map[string]any{"input": model.CreateNamespaceInput{
+			Metadata: &model.ObjectMetaInput{Name: "directory-name"},
+			Spec:     &model.NamespaceSpecInput{Tier: model.NamespaceTierUser},
+		}},
+	})
+	called := false
+	_, err := middleware.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+		called = true
+		return nil, nil
+	})
+	require.Error(t, err)
+	require.False(t, called)
+	var denied *gqlerror.Error
+	require.ErrorAs(t, err, &denied)
+	require.Equal(t, "FORBIDDEN", denied.Extensions["code"])
+	require.NotContains(t, denied.Extensions, "retryable")
+}
+
 func TestGraphQLFieldAuthorizerDeleteNamespaceDenyFromPolicy(t *testing.T) {
 	authz := testutil.NewDenyAllAuthZ(t)
 	registry := auth.NewProviderRegistry(nil, authz, nil)
