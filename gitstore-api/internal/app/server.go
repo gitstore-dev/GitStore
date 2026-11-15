@@ -166,7 +166,7 @@ func NewServer(cfg *config.Config, log *zap.Logger) (*Server, error) {
 
 // The internal opt-in exercises the same lifecycle in owned acceptance tests.
 // Public construction remains gated until the rollout evidence is complete.
-func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool) (*Server, error) {
+func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeOptions ...rbacRuntimeOptions) (*Server, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("app: config is required")
 	}
@@ -305,10 +305,14 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool) (*Server
 		recovery := &rbacRecoveryGit{store: store, client: gitClient}
 		recoveryReader = recovery
 		provisionNamespace = recovery.provisionNamespace
+		option := rbacRuntimeOptions{provider: prepared, prepare: func(ctx context.Context) error {
+			return ensureBootstrapResources(ctx, store, recovery, clock, ids, log)
+		}}
+		if len(runtimeOptions) > 0 {
+			option.observeSnapshot = runtimeOptions[0].observeSnapshot
+		}
 		dynamic, err = newInitializedCanonicalRBACRuntime(context.Background(), store, resourceJournal, recovery, cfg.Api.Auth.OPA, log,
-			rbacRuntimeOptions{provider: prepared, prepare: func(ctx context.Context) error {
-				return ensureBootstrapResources(ctx, store, recovery, clock, ids, log)
-			}})
+			option)
 		if err != nil {
 			return nil, fmt.Errorf("initialize RBAC runtime: %w", err)
 		}

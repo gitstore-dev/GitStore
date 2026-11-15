@@ -41,11 +41,13 @@ func (s *pendingRuntimeStore) ReadRBACTier(ctx context.Context, tier string) (rb
 
 func TestRBACApplicationReadinessRequiresSourceProofAndCompleteResync(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		repairs uint64
+		name        string
+		repairs     uint64
+		observation bool
 	}{
 		{name: "complete"},
 		{name: "committed-index-repair", repairs: 1},
+		{name: "source-observation-before-publication", observation: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, err := memdb.New()
@@ -75,6 +77,22 @@ func TestRBACApplicationReadinessRequiresSourceProofAndCompleteResync(t *testing
 				}}
 			limits := config.OPAConfig{MaxStaleness: 5 * time.Second, ValidationTimeout: 30 * time.Second,
 				RebuildWorkers: 1, DirtyQueueCapacity: 8, SnapshotRetries: 1, SnapshotMemorySize: "16MiB", RebuildMemorySize: "1MiB"}
+			var observationFailed atomic.Bool
+			var observations atomic.Uint64
+			observationFailed.Store(tc.observation)
+			var options rbacRuntimeOptions
+			if tc.observation {
+				options.observeSnapshot = func(ctx context.Context, snapshot rbac.Snapshot) error {
+					observations.Add(1)
+					if observationFailed.Load() {
+						return rbac.ErrUnavailable
+					}
+					if snapshot.State.TierID != rbac.ClusterTierID || snapshot.Origin != origin || snapshot.ContentDigest == "" {
+						return rbac.ErrInvalid
+					}
+					return ctx.Err()
+				}
+			}
 			runtime, err := newRBACRuntime(t.Context(), store, journal, reader, limits, func(_ context.Context, _ string, expected rbac.SnapshotOrigin) error {
 				if fail.Load() || expected != origin {
 					return rbac.ErrUnavailable
@@ -84,7 +102,7 @@ func TestRBACApplicationReadinessRequiresSourceProofAndCompleteResync(t *testing
 				repairs.Add(1)
 				snapshotStore.pending.Store(false)
 				return nil
-			})
+			}, options)
 			require.NoError(t, err)
 			t.Cleanup(runtime.Shutdown)
 			router := healthHandler(gin.New(), store, zap.NewNop(), apiruntime.SystemClock{}, nil, "", nil, runtime.Ready)
@@ -112,6 +130,11 @@ func TestRBACApplicationReadinessRequiresSourceProofAndCompleteResync(t *testing
 			}
 			for _, name := range []string{"Namespace", "Repository", "RBAC", "ServiceAccount"} {
 				source(name, time.Now())
+			}
+			if tc.observation {
+				require.Eventually(t, func() bool { return observations.Load() > 0 }, time.Second, 5*time.Millisecond)
+				require.Error(t, runtime.Ready(t.Context()), "an unrecorded source model must not become publishable")
+				observationFailed.Store(false)
 			}
 			ctx, cancelReady := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancelReady()
