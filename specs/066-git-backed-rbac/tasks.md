@@ -182,7 +182,7 @@ controllers and delete/recreate the namespace without duplicate or stale-UID gra
 
 - [X] T062 [P] [US6] Add managed-template admission tests in `gitstore-api/internal/admission/rbac_managed_test.go`: verified Staff subject distinct from username, Customer/ServiceAccount rejection, copied annotations, owner/admin tampering, non-managed collision, wrong role/UID and deletion/revert through either transport.
 - [X] T063 [P] [US6] Add controller lifecycle tests in `gitstore-controller-manager/internal/rbac/reconciler_test.go` for duplicate replicas, CAS conflicts, unresolved-to-resolved links, claim acquisition/release crashes, role finalization races, namespace cascades, durable retries and delayed old-UID work.
-- [ ] T064 [P] [US6] Add two-controller owner-access scenarios in `tests/integration/rbac_owner_access_test.go` for both namespace creation paths, existing USER namespace migration, Pending/Ready/Failed conditions, username/name/owner invariants and isolation despite namespace-full-control wildcard grants.
+- [X] T064 [P] [US6] Add two-controller owner-access scenarios in `tests/integration/rbac_owner_access_test.go` for both namespace creation paths, existing USER namespace migration, Pending/Ready/Failed conditions, username/name/owner invariants and isolation despite namespace-full-control wildcard grants.
 
 ### Implementation
 
@@ -194,7 +194,7 @@ controllers and delete/recreate the namespace without duplicate or stale-UID gra
 - [X] T070 [US6] Provision deterministic `namespace-owner-access` in `gitstore-controller-manager/internal/rbac/owner_access.go` from a live USER Namespace UID and trusted Staff owner subject; use fixed `namespace-full-control`, common admission and durable retries without giving bootstrap bind/escalate rights to the user.
 - [X] T071 [US6] Materialize owner-access Pending/Ready/Failed and admitted binding revision through existing Namespace status patches in `gitstore-controller-manager/internal/rbac/owner_access.go` and `gitstore-controller-manager/internal/namespace/graphql_client.go`; distinguish admission success from per-API cache readiness and preserve other controllers' fields.
 - [X] T072 [US6] Add bounded paged catch-up for existing live USER namespaces to `gitstore-controller-manager/internal/rbac/owner_access.go`; keep progress/retries durable, fail closed on ordinary-manifest collisions and skip terminating or superseded UIDs without username substitution in `rbac-local`.
-- [ ] T073 [US6] Run lifecycle/owner tests and the owned two-controller scenarios in `tests/integration/rbac_owner_access_test.go`; replace one controller while retaining its private checkpoint volume without overlap and verify exactly one binding, correct reference cleanup and zero cross-namespace/stale-UID grants.
+- [X] T073 [US6] Run lifecycle/owner tests and the owned two-controller scenarios in `tests/integration/rbac_owner_access_test.go`; replace one controller while retaining its private checkpoint volume without overlap and verify exactly one binding, correct reference cleanup and zero cross-namespace/stale-UID grants.
 
 The owner catch-up/replacement scenario now passes on the owned native fixture. It
 creates the USER Namespace before controllers start, injects bounded
@@ -343,6 +343,34 @@ override the combined-run availability failure or establish recovery acceptance.
 Private failure classification shows Scylla repository/Namespace cancellations
 and 11-second timeouts during the combined run; this is diagnostic evidence,
 not an established root cause. No staleness/retry/recovery gate was relaxed.
+
+A fresh isolated native deployment now passes all three scenarios together
+without skips on unchanged production source: GraphQL retained-checkpoint
+catch-up in 33.18 seconds, signed-Git catch-up in 29.69 seconds and Namespace
+recreation in 44.62 seconds. Both APIs use the current embedded migrations;
+the controller identity and signing material were freshly enrolled rather than
+adopting receipts from the lost disposable test database. All owned listeners
+close without forced stops, and the persistent test foundation is unchanged.
+This does not establish the historical failure's root cause, sustained
+availability or the remaining identity/reference matrix; T064/T073 stay open.
+
+After integrating the completed cleanup PRs, the full remaining native owner
+matrix passes without skips on fresh owned Scylla keyspaces. Ordinary
+prior-state collision cleanup passes in 11.61 seconds, followed by GraphQL
+retained-checkpoint catch-up in 25.37 seconds, signed-Git catch-up in 30.22 seconds
+and Namespace recreation/reference cleanup in 74.20 seconds. A separate
+97.06-second case verifies live Staff identities whose authenticated subject
+differs from their directory username, rejects username substitution on both
+APIs, and exercises GraphQL recreation plus signed-Git owner recovery. Wrong-name
+creation exposed a missing canonical denial code; its focused regression failed
+before reusing the existing authorization helper and now passes with the full
+security middleware race suite. Controller RBAC/Namespace race suites and
+integration vet also pass. All owned listeners close without forced stops;
+checkpoint isolation, foundation ownership and retained assets are preserved.
+These results close T064/T073's functional identity, collision, stale-reference
+and controller-replacement matrix, not sustained capacity or rolling-release
+acceptance. Earlier failures remain evidence; their underlying availability
+cause is not claimed to be established.
 
 **Checkpoint**: Managed owner access and general RBAC lifecycle are
 duplicate-safe and recoverable. Their safety derives from UID/CAS/claims,

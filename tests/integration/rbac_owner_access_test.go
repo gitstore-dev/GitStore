@@ -56,6 +56,57 @@ func TestRBACNativeOwnerAccessNamespaceRecreationAfterControllerReplacement(t *t
 	testRBACNativeOwnerAuthentication(t, false, true, true)
 }
 
+func TestRBACNativeOwnerSubjectDiffersFromUsername(t *testing.T) {
+	if os.Getenv("RBAC_TEST_OWNER_IDENTITY_RUN") != "1" {
+		t.Skip("an owned Staff identity with distinct authenticated subject and username is required")
+	}
+	admin := ownedRBACNativeFixture(t)
+	subject := os.Getenv("RBAC_TEST_SUBJECT")
+	username := os.Getenv("RBAC_TEST_OWNER_USERNAME")
+	require.NotEmpty(t, subject)
+	require.NotEmpty(t, username)
+	require.NotEqual(t, subject, username)
+	require.Equal(t, "1", os.Getenv("RBAC_TEST_CONTROLLER_REPLACEMENT_RUN"))
+	owner := admin
+	owner.token = rbacNativeToken(t, os.Getenv("RBAC_TEST_ACTOR_TOKEN_FILE"))
+	for _, api := range admin.apis {
+		response := admin.query(t, api,
+			`query($name:String!){actor(by:{username:$name}){__typename metadata{uid name}}}`,
+			map[string]any{"name": username})
+		require.Empty(t, response.Errors)
+		var resolved struct {
+			Actor struct {
+				TypeName string `json:"__typename"`
+				Metadata struct{ UID, Name string }
+			}
+		}
+		require.NoError(t, json.Unmarshal(response.Data, &resolved))
+		require.Equal(t, "Staff", resolved.Actor.TypeName)
+		require.Equal(t, subject, resolved.Actor.Metadata.UID,
+			"the authenticated subject must identify the verified directory Staff, not an arbitrary alias")
+		require.Equal(t, username, resolved.Actor.Metadata.Name)
+		rbacNativeErrorCode(t, owner.query(t, api,
+			`mutation($input:CreateNamespaceInput!){createNamespace(input:$input){namespace{id}}}`,
+			map[string]any{"input": map[string]any{
+				"metadata": map[string]any{"name": username,
+					"annotations": map[string]string{"rbac.authorization.gitstore.dev/owner": subject}},
+				"spec": map[string]any{"tier": "USER", "title": "Rejected username substitution"},
+			}}), "FORBIDDEN")
+		rbacNativeErrorCode(t, admin.query(t, api,
+			`query($name:String!){namespace(by:{name:$name}){id}}`,
+			map[string]any{"name": username}), "NOT_FOUND")
+	}
+	for _, nativeGit := range []bool{false, true} {
+		name := "GraphQL"
+		if nativeGit {
+			name = "Git"
+		}
+		t.Run(name, func(t *testing.T) {
+			testRBACNativeOwnerAuthentication(t, nativeGit, true, !nativeGit)
+		})
+	}
+}
+
 func TestRBACNativeOrdinaryOwnerCollisionCleanup(t *testing.T) {
 	admin := ownedRBACNativeFixture(t)
 	path := os.Getenv("RBAC_TEST_LEGACY_OWNER_FIXTURE")

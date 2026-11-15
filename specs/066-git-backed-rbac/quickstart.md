@@ -71,12 +71,23 @@ with review permission; it never establishes a caller's real authority.
 
 ## 4. Exercise personal namespaces and bootstrap (pending)
 
-As a trusted Staff user, create a USER namespace with matching canonical
-username. Verify one protected `namespace-owner-access` binding referencing
+As a trusted Staff user, create a USER namespace whose name matches the
+AuthN-selected subject, not a substituted directory username. Verify one
+protected `namespace-owner-access` binding referencing
 `namespace-full-control`, Namespace UID and correct owner subject.
 Observe Pending/Ready/Failed provisioning status separately from API cache
 readiness. Attempt duplicate reconciliation, collision, tampering and
 old-UID work after deletion/recreation.
+
+For the opt-in native identity case, set `RBAC_TEST_OWNER_IDENTITY_RUN=1`,
+`RBAC_TEST_CONTROLLER_REPLACEMENT_RUN=1` and
+`RBAC_TEST_OWNER_USERNAME` to the verified Staff directory username, distinct
+from `RBAC_TEST_SUBJECT`. Run
+`TestRBACNativeOwnerSubjectDiffersFromUsername` with the existing owned native
+fixture inputs. It verifies the Staff UID on both APIs, rejects directory-name
+substitution, and exercises GraphQL recreation and signed-Git creation with
+independent controller checkpoints. Use an explicitly qualified UID mapping
+and tokens for that authenticated subject; do not relabel an unrelated actor.
 
 Remove the ordinary initial-admin binding after establishing another
 administrator, restart the owned API, and confirm the removed binding is
