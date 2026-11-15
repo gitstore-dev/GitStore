@@ -59,6 +59,7 @@ type tierWork struct {
 	retryAt       time.Time
 	origin        SnapshotOrigin
 	projection    ProjectionIdentity
+	originAt      time.Time
 	checkAt       time.Time
 }
 
@@ -128,6 +129,14 @@ func (m *Manager) signalLocked() {
 }
 
 func (m *Manager) requestLocked(tier string, revision uint64) error {
+	return m.queueLocked(tier, revision, false)
+}
+
+func (m *Manager) replaceLocked(tier string, revision uint64) error {
+	return m.queueLocked(tier, revision, true)
+}
+
+func (m *Manager) queueLocked(tier string, revision uint64, replacing bool) error {
 	work := m.work[tier]
 	if work == nil {
 		if m.pending >= m.deps.QueueSize || len(m.work) >= m.deps.QueueSize+4096 {
@@ -139,12 +148,19 @@ func (m *Manager) requestLocked(tier string, revision uint64) error {
 		m.work[tier] = work
 	}
 	work.generation++
-	if work.installed {
-		work.unavailableAt = m.deps.Clock.Now()
+	now := m.deps.Clock.Now()
+	// A replacement does not renew the installed publication's origin proof.
+	preserve := replacing && work.installed && m.deps.CheckOrigin != nil && !work.blocked &&
+		!work.originAt.IsZero() && !now.Before(work.originAt) && now.Sub(work.originAt) <= m.deps.MaxStaleness &&
+		(work.pending || m.pending < m.deps.QueueSize)
+	if !preserve {
+		if work.installed {
+			work.unavailableAt = m.deps.Clock.Now()
+		}
+		work.installed = false
+		m.deps.Invalidate(tier)
 	}
-	work.installed = false
 	work.revision = max(work.revision, revision)
-	m.deps.Invalidate(tier)
 	if work.blocked {
 		return ErrUnavailable
 	}
@@ -305,7 +321,7 @@ func (m *Manager) poll(ctx context.Context) {
 	}
 	for tier, work := range m.work {
 		if !work.blocked && !work.pending && !work.running && !work.retryAt.IsZero() && !m.deps.Clock.Now().Before(work.retryAt) && m.pending < m.deps.QueueSize {
-			_ = m.requestLocked(tier, work.revision)
+			_ = m.replaceLocked(tier, work.revision)
 		}
 	}
 	m.signalLocked()
@@ -329,7 +345,12 @@ func (m *Manager) eventLocked(event datastore.ResourceWatchEvent) error {
 			// A scan whose namespace is not known yet may have captured the
 			// changed repository. Its generation must not remain publishable.
 			if work.namespace == repository.Namespace || work.namespace == "" {
-				_ = m.requestLocked(tier, 0)
+				if event.Type != datastore.ResourceWatchDeleted && repository.DeletionTimestamp == nil &&
+					work.origin.RepositoryID == repository.UID && work.origin.GitRef == "refs/heads/"+repository.DefaultBranch {
+					_ = m.replaceLocked(tier, 0)
+				} else {
+					_ = m.requestLocked(tier, 0)
+				}
 			}
 		}
 	case "RBACTier":
@@ -338,10 +359,14 @@ func (m *Manager) eventLocked(event datastore.ResourceWatchEvent) error {
 			return ErrUnavailable
 		}
 		work := m.work[progress.TierID]
-		if work != nil && progress.Revision <= work.revision {
+		if event.Type != datastore.ResourceWatchDeleted && work != nil && progress.Revision <= work.revision {
 			return nil
 		}
-		_ = m.requestLocked(progress.TierID, progress.Revision)
+		if event.Type == datastore.ResourceWatchDeleted {
+			_ = m.requestLocked(progress.TierID, progress.Revision)
+		} else {
+			_ = m.replaceLocked(progress.TierID, progress.Revision)
+		}
 	case "Namespace":
 		var namespace datastore.Namespace
 		if json.Unmarshal(event.Payload, &namespace) != nil || namespace.UID == "" || namespace.Name == "" {
@@ -402,7 +427,7 @@ func (m *Manager) take() (string, *tierWork, uint64, bool) {
 		if rebuild == nil && work.pending && !now.Before(work.retryAt) {
 			rebuildTier, rebuild = tier, work
 		}
-		if m.deps.CheckOrigin != nil && work.installed && !work.pending && !now.Before(work.checkAt) &&
+		if m.deps.CheckOrigin != nil && work.installed && !work.pending && work.retryAt.IsZero() && !now.Before(work.checkAt) &&
 			(probe == nil || work.checkAt.Before(probe.checkAt)) {
 			probeTier, probe = tier, work
 		}
@@ -489,11 +514,19 @@ func (m *Manager) probe(ctx context.Context, tier string, work *tierWork, genera
 	if !m.continuous || m.work[tier] != work || work.generation != generation {
 		return ErrUnavailable
 	}
-	if err == nil && ctx.Err() == nil && m.deps.CheckProgress(m.deps.Clock.Now()) == nil {
-		err = m.deps.RecordOrigin(tier, projection, checkedAt)
+	if ctx.Err() == nil && m.deps.CheckProgress(m.deps.Clock.Now()) == nil {
+		if errors.Is(err, errOriginAdvanced) {
+			return m.replaceLocked(tier, 0)
+		}
 		if err == nil {
-			work.checkAt = m.deps.Clock.Now().Add(min(time.Second, m.deps.MaxStaleness/2))
-			return nil
+			err = m.deps.RecordOrigin(tier, projection, checkedAt)
+			if err == nil {
+				if checkedAt.After(work.originAt) {
+					work.originAt = checkedAt
+				}
+				work.checkAt = m.deps.Clock.Now().Add(min(time.Second, m.deps.MaxStaleness/2))
+				return nil
+			}
 		}
 	}
 	_ = m.requestLocked(tier, 0)
@@ -533,8 +566,9 @@ func (m *Manager) rebuild(ctx context.Context, tier string, work *tierWork, gene
 	}
 	defer prepared.Close()
 	snapshot.Resources = nil
+	var originAt time.Time
 	if m.deps.CheckOrigin != nil {
-		checkedAt := m.deps.Clock.Now()
+		originAt = m.deps.Clock.Now()
 		checkCtx, cancel := context.WithTimeout(ctx, m.deps.MaxStaleness)
 		err := m.deps.CheckOrigin(checkCtx, tier, snapshot.Origin)
 		checkErr := checkCtx.Err()
@@ -543,7 +577,7 @@ func (m *Manager) rebuild(ctx context.Context, tier string, work *tierWork, gene
 			return ErrUnavailable
 		}
 		proof, ok := prepared.(interface{ SetOriginProgress(time.Time) error })
-		if !ok || proof.SetOriginProgress(checkedAt) != nil {
+		if !ok || proof.SetOriginProgress(originAt) != nil {
 			return ErrUnavailable
 		}
 	}
@@ -561,6 +595,7 @@ func (m *Manager) rebuild(ctx context.Context, tier string, work *tierWork, gene
 				work.namespace, work.revision = snapshot.Origin.Namespace, snapshot.State.Revision
 				work.installed = true
 				work.origin, work.projection = snapshot.Origin, snapshot.State.Projection
+				work.originAt = originAt
 				work.checkAt = m.deps.Clock.Now().Add(min(time.Second, m.deps.MaxStaleness/2))
 				if !work.unavailableAt.IsZero() {
 					auth.ObserveRBACRecovery(ctx, tier == ClusterTierID, m.deps.Clock.Now().Sub(work.unavailableAt))

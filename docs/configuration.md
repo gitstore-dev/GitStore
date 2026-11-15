@@ -276,6 +276,15 @@ Background workers alternate queued rebuilds with the oldest due origin checks.
 This prevents a rebuild backlog from indefinitely postponing those checks;
 overload or slow checks still fail closed at the configured freshness bound.
 
+Ordinary policy revisions replace complete translations atomically. While a
+replacement is prepared for the same active Namespace, repository and canonical
+branch, ordinary decisions may use the previous complete translation only
+within its original freshness proof. Replacement work never extends that
+proof. Missing or expired proofs, watch gaps, Namespace lifecycle changes,
+repository replacement and queue overload still make affected authorization
+unavailable; authoritative write validation never uses this bounded serving
+fallback.
+
 Progress-only CDC checkpoints use a 500 ms idle coalescing interval; resource
 changes keep the 25 ms flush cadence. Source freshness advances only after successful
 publication and checkpoint persistence.

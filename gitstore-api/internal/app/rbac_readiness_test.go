@@ -232,7 +232,13 @@ func TestCanonicalRBACRuntimeRepairsLostCallbacksBeforeRestoringReadiness(t *tes
 	require.Eventually(t, func() bool { return runtime.Ready(t.Context()) == nil }, 2*time.Second, 5*time.Millisecond)
 	hold.Store(true)
 	git.tip.Store(strings.Repeat("b", 40))
-	require.Eventually(t, func() bool { return runtime.Ready(t.Context()) != nil }, 2*time.Second, 5*time.Millisecond)
+	require.Never(t, func() bool { return runtime.Ready(t.Context()) != nil }, 200*time.Millisecond, 5*time.Millisecond,
+		"a canonical revision advance must not discard the existing complete origin proof")
+	require.Eventually(t, func() bool {
+		refresh()
+		return runtime.Ready(t.Context()) != nil
+	}, 6*time.Second, 25*time.Millisecond,
+		"failed replacement must still expire at the original five-second freshness bound")
 	require.Never(t, func() bool { return runtime.Ready(t.Context()) == nil }, 200*time.Millisecond, 5*time.Millisecond)
 	refresh()
 	hold.Store(false)
