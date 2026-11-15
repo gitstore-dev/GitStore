@@ -349,9 +349,9 @@ func TestRBACCapacityObservedTracesCannotRedefineCommittedPolicyOrRestartClocks(
 	oracle := newRBACCapacityOracle(5 * time.Second)
 	for index, revision := range []rbacCapacityPolicyRevision{grant, revoke, regrant} {
 		require.NoError(t, oracle.commit(rbacCapacityPolicyVector{Cluster: root, Namespace: revision},
-			now.Add(time.Duration(index)*time.Second), map[string]bool{"reader/product.list": index != 1}))
+			now, now.Add(time.Duration(index)*time.Second), map[string]bool{"reader/product.list": index != 1}))
 	}
-	require.NoError(t, oracle.commit(rbacCapacityPolicyVector{Cluster: root, Namespace: alias}, now,
+	require.NoError(t, oracle.commit(rbacCapacityPolicyVector{Cluster: root, Namespace: alias}, now, now,
 		map[string]bool{"reader/product.list": true}))
 	models := map[rbacCapacityPolicyRevision]rbacCapacityProbeSource{root: {Namespace: "root", Root: true}}
 	for _, revision := range []rbacCapacityPolicyRevision{grant, revoke, regrant, alias} {
@@ -943,7 +943,7 @@ func TestRBACCapacityOracleUsesIndependentCommittedRevisionVectors(t *testing.T)
 	namespace := rbacCapacityPolicyRevision{TierUID: "namespace-uid", GitRevision: "namespace-commit", Digest: "namespace-policy"}
 	vector := rbacCapacityPolicyVector{Cluster: cluster, Namespace: namespace}
 	oracle := newRBACCapacityOracle(5 * time.Second)
-	require.NoError(t, oracle.commit(vector, now, map[string]bool{"owner": true, "outsider": false}))
+	require.NoError(t, oracle.commit(vector, now, now, map[string]bool{"owner": true, "outsider": false}))
 	require.NoError(t, oracle.check(vector, "owner", true, now))
 	require.NoError(t, oracle.check(vector, "outsider", false, now))
 	require.Error(t, oracle.check(vector, "owner", false, now), "observations must not define their own expected policy")
@@ -964,10 +964,10 @@ func TestRBACCapacityOracleUsesIndependentCommittedRevisionVectors(t *testing.T)
 			require.Error(t, oracle.check(unknown, "owner", true, now))
 		})
 	}
-	require.Error(t, oracle.commit(vector, now, map[string]bool{"owner": false}), "a committed vector cannot be reinterpreted")
+	require.Error(t, oracle.commit(vector, now, now, map[string]bool{"owner": false}), "a committed vector cannot be reinterpreted")
 	newVector := vector
 	newVector.Namespace.GitRevision, newVector.Namespace.Digest = "revocation", "revoked-policy"
-	require.NoError(t, oracle.commit(newVector, now.Add(time.Second), map[string]bool{"owner": false, "outsider": false}))
+	require.NoError(t, oracle.commit(newVector, now, now.Add(time.Second), map[string]bool{"owner": false, "outsider": false}))
 	require.NoError(t, oracle.check(vector, "owner", true, now.Add(6*time.Second)))
 	require.Error(t, oracle.check(vector, "owner", true, now.Add(6*time.Second+time.Nanosecond)),
 		"an old, correctly evaluated allowance still violates the revocation bound")
@@ -983,15 +983,15 @@ func TestRBACCapacityOraclePreservesIntermediateRevocations(t *testing.T) {
 	}
 	oracle := newRBACCapacityOracle(5 * time.Second)
 	expected := map[string]bool{"owner": true}
-	require.NoError(t, oracle.commit(vector, now, expected))
+	require.NoError(t, oracle.commit(vector, now, now, expected))
 	expected["owner"] = false
 	require.NoError(t, oracle.check(vector, "owner", true, now), "the oracle must copy caller-owned expectations")
 	revoked := vector
 	revoked.Namespace.GitRevision, revoked.Namespace.Digest = "revoke", "revoke"
-	require.NoError(t, oracle.commit(revoked, now.Add(time.Second), map[string]bool{"owner": false}))
+	require.NoError(t, oracle.commit(revoked, now, now.Add(time.Second), map[string]bool{"owner": false}))
 	regranted := vector
 	regranted.Namespace.GitRevision, regranted.Namespace.Digest = "regrant", "regrant"
-	require.NoError(t, oracle.commit(regranted, now.Add(2*time.Second), map[string]bool{"owner": true}))
+	require.NoError(t, oracle.commit(regranted, now, now.Add(2*time.Second), map[string]bool{"owner": true}))
 	require.Error(t, oracle.check(vector, "owner", true, now.Add(7*time.Second)),
 		"latest allow must not hide a missed intermediate revocation")
 	require.NoError(t, oracle.check(regranted, "owner", true, now.Add(7*time.Second)))
@@ -999,19 +999,19 @@ func TestRBACCapacityOraclePreservesIntermediateRevocations(t *testing.T) {
 	alias.Cluster.Digest, alias.Namespace.Digest = "verified-cluster-status", "verified-namespace-status"
 	require.Error(t, oracle.check(alias, "owner", true, now.Add(7*time.Second)),
 		"matching authored Git commits alone cannot register an unverified source digest")
-	require.Error(t, oracle.commit(alias, now.Add(3*time.Second), map[string]bool{"owner": true}),
+	require.Error(t, oracle.commit(alias, now, now.Add(3*time.Second), map[string]bool{"owner": true}),
 		"a source alias cannot restart the original admission clock")
-	require.Error(t, oracle.commit(alias, now, map[string]bool{"owner": false}),
+	require.Error(t, oracle.commit(alias, now, now, map[string]bool{"owner": false}),
 		"a source alias cannot reinterpret independently authored expectations")
-	require.NoError(t, oracle.commit(alias, now, map[string]bool{"owner": true}))
-	require.NoError(t, oracle.commit(alias, now, map[string]bool{"owner": true}))
+	require.NoError(t, oracle.commit(alias, now, now, map[string]bool{"owner": true}))
+	require.NoError(t, oracle.commit(alias, now, now, map[string]bool{"owner": true}))
 	require.NoError(t, oracle.check(alias, "owner", true, now.Add(6*time.Second)))
 	require.Error(t, oracle.check(alias, "owner", true, now.Add(7*time.Second)),
 		"a late source alias must not hide a previously admitted intermediate revocation")
 	require.Error(t, oracle.check(alias, "owner", true, now.Add(-time.Nanosecond)))
 	uncommitted := alias
 	uncommitted.Namespace.GitRevision = "unadmitted"
-	require.Error(t, oracle.commit(uncommitted, now, map[string]bool{"owner": true}),
+	require.Error(t, oracle.commit(uncommitted, now, now, map[string]bool{"owner": true}),
 		"only source variants of the same admitted Git vector can arrive out of order")
 }
 
@@ -1022,14 +1022,99 @@ func TestRBACCapacityOracleEnforcesGrantPropagation(t *testing.T) {
 		Namespace: rbacCapacityPolicyRevision{TierUID: "ns", GitRevision: "deny", Digest: "deny"},
 	}
 	oracle := newRBACCapacityOracle(5 * time.Second)
-	require.NoError(t, oracle.commit(vector, now, map[string]bool{"owner": false}))
+	require.NoError(t, oracle.commit(vector, now, now, map[string]bool{"owner": false}))
 	granted := vector
 	granted.Namespace.GitRevision, granted.Namespace.Digest = "grant", "grant"
-	require.NoError(t, oracle.commit(granted, now.Add(time.Second), map[string]bool{"owner": true}))
+	require.NoError(t, oracle.commit(granted, now, now.Add(time.Second), map[string]bool{"owner": true}))
 	require.NoError(t, oracle.check(vector, "owner", false, now.Add(6*time.Second)))
 	require.Error(t, oracle.check(vector, "owner", false, now.Add(6*time.Second+time.Nanosecond)),
 		"an old denial must not conceal a missed grant propagation deadline")
 	require.NoError(t, oracle.check(granted, "owner", true, now.Add(7*time.Second)))
+}
+
+func TestRBACCapacityOracleDoesNotRefreshOneTierWithAnother(t *testing.T) {
+	for _, changedTier := range []string{"cluster", "namespace"} {
+		for _, sameOutcome := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/same-outcome=%t", changedTier, sameOutcome), func(t *testing.T) {
+				now := time.Unix(1000, 0)
+				initial := rbacCapacityPolicyVector{
+					Cluster:   rbacCapacityPolicyRevision{TierUID: "cluster", GitRevision: "root-original", Digest: "root-original"},
+					Namespace: rbacCapacityPolicyRevision{TierUID: "namespace", GitRevision: "ns-original", Digest: "ns-original"},
+				}
+				superseding, mixed := initial, initial
+				if changedTier == "cluster" {
+					superseding.Cluster.GitRevision, superseding.Cluster.Digest = "root-new", "root-new"
+					mixed.Namespace.GitRevision, mixed.Namespace.Digest = "ns-new", "ns-new"
+				} else {
+					superseding.Namespace.GitRevision, superseding.Namespace.Digest = "ns-new", "ns-new"
+					mixed.Cluster.GitRevision, mixed.Cluster.Digest = "root-new", "root-new"
+				}
+				oracle := newRBACCapacityOracle(5 * time.Second)
+				clusterAt, namespaceAt := now, now
+				mixedClusterAt, mixedNamespaceAt := now, now
+				if changedTier == "cluster" {
+					clusterAt, mixedNamespaceAt = now.Add(time.Second), now.Add(3*time.Second)
+				} else {
+					namespaceAt, mixedClusterAt = now.Add(time.Second), now.Add(3*time.Second)
+				}
+				require.NoError(t, oracle.commit(initial, now, now, map[string]bool{"reader": true}))
+				require.NoError(t, oracle.commit(superseding, clusterAt, namespaceAt, map[string]bool{"reader": sameOutcome}))
+				require.NoError(t, oracle.commit(mixed, mixedClusterAt, mixedNamespaceAt, map[string]bool{"reader": true}))
+				require.NoError(t, oracle.check(mixed, "reader", true, now.Add(6*time.Second)))
+				require.Error(t, oracle.check(mixed, "reader", true, now.Add(6*time.Second+time.Nanosecond)),
+					"a newer companion tier must not restart the superseded tier's clock, even when the outcome is unchanged")
+
+				alias := mixed
+				alias.Cluster.Digest, alias.Namespace.Digest = "verified-root-alias", "verified-ns-alias"
+				require.NoError(t, oracle.commit(alias, mixedClusterAt, mixedNamespaceAt, map[string]bool{"reader": true}))
+				require.Error(t, oracle.check(alias, "reader", true, now.Add(7*time.Second)),
+					"late verified source aliases must inherit both independent supersession clocks")
+			})
+		}
+	}
+}
+
+func TestRBACCapacityOraclePreservesCanonicalTierAdmissions(t *testing.T) {
+	now := time.Unix(1000, 0)
+	vector := rbacCapacityPolicyVector{
+		Cluster:   rbacCapacityPolicyRevision{TierUID: "root", GitRevision: "root-original", Digest: "root-original"},
+		Namespace: rbacCapacityPolicyRevision{TierUID: "namespace", GitRevision: "ns-original", Digest: "ns-original"},
+	}
+	oracle := newRBACCapacityOracle(5 * time.Second)
+	require.NoError(t, oracle.commit(vector, now, now, map[string]bool{"reader": true}))
+	alias := vector
+	alias.Cluster.Digest, alias.Namespace.Digest = "root-alias", "ns-alias"
+	require.Error(t, oracle.commit(alias, now.Add(time.Second), now, map[string]bool{"reader": true}),
+		"a verified root alias cannot move its canonical admission time")
+	require.Error(t, oracle.commit(alias, now, now.Add(time.Second), map[string]bool{"reader": true}),
+		"a verified Namespace alias cannot move its canonical admission time")
+	require.NoError(t, oracle.commit(alias, now, now, map[string]bool{"reader": true}))
+
+	next := vector
+	next.Cluster.GitRevision, next.Cluster.Digest = "root-next", "root-next"
+	require.Error(t, oracle.commit(next, now.Add(3*time.Second), now.Add(time.Second), map[string]bool{"reader": true}))
+	require.NoError(t, oracle.check(vector, "reader", true, now.Add(20*time.Second)),
+		"a rejected mixed admission must not supersede either installed tier")
+	require.Error(t, oracle.commit(next, now, now, map[string]bool{"reader": true}),
+		"distinct canonical admissions require a strictly increasing per-tier clock")
+	require.NoError(t, oracle.commit(next, now.Add(time.Second), now, map[string]bool{"reader": true}),
+		"a rejected mixed admission must not leave a partial future root admission")
+	namespace := next
+	namespace.Namespace.GitRevision, namespace.Namespace.Digest = "ns-next", "ns-next"
+	require.NoError(t, oracle.commit(namespace, now.Add(time.Second), now.Add(3*time.Second), map[string]bool{"reader": true}))
+	require.Error(t, oracle.check(namespace, "reader", true, now.Add(2*time.Second)))
+	require.NoError(t, oracle.check(namespace, "reader", true, now.Add(4*time.Second)))
+	root := namespace
+	root.Cluster.GitRevision, root.Cluster.Digest = "root-latest", "root-latest"
+	require.NoError(t, oracle.commit(root, now.Add(5*time.Second), now.Add(3*time.Second), map[string]bool{"reader": true}))
+	require.Error(t, oracle.check(root, "reader", true, now.Add(4*time.Second)))
+	require.NoError(t, oracle.check(root, "reader", true, now.Add(5*time.Second)))
+
+	foreign := root
+	foreign.Cluster.TierUID = vector.Namespace.TierUID
+	foreign.Namespace.TierUID = "other-namespace"
+	require.Error(t, oracle.commit(foreign, now.Add(6*time.Second), now.Add(6*time.Second), map[string]bool{"reader": true}),
+		"one tier UID cannot change between root and Namespace scope")
 }
 
 func TestRBACCapacityPrivateFixture(t *testing.T) {
