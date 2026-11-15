@@ -211,6 +211,25 @@ surpasses the earlier diagnostic's cardinality but does not isolate its cause,
 verify the subsequent retry/memory fixes at that scale, or establish full-scale
 or sustained acceptance.
 
+A reviewed-runtime eighty-Namespace control fails after 3,053.80 seconds at
+sixty-seven complete receipts, 670 Roles and 3,350 bindings, with one partial
+Namespace. After its fourth successful import acknowledgement, canonical
+`git ls-remote` exhausts the existing thirty-second retry window on
+authorization-unavailable responses. This is not a per-API readback timeout.
+Both API failure profiles show all four workers in full Git-backed origin
+rebuilds rather than the earlier CQL waits. No local builds or tests overlap the
+workload; cleanup closes all owned listeners without forced stops and preserves
+the foundation and failure evidence. No native cause is established.
+
+A separate manager regression proves long Namespace scans can occupy every
+worker until healthy root origin proofs expire. With installed publications and
+at least two workers, scheduling now leaves one slot for origin checks or shared
+root replacement and prioritizes root rebuilds over Namespace rebuilds.
+The regression fails before the correction and passes under race detection,
+including real origin-failure invalidation and eventual queued-scan recovery.
+The configured worker count and all freshness, retry, timeout and memory bounds
+are unchanged. This does not yet establish native recovery or scale acceptance.
+
 ## Current verification boundary
 
 T061 passes on the owned native Scylla/Kratos deployment: both APIs deliver

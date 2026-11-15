@@ -296,6 +296,89 @@ func TestManagerPendingRebuildsCannotStarveInstalledOriginChecks(t *testing.T) {
 	require.Greater(t, reads.Load(), uint64(1), "origin checks must not starve queued rebuilds either")
 }
 
+func TestManagerSlowRebuildsLeaveCapacityForInstalledOriginChecks(t *testing.T) {
+	provider, err := opa.NewProvider(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(provider.Close)
+	require.NoError(t, provider.RequireOriginProgress(400*time.Millisecond))
+	cluster := managerSnapshot(t, rbac.ClusterTierID, "", 1)
+	journal := &managerJournal{epoch: uuid.NewString()}
+	var current atomic.Pointer[rbac.Snapshot]
+	current.Store(&cluster)
+	namespaces := make(map[string]rbac.Snapshot)
+	for index := range 4 {
+		tier := uuid.NewString()
+		namespaces[tier] = managerSnapshot(t, tier, fmt.Sprintf("slow-%d", index), 1)
+	}
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	var reads, renewals atomic.Uint64
+	var originFailed atomic.Bool
+	manager := runRBACManager(t, rbac.ManagerDeps{
+		Journal: journal, Workers: 4, MaxStaleness: 400 * time.Millisecond,
+		Invalidate: provider.InvalidateTier, CheckProgress: func(time.Time) error { return nil },
+		ReadSnapshot: func(ctx context.Context, tier string) (rbac.Snapshot, error) {
+			if tier == rbac.ClusterTierID {
+				return *current.Load(), nil
+			}
+			reads.Add(1)
+			select {
+			case <-ctx.Done():
+				return rbac.Snapshot{}, ctx.Err()
+			case <-release:
+				return namespaces[tier], nil
+			}
+		},
+		Prepare: func(ctx context.Context, tier auth.AuthorizationTier) (rbac.PreparedPublication, error) {
+			return provider.PrepareTier(ctx, tier)
+		},
+		CheckOrigin: func(_ context.Context, tier string, _ rbac.SnapshotOrigin) error {
+			if tier == rbac.ClusterTierID && originFailed.Load() {
+				return rbac.ErrUnavailable
+			}
+			return nil
+		},
+		RecordOrigin: func(tier string, identity rbac.ProjectionIdentity, at time.Time) error {
+			renewals.Add(1)
+			return provider.RecordOriginProgress(tier, identity, at)
+		},
+	})
+	t.Cleanup(unblock)
+	require.Eventually(t, func() bool { return providerReady(provider, rbac.ClusterTierID) }, time.Second, time.Millisecond)
+	for tier := range namespaces {
+		require.NoError(t, manager.RequestTier(tier))
+	}
+	require.Eventually(t, func() bool { return reads.Load() >= 3 }, time.Second, time.Millisecond)
+	require.Never(t, func() bool { return !providerReady(provider, rbac.ClusterTierID) },
+		900*time.Millisecond, time.Millisecond, "slow Namespace scans must not consume every worker needed to verify healthy cluster authority")
+	require.Positive(t, renewals.Load(), "retaining readiness requires fresh canonical proofs, not a longer allowance")
+	second := nextManagerSnapshot(cluster)
+	current.Store(&second)
+	payload, err := json.Marshal(datastore.RBACTierProgress{TierID: rbac.ClusterTierID, Revision: second.State.Revision})
+	require.NoError(t, err)
+	journal.append("RBACTier", payload)
+	require.Eventually(t, func() bool {
+		decision, err := provider.Authorize(t.Context(), &auth.Principal{Subject: "fixture", AuthMethod: "static-users"},
+			"namespace.read", auth.ResourceContext{Kind: "namespace"})
+		return err == nil && decision.AuthorizationSnapshot != nil && decision.AuthorizationSnapshot.Tiers[0].Revision == 2
+	}, time.Second, time.Millisecond, "reserved capacity must also let shared root replacement bypass blocked Namespace scans")
+	originFailed.Store(true)
+	require.Eventually(t, func() bool { return !providerReady(provider, rbac.ClusterTierID) }, time.Second, time.Millisecond)
+	unblock()
+	originFailed.Store(false)
+	require.Eventually(t, func() bool {
+		if !providerReady(provider, rbac.ClusterTierID) {
+			return false
+		}
+		for tier := range namespaces {
+			if !providerReady(provider, tier) {
+				return false
+			}
+		}
+		return true
+	}, 3*time.Second, time.Millisecond, "queued scans and real origin-failure recovery must still complete")
+}
+
 func TestManagerCannotRenewOriginProofAcrossASupersededGeneration(t *testing.T) {
 	provider, err := opa.NewProvider(t.Context())
 	require.NoError(t, err)

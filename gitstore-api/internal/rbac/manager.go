@@ -79,6 +79,7 @@ type Manager struct {
 	lookups     chan string
 	lookupNames map[string]bool
 	probeNext   bool
+	rebuilding  int
 }
 
 func NewManager(deps ManagerDeps) (*Manager, error) {
@@ -420,17 +421,27 @@ func (m *Manager) take() (string, *tierWork, uint64, bool) {
 	now := m.deps.Clock.Now()
 	var rebuildTier, probeTier string
 	var rebuild, probe *tierWork
+	installed := false
 	for tier, work := range m.work {
+		installed = installed || work.installed
 		if work.running || work.blocked {
 			continue
 		}
-		if rebuild == nil && work.pending && !now.Before(work.retryAt) {
+		if work.pending && !now.Before(work.retryAt) && (rebuild == nil || tier == ClusterTierID) {
 			rebuildTier, rebuild = tier, work
 		}
 		if m.deps.CheckOrigin != nil && work.installed && !work.pending && work.retryAt.IsZero() && !now.Before(work.checkAt) &&
 			(probe == nil || work.checkAt.Before(probe.checkAt)) {
 			probeTier, probe = tier, work
 		}
+	}
+	limit := m.deps.Workers
+	// Slow Namespace scans must leave a worker for proofs or shared root recovery.
+	if installed && m.deps.CheckOrigin != nil && rebuildTier != ClusterTierID {
+		limit = max(1, limit-1)
+	}
+	if m.rebuilding >= limit {
+		rebuild = nil
 	}
 	// Alternate backlog work with the oldest due proof, so neither can starve.
 	if probe != nil && (rebuild == nil || m.probeNext) {
@@ -441,6 +452,7 @@ func (m *Manager) take() (string, *tierWork, uint64, bool) {
 	if rebuild != nil {
 		rebuild.pending, rebuild.running = false, true
 		m.pending--
+		m.rebuilding++
 		m.probeNext = true
 		return rebuildTier, rebuild, rebuild.generation, false
 	}
@@ -486,6 +498,9 @@ func (m *Manager) worker(ctx context.Context) {
 				auth.ObserveRBACRebuild(ctx, tier == ClusterTierID, err == nil, m.deps.Clock.Now().Sub(started))
 			}
 			m.mu.Lock()
+			if !probe {
+				m.rebuilding--
+			}
 			work.running = false
 			if m.work[tier] == work {
 				if err != nil && !work.blocked {
