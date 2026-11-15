@@ -256,10 +256,11 @@ func TestManagerPendingRebuildsCannotStarveInstalledOriginChecks(t *testing.T) {
 	require.Greater(t, reads.Load(), uint64(1), "origin checks must not starve queued rebuilds either")
 }
 
-func TestManagerCannotRenewOriginProofAcrossAnInvalidatedGeneration(t *testing.T) {
+func TestManagerCannotRenewOriginProofAcrossASupersededGeneration(t *testing.T) {
 	provider, err := opa.NewProvider(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(provider.Close)
+	require.NoError(t, provider.RequireOriginProgress(5*time.Second))
 	journal := &managerJournal{epoch: uuid.NewString()}
 	first := managerSnapshot(t, rbac.ClusterTierID, "", 1)
 	second := managerSnapshot(t, rbac.ClusterTierID, "", 2)
@@ -306,10 +307,174 @@ func TestManagerCannotRenewOriginProofAcrossAnInvalidatedGeneration(t *testing.T
 	payload, err := json.Marshal(datastore.RBACTierProgress{TierID: rbac.ClusterTierID, Revision: 2})
 	require.NoError(t, err)
 	journal.append("RBACTier", payload)
-	require.Eventually(t, func() bool { return !providerReady(provider, rbac.ClusterTierID) }, time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return journal.observed.Load() == 1 }, time.Second, 5*time.Millisecond)
 	close(release)
 	require.Eventually(t, func() bool { return providerReady(provider, rbac.ClusterTierID) }, 3*time.Second, 5*time.Millisecond)
 	require.Zero(t, staleRenewals.Load())
+}
+
+func TestManagerReplacesCompletePublicationWithinOriginalFreshnessBound(t *testing.T) {
+	for _, scenario := range []struct {
+		name       string
+		repository bool
+		expire     bool
+		gap        bool
+		change     string
+		deleted    bool
+	}{
+		{name: "tier-revision"},
+		{name: "canonical-commit", repository: true},
+		{name: "original-proof-expires", expire: true},
+		{name: "source-gap", gap: true},
+		{name: "repository-replacement", repository: true, change: "identity"},
+		{name: "canonical-branch-replacement", repository: true, change: "branch"},
+		{name: "tier-deletion", deleted: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			provider, err := opa.NewProvider(t.Context())
+			require.NoError(t, err)
+			t.Cleanup(provider.Close)
+			maxAge := 5 * time.Second
+			if scenario.expire {
+				maxAge = 800 * time.Millisecond
+			}
+			require.NoError(t, provider.RequireOriginProgress(maxAge))
+			first := managerSnapshot(t, rbac.ClusterTierID, "", 1)
+			second := first
+			second.State.Revision = 2
+			second.Origin.GitRevision = fmt.Sprintf("main@sha1:%040x", 2)
+			second.Origin.TreeDigest = fmt.Sprintf("%064x", 2)
+			second.State.Projection.GitRevision = second.Origin.GitRevision
+			second.State.Projection.TreeDigest = second.Origin.TreeDigest
+			second.ContentDigest = second.Origin.TreeDigest
+			switch scenario.change {
+			case "identity":
+				second.Origin.RepositoryID = uuid.NewString()
+				second.State.Projection.RepositoryID = second.Origin.RepositoryID
+			case "branch":
+				second.Origin.GitRef = "refs/heads/replacement"
+				second.Origin.GitRevision = fmt.Sprintf("replacement@sha1:%040x", 2)
+				second.State.Projection.GitRef = second.Origin.GitRef
+				second.State.Projection.GitRevision = second.Origin.GitRevision
+			}
+			journal := &managerJournal{epoch: uuid.NewString()}
+			var changed, healthy atomic.Bool
+			healthy.Store(true)
+			started, release := make(chan struct{}), make(chan struct{})
+			var startedOnce sync.Once
+			runRBACManager(t, rbac.ManagerDeps{
+				Journal: journal, Workers: 1, MaxStaleness: maxAge,
+				Invalidate: provider.InvalidateTier,
+				CheckProgress: func(time.Time) error {
+					if !healthy.Load() {
+						return rbac.ErrUnavailable
+					}
+					return nil
+				},
+				ReadSnapshot: func(ctx context.Context, _ string) (rbac.Snapshot, error) {
+					if !changed.Load() {
+						return first, nil
+					}
+					startedOnce.Do(func() { close(started) })
+					select {
+					case <-ctx.Done():
+						return rbac.Snapshot{}, ctx.Err()
+					case <-release:
+						return second, nil
+					}
+				},
+				Prepare: func(ctx context.Context, tier auth.AuthorizationTier) (rbac.PreparedPublication, error) {
+					return provider.PrepareTier(ctx, tier)
+				},
+				CheckOrigin:  func(context.Context, string, rbac.SnapshotOrigin) error { return nil },
+				RecordOrigin: provider.RecordOriginProgress,
+			})
+			require.Eventually(t, func() bool { return providerReady(provider, rbac.ClusterTierID) }, time.Second, time.Millisecond)
+			changed.Store(true)
+			kind := "RBACTier"
+			var event any = datastore.RBACTierProgress{TierID: rbac.ClusterTierID, Revision: 2}
+			if scenario.repository {
+				kind = "Repository"
+				branch := "main"
+				if scenario.change == "branch" {
+					branch = "replacement"
+				}
+				event = datastore.Repository{UID: second.Origin.RepositoryID, Name: "gitstore-system",
+					Namespace: first.Origin.Namespace, DefaultBranch: branch}
+			}
+			payload, err := json.Marshal(event)
+			require.NoError(t, err)
+			if scenario.deleted {
+				payload, err = json.Marshal(datastore.RBACTierProgress{TierID: rbac.ClusterTierID, Revision: 1})
+				require.NoError(t, err)
+				journal.append(kind, payload, datastore.ResourceWatchDeleted)
+			} else {
+				journal.append(kind, payload)
+			}
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("replacement scan did not start")
+			}
+			require.Equal(t, scenario.change == "" && !scenario.deleted, providerReady(provider, rbac.ClusterTierID),
+				"only ordinary revisions may preserve the complete, still-fresh publication")
+			if scenario.expire {
+				require.Eventually(t, func() bool { return !providerReady(provider, rbac.ClusterTierID) },
+					2*time.Second, time.Millisecond, "replacement work must not renew the old origin proof")
+			}
+			if scenario.gap {
+				healthy.Store(false)
+				require.Eventually(t, func() bool { return !providerReady(provider, rbac.ClusterTierID) },
+					time.Second, time.Millisecond, "source failure must invalidate even a fresh publication")
+				healthy.Store(true)
+			}
+			close(release)
+			require.Eventually(t, func() bool {
+				snapshot, ok := provider.AuthorizationSnapshot()
+				return providerReady(provider, rbac.ClusterTierID) && ok && snapshot.Tiers[0].Revision == 2
+			}, 3*time.Second, time.Millisecond)
+		})
+	}
+}
+
+func TestManagerOverloadedReplacementInvalidatesFreshPublication(t *testing.T) {
+	provider, err := opa.NewProvider(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(provider.Close)
+	require.NoError(t, provider.RequireOriginProgress(5*time.Second))
+	journal := &managerJournal{epoch: uuid.NewString()}
+	snapshot := managerSnapshot(t, rbac.ClusterTierID, "", 1)
+	started := make(chan struct{})
+	manager := runRBACManager(t, rbac.ManagerDeps{
+		Journal: journal, Workers: 1, QueueSize: 1,
+		Invalidate: provider.InvalidateTier, CheckProgress: func(time.Time) error { return nil },
+		ReadSnapshot: func(ctx context.Context, tier string) (rbac.Snapshot, error) {
+			if tier == rbac.ClusterTierID {
+				return snapshot, nil
+			}
+			close(started)
+			<-ctx.Done()
+			return rbac.Snapshot{}, ctx.Err()
+		},
+		Prepare: func(ctx context.Context, tier auth.AuthorizationTier) (rbac.PreparedPublication, error) {
+			return provider.PrepareTier(ctx, tier)
+		},
+		CheckOrigin:  func(context.Context, string, rbac.SnapshotOrigin) error { return nil },
+		RecordOrigin: provider.RecordOriginProgress,
+	})
+	require.Eventually(t, func() bool { return providerReady(provider, rbac.ClusterTierID) }, time.Second, time.Millisecond)
+	require.NoError(t, manager.RequestTier(uuid.NewString()))
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("configured worker did not start")
+	}
+	require.NoError(t, manager.RequestTier(uuid.NewString()))
+	payload, err := json.Marshal(datastore.RBACTierProgress{TierID: rbac.ClusterTierID, Revision: 2})
+	require.NoError(t, err)
+	journal.append("RBACTier", payload)
+	require.Eventually(t, func() bool { return !providerReady(provider, rbac.ClusterTierID) },
+		time.Second, time.Millisecond, "a full replacement queue must not retain an otherwise fresh publication")
 }
 
 func TestManagerNamespaceDemandIsCoalescedWithoutRestartingScans(t *testing.T) {

@@ -5,6 +5,7 @@ package rbac
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
+
+var errOriginAdvanced = errors.New("RBAC canonical revision advanced")
 
 type OriginGitReader interface {
 	ListFiles(ctx context.Context, repositoryID, prefix, ref string) ([]string, error)
@@ -137,8 +140,15 @@ func (r OriginReader) ReadOrigin(ctx context.Context, tier string) (SnapshotOrig
 func (r OriginReader) CheckOrigin(ctx context.Context, tier string, expected SnapshotOrigin) error {
 	current, err := r.facts(ctx, tier)
 	expected.TreeDigest = ""
-	if err != nil || current != expected || ctx.Err() != nil {
+	if err != nil || ctx.Err() != nil {
 		return snapshotUnavailable(err)
+	}
+	if current != expected {
+		current.GitRevision = expected.GitRevision
+		if current == expected {
+			return errors.Join(ErrUnavailable, errOriginAdvanced)
+		}
+		return snapshotUnavailable(nil)
 	}
 	return nil
 }

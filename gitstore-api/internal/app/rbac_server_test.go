@@ -67,7 +67,11 @@ func TestRBACNativeProcess(t *testing.T) {
 	}
 	ctx, stop := signal.NotifyContext(t.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	log, err := zap.NewProduction()
+	logConfig := zap.NewProductionConfig()
+	if os.Getenv("GITSTORE_RBAC_NATIVE_TEST_MODELS_FILE") != "" {
+		logConfig.Sampling = nil
+	}
+	log, err := logConfig.Build()
 	require.NoError(t, err)
 	defer func() { _ = log.Sync() }()
 	stopProfiler, err := observability.StartCapacityProfiler(cfg.Api.Profiling, log)
