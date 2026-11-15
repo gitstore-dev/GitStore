@@ -460,6 +460,7 @@ func TestManagerReplacesCompletePublicationWithinOriginalFreshnessBound(t *testi
 		name       string
 		repository bool
 		expire     bool
+		renew      bool
 		gap        bool
 		change     string
 		deleted    bool
@@ -467,6 +468,7 @@ func TestManagerReplacesCompletePublicationWithinOriginalFreshnessBound(t *testi
 		{name: "tier-revision"},
 		{name: "canonical-commit", repository: true},
 		{name: "original-proof-expires", expire: true},
+		{name: "renewed-origin-proof", renew: true},
 		{name: "source-gap", gap: true},
 		{name: "repository-replacement", repository: true, change: "identity"},
 		{name: "canonical-branch-replacement", repository: true, change: "branch"},
@@ -479,6 +481,9 @@ func TestManagerReplacesCompletePublicationWithinOriginalFreshnessBound(t *testi
 			maxAge := 5 * time.Second
 			if scenario.expire {
 				maxAge = 800 * time.Millisecond
+			}
+			if scenario.renew {
+				maxAge = 400 * time.Millisecond
 			}
 			require.NoError(t, provider.RequireOriginProgress(maxAge))
 			first := managerSnapshot(t, rbac.ClusterTierID, "", 1)
@@ -532,6 +537,10 @@ func TestManagerReplacesCompletePublicationWithinOriginalFreshnessBound(t *testi
 				RecordOrigin: provider.RecordOriginProgress,
 			})
 			require.Eventually(t, func() bool { return providerReady(provider, rbac.ClusterTierID) }, time.Second, time.Millisecond)
+			if scenario.renew {
+				require.Never(t, func() bool { return !providerReady(provider, rbac.ClusterTierID) },
+					650*time.Millisecond, time.Millisecond, "successful origin probes must renew a quiet publication's proof")
+			}
 			changed.Store(true)
 			kind := "RBACTier"
 			var event any = datastore.RBACTierProgress{TierID: rbac.ClusterTierID, Revision: 2}
