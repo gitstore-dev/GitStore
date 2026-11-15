@@ -78,6 +78,52 @@ func TestControllerListDocumentsFitDefaultOperationBudget(t *testing.T) {
 	require.Greater(t, complexity.Calculate(context.Background(), executor, document.Operations[0], nil, security.ComplexityOptions(executor.Schema())...), limits.Complexity)
 }
 
+func TestRBACCapacitySeedReadbackFitsDefaultPrincipalRefill(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "../../../tests/integration/namespace_watch_capacity_test.go", nil, 0)
+	require.NoError(t, err)
+	constants := map[string]goast.Expr{}
+	for _, declaration := range file.Decls {
+		group, ok := declaration.(*goast.GenDecl)
+		if !ok || group.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range group.Specs {
+			value := spec.(*goast.ValueSpec)
+			if len(value.Names) == 1 && len(value.Values) == 1 {
+				constants[value.Names[0].Name] = value.Values[0]
+			}
+		}
+	}
+	var evaluate func(goast.Expr) string
+	evaluate = func(expression goast.Expr) string {
+		switch value := expression.(type) {
+		case *goast.BasicLit:
+			text, err := strconv.Unquote(value.Value)
+			require.NoError(t, err)
+			return text
+		case *goast.Ident:
+			return evaluate(constants[value.Name])
+		case *goast.BinaryExpr:
+			require.Equal(t, token.ADD, value.Op)
+			return evaluate(value.X) + evaluate(value.Y)
+		default:
+			t.Fatalf("unsupported readback expression %T", expression)
+			return ""
+		}
+	}
+	limits := config.DefaultEndpoint("admin").Limits
+	schema := security.LimitSchema(generated.NewExecutableSchema(generated.Config{}), limits)
+	document, errors := gqlparser.LoadQueryWithRules(schema.Schema(), evaluate(constants["rbacCapacitySeedReadbackQuery"]), rules.NewDefaultRules())
+	require.Empty(t, errors)
+	cost := complexity.Calculate(t.Context(), schema, document.Operations[0], map[string]any{"namespace": "owned"}, security.ComplexityOptions(schema.Schema())...)
+	require.Positive(t, cost)
+	t.Logf("native seed readback complexity: %d", cost)
+	require.Less(t, float64(cost), 4*limits.PrincipalPerSecond,
+		"shared four-second seed observations must leave admission capacity for namespace operations")
+	require.Less(t, cost*4, limits.PrincipalBurst,
+		"four initial readbacks must leave burst capacity for namespace operations")
+}
+
 func TestZeroCostResourceEnvelopesContainOnlyInlineValues(t *testing.T) {
 	schema := generated.NewExecutableSchema(generated.Config{}).Schema()
 	var visit func(string, map[string]bool)

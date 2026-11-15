@@ -112,6 +112,15 @@ validation is a two-helper-process soak, not a released API deployment.
 `CAPACITY_PROFILE` is now only an internal k6 dispatch detail.
 The dispatcher is the only public capacity entry point.
 
+Dynamic RBAC capacity is not yet a supported deployed scenario.
+`CAPACITY_RBAC_WORKLOAD=1` fails explicitly; it never falls back to health-only
+readiness or ordinary Namespace watch load. Default health-only and identity
+readiness selections are unchanged. Local regressions in the default test suite
+cover exact offered/completed/dropped accounting, bounded scheduling/drain,
+independent committed-revision expectations, private fixtures, topology
+constraints and process-epoch counters. These checks do not certify native
+dataset counts, replica propagation, fault recovery or sustained acceptance.
+
 Spec 063's `REPOSITORY_CAPACITY_SECRET_SCENARIO=1` selects the connected File-push,
 owned-record fault, resource and evidence collector. It requires explicit
 `CHAOS_CONFIRM=1`, provisioned test-owned fixtures and an acknowledged Product

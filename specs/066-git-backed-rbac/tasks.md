@@ -458,7 +458,7 @@ persisted kind or an alternate authorization evaluator.
 **Goal**: Prove the declared envelope on owned infrastructure and publish
 supported operating behavior. Tests below must precede runner changes.
 
-- [ ] T089 Add failing local workload/verifier regressions in `tests/integration/rbac_capacity_contract_test.go` and `scripts/test-capacity-dispatch.sh`: exact offered/completed/dropped accounting, independently checked policy revisions, owned topology/dataset proof, private fixtures, fault epochs and unchanged default health-only driver behavior.
+- [X] T089 Add failing local workload/verifier regressions in `tests/integration/rbac_capacity_contract_test.go` and `scripts/test-capacity-dispatch.sh`: exact offered/completed/dropped accounting, independently checked policy revisions, owned topology/dataset proof, private fixtures, fault epochs and unchanged default health-only driver behavior.
 - [ ] T090 Extend the existing namespace/watch harness in `tests/integration/namespace_watch_capacity_test.go` with bounded RBAC fixture seeding and an independent revision-aware decision oracle; verify native counts for 1,000 namespaces, 10,000 roles and 50,000 bindings, rotate subjects/namespaces and avoid catalog-wide scans or a second capacity framework.
 - [ ] T091 Extend `tests/capacity/profiles/api-readiness.js`, `tests/capacity/preflight/api-readiness.sh` and `tests/capacity/verifiers/api-readiness.sh` with an explicit RBAC workload selector under the current Makefile interface; require two directly probed APIs/two controllers/one Git, and preserve the existing health-only and identity scenarios when not selected.
 - [ ] T092 Wire RBAC propagation observers, workload bounds and domain verification into `scripts/run-capacity-target.sh` and `tests/integration/namespace_watch_capacity_test.go`; use existing `TARGET=namespace PROFILE=watch` and `TARGET=api PROFILE=readiness MODE=alpha` families, bounded pending offers and the contract's 60/30/10 outcome mix without suppressing errors or drops.
@@ -473,6 +473,120 @@ supported operating behavior. Tests below must precede runner changes.
 - [ ] T101 Run focused suites/race checks, `make build`, `make test`, `make lint`, `make check TARGET=all` and the full default `make pr-ready`; refresh the code graph with `graphify update .`, check generated drift and confirm all source changes behind `shared/schemas/admin/rbac.graphqls` and `gitstore-api/internal/rbac/` retain the declared compatibility and no-secret guarantees.
 - [ ] T102 Validate the supported sequence in `specs/066-git-backed-rbac/quickstart.md`, update `tests/capacity/README.md` and relevant scoped command docs with the implemented selectors/evidence contract, and reconcile traceability in `specs/066-git-backed-rbac/plan.md`; do not add an external quickstart-repository parity gate or a feature-specific public Make target.
 - [ ] T103 After every required functional, native-store, replica/rolling, healthy/fault and large-catalog gate passes, update `specs/066-git-backed-rbac/spec.md` to Closed and finalize the acceptance summary in `specs/066-git-backed-rbac/contracts/capacity-recovery.md` in the implementing PR; retain Draft/pending status when evidence is unavailable and leave unrelated Proposed ADRs, #451, #487 and GraphQL-alignment #548 outside completion claims.
+
+T089's local test-first foundation is implemented in the existing namespace/watch
+harness. The scheduler computes every scheduled offer independently of timer
+delivery, bounds pending work and drain, preserves the full load window, and
+reports uncompleted offers as drops. The independent oracle copies predeclared
+expectations keyed by complete cluster/Namespace UID, Git revision and content
+digest vectors; it rejects unknown vectors and expired grant/revoke propagation,
+including intermediate revocations followed by re-grants. Local contracts also
+reject shared controller checkpoints, foreign/duplicate/stopped processes,
+incorrect native-count observations, public/symlinked fixture files, counter
+resets and unconfirmed fault windows. Missing contracts and silent dispatcher
+fallback failed before implementation; focused race and dispatcher regressions
+pass. The default aggregate test selector includes these regressions.
+
+This is not deployed capacity evidence. `CAPACITY_RBAC_WORKLOAD=1` is explicitly
+refused until T090-T092 finish native seeding/probes, ordinary decision observations,
+propagation and domain-verifier receipts; default health-only and identity
+drivers remain unchanged. T090's reusable scheduler/oracle foundation exists,
+but its native dataset and driver are not complete. The owner matrix is now
+closed by the fresh final-source results above. Historical stacks concentrate the repeated
+Repository status timeouts at the Namespace catalog-fence acquisition path;
+they do not establish the underlying cause. No production repair was inferred.
+Use canonical validation commands; a private launcher's fixed disk-space
+threshold is not a repository or user gate.
+
+The bounded native seeder now passes a two-Namespace/twenty-Role/one-hundred-
+binding diagnostic with exact policy/UID readback on both APIs. Four real Staff
+principals also pass ordinary Product-list probes for unconditional, conditional
+group and built-in grants, unresolved roles and unbound subjects. Readback work
+shares each replica's existing complexity budget; no administrator exemption or
+increased convergence deadline was introduced. Seeding encountered transient
+authorization unavailability before convergence. Full native scale, independent
+committed-vector observation and sustained decision/propagation drivers remain
+unfinished, so T090-T092 stay open.
+Seeding requires an explicitly finite whole-test deadline, separate from the
+thirty-second per-replica readback checks and thirty-minute acceptance duration.
+New seed receipts also retain all six bounded import revisions and their
+client-observed successful-push acknowledgement clocks before remote-ref or
+replica readback. Local regressions preserve those clocks through serialization
+and later admissions and reject duplicate/reordered or oversized records.
+Historical receipts without these fields cannot supply propagation timing.
+Topology regressions now accept the retained multi-peer Scylla shape without
+changing exact replica counts, singleton Git or private-checkpoint constraints.
+These are prerequisites, not completion of the deployed oracle or workload.
+At the default principal budget, one complete paced readback of all one thousand
+Namespaces alone requires more than one hour per replica; the earlier arbitrary
+one-hour whole-test guard could not prepare the declared dataset. Shared
+observation slots now retain a bounded four-query burst within the existing
+principal burst allowance, without increasing the sustained refill rate.
+Admission-slot waits consume the readback deadline and late successes are rejected. A
+four-actually-concurrent-writer diagnostic failed this strict bound with pending
+binding reconciliation and authorization unavailability; it remains failure
+evidence, not a four-writer capacity claim.
+
+Owned native source observation now records canonical candidates before provider
+preparation through an internal constructor option, with no public endpoint or
+production configuration switch. Streaming regressions reject altered digests,
+incomplete/overlapping models and hidden gaps. Both APIs pass independent source
+hashing, authored-policy, exact-count and immutable-UID checks in a two-Namespace
+diagnostic, alongside all five ordinary-principal probes. Ordinary Product
+decision vectors join to the captured source models; authoritative
+write-validation vectors are a separate capture path. This establishes source
+observability, not the finished committed-vector decision/propagation driver.
+Local oracle regressions now also cover independently verified status-source
+aliases: unchanged authored Git vectors retain their original admission time
+and expected cases, and late alias registration cannot conceal intermediate
+revocations. Unknown digests still fail until explicitly verified and registered.
+The diagnostic harness now predeclares ordinary request IDs and checks exact
+subject/action/Namespace/outcome receipts against both captured policy tiers.
+Canonical nested role-reference generations and Namespace Role UIDs are also
+validated. Contract tests, sealed replay and fresh native client-declared trace
+checks pass. Staged ten-manifest imports pass for one writer/two Namespaces and
+four actually concurrent writers/four Namespaces, with exact final counts and
+UID stability across commits. Every batch retains the thirty-second per-API
+bound. A further fresh two-Namespace diagnostic verifies the independently
+authored bootstrap administrator grant and policy-tree digest, pins root and
+binding incarnations through both APIs, and excludes uninitialized/unresolved
+root candidates from decision-vector joins. General root-policy changes,
+dynamic committed-policy registration and full staged scale remain pending.
+The larger four-writer staged diagnostic failed after forty-seven complete
+Namespace receipts and one partial receipt at the unchanged per-API deadline.
+Source files stayed below their capture bounds; offline provider preparation of
+complete models does not reproduce live allocation exhaustion. This remains a
+failed scale diagnostic, not native-scale acceptance.
+A separate one-writer medium diagnostic passes all sixty-four Namespaces,
+640 Roles and 3,200 bindings in 3,214 seconds, with both-API source/policy/UID
+checks, independently authored root verification and ordinary client traces.
+That run used the pre-rule-sharing provider. Fresh merged-provider parity passes
+four Namespaces, forty Roles and two hundred bindings with four concurrent
+writers in 100.27 seconds. Both have complete terminal receipts, no forced stops,
+closed owned listeners and an unchanged foundation. Neither establishes the
+earlier four-writer failure's cause or full-scale/healthy/fault acceptance.
+A later full-count one-writer attempt with 128 real Staff principals fails in
+its first Namespace after 41.45 seconds at the unchanged per-API bound, with
+authorization unavailable. A bounded two-Namespace control using the same subject
+pool and no source observation passes; neither setting alone is a proven cause.
+The failed fixture remains preserved, all owned listeners close without forced
+stops and the foundation is unchanged. Full scale remains unverified.
+Single-bulk-commit imports failed with default resync/checkpoint settings: a full-size
+two-writer attempt stopped after twelve complete Namespace receipts and one
+partial receipt. The one-writer full-size attempt also failed the strict bound
+after fifty-one complete receipts and one partial receipt. Both fixtures stopped
+without forced termination, closed their owned listeners and preserved the
+foundation. Tier revision conflicts, pending projection repair and authorization
+unavailability are observed; no single underlying cause is proven. No full native
+dataset or acceptance task is checked complete.
+
+The representative provider reservation regression now uses the seeded
+conditional, multi-resource rules and binding mix. It exposed a separate
+one-thousand-Namespace budget problem hidden by the simpler benchmark fixture.
+Sharing authored rules across action indexes makes that regression pass without
+changing the eightfold reservation multiplier, 512 MiB limit, replacement
+headroom or logical expansion bound. Local before/after measurements are in
+`research.md`; they do not prove native full scale or close T095/T096.
 
 T093's owned injector extension is now implemented and verified independently
 of the unfinished workload drivers. Test-first dispatcher cases rejected the

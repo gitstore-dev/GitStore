@@ -14,6 +14,112 @@ before they can exercise this feature. A health-only readiness smoke run
 is not an RBAC acceptance result. Document supported selectors with the
 implementation rather than publish invented flags here.
 
+The local namespace/watch foundation now provides exact scheduled-offer
+accounting, bounded pending/drain scheduling and an independent committed-vector
+oracle. It requires predeclared expected decisions, distinguishes infrastructure
+failures, and retains intermediate grant/revoke transitions. Local topology,
+private-file, epoch-counter and fault-window regressions do not replace live
+native counts or ownership probes. `CAPACITY_RBAC_WORKLOAD=1` currently fails
+explicitly rather than silently dispatching health-only evidence; it is not a
+supported deployed workload selector yet.
+
+Independently verified source variants of the same admitted cluster/Namespace
+Git vector retain the original admission time and expected cases. They cannot
+restart propagation clocks or reinterpret expected decisions. Late registration
+still checks every later admitted transition, including intermediate revocations;
+matching Git revisions alone never authorize an unknown content digest.
+
+New native seed receipts retain each of the six bounded import commits and its
+client-observed successful-push acknowledgement time before remote-ref or
+per-replica readback. Invalid, repeated or reordered records cannot rewrite
+that history. Historical receipts without these clocks cannot supply
+propagation measurements. This is clock plumbing, not the live mutation driver
+or a propagation-latency result. Local topology validation also accepts a shared
+multi-peer Scylla cluster while retaining exact API/controller counts, singleton
+Git, ownership and independent-checkpoint requirements.
+
+Bounded native seeding now passes a diagnostic with two Namespaces, twenty Roles
+and one hundred bindings, including the personal-owner template. Both APIs
+verify exact authored policies, unique UIDs and resolved Role links. Four real
+Staff principals exercise ordinary Product list requests for unconditional,
+group-conditioned and built-in grants, plus unresolved-role and unbound-subject
+denials. Shared per-replica readback pacing respects the existing administrator
+complexity budget rather than disabling admission. Transient authorization
+unavailability occurred during seeding; the successful convergence checks are
+not propagation-latency or availability acceptance. Full native scale and the
+deployed committed-vector oracle remain incomplete.
+
+The owned native fixture can now capture canonical source candidates before
+provider preparation, without a public endpoint or a production configuration
+switch. Private, exclusive, bounded record streams are independently hashed;
+the existing namespace/watch harness checks complete models against authored
+policies, native counts and immutable UIDs. The two-Namespace diagnostic passes
+these checks on both APIs and the five ordinary-principal probes. Actual ordinary
+Product decision vectors also match captured source models. Authoritative
+write-validation captures are separate and must not be mistaken for serving
+snapshots. This diagnostic observation path is not a completed deployed
+committed-vector oracle or uninstrumented performance evidence.
+
+Source verification also checks canonical nested role-reference generations and
+immutable Namespace Role UIDs, not just the GraphQL readback shape. The diagnostic
+harness can predeclare ordinary request IDs and join exact subjects, actions,
+Namespaces and expected outcomes to both captured policy tiers. Regressions reject
+missing/duplicate receipts, changed identities or verdicts, unknown digests and
+cross-tier substitutions. Both sealed replay and fresh native execution pass:
+the one-writer two-Namespace fixture and a four-actually-concurrent-writer
+four-Namespace fixture verify five predeclared client traces on each API.
+A further fresh native diagnostic pins the root Namespace and bootstrap binding
+incarnations independently through both APIs. Captured root models must match
+the authored initial-administrator subject, exact grant and canonical policy-tree
+digest; additional root policy or replaced incarnations are refused. Uninitialized
+or unresolved root candidates cannot supply a probe's policy vector. This proves
+the fixed bootstrap fixture, not general root-policy mutation or the dynamic
+committed-policy history still required for T090-T092.
+
+Four concurrent seed writers still exceed the strict per-replica readback bound,
+including with production-default resync/checkpoint settings. A full-size
+two-writer attempt stopped after twelve complete Namespace receipts and one
+partial receipt. The one-writer full-size attempt also failed, after fifty-one
+complete Namespace receipts and one partial receipt. Both encountered pending
+binding reconciliation and authorization unavailability. Backend evidence
+includes tier revision conflicts and projection-not-ready errors, but does not
+establish a single underlying cause. These remain failures, not native-scale
+acceptance. Neither admission limits nor the readback deadline were raised.
+
+Staged seeding now imports ten manifests per admitted Git commit and verifies
+both APIs before the next batch. It preserves the exact final geometry, authored
+policies, protected owner slot and immutable UIDs across commits. The one-writer
+and four-writer diagnostics pass with the unchanged thirty-second per-API bound
+for every batch. This changes import shape, not the failed bulk-commit results
+or the healthy workload gates. The larger four-writer staged diagnostic failed
+after forty-seven complete Namespace receipts and one partial receipt, again at
+the unchanged per-API bound with authorization unavailable. Its source captures
+were well below their byte limit. Offline preparation of its complete source
+models does not reproduce live allocation exhaustion; no single underlying cause
+is established. Full staged scale remains unverified. Six paced
+readbacks per Namespace also require a whole-fixture lifetime above the former
+six-hour choice; that lifetime is separate from every convergence and acceptance
+deadline.
+
+A one-writer medium diagnostic subsequently passes all sixty-four Namespaces,
+640 Roles and 3,200 bindings in 3,214 seconds, including both-API policy/UID
+readback, independently authored root verification and ordinary client traces.
+It used the pre-rule-sharing provider. A fresh four-writer diagnostic against
+the merged shared-rule provider passes four Namespaces, forty Roles and two
+hundred bindings in 100.27 seconds with the same source/root/trace checks.
+Both have complete terminal receipts, no forced stops, closed owned listeners
+and an unchanged foundation. These results establish their respective scopes,
+not the earlier failure's cause, one-thousand-Namespace execution, sustained
+four-writer capacity or healthy/fault acceptance.
+
+A subsequent full-count attempt with one writer and 128 real Staff principals
+failed in its first Namespace after 41.45 seconds: authorization remained
+unavailable beyond the unchanged per-API readback bound. A bounded two-Namespace
+control with that subject pool and source observation disabled passes, so those
+settings alone do not reproduce the failure. The failed fixture is preserved;
+all owned listeners closed without forced stops and the foundation is unchanged.
+No single underlying availability cause or full-scale pass is established.
+
 ## Current verification boundary
 
 T061 passes on the owned native Scylla/Kratos deployment: both APIs deliver
@@ -21,8 +127,11 @@ ordinary Product pushes on their original subscriptions and enforce revocation;
 isolated real API processes verify cold failure, reconstruction, source outage,
 same-process recovery and denial after removal. Both GraphQL and native Git USER
 creation verify AuthN-selected ownership, admitted owner status, both-API
-namespace isolation and exact incarnation finalization. The complete
-T064/T073 migration, condition/fault and stale-UID matrix remains pending.
+namespace isolation and exact incarnation finalization. The fresh native
+T064/T073 functional owner matrix now passes, including prior-state collisions,
+GraphQL/signed-Git catch-up, Namespace recreation and distinct authenticated
+subject/directory username coverage. This does not establish sustained-load or
+rolling-upgrade acceptance.
 
 Fresh native bootstrap and real controller enrollment pass with isolated
 Scylla keyspaces, singleton Git and two APIs. A separate same-contract upgrade
@@ -42,14 +151,24 @@ semantics. The completed-window/shutdown fixture also passes 100 race-enabled
 repetitions. These checks do not establish mixed-version or production capacity
 acceptance.
 
-Storage reclamation cleared the previously observed disk-space blocker against
-the retained peak profile's preflight requirement above 46 GiB. The reusable
-catalog's stopped container identities and retained mounts have been reverified,
-but its missing private runtime wiring and terminal restoration receipts must
-be recovered before reuse. Its native five-million-product count has not been
-reverified. T098 remains pending on runtime/asset eligibility; preserve the
-original thresholds, storage and history and recheck all launch gates before
-starting a workload. No full healthy/fault/peak workload is claimed, and
+A private launcher's fixed disk-space threshold is not a repository or user
+gate. Use canonical validation commands and diagnose measured resource failures
+without broad cache/container pruning or retained-data deletion.
+
+The reusable catalog has passed authoritative native counting above five
+million Products and cold recovery with its schema-compatible baseline images:
+three Scylla peers, two genuinely ready APIs, two credential-ready controllers
+with separate retained checkpoints and one Git process. Original signing
+material and migration history were preserved. Private recovery wiring and
+receipts retain the operational details. Final post-recovery backup and full
+restore proofs passed before the nine verified historical source volumes were
+retired. This does not classify unrelated development volumes as duplicates.
+
+This storage-recovery evidence does not establish a current RBAC image/schema
+upgrade or T098 peak acceptance. T098 remains pending on the feature runtime,
+native RBAC dataset and unchanged concurrent peak workload. Preserve the
+original thresholds, storage and history and recheck actual launch prerequisites
+before starting a workload. No full healthy/fault/peak workload is claimed, and
 production activation remains gated.
 
 ## Test-first matrix
@@ -83,17 +202,17 @@ reclaims failed/discarded builds. The manager reserves 64 MiB of scratch before
 source scanning, with at most four workers. Race suites cover aggregate pressure,
 replacement/pin reclamation, cancellation and scratch-pressure readiness.
 
-A local `darwin/arm64` benchmark on Apple M3 Pro uses ten roles (four Product
-actions each) and fifty resolved one-subject bindings in one Namespace.
-`BenchmarkProviderDeclaredNamespaceTranslation -benchmem -count=3` measured
-459,648 reserved bytes and 132,169-147,820 retained heap bytes per tier, with
-approximately 7 MB cumulative allocations per rebuild. Reservations are not
-heap or RSS measurements. The earlier 32x allocation multiplier reserved about
-1.84 MB for that tier and could not fit even this ordinary declared-count
-fixture; the calibrated 8x structural-estimate multiplier retains more than
-threefold headroom over the measured retained heap. A regression checks that
-1,000 such reservations, four replacement tiers and two cluster publications
-fit the 512 MiB budget.
+A local `darwin/arm64` benchmark on Apple M3 Pro now uses the seeded conditional,
+multi-resource policy mix with group, built-in and unresolved bindings rather
+than the earlier simplified four-action fixture. Sharing each authored rule
+across action indexes measured 526,912 reserved bytes and 124,812 sampled retained
+heap bytes per tier, with approximately 7.16 MB cumulative allocations per rebuild.
+Reservations are not heap or RSS measurements. The eightfold structural-estimate
+multiplier and logical expansion bound are unchanged. The representative
+regression checks that 1,000 reservations, four replacement tiers and two cluster
+publications fit the unchanged 512 MiB budget; it failed before rule sharing.
+See [research](../research.md#representative-translation-reservation-probe) for
+the before/after methodology and measurement limits.
 
 This is bounded component accounting evidence, not the native 1,000-Namespace
 dataset, maximum-manifest heap bound, process RSS, latency or sustained deployed

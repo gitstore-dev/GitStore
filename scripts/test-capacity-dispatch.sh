@@ -39,6 +39,18 @@ assert_dispatch product lifecycle 'CAPACITY_PROFILE=product-lifecycle'
 assert_dispatch category hierarchy 'CAPACITY_PROFILE=category-hierarchy'
 assert_dispatch scylla soak '_capacity-scylla-soak'
 
+for target_profile in 'api readiness' 'namespace watch' 'repository lifecycle'; do
+  read -r rbac_target rbac_profile <<<"${target_profile}"
+  if CAPACITY_RBAC_WORKLOAD=1 CAPACITY_DRY_RUN=1 "${dispatcher}" "${rbac_target}" "${rbac_profile}" alpha >/dev/null 2>&1; then
+    echo "unimplemented RBAC selection silently dispatched a non-RBAC workload" >&2
+    exit 1
+  fi
+done
+if CAPACITY_RBAC_WORKLOAD=invalid CAPACITY_DRY_RUN=1 "${dispatcher}" api readiness alpha >/dev/null 2>&1; then
+  echo "invalid RBAC selector unexpectedly succeeded" >&2
+  exit 1
+fi
+
 secret_output="$(REPOSITORY_CAPACITY_SECRET_SCENARIO=1 CAPACITY_DRY_RUN=1 "${dispatcher}" repository lifecycle production)"
 [[ "${secret_output}" == *"_capacity-repository-lifecycle"* ]]
 [[ "${secret_output}" == *"REPOSITORY_CAPACITY_SECRET_SCENARIO=1"* ]]
