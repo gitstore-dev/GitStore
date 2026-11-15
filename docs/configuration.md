@@ -273,8 +273,11 @@ fresh watch progress; resource update timestamps alone are not freshness
 evidence. Production activation remains gated.
 
 Background workers alternate queued rebuilds with the oldest due origin checks.
-This prevents a rebuild backlog from indefinitely postponing those checks;
-overload or slow checks still fail closed at the configured freshness bound.
+With at least two workers and installed publications, full Namespace scans leave
+one worker slot for origin checks or shared root replacement. Root rebuilds take
+priority over queued Namespace rebuilds within the same concurrency limit.
+A single worker still serializes checks and rebuilds; overload or slow checks
+still fail closed at the configured freshness bound.
 
 Ordinary policy revisions replace complete translations atomically. While a
 replacement is prepared for the same active Namespace, repository and canonical

@@ -641,6 +641,25 @@ regressions do. This is not a cause-isolating comparison, verification of the
 subsequent retry/memory fixes at that scale, or full-scale/sustained acceptance;
 T090-T092 remain open.
 
+The reviewed-runtime eighty-Namespace control fails after 3,053.80 seconds,
+with sixty-seven complete receipts, 670 Roles, 3,350 bindings and one partial
+Namespace. Its fourth import acknowledgement is followed by canonical
+`git ls-remote` authorization-unavailable responses through the existing
+thirty-second retry window; this is not a per-API readback timeout. Both API
+failure profiles show all four workers doing full Git-backed origin rebuilds,
+not the earlier CQL-wait profile. No local builds or tests overlap the workload.
+Cleanup closes owned listeners without forced stops and preserves the
+foundation and failed evidence. The native cause remains unproven.
+
+A separate regression reproduces healthy root proof expiry while all four
+workers are blocked in Namespace scans. Scheduling now reserves capacity for
+origin checks or prioritized shared root replacement when publications are
+installed and at least two workers are configured. The regression also verifies
+real origin failures still fail closed and queued scans recover after release.
+Manager race tests pass without increasing worker, freshness, retry, timeout or
+memory bounds. This fixes a reproduced scheduling defect, not proof that the
+native control failure is resolved; T090-T092 and scale acceptance remain open.
+
 The subsequent retry/memory review fixes pass a fresh two-API Role-rule
 diagnostic with all 120 ordinary outcomes and complete dynamic source joins:
 revocation is about 2.47 seconds on both APIs and restoration about 1.26 seconds.
