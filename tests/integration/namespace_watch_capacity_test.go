@@ -1679,11 +1679,12 @@ func verifyRBACCapacityDynamicTraces(t *testing.T, sourcePath, decisionPath stri
 			oracle := oracles[vector.Cluster]
 			if oracle == nil {
 				oracle = newRBACCapacityOracle(5 * time.Second)
+				// Root intent is pinned; only Namespace admissions advance in this diagnostic.
 				for index, admission := range history {
 					for revision, sourceIndex := range admissions {
 						if sourceIndex == index {
 							if err := oracle.commit(rbacCapacityPolicyVector{Cluster: vector.Cluster, Namespace: revision},
-								admission.AcknowledgedAt, admission.Cases); err != nil {
+								history[0].AcknowledgedAt, admission.AcknowledgedAt, admission.Cases); err != nil {
 								return err
 							}
 						}
@@ -1866,62 +1867,72 @@ type rbacCapacityPolicyVector struct {
 	Cluster, Namespace rbacCapacityPolicyRevision
 }
 
-type rbacCapacityExpectedPolicy struct {
-	vector    rbacCapacityPolicyVector
-	committed time.Time
-	cases     map[string]bool
+type rbacCapacityTierCommit struct {
+	admitted, superseded time.Time
+}
+
+type rbacCapacityTierHistory struct {
+	root    bool
+	latest  string
+	commits map[string]rbacCapacityTierCommit
 }
 
 type rbacCapacityOracle struct {
 	mu      sync.RWMutex
 	bound   time.Duration
-	history []rbacCapacityExpectedPolicy
+	history map[rbacCapacityPolicyVector]map[string]bool
+	tiers   map[string]*rbacCapacityTierHistory
 }
 
 func newRBACCapacityOracle(bound time.Duration) *rbacCapacityOracle {
-	return &rbacCapacityOracle{bound: bound}
+	return &rbacCapacityOracle{
+		bound: bound, history: make(map[rbacCapacityPolicyVector]map[string]bool),
+		tiers: make(map[string]*rbacCapacityTierHistory),
+	}
 }
 
-func (o *rbacCapacityOracle) commit(vector rbacCapacityPolicyVector, at time.Time, cases map[string]bool) error {
+func (o *rbacCapacityOracle) commit(vector rbacCapacityPolicyVector, clusterAt, namespaceAt time.Time, cases map[string]bool) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.bound <= 0 || at.IsZero() || len(cases) == 0 || len(cases) > 128 || len(o.history) >= 8192 {
+	if o.bound <= 0 || clusterAt.IsZero() || namespaceAt.IsZero() || len(cases) == 0 || len(cases) > 128 {
 		return errors.New("RBAC oracle requires bounded independent committed policy")
 	}
-	for _, revision := range []rbacCapacityPolicyRevision{vector.Cluster, vector.Namespace} {
+	revisions := []rbacCapacityPolicyRevision{vector.Cluster, vector.Namespace}
+	times := []time.Time{clusterAt, namespaceAt}
+	for index, revision := range revisions {
 		if revision.TierUID == "" || revision.GitRevision == "" || revision.Digest == "" {
 			return errors.New("RBAC oracle revision identity is incomplete")
+		}
+		if tier := o.tiers[revision.TierUID]; tier != nil {
+			if tier.root != (index == 0) {
+				return errors.New("RBAC oracle cannot reinterpret a tier's scope")
+			}
+			if committed, found := tier.commits[revision.GitRevision]; found {
+				if !committed.admitted.Equal(times[index]) {
+					return errors.New("RBAC source aliases cannot restart a tier's admission clock")
+				}
+			} else if !times[index].After(tier.commits[tier.latest].admitted) {
+				return errors.New("RBAC oracle commits must preserve independent per-tier admission order")
+			}
 		}
 	}
 	if vector.Cluster.TierUID == vector.Namespace.TierUID {
 		return errors.New("RBAC oracle cluster and namespace identities must be independent")
 	}
-	var latest time.Time
-	alias := false
-	for _, previous := range o.history {
-		if previous.vector == vector {
-			if previous.committed.Equal(at) && reflect.DeepEqual(previous.cases, cases) {
-				return nil
-			}
-			return errors.New("RBAC oracle cannot reinterpret a committed revision vector")
-		}
-		if previous.vector.Namespace.TierUID != vector.Namespace.TierUID {
-			continue
-		}
-		if previous.committed.After(latest) {
-			latest = previous.committed
-		}
-		if previous.vector.Cluster.TierUID == vector.Cluster.TierUID &&
-			previous.vector.Cluster.GitRevision == vector.Cluster.GitRevision &&
-			previous.vector.Namespace.GitRevision == vector.Namespace.GitRevision {
-			if !previous.committed.Equal(at) || !reflect.DeepEqual(previous.cases, cases) {
-				return errors.New("RBAC source aliases must preserve independently verified policy and admission time")
-			}
-			alias = true
+	for previous, expected := range o.history {
+		if previous.Cluster.TierUID == vector.Cluster.TierUID &&
+			previous.Cluster.GitRevision == vector.Cluster.GitRevision &&
+			previous.Namespace.TierUID == vector.Namespace.TierUID &&
+			previous.Namespace.GitRevision == vector.Namespace.GitRevision &&
+			!reflect.DeepEqual(expected, cases) {
+			return errors.New("RBAC source aliases must preserve independently verified policy")
 		}
 	}
-	if !alias && !at.After(latest) {
-		return errors.New("RBAC oracle commits must preserve the observed per-tier admission order")
+	if _, found := o.history[vector]; found {
+		return nil
+	}
+	if len(o.history) >= 8192 {
+		return errors.New("RBAC oracle source history exceeds its bound")
 	}
 	expected := make(map[string]bool, len(cases))
 	for name, allowed := range cases {
@@ -1930,40 +1941,45 @@ func (o *rbacCapacityOracle) commit(vector rbacCapacityPolicyVector, at time.Tim
 		}
 		expected[name] = allowed
 	}
-	o.history = append(o.history, rbacCapacityExpectedPolicy{vector: vector, committed: at, cases: expected})
+	for index, revision := range revisions {
+		tier := o.tiers[revision.TierUID]
+		if tier == nil {
+			tier = &rbacCapacityTierHistory{root: index == 0, commits: make(map[string]rbacCapacityTierCommit)}
+			o.tiers[revision.TierUID] = tier
+		}
+		if _, found := tier.commits[revision.GitRevision]; found {
+			continue
+		}
+		if tier.latest != "" {
+			previous := tier.commits[tier.latest]
+			previous.superseded = times[index]
+			tier.commits[tier.latest] = previous
+		}
+		tier.commits[revision.GitRevision] = rbacCapacityTierCommit{admitted: times[index]}
+		tier.latest = revision.GitRevision
+	}
+	o.history[vector] = expected
 	return nil
 }
 
 func (o *rbacCapacityOracle) check(vector rbacCapacityPolicyVector, probe string, allowed bool, at time.Time) error {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
-	index := -1
-	for i, policy := range o.history {
-		if policy.vector == vector {
-			index = i
-			break
-		}
-	}
-	if index < 0 {
+	policy, found := o.history[vector]
+	if !found {
 		return errors.New("RBAC decision evaluated an independently unverified policy revision")
 	}
-	policy := o.history[index]
-	expected, found := policy.cases[probe]
-	if !found || expected != allowed || at.Before(policy.committed) {
+	expected, found := policy[probe]
+	if !found || expected != allowed {
 		return errors.New("RBAC decision disagrees with independent committed policy")
 	}
-	// Source aliases can arrive after newer admissions without restarting their clock.
-	for _, newer := range o.history {
-		if newer.vector.Namespace.TierUID != vector.Namespace.TierUID ||
-			!newer.committed.After(policy.committed) || newer.committed.After(at) {
-			continue
+	for _, revision := range []rbacCapacityPolicyRevision{vector.Cluster, vector.Namespace} {
+		committed := o.tiers[revision.TierUID].commits[revision.GitRevision]
+		if at.Before(committed.admitted) {
+			return errors.New("RBAC decision predates an independently admitted tier")
 		}
-		newAllowed, found := newer.cases[probe]
-		if !found {
-			return errors.New("RBAC oracle lost a probe across committed policy revisions")
-		}
-		if newAllowed != allowed && at.After(newer.committed.Add(o.bound)) {
-			return errors.New("RBAC decision missed a committed policy change beyond the propagation bound")
+		if !committed.superseded.IsZero() && at.After(committed.superseded.Add(o.bound)) {
+			return errors.New("RBAC decision retained a superseded tier beyond the propagation bound")
 		}
 	}
 	return nil

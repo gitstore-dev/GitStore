@@ -487,6 +487,16 @@ resets and unconfirmed fault windows. Missing contracts and silent dispatcher
 fallback failed before implementation; focused race and dispatcher regressions
 pass. The default aggregate test selector includes these regressions.
 
+The oracle now accepts independent canonical root and Namespace admission clocks
+and retains each component's first supersession deadline. Mixed old/new vectors
+cannot restart the stale tier's allowance, even for an unchanged verdict; late
+verified aliases inherit both clocks. Four mixed-tier regressions fail on the
+composite-clock implementation and pass after the correction. All RBAC capacity
+race contracts and repository lint pass, including atomic rejection, future
+admissions and alias-clock immutability. Decision checks use indexed vectors and
+component clocks rather than scanning the full history. The native hook still
+pins root intent, so this is not dynamic-root or sustained acceptance.
+
 This is not deployed capacity evidence. `CAPACITY_RBAC_WORKLOAD=1` is explicitly
 refused until T090-T092 finish native seeding/probes, ordinary decision observations,
 propagation and domain-verifier receipts; default health-only and identity

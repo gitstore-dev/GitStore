@@ -24,10 +24,15 @@ explicitly rather than silently dispatching health-only evidence; it is not a
 supported deployed workload selector yet.
 
 Independently verified source variants of the same admitted cluster/Namespace
-Git vector retain the original admission time and expected cases. They cannot
-restart propagation clocks or reinterpret expected decisions. Late registration
-still checks every later admitted transition, including intermediate revocations;
-matching Git revisions alone never authorize an unknown content digest.
+Git vector retain each tier's original admission time and expected cases. Each
+tier also retains its first independently acknowledged supersession deadline:
+a newer companion tier or late source alias cannot refresh an old component,
+including when its expected verdict is unchanged. Future, reordered or
+reinterpreted component admissions are rejected atomically; matching Git revisions
+alone never authorize an unknown content digest. Mixed-tier regressions fail on
+the former composite clock and pass with independent clocks under race detection.
+The native diagnostic still pins root intent; this oracle correction does not
+implement or establish a native dynamic-root workload.
 
 New native seed receipts retain each of the six bounded import commits and its
 client-observed successful-push acknowledgement time before remote-ref or
