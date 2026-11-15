@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func servingTier(t *testing.T, tier, namespace string, revision uint64, grant bool) auth.AuthorizationTier {
+func servingTier(t testing.TB, tier, namespace string, revision uint64, grant bool) auth.AuthorizationTier {
 	t.Helper()
 	builtins, err := rbac.ReleaseBuiltins()
 	require.NoError(t, err)
@@ -428,6 +428,43 @@ func BenchmarkProviderDeclaredNamespaceTranslation(b *testing.B) {
 	}
 	for _, prepared := range retained {
 		prepared.Close()
+	}
+}
+
+func BenchmarkProviderDeclaredNamespaceDecision(b *testing.B) {
+	const namespace = "rbac-seed-fixture-0001"
+	for _, scenario := range []struct {
+		name      string
+		principal *auth.Principal
+		allowed   bool
+	}{
+		{"direct-user", &auth.Principal{Subject: "rbac-seed-fixture-filler-0001-00"}, true},
+		{"conditional-group", &auth.Principal{Subject: "group-reader", Groups: []string{"system:group:capacity-readers"}}, true},
+		{"builtin-view", &auth.Principal{Subject: "rbac-seed-fixture-filler-0001-02"}, true},
+		{"unbound-user", &auth.Principal{Subject: "unbound-reader"}, false},
+	} {
+		b.Run(scenario.name, func(b *testing.B) {
+			scenario.principal.AuthMethod = "static-users"
+			provider, err := NewProvider(b.Context())
+			require.NoError(b, err)
+			b.Cleanup(provider.Close)
+			require.NoError(b, provider.PublishTier(b.Context(), servingTier(b, rbac.ClusterTierID, "", 1, false)))
+			require.NoError(b, provider.PublishTier(b.Context(), declaredNamespaceTier(b, namespace)))
+			resource := auth.ResourceContext{Kind: "product", Name: "widget", Attrs: map[string]any{"namespace": namespace}}
+			expected := auth.OutcomeDeny
+			if scenario.allowed {
+				expected = auth.OutcomeAllow
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				decision, err := provider.Authorize(b.Context(), scenario.principal, auth.ActionProductList, resource)
+				if err != nil || decision.Outcome != expected {
+					b.Fatalf("prepared decision differs from the declared fixture: outcome=%v reason=%s error=%v",
+						decision.Outcome, decision.Reason, err)
+				}
+			}
+		})
 	}
 }
 

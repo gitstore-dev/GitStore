@@ -113,6 +113,33 @@ transfer size. Preserve the same platform, Dockerfile, base-image digests
 and build flags for the linked-OPA comparison; this baseline alone does
 not establish the final OPA delta.
 
+### Same-platform implementation comparison
+
+On 2026-11-15, rebuilt the clean pre-OPA source above and the linked implementation
+at `083d9af4ecb7fe04930f3fb2d8d168d71c52cab5` using the unchanged shipped
+Dockerfile, `linux/arm64`, the same two explicitly pinned base-image digests and
+the same unstripped build flags. Both builds used the local Docker engine;
+no running deployment was replaced.
+
+| Artifact | Fresh pre-OPA baseline, bytes | Linked implementation, bytes | Difference, bytes |
+|---|---:|---:|---:|
+| `/app/api` | 64,479,538 | 84,700,951 | +20,221,413 |
+| `/app/gitctl` | 39,047,408 | 39,068,140 | +20,732 |
+| Docker-reported local image size | 168,804,986 | 196,378,071 | +27,573,085 |
+
+Both baseline binary sizes reproduce the earlier measurement exactly. The fresh
+baseline's Docker-reported size differs by 25 bytes from the historical record;
+the table compares the two fresh builds, not mixed measurement batches. Image
+and extracted-binary identities, build metadata and layer histories are retained
+with the private evidence. The image figures are Docker's reported local sizes,
+not compressed registry transfer sizes or an isolated evaluator-layer delta.
+The source interval includes the RBAC implementation and its dependency changes;
+the entire difference must not be attributed to OPA alone.
+
+This completes the actual binary/image comparison slice, not process heap/RSS,
+sustained acceptance or T095 as a whole. It does not complete image-reduction
+issue #487.
+
 Adding OPA v1.22.2 raised the selected versions of gqlparser
 v2.5.33 -> v2.5.58, x/time v0.15.0 -> v0.16.0, go-json
 v0.10.5 -> v0.10.6 and logrus v1.9.4 -> v1.10.2. The existing
@@ -153,6 +180,37 @@ The representative aggregate reservation regression now passes with unchanged
 headroom and limits. These are local translation measurements, not process RSS,
 provider-call latency, native one-thousand-Namespace execution, sustained
 capacity acceptance or completion of the image-size comparison.
+
+### Representative prepared-decision component measurement
+
+The existing provider benchmark now evaluates ordinary Product lists against a
+prepared cluster tier and one representative Namespace tier, using the same ten
+Roles and fifty bindings as the reservation fixture above. Authenticated direct
+User, conditional Group, built-in view and unbound User cases check their exact
+expected allow or deny outcome on every iteration; unavailable outcomes cannot
+count as denials. Tier preparation is excluded from timed evaluation.
+
+On 2026-11-15, `BenchmarkProviderDeclaredNamespaceDecision` ran on the shared
+local `darwin/arm64` Apple M3 Pro with `GOMAXPROCS=2`, `-benchtime=200ms`,
+`-benchmem` and three repetitions. The following figures are the median of
+three per-run means, not request percentiles.
+
+| Ordinary decision case | Mean-call median, microseconds | Allocated bytes/call median | Allocations/call |
+|---|---:|---:|---:|
+| Direct User allowance | 34.837 | 21,213 | 339 |
+| Conditional Group allowance | 42.739 | 23,548 | 400 |
+| Built-in view allowance | 34.474 | 20,884 | 331 |
+| Unbound User denial | 14.863 | 14,616 | 207 |
+
+These are component calls through the linked provider, not an isolated Rego
+query, HTTP latency, p99, process RSS or a one-thousand-Namespace working set.
+Allocated bytes are cumulative per call, not retained heap. The existing auth,
+SDK telemetry, RBAC and app suites also pass with race detection on this source.
+An earlier authenticated-fixture batch measured approximately 39-110 microseconds
+per call across these cases; shared-host variability must not be interpreted
+as an implementation improvement.
+Paired runtime heap/RSS, full-scale prepared-evaluation latency and sustained
+healthy/fault evidence remain required; T095 stays open.
 
 ## 3. Translation and lifecycle ownership
 
