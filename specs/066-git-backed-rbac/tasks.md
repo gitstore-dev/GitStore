@@ -660,12 +660,33 @@ Manager race tests pass without increasing worker, freshness, retry, timeout or
 memory bounds. This fixes a reproduced scheduling defect, not proof that the
 native control failure is resolved; T090-T092 and scale acceptance remain open.
 
-The subsequent retry/memory review fixes pass a fresh two-API Role-rule
+The corrected reviewed-source runtime then completes eighty Namespaces, 800
+Roles and 4,000 bindings in 3,220.25 seconds. All six canonical admissions are
+complete for each Namespace; no local builds or tests overlap the one-writer,
+eight-principal control. Source/request/propagation/startup-profile captures are
+disabled. Normal cleanup closes every owned listener without forced stops and
+preserves the foundation. This verifies the current runtime at medium scale,
+not the required thousand Namespaces or sustained/fault acceptance.
+
+The earlier retry/memory review fixes pass a fresh two-API Role-rule
 diagnostic with all 120 ordinary outcomes and complete dynamic source joins:
 revocation is about 2.47 seconds on both APIs and restoration about 1.26 seconds.
 Manager/application race cases and final isolated default checks pass. These
 individual observations pass five seconds, not the separate two-second p95 gate
 or a full-scale/healthy/fault acceptance task.
+
+The diagnostic now also performs binding-subject revocation/restoration after
+the Role-rule pair. Each authored admission pins mutation generations separately
+from the original immutable reference-resolution generation, and retains the
+same UIDs, successful-push clocks and five-second limit. Regressions fail before
+the correction for both a self-consistent older binding generation and conflated
+reference generations. A fresh two-API/two-controller/singleton-Git run passes
+all five authored source/history states and 120 static outcomes in 71.10 seconds.
+Binding generations advance to two and three while the reference pin stays at
+one; both APIs verify binding revocation in about 2.47-2.57 seconds and restoration
+in about 2.63-2.74 seconds. The failed first expanded fixture is preserved. These
+are bounded observations, not the two-second p95 gate, general dynamic-root
+history, thousand-Namespace counts or sustained acceptance; T090-T092 remain open.
 
 The representative provider reservation regression now uses the seeded
 conditional, multi-resource rules and binding mix. It exposed a separate

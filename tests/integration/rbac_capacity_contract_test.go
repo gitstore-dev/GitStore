@@ -277,7 +277,7 @@ func TestRBACCapacitySourceBindingRequiresTheAdmittedRoleIncarnation(t *testing.
 			}
 			encoded, err := json.Marshal(resource)
 			require.NoError(t, err)
-			ready, err := rbacCapacitySeedBindingResolved(encoded, map[string]string{"owned-role": "admitted-uid"})
+			ready, err := rbacCapacitySeedBindingResolved(encoded, map[string]string{"owned-role": "admitted-uid"}, 1)
 			if tc.invalid {
 				require.Error(t, err)
 			} else {
@@ -285,6 +285,31 @@ func TestRBACCapacitySourceBindingRequiresTheAdmittedRoleIncarnation(t *testing.
 			}
 			require.Equal(t, tc.ready, ready)
 		})
+	}
+}
+
+func TestRBACCapacitySourceBindingPinsOriginalReferenceGenerationAcrossSubjectEdits(t *testing.T) {
+	for _, generation := range []int{2, 3} {
+		for _, reference := range []int{1, 2} {
+			t.Run(fmt.Sprintf("binding=%d/reference=%d", generation, reference), func(t *testing.T) {
+				resource := map[string]any{
+					"metadata": map[string]any{"generation": generation},
+					"spec":     map[string]any{"roleRef": map[string]any{"kind": "Role", "name": "owned-role"}},
+					"status": map[string]any{
+						"observedGeneration": generation,
+						"resolved": map[string]any{"roleRef": map[string]any{
+							"kind": "Role", "name": "owned-role", "uid": "admitted-uid", "observedGeneration": reference,
+						}},
+					},
+				}
+				encoded, err := json.Marshal(resource)
+				require.NoError(t, err)
+				ready, err := rbacCapacitySeedBindingResolved(encoded, map[string]string{"owned-role": "admitted-uid"}, 1)
+				require.NoError(t, err)
+				require.Equal(t, reference == 1, ready,
+					"subject edits advance the binding generation, not its immutable role reference's pinned resolution generation")
+			})
+		}
 	}
 }
 
@@ -467,7 +492,7 @@ func TestRBACCapacityDynamicHistoryJoinsSealedSourcesAndSkipsPendingAliases(t *t
 		"root": true, "active": true, "treeDigest": root.TreeDigest,
 	}, map[string]any{"tierID": "cluster", "roleCount": 0, "bindingCount": 1}, []json.RawMessage{encoded})
 	var history []rbacCapacityAuthoredAdmission
-	var pendingRevision, resolvedRevocation rbacCapacityPolicyRevision
+	var pendingRevision, staleGeneration, resolvedRevocation rbacCapacityPolicyRevision
 	expected := make(map[string]rbacCapacityProbeExpectation)
 	for step, allowed := range []bool{true, false, true} {
 		namespace := plan.namespace(1)
@@ -481,7 +506,9 @@ func TestRBACCapacityDynamicHistoryJoinsSealedSourcesAndSkipsPendingAliases(t *t
 		at := time.Unix(1000+int64(step), 0)
 		history = append(history, rbacCapacityAuthoredAdmission{
 			Namespace: namespace, Receipt: admitted, AcknowledgedAt: at,
-			Cases: map[string]bool{"reader-b/product.list": allowed},
+			Cases:       map[string]bool{"reader-b/product.list": allowed},
+			Generations: map[string]int64{"Role/capacity-role-00": 1, "RoleBinding/capacity-binding-00": int64(step + 1)},
+			References:  map[string]int64{"RoleBinding/capacity-binding-00": 1},
 		})
 		var resources []json.RawMessage
 		for _, resource := range namespace.Resources {
@@ -506,7 +533,7 @@ func TestRBACCapacityDynamicHistoryJoinsSealedSourcesAndSkipsPendingAliases(t *t
 						roleUID = "builtin-view"
 					}
 					status["resolved"] = map[string]any{"roleRef": map[string]any{
-						"kind": ref["kind"], "name": ref["name"], "uid": roleUID, "observedGeneration": generation,
+						"kind": ref["kind"], "name": ref["name"], "uid": roleUID, "observedGeneration": 1,
 					}}
 				}
 				source["status"] = status
@@ -529,6 +556,12 @@ func TestRBACCapacityDynamicHistoryJoinsSealedSourcesAndSkipsPendingAliases(t *t
 			require.NoError(t, err)
 			pendingRevision = writeSource(origin, state, pending)
 			resolvedRevocation = revision
+			metadata := unresolved["metadata"].(map[string]any)
+			metadata["generation"] = 1
+			unresolved["status"].(map[string]any)["resolved"].(map[string]any)["roleRef"].(map[string]any)["observedGeneration"] = 1
+			pending[10], err = json.Marshal(unresolved)
+			require.NoError(t, err)
+			staleGeneration = writeSource(origin, state, pending)
 		}
 		id := fmt.Sprintf("request-%d", step)
 		expected[id] = rbacCapacityProbeExpectation{
@@ -556,6 +589,11 @@ func TestRBACCapacityDynamicHistoryJoinsSealedSourcesAndSkipsPendingAliases(t *t
 	require.NoError(t, os.WriteFile(decisionPath, []byte(changed), 0600))
 	require.Error(t, verifyRBACCapacityDynamicTraces(t, sourcePath, decisionPath, history, root, expected),
 		"a matching Git commit and HTTP denial cannot promote a pending source candidate into a verified policy")
+	changed = strings.Replace(decisions.String(), resolvedRevocation.Digest, staleGeneration.Digest, 1)
+	require.NotEqual(t, decisions.String(), changed)
+	require.NoError(t, os.WriteFile(decisionPath, []byte(changed), 0600))
+	require.Error(t, verifyRBACCapacityDynamicTraces(t, sourcePath, decisionPath, history, root, expected),
+		"self-consistent binding status cannot certify a generation older than the independently authored admission")
 }
 
 func TestRBACCapacityRootSourceRequiresAuthoredGrantAndPinnedIncarnations(t *testing.T) {
