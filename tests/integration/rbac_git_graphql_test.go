@@ -78,12 +78,13 @@ type rbacNativeResource struct {
 	ID       string `json:"id"`
 	Kind     string `json:"kind"`
 	Metadata struct {
-		UID               string  `json:"uid"`
-		Name              string  `json:"name"`
-		Namespace         string  `json:"namespace"`
-		ResourceVersion   string  `json:"resourceVersion"`
-		Generation        int64   `json:"generation"`
-		DeletionTimestamp *string `json:"deletionTimestamp"`
+		UID               string            `json:"uid"`
+		Name              string            `json:"name"`
+		Namespace         string            `json:"namespace"`
+		ResourceVersion   string            `json:"resourceVersion"`
+		Generation        int64             `json:"generation"`
+		DeletionTimestamp *string           `json:"deletionTimestamp"`
+		Labels            map[string]string `json:"labels"`
 	} `json:"metadata"`
 	Spec   json.RawMessage `json:"spec"`
 	Status struct {

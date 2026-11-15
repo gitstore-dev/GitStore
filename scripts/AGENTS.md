@@ -72,6 +72,10 @@ container wiring and configuration.
   `CAPACITY_IDENTITY_CHAOS=1` additionally requires predeclared bounded fault
   windows, confirmed restart/recovery receipts and process-segmented counters;
   `USER_DIRECTORY_TEST_CHAOS=1` selects that opt-in owned driver.
+- Dynamic RBAC capacity remains unavailable: `CAPACITY_RBAC_WORKLOAD=1`
+  fails explicitly instead of falling back to a non-RBAC driver. The default
+  test suite covers the local scheduler/oracle contracts; these are not native
+  dataset, propagation or fault-recovery evidence.
 - `make chaos CHAOS_RBAC=1` requires an owned target and a predeclared fault
   window of at most 30 seconds. Controller restart also requires an unchanged
   owned peer with non-overlapping writable checkpoint mounts. Journal-source

@@ -147,6 +147,13 @@ A complete run must retain:
    during replacement and a successful domain verifier. Readiness must include
    its boolean state and credential readiness, not HTTP status alone.
 
+Health-only readiness and ordinary Namespace watch load do not test dynamic
+RBAC capacity. The dispatcher explicitly refuses `CAPACITY_RBAC_WORKLOAD=1`
+until the native workload and domain verifier are available. Local tests cover
+bounded scheduling, exact offered/completed/dropped accounting, independent
+committed-policy expectations and process-epoch counters, but they do not
+establish native dataset, propagation, recovery or sustained-load acceptance.
+
 Fault injection uses the existing reviewed profiles, for example:
 
 ```bash

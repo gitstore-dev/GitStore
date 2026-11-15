@@ -60,6 +60,11 @@ or zero-downtime replacement is introduced.
 **Authentication/Authorization**: Preserve AuthN/UserDir/AuthZ independence and signed receiver-bound RPCs. Trusted UserDir Staff membership gates personal namespace creation. Every external mutation/read/watch/review is authorized; privileged lifecycle templates are server-validated even for administrators.
 **Load/Backpressure Model**: Defaults in the capacity contract: four global tier rebuild workers, one rebuild per tier, bounded/coalesced work, 30 s validation deadline, 1,000-entry pages, 64 KiB manifests, 4 MiB/256-manifest candidate changes and 64 MiB tier snapshots. Thirty-minute healthy and fault workloads; offered load and completed throughput reported separately.
 **Capacity Profile**: Extend existing `namespace/watch` and `api/readiness MODE=alpha` drivers and selectors. Their current implementations do not yet test RBAC; extensions are implementation prerequisites, not existing acceptance.
+The existing namespace/watch harness now includes the tested bounded scheduler,
+independent committed-vector oracle foundation and bounded native diagnostic
+seeding with source/root/client joins. Full native scale, dynamic committed-policy
+history, sustained decision/propagation drivers and live domain-verifier wiring
+remain pending; local contracts do not certify the declared dataset or topology.
 **Fault Profile**: Reuse owned `api-restart`/controller restart facilities; extend the existing runner for a bounded, owned watch-journal interruption. Verify domain recovery and process epochs, not just injector exit.
 
 ## Constitution Check

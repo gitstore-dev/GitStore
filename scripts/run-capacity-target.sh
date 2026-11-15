@@ -35,6 +35,18 @@ case "${mode}" in
   *) usage; exit 2 ;;
 esac
 
+case "${CAPACITY_RBAC_WORKLOAD:-0}" in
+  0) ;;
+  1)
+    echo "RBAC workload selection is unavailable until the native fixture, driver and domain verifier are wired; health-only evidence is not RBAC acceptance" >&2
+    exit 2
+    ;;
+  *)
+    echo "CAPACITY_RBAC_WORKLOAD must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
+
 case "${target}/${profile}" in
   api/readiness)
     runner_kind=k6
