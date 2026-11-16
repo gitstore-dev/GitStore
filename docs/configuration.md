@@ -604,12 +604,12 @@ Automatic startup migration defaults to enabled. To prepare schemas using an
 init container or a separate operator step, set
 `api.datastore.scylla.auto_migrate = false` (environment:
 `GITSTORE_API__DATASTORE__SCYLLA__AUTO_MIGRATE=false`) on the API and run the matching
-image's `gitctl migrate --hosts scylla:9042 --keyspace gitstore --timeout 5m`
+image's `/app/api gitctl migrate --hosts scylla:9042 --keyspace gitstore --timeout 5m`
 before starting it. The command also accepts the existing Scylla environment
 variables, including password, so private connection material need not appear
 in arguments.
 
-The operator must create the keyspace first. `gitctl migrate` uses the same
+The operator must create the keyspace first. `/app/api gitctl migrate` uses the same
 distributed migration lock as API startup, exits nonzero on failure and starts
 no API listeners or CDC readers. Both startup modes require a complete,
 unchanged migration history for the current binary. Disabled mode checks that

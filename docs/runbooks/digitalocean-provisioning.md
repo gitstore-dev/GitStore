@@ -116,7 +116,7 @@ Use configuration management or a controlled per-host deployment procedure:
    settings; use private listen/advertised addresses and seeds; configure
    authentication and transport security. Create the keyspace using
    `NetworkTopologyStrategy`, the actual datacenter name and RF=3. Inventory
-   metadata alone does not set replication. Run existing `gitctl migrate` before
+   metadata alone does not set replication. Run `/app/api gitctl migrate` in the matching API image before
    starting APIs in validation-only migration mode.
 3. Install API signing material and matching API/Git RPC secrets privately.
    Give controllers enrolled signing records and their separate

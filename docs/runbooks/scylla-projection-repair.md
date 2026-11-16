@@ -49,7 +49,7 @@ export GITSTORE_API__DATASTORE__SCYLLA__KEYSPACE=gitstore
 export GITSTORE_API__DATASTORE__SCYLLA__USERNAME=gitstore_operator
 export GITSTORE_API__DATASTORE__SCYLLA__PASSWORD='<from-secret-manager>'
 
-go run ./cmd/gitctl scylla-projection-audit > projection-audit.json
+go run ./cmd/server gitctl scylla-projection-audit > projection-audit.json
 jq '{findings: (.findings | length), actions: (.actions | length)}' projection-audit.json
 ```
 
@@ -93,10 +93,10 @@ Run an audit followed by a confirmed repair:
 - whenever `gitstore_category_ancestor_index_repair_required_total` increases.
 
 ```bash
-go run ./cmd/gitctl scylla-projection-audit > projection-audit.json
+go run ./cmd/server gitctl scylla-projection-audit > projection-audit.json
 jq '.findings[] | select(.table == "category_ancestor_index")' projection-audit.json
-go run ./cmd/gitctl scylla-projection-repair --dry-run > projection-repair-plan.json
-go run ./cmd/gitctl scylla-projection-repair --confirm > projection-repair-result.json
+go run ./cmd/server gitctl scylla-projection-repair --dry-run > projection-repair-plan.json
+go run ./cmd/server gitctl scylla-projection-repair --confirm > projection-repair-result.json
 ```
 
 For the `Category.products` membership projection, new API replicas fail
@@ -122,7 +122,7 @@ previous path; unfiltered category reads are unaffected. Categories with
 ## 3. Dry run
 
 ```bash
-go run ./cmd/gitctl scylla-projection-repair --dry-run > projection-repair-plan.json
+go run ./cmd/server gitctl scylla-projection-repair --dry-run > projection-repair-plan.json
 jq '.findings[] | select(.repairable == false)' projection-repair-plan.json
 jq '.actions[] | {type,kind,uid,table: (.after.table // .before.table)}' projection-repair-plan.json
 ```
@@ -138,7 +138,7 @@ also clears retained Namespace/repository fence reservations after the
 post-repair audit is clean. Then run:
 
 ```bash
-go run ./cmd/gitctl scylla-projection-repair --confirm > projection-repair-result.json
+go run ./cmd/server gitctl scylla-projection-repair --confirm > projection-repair-result.json
 jq '{plannedActions,appliedActions,remaining: (.verification.findings | length)}' projection-repair-result.json
 ```
 
@@ -156,7 +156,7 @@ Successful apply includes an empty post-repair verification plan. Independently
 verify:
 
 ```bash
-go run ./cmd/gitctl scylla-projection-audit | tee projection-audit-after.json
+go run ./cmd/server gitctl scylla-projection-audit | tee projection-audit-after.json
 jq -e '(.findings | length) == 0 and (.actions | length) == 0' projection-audit-after.json
 ```
 

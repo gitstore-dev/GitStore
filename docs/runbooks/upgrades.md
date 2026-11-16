@@ -68,7 +68,7 @@ Update dashboards and alerts that match the old label sets:
 
 Schema migrations apply on API startup unless
 `GITSTORE_API__DATASTORE__SCYLLA__AUTO_MIGRATE=false`; with automatic migration
-disabled, run `gitctl migrate` first. In-memory deployments need no migration
+disabled, run `/app/api gitctl migrate` in the matching API image first. In-memory deployments need no migration
 step. Validate compatibility with the deployed schema before mixing versions;
 the [Product and Namespace schema baseline](../architecture/datastore-resource-storage.md#schema-compatibility)
 does not support writers built for the earlier layout.
@@ -78,16 +78,16 @@ API replicas use the supporting version, then audit projections. From
 `gitstore-api/`:
 
 ```bash
-go run ./cmd/gitctl scylla-projection-audit > projection-audit.json
-go run ./cmd/gitctl scylla-projection-repair --dry-run > projection-repair-plan.json
+go run ./cmd/server gitctl scylla-projection-audit > projection-audit.json
+go run ./cmd/server gitctl scylla-projection-repair --dry-run > projection-repair-plan.json
 ```
 
 Repair only reviewed findings, following the
 [projection repair safeguards](scylla-projection-repair.md#category-ancestor-index):
 
 ```bash
-go run ./cmd/gitctl scylla-projection-repair --confirm
-go run ./cmd/gitctl scylla-projection-audit   # expect zero findings
+go run ./cmd/server gitctl scylla-projection-repair --confirm
+go run ./cmd/server gitctl scylla-projection-audit   # expect zero findings
 ```
 
 An audit without findings does not require repair. Schema validation and

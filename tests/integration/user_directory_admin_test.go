@@ -298,6 +298,9 @@ principal_burst = 2000
 		adminPort, storefrontPort := directoryLoopbackPorts(t)
 		r.command(t, nil, "run", "-d", "--name", name, "--label", "dev.gitstore.test_owner="+r.owner,
 			"--network", r.network, "--ip", apiIP.String(), "--memory", "384m", "--cpus", "1",
+			// Bind-mounted private fixtures retain their host owner's 0700/0600
+			// permissions; do not make test credentials world-readable.
+			"--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()),
 			"-p", fmt.Sprintf("127.0.0.1:%d:4000", adminPort), "-p", fmt.Sprintf("127.0.0.1:%d:4001", storefrontPort),
 			"-v", privateDir+":/fixtures:ro", "--entrypoint", apiEntrypoint,
 			apiImage, "--config-file", fmt.Sprintf("/fixtures/api-%d.toml", replica))

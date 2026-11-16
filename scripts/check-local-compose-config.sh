@@ -53,6 +53,14 @@ check '
   [.services[].volumes[]? | select(.target == "/etc/gitstore/gitstore.toml")] | length == 3
 ' "shared config must be mounted only by the three core services"
 check '
+  .services.api.command == ["/app/api", "--config-file", "/etc/gitstore/gitstore.toml",
+    "--serviceaccount-signing-key-file", "/run/secrets/serviceaccount-signing-key"] and
+  .services.api.healthcheck.test == ["CMD", "/app/api", "gitctl", "healthcheck"] and
+  .services["credential-bootstrap"].build.target == "debug" and
+  .services["credential-bootstrap"].user == "0:0" and
+  (.services["serviceaccount-enrollment"].command[:2] == ["/app/api", "gitctl"])
+' "shell-less API startup, native probe and debug-only shell initialization must be wired"
+check '
   [.services[].volumes[]? | select(.target == "/etc/gitstore/policy.yaml")] |
   length == 1 and all(.[]; .read_only == true)
 ' "policy must have one read-only mount"

@@ -264,7 +264,7 @@ _enroll-controller-serviceaccount:
 		echo "Generate one with: make secret TARGET=signing-key (use the same CONTROLLER_* overrides)"; \
 		exit 2; \
 	}
-	@cd "$(API_DIR)" && go run ./cmd/gitctl enroll-serviceaccount \
+	@cd "$(API_DIR)" && go run ./cmd/server gitctl enroll-serviceaccount \
 		--api-url "$(API_URL)" \
 		--admin-username "$(DEV_ADMIN_USERNAME)" \
 		--admin-password "$(DEV_ADMIN_PASSWORD)" \
@@ -302,7 +302,7 @@ controller: ## Run gitstore-controller-manager locally in the foreground.
 api: ## Run gitstore-api locally in the foreground.
 	@mkdir -p "$$(dirname "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")"
 	@test -f "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" || \
-		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" )
+		( cd "$(API_DIR)" && go run ./cmd/server gitctl generate-signing-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" )
 	@cd "$(API_DIR)" && \
 		GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")" \
 		go run ./cmd/server
@@ -316,14 +316,14 @@ dev: ## Generate/enroll local credentials and run all three core services in the
 	mkfifo "$$fifo"; \
 	if [ ! -f "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" ]; then \
 		mkdir -p "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)"; \
-		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" ); \
+		( cd "$(API_DIR)" && go run ./cmd/server gitctl generate-signing-key --private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" ); \
 	fi; \
-	( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key \
+	( cd "$(API_DIR)" && go run ./cmd/server gitctl generate-signing-key \
 		--private-key-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME)/$(CONTROLLER_SECRET_KEY)" \
 		--record-output-path "$(CONTROLLER_SECRET_DIR)/$(CONTROLLER_SECRET_NAME).json" --key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)" ) || exit $$?; \
 	if [ ! -f "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" ]; then \
 		mkdir -p "$$(dirname "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)")"; \
-		( cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" ); \
+		( cd "$(API_DIR)" && go run ./cmd/server gitctl generate-signing-key --private-key-path "$(API_SERVICEACCOUNT_SIGNING_KEY_PATH)" ); \
 	fi; \
 	cleanup() { \
 		trap - INT TERM EXIT; \
@@ -379,7 +379,7 @@ dev: ## Generate/enroll local credentials and run all three core services in the
 	resolved_uid="$(CONTROLLER_SERVICEACCOUNT_UID)"; \
 	if [ -z "$$resolved_uid" ]; then \
 		echo "controller: enrolling ServiceAccount with the API..."; \
-		if ( cd "$(API_DIR)" && go run ./cmd/gitctl enroll-serviceaccount \
+		if ( cd "$(API_DIR)" && go run ./cmd/server gitctl enroll-serviceaccount \
 			--api-url "$(API_URL)" \
 			--admin-username "$(DEV_ADMIN_USERNAME)" \
 			--admin-password "$(DEV_ADMIN_PASSWORD)" \
@@ -419,7 +419,7 @@ _check-local-config:
 	@test -r "$(POLICY_FILE)" || { echo "Local RBAC policy is not readable: $(POLICY_FILE)"; exit 2; }
 	@cd "$(API_DIR)" && \
 		GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$${GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY:-config-validation-placeholder}" \
-		go run ./cmd/gitctl validate-local-config \
+		go run ./cmd/server gitctl validate-local-config \
 			--config-file "$(abspath $(CONFIG_FILE))" --policy-file "$(abspath $(POLICY_FILE))"
 
 _check-compose-config: _check-local-config
@@ -461,13 +461,13 @@ generate: ## Generate committed sources; TARGET=authz or all.
 	@./scripts/run-make-workflow.sh generate "$(TARGET)"
 
 _generate-authz:
-	@cd "$(API_DIR)" && go run ./cmd/gitctl generate authz --root "$(ROOT)"
+	@cd "$(API_DIR)" && go run ./cmd/server gitctl generate authz --root "$(ROOT)"
 
 _generate-all:
 	@cd "$(API_DIR)" && go generate ./...
 
 _check-generated:
-	@cd "$(API_DIR)" && go run ./cmd/gitctl generate authz --root "$(ROOT)" --check
+	@cd "$(API_DIR)" && go run ./cmd/server gitctl generate authz --root "$(ROOT)" --check
 	@bash ./scripts/check-graphql-generation.sh
 
 test: ## Run tests; TARGET=all (default), datastore, or secret-integration. Datastore tests use DATASTORE=memdb|scylla.
@@ -753,7 +753,7 @@ hash-user-password: ## Generate a bcrypt hash for PASSWORD for manual users.yaml
 		echo "Usage: make hash-user-password PASSWORD='<password>'"; \
 		exit 2; \
 	fi
-	@hash=$$(printf '%s\n' "$$PASSWORD" | (cd "$(API_DIR)" && go run ./cmd/gitctl hash-password)) || { \
+	@hash=$$(printf '%s\n' "$$PASSWORD" | (cd "$(API_DIR)" && go run ./cmd/server gitctl hash-password)) || { \
 		echo "Failed to generate bcrypt hash. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
@@ -764,7 +764,7 @@ add-user: ## Add a local user to USERS_FILE; requires USERNAME and PASSWORD.
 		echo "Usage: make add-user USERNAME=<user> PASSWORD='<password>' [EMAIL=<email>] [DISPLAY_NAME='<name>'] [USERS_FILE=<path>]"; \
 		exit 2; \
 	fi
-	@printf '%s\n' "$$PASSWORD" | (cd "$(API_DIR)" && go run ./cmd/gitctl users add \
+	@printf '%s\n' "$$PASSWORD" | (cd "$(API_DIR)" && go run ./cmd/server gitctl users add \
 		--file "$(abspath $(USERS_FILE))" \
 		--username "$$USERNAME" \
 		--email "$${EMAIL:-}" \
@@ -781,14 +781,14 @@ secret: ## Generate local security material; TARGET=jwt, grpc-hmac, or signing-k
 	@./scripts/run-make-workflow.sh secret "$(TARGET)"
 
 _secret-jwt:
-	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-jwt-secret | sed -n 's/^GITSTORE_API__AUTH__JWT__SECRET=//p') || { \
+	@secret=$$(cd "$(API_DIR)" && go run ./cmd/server gitctl gen-jwt-secret | sed -n 's/^GITSTORE_API__AUTH__JWT__SECRET=//p') || { \
 		echo "Failed to generate JWT secret. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
 	./scripts/update-env-secret.sh GITSTORE_API__AUTH__JWT__SECRET "$$secret" "$(API_DIR)/.env"
 
 _secret-grpc-hmac:
-	@secret=$$(cd "$(API_DIR)" && go run ./cmd/gitctl gen-hmac-secret | sed -n 's/^GITSTORE_GRPC_AUTH__HMAC_SECRET=//p') || { \
+	@secret=$$(cd "$(API_DIR)" && go run ./cmd/server gitctl gen-hmac-secret | sed -n 's/^GITSTORE_GRPC_AUTH__HMAC_SECRET=//p') || { \
 		echo "Failed to generate HMAC secret. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
@@ -807,7 +807,7 @@ _secret-signing-key:
 		mkdir -p "$$(dirname "$$record_path")"; \
 		set -- "$$@" --record-output-path "$$record_path" --key-id "$(CONTROLLER_SERVICEACCOUNT_KEY_ID)"; \
 	fi; \
-	cd "$(API_DIR)" && go run ./cmd/gitctl generate-signing-key "$$@"
+	cd "$(API_DIR)" && go run ./cmd/server gitctl generate-signing-key "$$@"
 
 _bootstrap-token: _bootstrap-tools
 	@if [ -z "$${ADMIN_PASSWORD:-}" ]; then \

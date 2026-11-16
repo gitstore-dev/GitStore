@@ -386,7 +386,7 @@ write_mock "${test_dir}/readiness-bin/docker" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 source "${CAPACITY_TEST_FIXTURES}/capacity.sh"
-if [[ "$1" == exec && "${3:-}" == readlink ]]; then
+if [[ "$1" == exec && "${*:3}" == "/app/api gitctl process-executable" ]]; then
   printf '%s\n' "${MOCK_API_EXECUTABLE:-/app/api}"
 elif [[ "$1" == exec ]]; then
   case "$2" in
@@ -458,7 +458,7 @@ write_mock "${test_dir}/bin/docker" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 source "${CAPACITY_TEST_FIXTURES}/capacity.sh"
-if [[ "$1" == exec && "${3:-}" == readlink ]]; then
+if [[ "$1" == exec && "${*:3}" == "/app/api gitctl process-executable" ]]; then
   printf '%s\n' "${MOCK_API_EXECUTABLE:-/app/api}"
 elif [[ "$1" == exec ]]; then
   case "$2" in

@@ -33,6 +33,44 @@ curl -s http://localhost:4000/health | jq .
 curl -s http://localhost:4000/ready | jq .
 ```
 
+The API image contains one static Go binary and CA certificates, runs as
+UID/GID `65532:65532`, and has no shell or `wget`. Operator commands run as
+`/app/api gitctl <command>` without starting the server. Compose probes use:
+
+```bash
+docker compose exec api /app/api gitctl healthcheck
+```
+
+For live process verification without installing tools in the container, use
+`docker compose exec api /app/api gitctl process-executable`; PID 1 should be
+`/app/api`.
+
+For a custom Admin port, pass `--url http://127.0.0.1:<port>/ready`.
+The probe requires HTTP 200, rejects redirects, and times out after one second
+by default (`--timeout` overrides it). Host-side `curl` remains available for
+response-body inspection.
+
+The local overlay loads the issuer PEM through
+`--serviceaccount-signing-key-file /run/secrets/serviceaccount-signing-key`;
+keep that mount API-only. Credential initialization uses a separate Alpine
+debug image as root to prepare the named volumes and assign the issuer PEM to
+the API UID. Enrollment also needs write access to its identity volume; the
+long-running API remains non-root. Preserve existing volumes and key material.
+Configuration, policy and user-directory bind mounts must also be readable by
+UID `65532`; keep private issuer keys mode `0600` and owned by that UID.
+
+For an interactive diagnostic shell, build the opt-in target from the same
+reviewed source as the runtime image, then start a disposable container:
+
+```bash
+docker build --target debug -f docker/api.Dockerfile -t gitstore-api:debug .
+docker run --rm -it gitstore-api:debug /bin/sh
+```
+
+The debug target defaults to the same non-root identity. It is not the default
+published runtime image. Do not mount production credentials or writable data
+volumes merely to inspect the image.
+
 Check controller-manager health:
 
 ```bash

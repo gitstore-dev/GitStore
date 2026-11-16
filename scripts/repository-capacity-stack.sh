@@ -44,6 +44,8 @@ export CAPACITY_GIT_REVISION="${revision}"
 # same immutable run directory rather than a sibling with an empty name.
 export CAPACITY_RUN_ID="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dt%H%M%Sz)}"
 if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]]; then
+  export CAPACITY_SERVICEACCOUNT_DEFAULT_TTL=60s
+  export CAPACITY_SERVICEACCOUNT_MAX_TTL=60s
   export REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR="${REPOSITORY_CAPACITY_SECRET_FIXTURE_DIR:-${state_dir}/secret-fixtures/${CAPACITY_RUN_ID}}"
   export REPOSITORY_CAPACITY_SECRET_OWNED_DEPLOYMENT=1
   export REPOSITORY_CAPACITY_PROJECT="${project}"
