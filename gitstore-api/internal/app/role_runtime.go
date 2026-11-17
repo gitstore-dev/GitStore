@@ -194,8 +194,10 @@ func writeRuntimeHealth(c *gin.Context, code int, checks map[string]health.Check
 
 func bootstrapServingHandler(next http.Handler, ready func(context.Context) error) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		role, rolePath := strings.CutPrefix(request.URL.Path, "/ready/")
+		rolePath = rolePath && role != "" && !strings.Contains(role, "/")
 		if request.URL.Path != "/health" && request.URL.Path != "/ready" &&
-			request.URL.Path != "/metrics" && !strings.HasPrefix(request.URL.Path, "/ready/") && ready(request.Context()) != nil {
+			request.URL.Path != "/metrics" && !rolePath && ready(request.Context()) != nil {
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, "bootstrap pending", http.StatusServiceUnavailable)
 			return
@@ -235,7 +237,7 @@ func runtimeHTTPHandler(next http.Handler, readiness *roleReadiness) http.Handle
 	mux := http.NewServeMux()
 	mux.Handle("/health", operations)
 	mux.Handle("/ready", operations)
-	mux.Handle("/ready/", operations)
+	mux.Handle("/ready/{role}", operations)
 	mux.Handle("/", next)
 	return mux
 }

@@ -194,6 +194,44 @@ func TestRuntimeBudgetsDoNotStarveCatalogCallbacksOrHealth(t *testing.T) {
 	require.Less(t, time.Since(start), time.Second)
 }
 
+func TestRuntimeReadinessRoutesPreserveReadyNamespace(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(fmt.Sprintf("bootstrap-pending=%t", pending), func(t *testing.T) {
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("X-Repository-Path", r.URL.Path)
+				w.WriteHeader(http.StatusNoContent)
+			})
+			readiness := &roleReadiness{cfg: config.ApiConfig{Roles: []string{config.RoleStorefront}}}
+			handler := bootstrapServingHandler(runtimeHTTPHandler(next, readiness), func(context.Context) error {
+				if pending {
+					return errRoleUnavailable
+				}
+				return nil
+			})
+			for _, request := range []struct{ method, path string }{
+				{http.MethodGet, "/ready/myrepo/info/refs?service=git-upload-pack"},
+				{http.MethodPost, "/ready/myrepo/git-upload-pack"},
+				{http.MethodPost, "/ready/myrepo/git-receive-pack"},
+			} {
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, httptest.NewRequest(request.method, request.path, nil))
+				if pending {
+					require.Equal(t, http.StatusServiceUnavailable, response.Code, request.path)
+					require.Empty(t, response.Header().Get("X-Repository-Path"))
+				} else {
+					require.Equal(t, http.StatusNoContent, response.Code, request.path)
+					require.Equal(t, strings.Split(request.path, "?")[0], response.Header().Get("X-Repository-Path"))
+				}
+			}
+			for path, want := range map[string]int{"/health": 200, "/ready": 503, "/ready/missing": 404} {
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+				require.Equal(t, want, response.Code, path)
+			}
+		})
+	}
+}
+
 func TestSharedGraphQLKeepsDisjointPathsAndLocalLiveness(t *testing.T) {
 	cfg := roleTestConfig(t)
 	cfg.Api.Roles = []string{config.RoleAdmin, config.RoleStorefront}
