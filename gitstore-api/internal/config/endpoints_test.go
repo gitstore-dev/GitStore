@@ -28,6 +28,7 @@ func TestEndpointPortCollisionsFailClosed(t *testing.T) {
 		t.Run(port, func(t *testing.T) {
 			defer clearEnv(t)()
 			setRequiredAuth(t)
+			t.Setenv("GITSTORE_API__ROLES", "admin,storefront,smart-http,catalog")
 			t.Setenv("GITSTORE_API__STOREFRONT_PORT", port)
 			_, err := Load()
 			require.Error(t, err, "must reject zero or occupied named port")

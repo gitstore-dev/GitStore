@@ -73,6 +73,13 @@ type repositoryCapacityConfig struct {
 	skipReplacement             bool
 }
 
+func (cfg repositoryCapacityConfig) endpointReady(client *http.Client, endpoint string) bool {
+	if cfg.endpointSplit {
+		return endpointReady(client, endpoint, "admin")
+	}
+	return endpointReady(client, endpoint)
+}
+
 type repositoryCapacityEvent struct {
 	Type            string `json:"type"`
 	Name            string `json:"name"`
@@ -127,9 +134,9 @@ func runRepositoryCapacityWorkload(t *testing.T, cfg repositoryCapacityConfig) {
 	client := &http.Client{Timeout: 20 * time.Second}
 	require.NotEqual(t, cfg.apiA, cfg.apiB, "API endpoints must identify distinct replicas")
 	require.NotEqual(t, cfg.controllerA, cfg.controllerB, "controller endpoints must identify distinct replicas")
-	require.True(t, endpointReady(client, cfg.apiA), "API A must be healthy and ready")
-	require.True(t, endpointReady(client, cfg.apiB), "API B must be healthy and ready")
-	require.True(t, endpointReady(client, cfg.overflowAPI), "overflow API must be healthy and ready")
+	require.True(t, cfg.endpointReady(client, cfg.apiA), "API A must be healthy and ready")
+	require.True(t, cfg.endpointReady(client, cfg.apiB), "API B must be healthy and ready")
+	require.True(t, cfg.endpointReady(client, cfg.overflowAPI), "overflow API must be healthy and ready")
 	identityA := repositoryCapacityAPIIdentity(t, client, cfg.apiA)
 	identityB := repositoryCapacityAPIIdentity(t, client, cfg.apiB)
 	require.NotEqual(t, identityA, identityB, "API endpoints resolve to the same process instance")
@@ -1351,16 +1358,16 @@ func runRepositoryCapacityReplacement(cfg repositoryCapacityConfig, client *http
 	}
 	probe := &http.Client{Timeout: 500 * time.Millisecond}
 	outageDeadline := time.Now().Add(30 * time.Second)
-	for endpointReady(probe, cfg.replacement) && time.Now().Before(outageDeadline) {
+	for cfg.endpointReady(probe, cfg.replacement) && time.Now().Before(outageDeadline) {
 		time.Sleep(100 * time.Millisecond)
 	}
-	if endpointReady(probe, cfg.replacement) {
+	if cfg.endpointReady(probe, cfg.replacement) {
 		result.err = errors.New("replacement did not produce an observed API outage")
 		return result
 	}
 	recoveryDeadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(recoveryDeadline) {
-		if endpointReady(probe, cfg.replacement) {
+		if cfg.endpointReady(probe, cfg.replacement) {
 			after, identityErr := repositoryCapacityAPIIdentityValue(client, cfg.replacement)
 			if identityErr == nil && after != before {
 				result.afterStart, result.err = fetchCapacityMetrics(client, cfg.replacement)

@@ -371,6 +371,7 @@ write_mock "${test_dir}/readiness-bin/curl" <<'MOCK'
 set -euo pipefail
 source "${CAPACITY_TEST_FIXTURES}/capacity.sh"
 if [[ "${MOCK_BAD_READY:-0}" == 1 && "$*" == *api-b.internal/ready* ]]; then exit 22; fi
+if [[ "${MOCK_AGGREGATE_NOT_READY:-0}" == 1 && "${*: -1}" == */ready ]]; then exit 22; fi
 case "$*" in
   *api-a*|*api-alias*) mock_api_metrics a ;;
   *api-b*) mock_api_metrics b ;;
@@ -432,6 +433,13 @@ assert_rejected "production API readiness unexpectedly accepted an unrelated wor
   run_readiness readiness-valid CAPACITY_BASE_URL=http://unverified.internal
 assert_rejected "production API readiness unexpectedly accepted an unready secondary replica" "${test_dir}/output" \
   run_readiness readiness-valid MOCK_BAD_READY=1
+assert_rejected "aggregate readiness ignored an unavailable selected role" "${test_dir}/output" \
+  run_readiness readiness-valid MOCK_AGGREGATE_NOT_READY=1
+run_readiness readiness-valid MOCK_AGGREGATE_NOT_READY=1 CAPACITY_API_READINESS_ROLE=admin
+assert_rejected "Admin role readiness ignored an unready secondary replica" "${test_dir}/output" \
+  run_readiness readiness-valid MOCK_BAD_READY=1 CAPACITY_API_READINESS_ROLE=admin
+assert_rejected "role readiness accepted an arbitrary operational path" "${test_dir}/output" \
+  run_readiness readiness-valid CAPACITY_API_READINESS_ROLE=health
 assert_rejected "production API readiness unexpectedly accepted a mutable live image" "${test_dir}/output" \
   run_readiness readiness-valid MOCK_READINESS_CONTAINERS_FILE="${test_dir}/unverified-readiness-containers.json"
 

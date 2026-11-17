@@ -349,6 +349,8 @@ func TestRBACServerCompositionRecoversBeforeOpeningTrafficAndReusesProviderOnRel
 	cfg := &config.Config{}
 	cfg.Api.AdminPort, cfg.Api.StorefrontPort, cfg.Api.GitPort, cfg.Api.GrpcPort = ports[0], ports[1], ports[2], ports[3]
 	cfg.Api.Admin, cfg.Api.Storefront = config.DefaultEndpoint("admin"), config.DefaultEndpoint("storefront")
+	cfg.Api.SmartHTTP = config.RoleBudget{InFlight: 32, Deadline: 2 * time.Minute}
+	cfg.Api.Catalog = config.RoleBudget{InFlight: 32, Deadline: 30 * time.Second}
 	cfg.Api.Datastore.Backend = "memdb"
 	cfg.Api.GitService.Uri = listener.Addr().String()
 	cfg.GrpcAuth.HmacSecret = secret

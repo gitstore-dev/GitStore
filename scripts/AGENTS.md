@@ -9,6 +9,13 @@ prerequisites documented in `tests/capacity/README.md`.
 These instructions also apply to the root `Makefile`, Compose files,
 container wiring and configuration.
 
+- API role selection uses `api.roles` / `GITSTORE_API__ROLES` or the same
+  binary's optional `serve --roles` / `serve --all` flags. The default omits
+  Storefront; endpoint-boundary fixtures must explicitly select `storefront`.
+  GraphQL layout and deployment advertisements are independent settings;
+  see `../docs/runbooks/api-runtime-roles.md`. Do not infer public URLs from
+  local ports or add role-specific binaries/Makefile targets.
+
 - Use the root Makefile as the public interface and `make help` for current
   commands. Extend existing selector families (`TARGET`, `PROFILE`,
   `DATASTORE`) and helpers, not feature-specific public targets or overlays.

@@ -8,6 +8,11 @@ set -euo pipefail
 evidence_dir="${1:?evidence directory is required}"
 mode="$(capacity_preflight_mode)"
 output="${evidence_dir}/preflight-environment.json"
+case "${CAPACITY_API_READINESS_ROLE:-}" in
+  "") readiness_path=/ready ;;
+  admin) readiness_path=/ready/admin ;;
+  *) echo "CAPACITY_API_READINESS_ROLE must be empty or admin" >&2; exit 2 ;;
+esac
 
 if [[ "${mode}" == "diagnostic" ]]; then
   jq -n --arg mode "${mode}" \
@@ -113,7 +118,7 @@ for index in "${!api_endpoints[@]}"; do
     echo "live API endpoint failed health probe: ${endpoint}" >&2
     exit 1
   }
-  curl -fsS --max-time 5 "${endpoint%/}/ready" >/dev/null || {
+  curl -fsS --max-time 5 "${endpoint%/}${readiness_path}" >/dev/null || {
     echo "live API endpoint failed readiness probe: ${endpoint}" >&2
     exit 1
   }
@@ -234,8 +239,9 @@ fi
 
 jq -n \
   --arg mode "${mode}" --arg base_url "${base_url}" --arg api_build "${config_build}" \
+  --arg readiness_path "${readiness_path}" \
   --argjson api_replicas "${config_replicas}" --argjson runtime_memory_bytes "${environment_memory}" \
   --argjson live_replicas "${identity_json}" --argjson api_containers "${container_json}" \
   --slurpfile config "${config}" --slurpfile environment "${environment}" \
-  '{schemaVersion:1,mode:$mode,passed:true,baseURL:$base_url,topology:{apiReplicas:$api_replicas,liveReplicas:$live_replicas},resources:{runtimeMemoryBytes:$runtime_memory_bytes},builds:{api:$api_build},artifacts:{apiContainers:$api_containers},config:$config[0],environment:$environment[0]}' \
+  '{schemaVersion:1,mode:$mode,passed:true,baseURL:$base_url,readinessPath:$readiness_path,topology:{apiReplicas:$api_replicas,liveReplicas:$live_replicas},resources:{runtimeMemoryBytes:$runtime_memory_bytes},builds:{api:$api_build},artifacts:{apiContainers:$api_containers},config:$config[0],environment:$environment[0]}' \
   >"${output}"

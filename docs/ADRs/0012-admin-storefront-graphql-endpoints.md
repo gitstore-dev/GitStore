@@ -4,6 +4,13 @@
 
 **Date**: 2026-09-30
 
+**Runtime composition extension (2026-11-17)**: One binary/image now supports
+independently selected Smart HTTP, catalog, Admin and Storefront roles.
+`api.graphql_layout` selects dedicated (default) or shared GraphQL listeners,
+without changing schema paths, provider boundaries or execution budgets.
+The pre-GA removal of `/graphql` is unchanged; no legacy alias is introduced.
+See the [runtime operations contract](../runbooks/api-runtime-roles.md).
+
 **Revision (2026-11-04)**: Use one pre-GA endpoint cutover with matching clients.
 Use separate named Admin/Storefront listeners with invariant prefixed paths, explicit
 generator/package names, configurable CORS and a playground endpoint switcher. No generic
@@ -60,28 +67,35 @@ The storefront and buyer surfaces don't exist yet, so this is the cheapest point
 | **Admin API** | `api.admin_port` (default 4000) | `/admin/graphql` | admin | admin UI, controllers, operators and third-party management clients |
 | **Storefront API** | `api.storefront_port` (default 4001) | `/storefront/graphql` | storefront | browser/server storefronts and buyers |
 
-- **Path rule.** Each schema has one distinct listener and one invariant prefixed path.
-  There is no shared-listener mode, port-dependent path rewrite or generic `api.port`.
-  All named listener ports must be nonzero and distinct from `api.git_port` and
-  `api.grpc_port`. Reject the removed generic port setting with migration guidance.
+- **Path rule.** Each schema has one invariant prefixed path. Dedicated listeners
+  remain the default. The runtime composition extension permits an explicitly shared
+  Admin listener when both GraphQL roles are selected; there is no path rewrite or
+  generic `api.port`. Active dedicated ports remain nonzero and distinct.
+  Reject the removed generic port setting with migration guidance.
 - Playgrounds use `/admin/playground` and `/storefront/playground` and include an
   endpoint switcher with separate schema/editor sessions. The current endpoint has a
   same-origin URL; a browser-accessible peer URL is explicitly entered rather than guessed
   from internal bind addresses. Switching clears credentials/headers, closes the previous
   subscription connection and never auto-executes a document. It does not bypass endpoint
   authentication, CORS or Storefront unavailability, or publicly discover a private Admin URL.
-- Root operational routes remain on the Admin listener; no generic/operational listener is
-  added. New instrumentation uses OpenTelemetry Metrics through shared observability.
+- Liveness and role/aggregate readiness are available on every selected HTTP listener
+  and through gRPC Health Check for catalog-only processes; no generic operational
+  listener is added. Metrics remain Admin-only. New instrumentation uses OpenTelemetry Metrics through shared observability.
   Existing compatibility export/scrape behavior is not a second instrumentation API.
-- Both endpoints are served by the existing `gitstore-api` process. They share:
+- Selected roles use the existing `gitstore-api` binary/image. When required
+  by those roles, a process reuses:
   - the datastore;
   - the AuthN/AuthZ provider registry;
   - existing limiting primitives with separate endpoint policies (doc 038);
   - the watch journal;
   - the transport/extension builder.
-- A separate storefront service or binary is deferred. The split is by schema, not by deployable.
-- Both endpoint routes are part of normal startup; there is no separate Storefront enablement
-  flag. Until publication-backed reads and trusted target binding are available, Storefront
+- The unavailable Storefront-only boundary constructs no datastore, Git
+  client, authentication registry, bootstrap provisioner or journal worker.
+- Separate role-specific binaries/images remain out of scope. Role selection is
+  independent from listener layout; Admin keeps admission in-process.
+- Storefront is omitted by default and by `--all` while publication prerequisites
+  are unavailable. Explicit Storefront role selection starts only its unavailable
+  boundary. Until publication-backed reads and trusted target binding are available, Storefront
   requests return HTTP 503 with a stable `STOREFRONT_UNAVAILABLE` diagnostic and no catalog
   data. Missing prerequisites never fall back to Admin rows. Admin remains usable independently.
 - A dedicated admin listener lets operators keep the Admin API on an internal network only, as

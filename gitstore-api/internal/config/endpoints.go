@@ -19,6 +19,7 @@ import (
 // EndpointConfig contains independent browser and execution policies. Ports are
 // named fields on ApiConfig so they follow the existing Git/catalog convention.
 type EndpointConfig struct {
+	BindHost          string        `mapstructure:"bind_host"`
 	ControllerSubject string        `mapstructure:"controller_subject"`
 	CORS              CORSConfig    `mapstructure:"cors"`
 	Limits            GraphQLLimits `mapstructure:"limits"`
@@ -79,12 +80,25 @@ func DefaultEndpoint(kind string) EndpointConfig {
 }
 
 func setEndpointDefaults(v *viper.Viper) {
+	v.SetDefault("api.roles", DefaultRoles())
+	v.SetDefault("api.graphql_layout", "dedicated")
+	for _, role := range []string{"smart_http", "catalog"} {
+		v.SetDefault("api."+role+".bind_host", "")
+		v.SetDefault("api."+role+".in_flight", 32)
+		v.SetDefault("api."+role+".deadline", "30s")
+	}
+	v.SetDefault("api.smart_http.deadline", "2m")
+	for _, endpoint := range []string{"admin", "storefront", "git_http"} {
+		v.SetDefault("api.advertised."+endpoint+".url", "")
+		v.SetDefault("api.advertised."+endpoint+".disclose", false)
+	}
 	v.SetDefault("api.admin_port", 4000)
 	v.SetDefault("api.storefront_port", 4001)
 	v.SetDefault("api.storefront_rate_limit.per_second", 200)
 	v.SetDefault("api.storefront_rate_limit.burst", 400)
 	v.SetDefault("api.trusted_proxies", []string{})
 	for _, kind := range []string{"admin", "storefront"} {
+		v.SetDefault("api."+kind+".bind_host", "")
 		defaults := DefaultEndpoint(kind)
 		v.SetDefault("api."+kind+".controller_subject", defaults.ControllerSubject)
 		for section, value := range map[string]any{"cors": defaults.CORS, "limits": defaults.Limits} {
@@ -102,7 +116,14 @@ func (a ApiConfig) ValidatePorts() error {
 	for _, item := range []struct {
 		name string
 		port int
-	}{{"admin_port", a.AdminPort}, {"storefront_port", a.StorefrontPort}, {"git_port", a.GitPort}, {"grpc_port", a.GrpcPort}} {
+		role string
+	}{{"admin_port", a.AdminPort, RoleAdmin}, {"storefront_port", a.StorefrontPort, RoleStorefront}, {"git_port", a.GitPort, RoleSmartHTTP}, {"grpc_port", a.GrpcPort, RoleCatalog}} {
+		if !a.HasRole(item.role) {
+			continue
+		}
+		if item.role == RoleStorefront && a.GraphQLLayout == "shared" && a.HasRole(RoleAdmin) {
+			continue
+		}
 		if item.port < 1 || item.port > 65535 {
 			return fmt.Errorf("api.%s must be between 1 and 65535", item.name)
 		}

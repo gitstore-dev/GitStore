@@ -81,6 +81,17 @@ func TestParseConfigFile(t *testing.T) {
 	assert.Equal(t, configFileFlags{"/config/shared.toml"}, options.configFiles)
 }
 
+func TestParseComposableServeRoles(t *testing.T) {
+	for _, args := range [][]string{{"serve", "--roles=admin"}, {"--roles", "smart-http,catalog"}, {"serve", "--all"}, {"--all"}} {
+		_, err := parseOptions(args)
+		require.NoError(t, err, args)
+	}
+	for _, args := range [][]string{{"serve", "--all", "--roles=admin"}, {"--roles="}, {"--roles=admin,admin"}, {"serve", "--roles=invalid"}, {"serve", "unexpected"}} {
+		_, err := parseOptions(args)
+		require.Error(t, err, args)
+	}
+}
+
 func TestParseConfigFilesRepeated(t *testing.T) {
 	options, err := parseOptions([]string{
 		"--config-file", "/config/shared.toml",

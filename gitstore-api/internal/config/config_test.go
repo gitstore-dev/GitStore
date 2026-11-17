@@ -21,6 +21,8 @@ func clearEnv(t *testing.T) func() {
 	t.Helper()
 	keys := []string{
 		// Current schema.
+		"GITSTORE_API__ROLES",
+		"GITSTORE_API__GRAPHQL_LAYOUT",
 		"GITSTORE_API__ADMIN_PORT",
 		"GITSTORE_API__STOREFRONT_PORT",
 		"GITSTORE_API__GIT_PORT",

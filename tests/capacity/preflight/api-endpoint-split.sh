@@ -12,7 +12,7 @@ if [[ "${mode}" == diagnostic ]]; then
   exit 0
 fi
 command -v python3 >/dev/null || { echo 'python3 is required for bounded owned capacity children' >&2;exit 2; }
-"${root}/tests/capacity/preflight/api-readiness.sh" "${evidence}"
+CAPACITY_API_READINESS_ROLE=admin "${root}/tests/capacity/preflight/api-readiness.sh" "${evidence}"
 [[ -n "${CAPACITY_PROMETHEUS_URL:-}" ]] || { echo 'acceptance requires SDK/process resource history via CAPACITY_PROMETHEUS_URL' >&2;exit 2; }
 IFS=',' read -r -a admin_urls <<<"${CAPACITY_ADMIN_URLS}"
 IFS=',' read -r -a public_urls <<<"${CAPACITY_STOREFRONT_URLS}"

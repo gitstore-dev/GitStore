@@ -26,6 +26,7 @@ proposed designs and historical plans are not supported-feature references.
 ## Operators
 
 - [Configuration reference](configuration.md)
+- [API runtime roles and deployment endpoints](runbooks/api-runtime-roles.md)
 - [Current architecture](architecture/README.md)
 - [Datastore resource storage](architecture/datastore-resource-storage.md)
 - [Operations and Recovery](runbooks/README.md): deployment, upgrade, rotation

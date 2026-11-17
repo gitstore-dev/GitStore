@@ -33,6 +33,16 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "Failed to parse arguments: %v\n", err)
 		os.Exit(2)
 	}
+	if options.roles != "" {
+		if err := os.Setenv("GITSTORE_API__ROLES", options.roles); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "Failed to select runtime roles")
+			os.Exit(1)
+		}
+	} else if options.all {
+		if err := os.Setenv("GITSTORE_API__ROLES", strings.Join(config.DefaultRoles(), ",")); err != nil {
+			os.Exit(1)
+		}
+	}
 	if err := loadSigningKeyFile(options.signingKeyFile); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Failed to load service-account signing key: %v\n", err)
 		os.Exit(1)
@@ -82,11 +92,10 @@ func main() {
 		}
 	}()
 
-	log.Info("Starting GitStore GraphQL API",
-		zap.Int("admin_port", cfg.Api.AdminPort),
-		zap.Int("storefront_port", cfg.Api.StorefrontPort),
-		zap.String("api.git_service.uri", cfg.Api.GitService.Uri),
-		zap.String("datastore_backend", cfg.Api.Datastore.Backend),
+	log.Info("Starting GitStore API",
+		zap.Strings("roles", cfg.Api.Roles),
+		zap.String("graphql_layout", cfg.Api.GraphQLLayout),
+		zap.String("endpoint_config_digest", cfg.Api.Advertised.Digest()),
 	)
 
 	server, err := app.NewServer(cfg, log)
@@ -125,18 +134,42 @@ func (f *configFileFlags) Set(value string) error {
 type serverOptions struct {
 	configFiles    configFileFlags
 	signingKeyFile string
+	roles          string
+	all            bool
 }
 
 func parseOptions(args []string) (serverOptions, error) {
+	if len(args) > 0 && args[0] == "serve" {
+		args = args[1:]
+	}
 	flags := flag.NewFlagSet("gitstore-api", flag.ContinueOnError)
 	var options serverOptions
 	flags.Var(&options.configFiles, "config-file", "path to a TOML configuration file; repeat to layer additive overlays on top of the first")
 	flags.StringVar(&options.signingKeyFile, "serviceaccount-signing-key-file", "", "API-only file containing the service-account issuer private key")
+	flags.StringVar(&options.roles, "roles", "", "comma-separated runtime roles: smart-http,catalog,admin,storefront")
+	flags.BoolVar(&options.all, "all", false, "select all enabled roles (Storefront publication is not yet available)")
 	if err := flags.Parse(args); err != nil {
 		return options, err
 	}
 	if flags.NArg() != 0 {
 		return options, fmt.Errorf("unexpected argument: %s", flags.Arg(0))
+	}
+	if options.all && options.roles != "" {
+		return options, fmt.Errorf("--all and --roles are mutually exclusive")
+	}
+	emptyRoles := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "roles" && options.roles == "" {
+			emptyRoles = true
+		}
+	})
+	if emptyRoles {
+		return options, fmt.Errorf("--roles must not be empty")
+	}
+	if options.roles != "" {
+		if err := (config.ApiConfig{Roles: strings.Split(options.roles, ",")}).ValidateRuntime(); err != nil {
+			return options, err
+		}
 	}
 	return options, nil
 }

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -36,6 +37,7 @@ type rbacRuntime struct {
 type rbacRuntimeOptions struct {
 	provider        *opa.Provider
 	prepare         func(context.Context) error
+	observeOnly     bool
 	initializing    bool
 	observeSnapshot func(context.Context, rbac.Snapshot) error
 }
@@ -209,7 +211,7 @@ func rbacServingHandler(next http.Handler, ready func(context.Context) error) ht
 		switch request.URL.Path {
 		case "/health", "/ready", "/metrics":
 		default:
-			if ready(request.Context()) != nil {
+			if !strings.HasPrefix(request.URL.Path, "/ready/") && ready(request.Context()) != nil {
 				w.Header().Set("Retry-After", "1")
 				http.Error(w, "authorization is unavailable", http.StatusServiceUnavailable)
 				return

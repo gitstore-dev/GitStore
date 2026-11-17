@@ -22,7 +22,7 @@ Post-receive admission is operation-aware for current Git-backed catalog resourc
 
 ## Boundaries
 
-- Admin clients use port `4000`; Storefront uses port `4001`.
+- Admin clients use port `4000`; explicitly selected Storefront uses port `4001`.
 - Git clients use this service's Smart HTTP port `9000` in the default Compose deployment.
 - `gitstore-git-service` calls this service's CatalogService gRPC endpoint on port `6000`.
 - This service calls `gitstore-git-service` through GitService gRPC on port `50051`.
@@ -30,8 +30,9 @@ Post-receive admission is operation-aware for current Git-backed catalog resourc
 
 ## Ports And Paths
 
-The table uses listener/container ports. Compose publishes Storefront's 4001
-listener on host port 4100; native defaults use 4001 directly.
+The table uses listener/container ports for selected roles. Storefront is omitted
+by default; when selected, Compose publishes its 4001 listener on host port
+4100 and native defaults use 4001 directly.
 
 |   Port | Path                                       | Purpose                             |
 |-------:|--------------------------------------------|-------------------------------------|
@@ -77,7 +78,14 @@ gitstore-api/
 
 ## Configuration Highlights
 
-Admin and Storefront have separate named listeners with fixed prefixed paths.
+Admin and Storefront have fixed prefixed paths and dedicated named listeners by
+default. `api serve --roles=smart-http,catalog,admin` composes runtime roles in the
+same binary/image; `--all` selects the currently available roles. Explicit
+`--roles=storefront` runs only the unavailable Storefront boundary, without Git
+or datastore initialization. `api.graphql_layout="shared"` can share the Admin
+listener when both GraphQL roles are selected. No `/graphql` alias is restored.
+See [runtime roles and advertised endpoints](../docs/runbooks/api-runtime-roles.md)
+for budgets, bootstrap, role readiness, private Admin and proxy configuration.
 `api.admin_port` defaults to 4000; `api.storefront_port` defaults to 4001.
 The generic `api.port` and old `/graphql`/`/playground` routes are removed.
 Storefront has a separate generated schema but returns a fixed no-store 503
