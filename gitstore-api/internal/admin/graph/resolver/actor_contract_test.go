@@ -19,6 +19,8 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware/security"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2"
+	"github.com/vektah/gqlparser/v2/validator/rules"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
@@ -112,6 +114,30 @@ func TestHumanAdministrationSchemaUsesActionSpecificInputsAndPayloads(t *testing
 	}
 }
 
+func TestStaffCreateAndUserPatchSchemaContracts(t *testing.T) {
+	schema := generated.NewExecutableSchema(generated.Config{}).Schema()
+	for _, query := range []string{
+		`mutation { createStaff(input: {apiVersion: "authentication.gitstore.dev/v1beta1", kind: "Staff",
+			metadata: {name: "carol"}, fullName: "Carol", primaryEmail: "carol@example.test"}) { staff { id kind } } }`,
+		`mutation { updateUser(input: {id: "opaque", fullName: "Carol"}) { actor { id ... on User { fullName } } } }`,
+	} {
+		_, errs := gqlparser.LoadQueryWithRules(schema, query, rules.NewDefaultRules())
+		require.Empty(t, errs)
+	}
+	for _, extra := range []string{
+		`metadata: {name: "carol"}`, `kind: "Staff"`, `groups: ["admin"]`, `lifecycle: {state: ACTIVE}`,
+	} {
+		_, errs := gqlparser.LoadQueryWithRules(schema, fmt.Sprintf(`mutation {
+			updateUser(input: {id: "opaque", %s}) { actor { id } }
+		}`, extra), rules.NewDefaultRules())
+		require.NotEmpty(t, errs, "safe-field patches must reject resource/protected fields")
+	}
+	for _, kind := range []string{"Staff", "Customer", "ServiceAccount"} {
+		require.Nil(t, schema.Types[kind].Fields.ForName("spec"))
+		require.Nil(t, schema.Types[kind].Fields.ForName("status"))
+	}
+}
+
 func (d *actorContractDirectory) SearchUsers(context.Context, string, int) ([]*auth.UserProfile, error) {
 	d.searchCalls++
 	return d.profiles, d.err
@@ -129,6 +155,106 @@ func (d *actorContractDirectory) GetBySubject(_ context.Context, uid string) (*a
 type actorMutationDirectory struct {
 	*actorContractDirectory
 	writes int
+}
+
+type staffCreateDirectory struct {
+	auth.HumanDirectory
+	created []*auth.UserProfile
+	err     error
+}
+
+func (d *staffCreateDirectory) CreateStaff(_ context.Context, profile *auth.UserProfile) error {
+	if d.err != nil {
+		return d.err
+	}
+	profile.Subject = "new-staff-uid"
+	profile.Lifecycle = auth.ActorInvited
+	profile.Metadata.UID = profile.Subject
+	profile.Metadata.Name = profile.Username
+	profile.Metadata.Generation = 1
+	profile.Metadata.ResourceVersion = "1"
+	d.created = append(d.created, profile)
+	return nil
+}
+
+func TestCreateStaffEnvelopeOverGraphQL(t *testing.T) {
+	h := newServiceAccountResolverHarness(t)
+	directory := &staffCreateDirectory{}
+	h.resolver.registry = auth.NewProviderRegistry(nil, h.authz, directory)
+	server := handler.NewDefaultServer(generated.NewExecutableSchema(generated.Config{Resolvers: h.resolver}))
+	authorizer := security.NewAuthorizeWithStore(h.resolver.registry, h.store, zap.NewNop())
+	server.AroundFields(authorizer.GraphQLFieldAuthorizer)
+
+	for _, test := range []struct {
+		name         string
+		fields       map[string]any
+		principal    *auth.Principal
+		deny         bool
+		directoryErr error
+		errorText    string
+	}{
+		{name: "omitted discriminators use defaults"},
+		{name: "explicit resource envelope", fields: map[string]any{"apiVersion": "authentication.gitstore.dev/v1beta1", "kind": "Staff"}},
+		{name: "unsupported version", fields: map[string]any{"apiVersion": "authentication.gitstore.dev/v99"}, errorText: "BAD_USER_INPUT"},
+		{name: "wrong identity kind", fields: map[string]any{"kind": "Customer"}, errorText: "BAD_USER_INPUT"},
+		{name: "empty kind", fields: map[string]any{"kind": ""}, errorText: "BAD_USER_INPUT"},
+		{name: "null version", fields: map[string]any{"apiVersion": nil}, errorText: "cannot be null"},
+		{name: "namespaced human", fields: map[string]any{"metadata": map[string]any{"name": "carol", "namespace": "shop"}}, errorText: "INVALID_NAMESPACE_SCOPE"},
+		{name: "protected group", fields: map[string]any{"groups": []string{"system:staff"}}, errorText: "BAD_USER_INPUT"},
+		{name: "non-string label", fields: map[string]any{"metadata": map[string]any{"name": "carol", "labels": map[string]any{"team": true}}}, errorText: "BAD_USER_INPUT"},
+		{name: "untrusted principal", principal: &auth.Principal{Subject: "untrusted"}, errorText: "BAD_USER_INPUT"},
+		{name: "authorization denied", deny: true, errorText: "FORBIDDEN"},
+		{name: "directory unavailable", directoryErr: auth.ErrDirectoryUnavailable, errorText: "SERVICE_UNAVAILABLE"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := map[string]any{
+				"metadata": map[string]any{"name": "carol", "labels": map[string]any{"team": "catalog"}},
+				"fullName": "Carol", "primaryEmail": "carol@example.test", "groups": []string{"merchandiser"},
+			}
+			for key, value := range test.fields {
+				input[key] = value
+			}
+			directory.err = test.directoryErr
+			h.authz.denyAction = ""
+			if test.deny {
+				h.authz.denyAction = "user.create"
+			}
+			before := len(directory.created)
+			body, err := json.Marshal(map[string]any{
+				"query": `mutation Invite($input: CreateStaffInput!) {
+					createStaff(input: $input) { staff {
+						apiVersion kind metadata { name uid } fullName primaryEmail groups lifecycle { state }
+					} }
+				}`,
+				"variables": map[string]any{"input": input},
+			})
+			require.NoError(t, err)
+			ctx := serviceAccountAdminContext()
+			if test.principal != nil {
+				ctx = auth.ContextWithPrincipal(t.Context(), test.principal)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/admin/graphql", strings.NewReader(string(body))).WithContext(ctx)
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if test.errorText != "" {
+				require.Contains(t, response.Body.String(), test.errorText)
+				require.Len(t, directory.created, before, "invalid, unauthorized or failed requests must not create an identity")
+				return
+			}
+			require.NotContains(t, response.Body.String(), `"errors"`)
+			require.Contains(t, response.Body.String(), `"apiVersion":"authentication.gitstore.dev/v1beta1"`)
+			require.Contains(t, response.Body.String(), `"kind":"Staff"`)
+			require.Contains(t, response.Body.String(), `"name":"carol"`)
+			require.Contains(t, response.Body.String(), `"state":"INVITED"`)
+			require.Len(t, directory.created, before+1)
+			profile := directory.created[before]
+			require.Equal(t, "Carol", profile.DisplayName)
+			require.Equal(t, "carol@example.test", profile.Email)
+			require.Equal(t, []string{"merchandiser"}, profile.Groups)
+			require.Equal(t, map[string]string{"team": "catalog"}, profile.Metadata.Labels)
+		})
+	}
 }
 
 func (d *actorMutationDirectory) UpsertProfile(_ context.Context, profile *auth.UserProfile) error {

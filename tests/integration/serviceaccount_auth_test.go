@@ -86,7 +86,7 @@ func (h *serviceAccountAuthHarness) createServiceAccount(name, publicKeyPEM stri
 
 	vars := map[string]any{
 		"input": map[string]any{
-			"apiVersion": "gitstore.dev/v1alpha1",
+			"apiVersion": "authentication.gitstore.dev/v1beta1",
 			"kind":       "ServiceAccount",
 			"metadata": map[string]any{
 
@@ -163,7 +163,7 @@ func (h *serviceAccountAuthHarness) issueServiceAccountToken(name, uid string, p
 
 	vars := map[string]any{
 		"input": map[string]any{
-			"apiVersion": "gitstore.dev/v1alpha1",
+			"apiVersion": "authentication.gitstore.dev/v1beta1",
 			"kind":       "TokenRequest",
 			"metadata": map[string]any{
 
@@ -446,7 +446,7 @@ func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
 	}`
 	issueInput := map[string]any{
 		"input": map[string]any{
-			"apiVersion": "gitstore.dev/v1beta1",
+			"apiVersion": "authentication.gitstore.dev/v1beta1",
 			"kind":       "TokenRequest",
 			"metadata":   map[string]any{"name": name},
 			"spec":       map[string]any{"audiences": []string{"gitstore-api"}, "expirationSeconds": 3600},
@@ -514,7 +514,7 @@ func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
 	}`
 	deleted := gqlQueryWithURL(t, h.apiURL, h.token, deleteMutation, map[string]any{
 		"input": map[string]any{
-			"apiVersion": "gitstore.dev/v1beta1",
+			"apiVersion": "authentication.gitstore.dev/v1beta1",
 			"kind":       "ServiceAccount",
 			"metadata":   map[string]any{"name": name},
 		},
@@ -532,7 +532,7 @@ func TestServiceAccountAuthEndToEndLifecycle_T041(t *testing.T) {
 
 	idempotentDelete := gqlQueryWithURL(t, h.apiURL, h.token, deleteMutation, map[string]any{
 		"input": map[string]any{
-			"apiVersion": "gitstore.dev/v1beta1",
+			"apiVersion": "authentication.gitstore.dev/v1beta1",
 			"kind":       "ServiceAccount",
 			"metadata":   map[string]any{"name": name},
 		},

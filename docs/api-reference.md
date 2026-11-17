@@ -55,6 +55,74 @@ updates do not advance generation. Contact writes retain the external
 provider's best-effort concurrency and privileged-Admin bypass limitations.
 This contact capability does not add a public mail or contact HTTP endpoint.
 
+## Type and input conventions
+
+GraphQL names describe their role; not every object is a persisted resource.
+Use the schema's defaults and field types rather than adding an envelope to
+every input or response.
+
+| Contract family | Naming and shape | Intentional distinctions |
+|---|---|---|
+| Resource representations | Concrete kinds such as `Repository`, `Namespace`, `Product`, `Category`, `Collection`, `ProductVariant`, `File`, and RBAC resources expose `apiVersion`, `kind`, `metadata`, `spec` and `status`, plus opaque `id` where supported. | GraphQL type names need not equal manifest discriminators: `Category.kind` is `CategoryTaxonomy`. An envelope does not imply a supported GraphQL write operation. |
+| Identity representations | `Staff`, `Customer` and `ServiceAccount` expose `id`, `apiVersion`, `kind`, `metadata` and identity fields. | No synthetic `spec` or `status`. `Actor` is the shared identity interface; `User` adds human fields. Customer creation remains owned by the external identity provider. |
+| Resource-oriented writes | `Create<Kind>Input` and resource-replacement `Update<Kind>Input` carry defaulted, non-null `apiVersion`/`kind`, required `metadata`, and the writable content for that resource. | Catalog/infrastructure/RBAC inputs use `spec`; `CreateStaffInput` keeps `fullName`, `primaryEmail`, `groups` alongside metadata; `CreateServiceAccountInput` keeps `publicKeys` there. Output-only fields do not become writable. |
+| Targeted operations | `<Action>Input` contains the target and only the arguments needed by the operation. | `UpdateUserInput` is a human-field patch, not a resource replacement. Its opaque `id` selects Staff or Customer; omitted fields stay unchanged. Delete/lookup by ID, lifecycle, group, status, finalizer, publication and invitation operations do not need a full resource envelope. |
+| Transient requests/results | `TokenRequest` and `SubjectAccessReview` use versioned request/result envelopes with `spec` and `status`. | They are not persisted resources and gain no resource lifecycle or CRUD API. OAuth/OIDC `TokenResponse`, login and refresh inputs retain their protocol-oriented fields without an envelope. |
+| Transport and helpers | `<Action>Payload`, `<Kind>Connection`, `<Kind>Edge`, `PageInfo`, selectors such as `ActorBy`, and watch-event wrappers carry operation/pagination/selection/event data. | Payloads wrap results, not duplicate resource envelopes. Nested specs, statuses, references, keys, lifecycle/contact values and scalars are values, not independent resources. Watch events wrap a resource or tombstone and cursor rather than becoming resources themselves. |
+
+ServiceAccount rotation/deletion retain their existing name-based metadata
+envelopes; rotation's `add`/`removeKids` fields describe a key operation, not a
+replacement identity. Token issuance also uses metadata to match the
+authenticated assertion's account. Every ServiceAccount operation rejects
+any non-null namespace. By contrast, access reviews deliberately have no
+metadata: they evaluate a request and do not allocate a resource identity.
+
+`CreateStaffInput` defaults to
+`apiVersion: "authentication.gitstore.dev/v1beta1"` and `kind: "Staff"`;
+explicit unsupported values fail with `BAD_USER_INPUT` before directory writes.
+`metadata.name` is the username, not an email alias. Human scope remains
+cluster-wide; a nonempty `metadata.namespace` is rejected. Shared metadata
+fields do not imply that every identity provider can edit or persist them.
+
+Human mutation payloads deliberately retain the common `actor` result key,
+except invitation/create payloads that return `staff`. Group operations can
+return a workload actor; human-field patches and lifecycle/contact operations
+cannot. Keep concrete human selections under `... on User` or concrete-kind
+fragments rather than assuming every `Actor` has contact fields.
+
+### Client coordination
+
+Staff creation now accepts explicit version/kind discriminators. Existing
+GraphQL documents and variable objects that omit them continue to use schema
+defaults; there are no renamed operations, moved fields or deprecated aliases.
+Regenerate typed clients from the updated Admin SDL when adopting those fields,
+and deploy the server schema before sending explicit discriminators: an older
+server rejects unknown input fields. Direct Go model/resolver callers must set
+both fields because GraphQL defaults are applied only during GraphQL coercion.
+Only the supported explicit discriminators are accepted.
+
+ServiceAccount create, rotate, delete and token-issuance inputs now validate
+their discriminators instead of silently ignoring them. Migrate explicit
+`gitstore.dev/v1alpha1` or `gitstore.dev/v1beta1` values to
+`authentication.gitstore.dev/v1beta1`, or omit the discriminator fields to use
+schema defaults. Use `kind: "ServiceAccount"` for account operations and
+`kind: "TokenRequest"` for token issuance. Update clients before rolling out
+this validation; the corrected values and omitted form also work with the
+previous server. Unsupported values return `BAD_USER_INPUT` without issuing
+tokens or creating, rotating or deleting an account.
+
+The in-repository invitation example sends the explicit envelope; integration
+Staff callers omitting it exercise the defaulted form. The shipped
+`gitctl enroll-serviceaccount` operation, ServiceAccount integration callers
+and direct resolver tests use the corrected version. Controller token
+requests already use that version. No commerce-admin client operations are
+shipped in this source tree. Independently delivered clients
+should regenerate their Admin types and coordinate schema rollout, without
+inventing legacy wrappers. No datastore migration is needed. Other resource,
+patch, OAuth/OIDC and payload contracts are unchanged. During mixed-server
+rollouts, keep omitting the new fields until all serving replicas support them.
+These Admin conventions do not add catalog capabilities to Storefront.
+
 ## Authentication
 
 Admin introspection requires an authenticated principal. The endpoint selector

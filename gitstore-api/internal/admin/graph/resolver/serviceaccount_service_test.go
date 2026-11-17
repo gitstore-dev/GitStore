@@ -21,6 +21,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/gqlerror"
 	"go.uber.org/zap"
 )
 
@@ -149,7 +150,7 @@ func serviceAccountPublicKeyInput(t *testing.T, keyID string) *model.ServiceAcco
 func serviceAccountCreateInput(t *testing.T, namespace, name, keyID string) *model.CreateServiceAccountInput {
 	t.Helper()
 	return &model.CreateServiceAccountInput{
-		APIVersion: "gitstore.dev/v1beta1",
+		APIVersion: "authentication.gitstore.dev/v1beta1",
 		Kind:       "ServiceAccount",
 		Metadata:   &model.ObjectMetaInput{Namespace: serviceAccountTestNamespace(namespace), Name: name},
 		PublicKeys: []*model.ServiceAccountPublicKeyInput{serviceAccountPublicKeyInput(t, keyID)},
@@ -202,6 +203,66 @@ func TestCreateServiceAccountValidatesKeysAndDuplicates(t *testing.T) {
 
 }
 
+func TestServiceAccountOperationsRejectInvalidEnvelopesBeforeEffects(t *testing.T) {
+	h := newServiceAccountResolverHarness(t)
+	ctx := serviceAccountAdminContext()
+	input := serviceAccountCreateInput(t, "", "manager", "key")
+	created, err := h.resolver.CreateServiceAccount(ctx, input)
+	require.NoError(t, err)
+	for _, operation := range []struct {
+		name string
+		kind string
+		run  func(string, string) error
+	}{
+		{"create", "ServiceAccount", func(version, kind string) error {
+			_, err := h.resolver.CreateServiceAccount(ctx, &model.CreateServiceAccountInput{
+				APIVersion: version, Kind: kind, Metadata: &model.ObjectMetaInput{Name: "must-not-create"}, PublicKeys: input.PublicKeys,
+			})
+			return err
+		}},
+		{"rotate", "ServiceAccount", func(version, kind string) error {
+			_, err := h.resolver.RotateServiceAccountKey(ctx, &model.RotateServiceAccountKeyInput{
+				APIVersion: version, Kind: kind, Metadata: input.Metadata, Add: input.PublicKeys,
+			})
+			return err
+		}},
+		{"delete", "ServiceAccount", func(version, kind string) error {
+			_, err := h.resolver.DeleteServiceAccount(ctx, &model.DeleteServiceAccountInput{
+				APIVersion: version, Kind: kind, Metadata: input.Metadata,
+			})
+			return err
+		}},
+		{"issue", "TokenRequest", func(version, kind string) error {
+			_, err := h.resolver.IssueServiceAccountToken(ctx, &model.IssueServiceAccountTokenInput{
+				APIVersion: version, Kind: kind, Metadata: input.Metadata, Spec: &model.TokenRequestSpecInput{},
+			})
+			return err
+		}},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			for _, envelope := range [][2]string{
+				{"gitstore.dev/v1alpha1", operation.kind},
+				{"gitstore.dev/v1beta1", operation.kind},
+				{"authentication.gitstore.dev/v1beta1", "Staff"},
+				{"", operation.kind},
+				{"authentication.gitstore.dev/v1beta1", ""},
+			} {
+				err := operation.run(envelope[0], envelope[1])
+				var structured *gqlerror.Error
+				require.ErrorAs(t, err, &structured)
+				require.Equal(t, "BAD_USER_INPUT", structured.Extensions["code"])
+				require.Contains(t, err.Error(), "apiVersion must be")
+				current, err := h.store.GetServiceAccountBySubject(ctx, "manager")
+				require.NoError(t, err)
+				require.Equal(t, created.ServiceAccount.Metadata.ResourceVersion, current.ResourceVersion)
+				require.Len(t, current.PublicKeys, 1)
+				_, err = h.store.GetServiceAccountBySubject(ctx, "must-not-create")
+				require.ErrorIs(t, err, datastore.ErrNotFound)
+			}
+		})
+	}
+}
+
 func TestServiceAccountLifecycleStateReflectsDisabledState(t *testing.T) {
 	active := serviceAccountToModel(&datastore.ServiceAccount{UID: "source-uid"})
 	require.NotNil(t, active.Lifecycle)
@@ -219,14 +280,18 @@ func TestRotateServiceAccountKeyPreservesOverlapAndRejectsEmptyRotation(t *testi
 	require.NoError(t, err)
 
 	overlap, err := h.resolver.RotateServiceAccountKey(ctx, &model.RotateServiceAccountKeyInput{
-		Metadata: &model.ObjectMetaInput{Name: "manager"},
-		Add:      []*model.ServiceAccountPublicKeyInput{serviceAccountPublicKeyInput(t, "new")},
+		APIVersion: "authentication.gitstore.dev/v1beta1",
+		Kind:       "ServiceAccount",
+		Metadata:   &model.ObjectMetaInput{Name: "manager"},
+		Add:        []*model.ServiceAccountPublicKeyInput{serviceAccountPublicKeyInput(t, "new")},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"old", "new"}, overlap.ServiceAccount.KeyIDs)
 	assert.Equal(t, created.ServiceAccount.Metadata.UID, overlap.ServiceAccount.Metadata.UID)
 
 	rotated, err := h.resolver.RotateServiceAccountKey(ctx, &model.RotateServiceAccountKeyInput{
+		APIVersion: "authentication.gitstore.dev/v1beta1",
+		Kind:       "ServiceAccount",
 		Metadata:   &model.ObjectMetaInput{Name: "manager"},
 		RemoveKids: []string{"old"},
 	})
@@ -235,6 +300,8 @@ func TestRotateServiceAccountKeyPreservesOverlapAndRejectsEmptyRotation(t *testi
 	assert.Equal(t, created.ServiceAccount.Metadata.UID, rotated.ServiceAccount.Metadata.UID)
 
 	_, err = h.resolver.RotateServiceAccountKey(ctx, &model.RotateServiceAccountKeyInput{
+		APIVersion: "authentication.gitstore.dev/v1beta1",
+		Kind:       "ServiceAccount",
 		Metadata:   &model.ObjectMetaInput{Name: "manager"},
 		RemoveKids: []string{"new"},
 	})
@@ -263,7 +330,9 @@ func TestDeleteServiceAccountIsIdempotentAndRevokesAuthentication(t *testing.T) 
 	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
 
 	deleted, err := h.resolver.DeleteServiceAccount(ctx, &model.DeleteServiceAccountInput{
-		Metadata: &model.ObjectMetaInput{Name: "manager"},
+		APIVersion: "authentication.gitstore.dev/v1beta1",
+		Kind:       "ServiceAccount",
+		Metadata:   &model.ObjectMetaInput{Name: "manager"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, created.ServiceAccount.Metadata.UID, deleted.ServiceAccount.Metadata.UID)
@@ -275,7 +344,9 @@ func TestDeleteServiceAccountIsIdempotentAndRevokesAuthentication(t *testing.T) 
 	assert.Equal(t, auth.OutcomeDeny, decision.Outcome)
 
 	deleted, err = h.resolver.DeleteServiceAccount(ctx, &model.DeleteServiceAccountInput{
-		Metadata: &model.ObjectMetaInput{Name: "manager"},
+		APIVersion: "authentication.gitstore.dev/v1beta1",
+		Kind:       "ServiceAccount",
+		Metadata:   &model.ObjectMetaInput{Name: "manager"},
 	})
 	require.NoError(t, err)
 	assert.Nil(t, deleted.ServiceAccount, "deleting an absent account returns a null serviceAccount")
@@ -288,8 +359,10 @@ func TestIssueServiceAccountTokenRequiresMatchingAssertionIdentityAndClampsTTL(t
 	require.NoError(t, err)
 	ttl := int32(7200)
 	input := &model.IssueServiceAccountTokenInput{
-		Metadata: &model.ObjectMetaInput{Name: "manager"},
-		Spec:     &model.TokenRequestSpecInput{Audiences: []string{"gitstore-api"}, ExpirationSeconds: &ttl},
+		APIVersion: "authentication.gitstore.dev/v1beta1",
+		Kind:       "TokenRequest",
+		Metadata:   &model.ObjectMetaInput{Name: "manager"},
+		Spec:       &model.TokenRequestSpecInput{Audiences: []string{"gitstore-api"}, ExpirationSeconds: &ttl},
 	}
 	assertionCtx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{
 		Subject:           datastore.ServiceAccountSubject("manager"),

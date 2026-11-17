@@ -620,6 +620,8 @@ type CreateRolePayload struct {
 }
 
 // createServiceAccount mutation input.
+// apiVersion and kind must match their defaults. Public keys are identity fields,
+// not a catalog spec.
 type CreateServiceAccountInput struct {
 	APIVersion string           `json:"apiVersion"`
 	Kind       string           `json:"kind"`
@@ -633,7 +635,11 @@ type CreateServiceAccountPayload struct {
 	ServiceAccount *ServiceAccount `json:"serviceAccount,omitempty"`
 }
 
+// Create a cluster-scoped Staff resource. Identity fields remain top-level;
+// no spec or status is required. metadata.name is the immutable username.
 type CreateStaffInput struct {
+	APIVersion   string           `json:"apiVersion"`
+	Kind         string           `json:"kind"`
 	Metadata     *ObjectMetaInput `json:"metadata"`
 	FullName     string           `json:"fullName"`
 	PrimaryEmail string           `json:"primaryEmail"`
@@ -807,6 +813,7 @@ type DeleteRolePayload struct {
 }
 
 // deleteServiceAccount mutation input.
+// apiVersion and kind must match their defaults.
 type DeleteServiceAccountInput struct {
 	APIVersion string           `json:"apiVersion"`
 	Kind       string           `json:"kind"`
@@ -940,6 +947,8 @@ type InventoryDefinition struct {
 }
 
 // issueServiceAccountToken mutation input.
+// apiVersion and kind must match their defaults; this transient request is not
+// a persisted ServiceAccount replacement.
 type IssueServiceAccountTokenInput struct {
 	APIVersion string                 `json:"apiVersion"`
 	Kind       string                 `json:"kind"`
@@ -1927,7 +1936,7 @@ type RoleWatchEvent struct {
 
 // rotateServiceAccountKey mutation input. add and removeKids
 // may both be non-empty in the same call to support an overlap window during
-// rotation.
+// rotation. apiVersion and kind must match their defaults.
 type RotateServiceAccountKeyInput struct {
 	APIVersion string                          `json:"apiVersion"`
 	Kind       string                          `json:"kind"`
@@ -2391,7 +2400,9 @@ type UpdateRolePayload struct {
 	Role *Role `json:"role,omitempty"`
 }
 
-// Only display name, pending primary email and consent may be edited.
+// Patch the human identified by its opaque ID, preserving omitted fields.
+// Only display name, pending primary email and consent may be edited. This is
+// not a resource replacement: metadata, kind, groups and lifecycle are not editable.
 type UpdateUserInput struct {
 	ID                   string  `json:"id"`
 	FullName             *string `json:"fullName,omitempty"`
@@ -2400,6 +2411,7 @@ type UpdateUserInput struct {
 	MarketingConsent     *bool   `json:"marketingConsent,omitempty"`
 }
 
+// The updated human actor; this operation never returns a ServiceAccount.
 type UpdateUserPayload struct {
 	Actor Actor `json:"actor,omitempty"`
 }

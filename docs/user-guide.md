@@ -500,6 +500,8 @@ Use the Admin endpoint with cluster-scoped `user.*` grants. For example:
 ```graphql
 mutation InviteStaff {
   createStaff(input: {
+    apiVersion: "authentication.gitstore.dev/v1beta1"
+    kind: "Staff"
     metadata: {name: "carol"}
     fullName: "Carol"
     primaryEmail: "carol@example.test"

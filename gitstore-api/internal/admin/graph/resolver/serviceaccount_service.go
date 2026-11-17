@@ -15,11 +15,22 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/google/uuid"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
+
+const authenticationAPIVersion = "authentication.gitstore.dev/v1beta1"
+
+func validateAuthenticationEnvelope(apiVersion, kind, expectedKind string) error {
+	if apiVersion != authenticationAPIVersion || kind != expectedKind {
+		return admission.NewError(admission.CodeBadUserInput, "INVALID_ENVELOPE",
+			fmt.Sprintf("apiVersion must be %q and kind must be %q", authenticationAPIVersion, expectedKind)).ToGQLError()
+	}
+	return nil
+}
 
 // CreateServiceAccount creates a new service account with the given metadata and public keys.
 func (r *Resolver) CreateServiceAccount(ctx context.Context, input *model.CreateServiceAccountInput) (*model.CreateServiceAccountPayload, error) {
@@ -36,6 +47,9 @@ func (r *Resolver) CreateServiceAccount(ctx context.Context, input *model.Create
 
 	if err := validateMetadataScope("ServiceAccount", input.Metadata); err != nil {
 		return nil, err.ToGQLError()
+	}
+	if err := validateAuthenticationEnvelope(input.APIVersion, input.Kind, "ServiceAccount"); err != nil {
+		return nil, err
 	}
 	name := input.Metadata.Name
 
@@ -117,7 +131,7 @@ func serviceAccountToModel(sa *datastore.ServiceAccount) *model.ServiceAccount {
 	}
 	return &model.ServiceAccount{
 		ID:         mustEncodeNodeID(nodeKindServiceAccount, sa.UID),
-		APIVersion: "authentication.gitstore.dev/v1beta1",
+		APIVersion: authenticationAPIVersion,
 		Kind:       "ServiceAccount",
 		Metadata:   serviceAccountObjectMeta(sa),
 		KeyIDs:     keyIDs,
@@ -132,6 +146,9 @@ func (r *Resolver) RotateServiceAccountKey(ctx context.Context, input *model.Rot
 	}
 	if err := validateMetadataScope("ServiceAccount", input.Metadata); err != nil {
 		return nil, err.ToGQLError()
+	}
+	if err := validateAuthenticationEnvelope(input.APIVersion, input.Kind, "ServiceAccount"); err != nil {
+		return nil, err
 	}
 	name := input.Metadata.Name
 
@@ -174,6 +191,9 @@ func (r *Resolver) DeleteServiceAccount(ctx context.Context, input *model.Delete
 	}
 	if err := validateMetadataScope("ServiceAccount", input.Metadata); err != nil {
 		return nil, err.ToGQLError()
+	}
+	if err := validateAuthenticationEnvelope(input.APIVersion, input.Kind, "ServiceAccount"); err != nil {
+		return nil, err
 	}
 	name := input.Metadata.Name
 
@@ -226,6 +246,9 @@ func (r *Resolver) IssueServiceAccountToken(ctx context.Context, input *model.Is
 	if err := validateMetadataScope("ServiceAccount", input.Metadata); err != nil {
 		return nil, err.ToGQLError()
 	}
+	if err := validateAuthenticationEnvelope(input.APIVersion, input.Kind, "TokenRequest"); err != nil {
+		return nil, err
+	}
 	name := input.Metadata.Name
 	principal := auth.PrincipalFromContext(ctx)
 	if principal == nil || principal.AuthMethod != "serviceaccount-assertion" {
@@ -276,7 +299,7 @@ func (r *Resolver) IssueServiceAccountToken(ctx context.Context, input *model.Is
 	effectiveTTL := int32(time.Until(expiresAt).Round(time.Second) / time.Second)
 	return &model.IssueServiceAccountTokenPayload{
 		TokenRequest: &model.TokenRequest{
-			APIVersion: "authentication.gitstore.dev/v1beta1",
+			APIVersion: authenticationAPIVersion,
 			Kind:       "TokenRequest",
 			Metadata:   serviceAccountObjectMeta(sa),
 			Spec: &model.TokenRequestSpec{
