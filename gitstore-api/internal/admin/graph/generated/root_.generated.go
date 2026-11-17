@@ -9861,6 +9861,8 @@ extend type Query {
 
 """
 issueServiceAccountToken mutation input.
+apiVersion and kind must match their defaults; this transient request is not
+a persisted ServiceAccount replacement.
 """
 input IssueServiceAccountTokenInput {
   apiVersion: String! = "authentication.gitstore.dev/v1beta1"
@@ -9930,6 +9932,8 @@ input ServiceAccountPublicKeyInput {
 
 """
 createServiceAccount mutation input.
+apiVersion and kind must match their defaults. Public keys are identity fields,
+not a catalog spec.
 """
 input CreateServiceAccountInput {
   apiVersion: String! = "authentication.gitstore.dev/v1beta1"
@@ -9950,7 +9954,7 @@ type CreateServiceAccountPayload {
 """
 rotateServiceAccountKey mutation input. add and removeKids
 may both be non-empty in the same call to support an overlap window during
-rotation.
+rotation. apiVersion and kind must match their defaults.
 """
 input RotateServiceAccountKeyInput {
   apiVersion: String! = "authentication.gitstore.dev/v1beta1"
@@ -9969,6 +9973,7 @@ type RotateServiceAccountKeyPayload {
 
 """
 deleteServiceAccount mutation input.
+apiVersion and kind must match their defaults.
 """
 input DeleteServiceAccountInput {
   apiVersion: String! = "authentication.gitstore.dev/v1beta1"
@@ -10092,7 +10097,13 @@ extend type Query {
   actors(first: Int, after: String, last: Int, before: String): ActorConnection!
 }
 
+"""
+Create a cluster-scoped Staff resource. Identity fields remain top-level;
+no spec or status is required. metadata.name is the immutable username.
+"""
 input CreateStaffInput {
+  apiVersion: String! = "authentication.gitstore.dev/v1beta1"
+  kind: String! = "Staff"
   metadata: ObjectMetaInput!
   fullName: String!
   primaryEmail: String!
@@ -10100,7 +10111,11 @@ input CreateStaffInput {
 }
 type CreateStaffPayload { staff: Staff }
 
-"""Only display name, pending primary email and consent may be edited."""
+"""
+Patch the human identified by its opaque ID, preserving omitted fields.
+Only display name, pending primary email and consent may be edited. This is
+not a resource replacement: metadata, kind, groups and lifecycle are not editable.
+"""
 input UpdateUserInput {
   id: ID!
   fullName: String
@@ -10108,6 +10123,7 @@ input UpdateUserInput {
   transactionalConsent: Boolean
   marketingConsent: Boolean
 }
+"""The updated human actor; this operation never returns a ServiceAccount."""
 type UpdateUserPayload { actor: Actor }
 
 input DeactivateUserInput { id: ID! }

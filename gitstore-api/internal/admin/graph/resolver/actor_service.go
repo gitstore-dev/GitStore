@@ -42,14 +42,14 @@ func humanActorToModel(profile *auth.UserProfile) (model.Actor, error) {
 	switch profile.Kind {
 	case auth.ProfileStaff:
 		return &model.Staff{
-			ID: mustEncodeNodeID(nodeKindStaff, profile.Subject), APIVersion: "authentication.gitstore.dev/v1beta1",
+			ID: mustEncodeNodeID(nodeKindStaff, profile.Subject), APIVersion: authenticationAPIVersion,
 			Kind: nodeKindStaff, Metadata: metadata, FullName: profile.DisplayName, Identities: identities, Groups: groups,
 			Lifecycle: lifecycle, PrimaryEmail: profile.Email, EmailVerified: profile.EmailVerified,
 			EmailDeliverable: profile.EmailDeliverable, ContactConsent: consent,
 		}, nil
 	case auth.ProfileCustomer:
 		return &model.Customer{
-			ID: mustEncodeNodeID(nodeKindCustomer, profile.Subject), APIVersion: "authentication.gitstore.dev/v1beta1",
+			ID: mustEncodeNodeID(nodeKindCustomer, profile.Subject), APIVersion: authenticationAPIVersion,
 			Kind: nodeKindCustomer, Metadata: metadata, FullName: profile.DisplayName, Identities: identities, Groups: groups,
 			Lifecycle: lifecycle, PrimaryEmail: profile.Email, EmailVerified: profile.EmailVerified,
 			EmailDeliverable: profile.EmailDeliverable, ContactConsent: consent,
@@ -340,6 +340,9 @@ func (r *mutationResolver) createStaffActor(ctx context.Context, input model.Cre
 	}
 	if input.Metadata.Namespace != nil && *input.Metadata.Namespace != "" {
 		return nil, admission.NewError(admission.CodeBadUserInput, "INVALID_NAMESPACE_SCOPE", "human actors are cluster-scoped").ToGQLError()
+	}
+	if err := validateAuthenticationEnvelope(input.APIVersion, input.Kind, nodeKindStaff); err != nil {
+		return nil, err
 	}
 	if r.registry == nil {
 		return nil, actorDirectoryError(auth.ErrNotSupported)

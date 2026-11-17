@@ -103,6 +103,9 @@ func TestEnrollServiceAccountIsIdempotentAndDoesNotWriteCredentials(t *testing.T
 		if !strings.Contains(payload.Query, "createServiceAccount") {
 			t.Errorf("query = %q, want createServiceAccount", payload.Query)
 		}
+		if !strings.Contains(payload.Query, `apiVersion: "authentication.gitstore.dev/v1beta1"`) {
+			t.Errorf("enrollment must send the supported authentication API version")
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if requests == 1 {
 			_, _ = w.Write([]byte(`{"data":{"createServiceAccount":{"serviceAccount":{"metadata":{"uid":"uid-1"}}}}}`))

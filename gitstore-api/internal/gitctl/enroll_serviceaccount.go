@@ -32,7 +32,7 @@ const signingRecordRotationHint = "For hot rotation, enroll a distinct key ID, a
 const (
 	createServiceAccountMutation = `mutation CreateServiceAccount($name: String!, $keyID: String!, $algorithm: String!, $publicKey: String!) {
   createServiceAccount(input: {
-    apiVersion: "gitstore.dev/v1beta1"
+    apiVersion: "authentication.gitstore.dev/v1beta1"
     kind: "ServiceAccount"
     metadata: { name: $name }
     publicKeys: [{ kid: $keyID, algorithm: $algorithm, publicKeyPEM: $publicKey }]
