@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -75,18 +76,59 @@ func TestMain(m *testing.M) {
 }
 
 func TestParseConfigFile(t *testing.T) {
-	paths, err := parseConfigFiles([]string{"--config-file", "/config/shared.toml"})
+	options, err := parseOptions([]string{"--config-file", "/config/shared.toml"})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"/config/shared.toml"}, paths)
+	assert.Equal(t, configFileFlags{"/config/shared.toml"}, options.configFiles)
 }
 
 func TestParseConfigFilesRepeated(t *testing.T) {
-	paths, err := parseConfigFiles([]string{
+	options, err := parseOptions([]string{
 		"--config-file", "/config/shared.toml",
 		"--config-file", "/config/overlay.toml",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"/config/shared.toml", "/config/overlay.toml"}, paths)
+	assert.Equal(t, configFileFlags{"/config/shared.toml", "/config/overlay.toml"}, options.configFiles)
+}
+
+func TestOperatorCommandDoesNotLoadServerConfiguration(t *testing.T) {
+	if os.Getenv("GITSTORE_TEST_OPERATOR_ENTRYPOINT") == "1" {
+		os.Args = []string{"api", "gitctl", "migrate", "--timeout", "0s"}
+		main()
+		return
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOperatorCommandDoesNotLoadServerConfiguration$")
+	command.Env = append(os.Environ(),
+		"GITSTORE_TEST_OPERATOR_ENTRYPOINT=1",
+		"GITSTORE_API__DATASTORE__BACKEND=invalid",
+		"GITSTORE_API__AUTH__AUTHN__CHAIN=invalid",
+	)
+	output, err := command.CombinedOutput()
+	var exit *exec.ExitError
+	require.ErrorAs(t, err, &exit)
+	assert.Equal(t, 2, exit.ExitCode())
+	assert.Contains(t, string(output), "timeout")
+	assert.NotContains(t, string(output), "Failed to load configuration")
+}
+
+func TestSigningKeyFileOverridesEnvironmentWithoutChangingConfigLayers(t *testing.T) {
+	t.Setenv("GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY", "environment-key")
+	path := filepath.Join(t.TempDir(), "issuer-key")
+	require.NoError(t, os.WriteFile(path, []byte("mounted-key\n"), 0600))
+	options, err := parseOptions([]string{
+		"--config-file", "shared.toml", "--config-file", "overlay.toml",
+		"--serviceaccount-signing-key-file", path,
+	})
+	require.NoError(t, err)
+	require.NoError(t, loadSigningKeyFile(options.signingKeyFile))
+	assert.Equal(t, "mounted-key\n", os.Getenv("GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY"))
+	assert.Equal(t, configFileFlags{"shared.toml", "overlay.toml"}, options.configFiles)
+	require.NoError(t, loadSigningKeyFile(""))
+	assert.Equal(t, "mounted-key\n", os.Getenv("GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY"))
+	require.NoError(t, os.WriteFile(path, []byte(" \n"), 0600))
+	assert.Error(t, loadSigningKeyFile(path))
+	assert.Error(t, loadSigningKeyFile(filepath.Join(t.TempDir(), "missing")))
 }
 
 func (m *mockGitWriter) CommitFile(_ context.Context, p gitclient.CommitFileParams) (string, error) {

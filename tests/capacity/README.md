@@ -203,8 +203,11 @@ controller's config and read-only provider source with
 `CAPACITY_CONTROLLER_{A,B}_SECRET_SOURCE`. Normal runs retain their existing
 shared-key defaults. Secret runs keep the shared nonsecret UID volume and
 separate checkpoint volumes, but neither controller mounts the other's private
-provider directory. The existing API command clamps token TTL only when the
-scenario flag is set. No secret-specific Compose overlay or public Make target
+provider directory. The owned stack runner sets
+`CAPACITY_SERVICEACCOUNT_DEFAULT_TTL=60s` and
+`CAPACITY_SERVICEACCOUNT_MAX_TTL=60s` when the secret scenario is selected;
+Compose passes these directly to the shell-less API. Direct Compose rendering
+for this scenario must supply both variables too. No secret-specific Compose overlay or public Make target
 is needed. Missing ownership/fault prerequisites are rejected before startup;
 missing observations prevent final bundle acceptance.
 

@@ -194,7 +194,7 @@ validate_release_service_containers() {
 
   container_identities='[]'
   for container in "${api_containers[@]}"; do
-    metrics="$(docker exec "${container}" wget -qO- http://127.0.0.1:4000/metrics)" || {
+    metrics="$(docker exec "${container}" /app/api gitctl metrics)" || {
       echo "cannot scrape API metrics inside container: ${container}" >&2
       exit 1
     }

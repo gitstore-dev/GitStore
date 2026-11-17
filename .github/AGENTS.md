@@ -12,6 +12,10 @@
   smoke validation or rollback; those remain operator procedures.
 - Preserve shared-module standalone `GOWORK=off` checks and the full default
   `make pr-ready` suite. Capacity runs do not replace that suite.
+- CI's API image matrix measures expanded image bytes for amd64/arm64 against
+  an 80 MiB ceiling; retain exact byte counts in the job summary. The default
+  `runtime` target is shell-less/non-root; the Alpine `debug` target is opt-in
+  and is not published by CD.
 - Core CI runs on PRs, merge groups and main pushes; use its manual dispatch
   for branches without a PR. Cancel superseded PR runs only, never main or
   merge-group validation. Keep required job names unchanged.

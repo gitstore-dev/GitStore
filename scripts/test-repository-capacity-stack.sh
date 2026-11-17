@@ -11,6 +11,9 @@ shell_test_setup repository-capacity-stack
 write_mock "${test_dir}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${REPOSITORY_CAPACITY_DOCKER_LOG}"
+if [[ -n "${REPOSITORY_CAPACITY_TTL_LOG:-}" ]]; then
+  printf '%s %s\n' "${CAPACITY_SERVICEACCOUNT_DEFAULT_TTL:-}" "${CAPACITY_SERVICEACCOUNT_MAX_TTL:-}" >"${REPOSITORY_CAPACITY_TTL_LOG}"
+fi
 EOF
 
 write_mock "${test_dir}/bin/curl" <<'EOF'
@@ -74,6 +77,12 @@ PATH="${test_dir}/bin:${PATH}" \
 grep -q -- '-p capacity-test --profile capacity-stack' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 grep -q -- 'compose.capacity.yml config' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 
+PATH="${test_dir}/bin:${PATH}" CHAOS_CONFIRM=1 REPOSITORY_CAPACITY_SECRET_SCENARIO=1 \
+  REPOSITORY_CAPACITY_STATE_DIR="${test_dir}/state" \
+  REPOSITORY_CAPACITY_TTL_LOG="${test_dir}/ttl.log" \
+  "${repo_root}/scripts/repository-capacity-stack.sh" config
+[[ "$(cat "${test_dir}/ttl.log")" == "60s 60s" ]]
+
 : >"${REPOSITORY_CAPACITY_DOCKER_LOG}"
 touch "${test_dir}/replace"
 PATH="${test_dir}/bin:${PATH}" \
@@ -123,6 +132,10 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     .services["api-b"].depends_on["capacity-credential-bootstrap"].condition == "service_completed_successfully" and
     .services["api-b"].depends_on["scylla-init"].condition == "service_completed_successfully" and
     .services["api-b"].depends_on["capacity-git-service"].condition == "service_started" and
+    .services["api-a"].command[0] == "/app/api" and
+    .services["api-a"].healthcheck.test == ["CMD", "/app/api", "gitctl", "healthcheck"] and
+    .services["capacity-credential-bootstrap"].build.target == "debug" and
+    .services["capacity-serviceaccount-enrollment"].command[:2] == ["/app/api", "gitctl"] and
     .services["capacity-git-service"].environment.GITSTORE_GIT_SERVICE__CATALOG__URI == "dns:///api-a:6000" and
     ((.services["capacity-credential-bootstrap"].ports // []) | length) == 0 and
     ((.services["capacity-serviceaccount-enrollment"].ports // []) | length) == 0 and
@@ -131,6 +144,8 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
 
   secret_rendered="${test_dir}/compose-secret.json"
   REPOSITORY_CAPACITY_SECRET_SCENARIO=1 \
+    CAPACITY_SERVICEACCOUNT_DEFAULT_TTL=60s \
+    CAPACITY_SERVICEACCOUNT_MAX_TTL=60s \
     CAPACITY_API_IMAGE="localhost/api@sha256:$(printf '%064d' 1)" \
     CAPACITY_CONTROLLER_IMAGE="localhost/controller@sha256:$(printf '%064d' 2)" \
     CAPACITY_GIT_SERVICE_IMAGE="localhost/git@sha256:$(printf '%064d' 3)" \
@@ -150,7 +165,9 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     (.services["capacity-git-service"].image | startswith("localhost/git@sha256:")) and
     (.services["api-a"].environment.REPOSITORY_CAPACITY_SECRET_SCENARIO == "1") and
     (.services["api-b"].environment.REPOSITORY_CAPACITY_SECRET_SCENARIO == "1") and
-    (.services["api-a"].command[-1] | contains("GITSTORE_API__AUTH__SERVICEACCOUNT__MAX_TTL=60s")) and
+    (.services["api-a"].environment.GITSTORE_API__AUTH__SERVICEACCOUNT__DEFAULT_TTL == "60s") and
+    (.services["api-a"].environment.GITSTORE_API__AUTH__SERVICEACCOUNT__MAX_TTL == "60s") and
+    (.services["api-b"].environment.GITSTORE_API__AUTH__SERVICEACCOUNT__MAX_TTL == "60s") and
     (.services["capacity-git-service"].environment.GITSTORE_GIT_SERVICE__CATALOG__URI == "dns:///api-a:6000") and
     ([.services["controller-manager-a"], .services["controller-manager-b"]] |
       all((.volumes | length) == 4 and

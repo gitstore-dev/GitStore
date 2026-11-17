@@ -350,11 +350,11 @@ projections:
 ```bash
 cd gitstore-api
 GITSTORE_API__DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
-  go run ./cmd/gitctl scylla-projection-audit
+  go run ./cmd/server gitctl scylla-projection-audit
 GITSTORE_API__DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
-  go run ./cmd/gitctl scylla-projection-repair --dry-run
+  go run ./cmd/server gitctl scylla-projection-repair --dry-run
 GITSTORE_API__DATASTORE__SCYLLA__HOSTS=127.0.0.1:9042 \
-  go run ./cmd/gitctl scylla-projection-repair --confirm
+  go run ./cmd/server gitctl scylla-projection-repair --confirm
 ```
 
 Plans are stable JSON. Apply checks authoritative identity/resource version,

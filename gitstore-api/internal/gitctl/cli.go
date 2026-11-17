@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 
-package main
+package gitctl
 
 import (
 	"bufio"
@@ -44,8 +44,9 @@ var openProjectionRepair = func(cfg config.ScyllaConfig) (projectionRepairClient
 
 var migrateSchema = scylla.Migrate
 
-func main() {
-	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+// Run executes an operator command without initializing the API server.
+func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return run(args, stdin, stdout, stderr)
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -55,6 +56,22 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "process-executable":
+		if len(args) != 1 {
+			fmt.Fprintln(stderr, "process-executable accepts no arguments")
+			return 2
+		}
+		executable, err := os.Readlink("/proc/1/exe")
+		if err != nil {
+			fmt.Fprintln(stderr, "cannot inspect PID 1 executable")
+			return 1
+		}
+		fmt.Fprintln(stdout, executable)
+		return 0
+	case "healthcheck":
+		return runHealthcheck(args[1:], stderr)
+	case "metrics":
+		return runHTTPProbe("metrics", "http://127.0.0.1:4000/metrics", 5*time.Second, args[1:], stdout, stderr)
 	case "generate":
 		return runGenerate(args[1:], stdout, stderr)
 	case "hash-password":
@@ -115,8 +132,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 func printUsage(output io.Writer) {
-	fmt.Fprintln(output, "Usage: gitctl <subcommand> [args]")
+	fmt.Fprintln(output, "Usage: api gitctl <subcommand> [args]")
 	fmt.Fprintln(output, "Subcommands:")
+	fmt.Fprintln(output, "  healthcheck [--url http://127.0.0.1:4000/ready] [--timeout 1s]")
+	fmt.Fprintln(output, "  metrics [--url http://127.0.0.1:4000/metrics] [--timeout 5s] (print up to 16 MiB)")
+	fmt.Fprintln(output, "  process-executable (print the live container PID 1 executable)")
 	fmt.Fprintln(output, "  generate authz --root <repository-root> [--catalog <path>] [--check]")
 	fmt.Fprintln(output, "  hash-password <password>")
 	fmt.Fprintln(output, "  users add --file <users.yaml> --username <name> --password-stdin [--email <email>] [--display-name <name>]")
@@ -315,7 +335,7 @@ func (a *actionList) Set(value string) error {
 
 func runRBAC(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 2 {
-		fmt.Fprintln(stderr, "Usage: gitctl rbac (role add | binding add) [flags]")
+		fmt.Fprintln(stderr, "Usage: api gitctl rbac (role add | binding add) [flags]")
 		return 2
 	}
 	switch strings.Join(args[:2], " ") {
@@ -388,14 +408,14 @@ func runRBAC(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	default:
-		fmt.Fprintln(stderr, "Usage: gitctl rbac (role add | binding add) [flags]")
+		fmt.Fprintln(stderr, "Usage: api gitctl rbac (role add | binding add) [flags]")
 		return 2
 	}
 }
 
 func runUsers(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "add" {
-		fmt.Fprintln(stderr, "Usage: gitctl users add --file <users.yaml> --username <name> --password-stdin [--email <email>] [--display-name <name>]")
+		fmt.Fprintln(stderr, "Usage: api gitctl users add --file <users.yaml> --username <name> --password-stdin [--email <email>] [--display-name <name>]")
 		return 2
 	}
 	flags := flag.NewFlagSet("users add", flag.ContinueOnError)

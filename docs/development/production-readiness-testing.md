@@ -178,7 +178,7 @@ partitions, run concurrent reservation mutations and optionally soak.
 The test has no preload phase or observed Product-count assertion.
 Empty tables can satisfy its bounded-page and recorded-partition checks;
 reservation mutation throughput does not establish Product dataset size.
-`gitctl scylla-projection-audit` verifies consistency, not row count.
+`/app/api gitctl scylla-projection-audit` in the API image verifies consistency, not row count.
 Consequently, use only:
 
 ```bash

@@ -85,10 +85,10 @@ or a damaged projection, stop relevant mutations and controller writes while
 running the existing maintenance commands from `gitstore-api/`:
 
 ```bash
-go run ./cmd/gitctl scylla-projection-audit --hosts "$HOSTS" --keyspace "$KEYSPACE"
-go run ./cmd/gitctl scylla-projection-repair --dry-run --hosts "$HOSTS" --keyspace "$KEYSPACE"
-go run ./cmd/gitctl scylla-projection-repair --confirm --hosts "$HOSTS" --keyspace "$KEYSPACE"
-go run ./cmd/gitctl scylla-projection-audit --hosts "$HOSTS" --keyspace "$KEYSPACE"
+go run ./cmd/server gitctl scylla-projection-audit --hosts "$HOSTS" --keyspace "$KEYSPACE"
+go run ./cmd/server gitctl scylla-projection-repair --dry-run --hosts "$HOSTS" --keyspace "$KEYSPACE"
+go run ./cmd/server gitctl scylla-projection-repair --confirm --hosts "$HOSTS" --keyspace "$KEYSPACE"
+go run ./cmd/server gitctl scylla-projection-audit --hosts "$HOSTS" --keyspace "$KEYSPACE"
 ```
 
 Supply database passwords through `GITSTORE_API__DATASTORE__SCYLLA__PASSWORD`.

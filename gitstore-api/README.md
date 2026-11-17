@@ -51,8 +51,7 @@ listener on host port 4100; native defaults use 4001 directly.
 ```text
 gitstore-api/
 ├── cmd/
-│   ├── server/       # API server entrypoint
-│   └── gitctl/       # operator CLI: auth config, secrets, and datastore repair
+│   └── server/       # API server and gitctl subcommand entrypoint
 ├── gen/              # Generated protobuf Go code
 ├── internal/
 │   ├── app/          # Runtime composition
@@ -63,6 +62,7 @@ gitstore-api/
 │   ├── datastore/    # Datastore abstraction and backends
 │   ├── gitclient/    # GitService gRPC client
 │   ├── githttp/      # Git Smart HTTP handler
+│   ├── gitctl/       # Operator commands, shared by the API entrypoint
 │   ├── admin/graph/  # Admin resolvers and generated code
 │   ├── storefront/   # Isolated public boundary and generated schema
 │   ├── health/       # Health and readiness handlers
@@ -139,7 +139,7 @@ From this module:
 ```bash
 go test ./...
 go generate ./...
-go run ./cmd/gitctl hash-password <password>
+go run ./cmd/server gitctl hash-password <password>
 ```
 
 Scylla-backed tests:

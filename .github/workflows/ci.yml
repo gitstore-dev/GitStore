@@ -231,6 +231,44 @@ jobs:
         name: controller-manager-coverage
       continue-on-error: true
 
+  api-image:
+    name: API Image (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+    - uses: actions/checkout@v6
+    - uses: docker/setup-qemu-action@v4
+    - uses: docker/setup-buildx-action@v4
+    - name: Build default API runtime
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: docker/api.Dockerfile
+        platforms: linux/${{ matrix.arch }}
+        load: true
+        push: false
+        tags: gitstore-api:ci
+        build-args: GIT_REVISION=${{ github.sha }}
+        cache-from: type=gha,scope=api-${{ matrix.arch }}
+        cache-to: type=gha,mode=max,scope=api-${{ matrix.arch }}
+    - name: Enforce expanded image-size budget and runtime identity
+      env:
+        IMAGE_SIZE_BUDGET_BYTES: '83886080'
+      run: |
+        test "$(docker image inspect gitstore-api:ci --format '{{.Config.User}}')" = "65532:65532"
+        # Materialize this platform before reading containerd snapshot sizes.
+        test "$(docker run --rm gitstore-api:ci /app/api gitctl process-executable)" = /app/api
+        size="$(docker history --no-trunc --human=false --format '{{.Size}}' gitstore-api:ci | awk '{sum += $1} END {printf "%.0f", sum}')"
+        echo "API linux/${{ matrix.arch }} expanded bytes: ${size}; budget: ${IMAGE_SIZE_BUDGET_BYTES}" >> "$GITHUB_STEP_SUMMARY"
+        test "$size" -gt 0
+        test "$size" -le "$IMAGE_SIZE_BUDGET_BYTES"
+        docker run --rm gitstore-api:ci /app/api gitctl migrate --timeout 0s && exit 1 || test "$?" -eq 2
+        # A shell-less image must still expose the native readiness probe.
+        docker run --rm gitstore-api:ci /app/api gitctl healthcheck && exit 1 || test "$?" -eq 1
+        docker run --rm gitstore-api:ci /app/api gitctl metrics && exit 1 || test "$?" -eq 1
+
   security-scan:
     name: Security Scan
     runs-on: ubuntu-latest

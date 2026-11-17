@@ -233,7 +233,7 @@ cat >"${test_dir}/bin/go" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 case "$*" in
-  "run ./cmd/gitctl enroll-serviceaccount "*)
+  "run ./cmd/server gitctl enroll-serviceaccount "*)
     printf '%s\n' "$@" >"${MOCK_GO_LOG}"
     ;;
   "run ./cmd/controller")
@@ -268,8 +268,10 @@ cmp "${signing_record}" "${test_dir}/original-record"
 # invocation without an operator-supplied namespace.
 role_output="$(env -u NAMESPACE make --no-print-directory -C "${repo_root}" add-role ROLE=reader ALLOW=product.read SCOPE=namespace WORKFLOW_DRY_RUN=1)"
 [[ "${role_output}" == *"--scope namespace"* && "${role_output}" != *"--namespace"* ]]
+[[ "${role_output}" == *"run ./cmd/server gitctl rbac role add"* ]]
 binding_output="$(make --no-print-directory -C "${repo_root}" assign-role ROLE=reader SUBJECT=bot SUBJECT_KIND=ServiceAccount ROLE_KIND=Role SCOPE=namespace NAMESPACE=acme WORKFLOW_DRY_RUN=1)"
 [[ "${binding_output}" == *"--namespace acme"* && "${binding_output}" == *"--subject-kind ServiceAccount"* && "${binding_output}" == *"--role-kind Role"* ]]
+[[ "${binding_output}" == *"run ./cmd/server gitctl rbac binding add"* ]]
 cluster_output="$(env -u NAMESPACE make --no-print-directory -C "${repo_root}" assign-role ROLE=reader SUBJECT=alice WORKFLOW_DRY_RUN=1)"
 [[ "${cluster_output}" == *"--scope cluster"* && "${cluster_output}" != *"--namespace"* ]]
 if env -u NAMESPACE make --no-print-directory -C "${repo_root}" assign-role ROLE=reader SUBJECT=alice SCOPE=namespace WORKFLOW_DRY_RUN=1 >/dev/null 2>&1; then

@@ -101,10 +101,9 @@ identity_json='[]'
 for index in "${!api_endpoints[@]}"; do
   endpoint="${api_endpoints[$index]}"
   container="${api_containers[$index]}"
-  # The canonical Compose command reads a mounted signing key in a shell,
-  # then execs the release binary. Docker's configured Path stays /bin/sh;
-  # inspect the live PID 1 executable rather than trusting command text.
-  running_executable="$(docker exec "${container}" readlink /proc/1/exe)"
+  # Inspect live PID 1 rather than trusting Docker's configured command.
+  # The static runtime intentionally has neither a shell nor readlink.
+  running_executable="$(docker exec "${container}" /app/api gitctl process-executable)"
   [[ "${running_executable}" == /app/api ]] || {
     echo "API container PID 1 must run the release /app/api binary: ${container}" >&2
     exit 1
@@ -132,7 +131,7 @@ for index in "${!api_endpoints[@]}"; do
     echo "live API endpoint does not expose gitstore_api_process_instance_info: ${endpoint}" >&2
     exit 1
   }
-  container_metrics="$(docker exec "${container}" wget -qO- http://127.0.0.1:4000/metrics)" || {
+  container_metrics="$(docker exec "${container}" /app/api gitctl metrics)" || {
     echo "cannot scrape API metrics inside container: ${container}" >&2
     exit 1
   }

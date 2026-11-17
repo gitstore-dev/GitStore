@@ -19,6 +19,12 @@ mock_api_metrics() {
       ;;
     *) return 1 ;;
   esac
+  if [[ "${2:-}" == container ]]; then
+    case "${MOCK_CONTAINER_IDENTITY_MISMATCH:-}" in
+      start) start=999 ;;
+      instance) instance=unrelated-instance ;;
+    esac
+  fi
   printf 'process_start_time_seconds %s\ngitstore_api_process_instance_info{instance_id="%s"} 1\n' \
     "${start}" "${instance}"
 }

@@ -4,7 +4,7 @@
 # GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE) and replace the placeholder
 # password hashes below with real bcrypt hashes generated via:
 #
-#   go run ./cmd/gitctl hash-password '<password>'
+#   go run ./cmd/server gitctl hash-password '<password>'
 #
 # `version` must be "v1".
 version: v1

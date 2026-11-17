@@ -33,10 +33,10 @@ case "${family}/${target}" in
     if [[ "${target}" == role-add ]]; then
       [[ -n "${ALLOW:-}" ]] || { echo 'ALLOW canonical actions are required' >&2; exit 2; }
       [[ -z "${RBAC_NAMESPACE:-}" ]] || { echo 'role definitions have no namespace; set namespace only on bindings' >&2; exit 2; }
-      command=(go -C "${repo_root}/gitstore-api" run ./cmd/gitctl rbac role add --file "${policy_file}" --name "${ROLE}" --allow "${ALLOW}" --scope "${scope}")
+      command=(go -C "${repo_root}/gitstore-api" run ./cmd/server gitctl rbac role add --file "${policy_file}" --name "${ROLE}" --allow "${ALLOW}" --scope "${scope}")
     else
       [[ -n "${SUBJECT:-}" ]] || { echo 'SUBJECT is required' >&2; exit 2; }
-      command=(go -C "${repo_root}/gitstore-api" run ./cmd/gitctl rbac binding add --file "${policy_file}" --subject "${SUBJECT}" --role "${ROLE}" --scope "${scope}" --subject-kind "${SUBJECT_KIND:-User}" --role-kind "${ROLE_KIND:-ClusterRole}")
+      command=(go -C "${repo_root}/gitstore-api" run ./cmd/server gitctl rbac binding add --file "${policy_file}" --subject "${SUBJECT}" --role "${ROLE}" --scope "${scope}" --subject-kind "${SUBJECT_KIND:-User}" --role-kind "${ROLE_KIND:-ClusterRole}")
       if [[ "${scope}" == namespace ]]; then
         [[ -n "${RBAC_NAMESPACE:-}" ]] || { echo 'namespace binding requires an explicit NAMESPACE (bootstrap default is not used)' >&2; exit 2; }
         command+=(--namespace "${RBAC_NAMESPACE}")

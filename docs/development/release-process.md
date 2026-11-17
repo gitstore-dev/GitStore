@@ -31,6 +31,40 @@ verify health and compatibility after deployment, retain persistent storage,
 and replace the singleton Git service without overlapping active processes.
 Use [upgrade procedures](../runbooks/upgrades.md) for that runtime handoff.
 
+## API image and command surface
+
+The default API runtime is a shell-less static image with CA certificates and
+UID/GID `65532:65532`. It contains `/app/api`, not a separate `gitctl` binary.
+Use `/app/api gitctl <command>` in containers, or
+`go run ./cmd/server gitctl <command>` from `gitstore-api/`. Migration init
+containers must invoke `/app/api gitctl migrate` from the same release as the
+API. Disabling automatic migrations still performs read-only startup schema
+validation; it does not skip compatibility checks.
+
+CI builds the default runtime for Linux amd64 and arm64 without publishing it
+and enforces an 80 MiB expanded-image ceiling per architecture. The job summary
+records exact bytes by summing `docker history --human=false` layer sizes.
+CI first runs the native command smoke probe so the selected platform's layers
+are materialized; unloaded foreign-platform layers can otherwise report zero.
+Docker's containerd-backed image store can include compressed content in
+`docker image inspect .Size`; do not treat that value as expanded bytes.
+Registry-compressed download sizes are a different measurement. Image-size changes should record same-source,
+same-platform comparisons separately for stripping Go symbols, consolidating
+the command binaries, and changing the runtime base. Record source revisions,
+base-image digests, build flags, architecture, binary sizes and total image
+bytes alongside those comparisons; do not compare a mutable `latest` tag with
+an unrelated checkout.
+
+The opt-in `debug` build target retains Alpine and a shell using the same API
+binary. It is not automatically published by CD. See the
+[container troubleshooting runbook](../runbooks/docker-troubleshooting.md#basic-health-checks)
+for build and probe commands. Only credential-volume initialization and
+enrollment override the runtime user; keep long-running APIs non-root.
+
+After the next release containing this command change is available, update
+`gitstore-dev/quickstart` to use that release and the new invocation. Do not
+point external examples at an unreleased command surface.
+
 ## Required One-Time Setup (manual, not in version control)
 
 **A GitHub App installation token — required, or nothing downstream ever fires.** `release-please.yml` mints a fresh token via `actions/create-github-app-token` and passes it to the release-please action. Without a real token here, the action falls back to the default `GITHUB_TOKEN` — which GitHub explicitly documents as **not triggering other workflows** (its own recursion-prevention: commits/tags/PRs created by the default token don't fire `on: push`/`on: pull_request` events). Concretely, without this: the release PR never gets CI checks run on it, and the tag Release Please pushes on merge never triggers `cd.yml` — so no versioned Docker images ever get built. This is [Release Please's own documented recommendation](https://github.com/googleapis/release-please-action#github-credentials), chosen over a plain Personal Access Token specifically because GitHub App installation tokens are minted fresh (1-hour lived) on every workflow run — no manual rotation, no expiry to track, ever.

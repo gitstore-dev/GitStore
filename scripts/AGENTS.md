@@ -50,11 +50,16 @@ container wiring and configuration.
 - Use the existing identity/bootstrap helpers for user records, role
   bindings, authentication material and resources. Preserve private material
   and never put credentials in versioned files, logs or diagnostic evidence.
-- `gitctl migrate` prepares schema independently. With
+- `/app/api gitctl migrate` prepares schema independently in the API image.
+  Native helpers use `go run ./cmd/server gitctl` from `gitstore-api/`. With
   `GITSTORE_API__DATASTORE__SCYLLA__AUTO_MIGRATE=false`, API startup validates
   migration history read-only; the compatible default is `true`. This
   command does not transfer data. Read
   [../.claude/rules/scylla-migrations.md](../.claude/rules/scylla-migrations.md).
+- The default API image is shell-less and runs as UID/GID `65532:65532`.
+  Use its native `gitctl healthcheck`; shell-based credential initialization
+  explicitly selects `docker/api.Dockerfile`'s `debug` target as root. Keep
+  issuer key mounts API-only and readable only by the API identity.
 - `make clean TARGET=<git-data|controller-checkpoints> CONFIRM=1` removes
   selected local runtime state, never Docker volumes.
 - For capacity, profiling, chaos and owned-deployment helpers, read

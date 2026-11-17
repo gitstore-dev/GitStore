@@ -18,17 +18,26 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gitstore-dev/gitstore/api/internal/app"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
+	"github.com/gitstore-dev/gitstore/api/internal/gitctl"
 	"github.com/gitstore-dev/gitstore/api/internal/logger"
 	"github.com/gitstore-dev/gitstore/observability"
 	"go.uber.org/zap"
 )
 
 func main() {
-	configFiles, err := parseConfigFiles(os.Args[1:])
+	if len(os.Args) > 1 && os.Args[1] == "gitctl" {
+		os.Exit(gitctl.Run(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	}
+	options, err := parseOptions(os.Args[1:])
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Failed to parse arguments: %v\n", err)
 		os.Exit(2)
 	}
+	if err := loadSigningKeyFile(options.signingKeyFile); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Failed to load service-account signing key: %v\n", err)
+		os.Exit(1)
+	}
+	configFiles := options.configFiles
 	var cfg *config.Config
 	if len(configFiles) == 0 {
 		cfg, err = config.Load()
@@ -113,12 +122,37 @@ func (f *configFileFlags) Set(value string) error {
 	return nil
 }
 
-func parseConfigFiles(args []string) ([]string, error) {
+type serverOptions struct {
+	configFiles    configFileFlags
+	signingKeyFile string
+}
+
+func parseOptions(args []string) (serverOptions, error) {
 	flags := flag.NewFlagSet("gitstore-api", flag.ContinueOnError)
-	var paths configFileFlags
-	flags.Var(&paths, "config-file", "path to a TOML configuration file; repeat to layer additive overlays on top of the first")
+	var options serverOptions
+	flags.Var(&options.configFiles, "config-file", "path to a TOML configuration file; repeat to layer additive overlays on top of the first")
+	flags.StringVar(&options.signingKeyFile, "serviceaccount-signing-key-file", "", "API-only file containing the service-account issuer private key")
 	if err := flags.Parse(args); err != nil {
-		return nil, err
+		return options, err
 	}
-	return paths, nil
+	if flags.NArg() != 0 {
+		return options, fmt.Errorf("unexpected argument: %s", flags.Arg(0))
+	}
+	return options, nil
+}
+
+func loadSigningKeyFile(path string) error {
+	if path == "" {
+		return nil
+	}
+	key, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(key)) == "" {
+		return fmt.Errorf("signing key file is empty")
+	}
+	// Match the former container wrapper: an explicitly mounted key overrides
+	// the environment, while config.Load still enforces the shared-file guard.
+	return os.Setenv("GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY", string(key))
 }
