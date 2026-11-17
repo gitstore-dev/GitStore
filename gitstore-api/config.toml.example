@@ -23,15 +23,15 @@ deadline = "30s"
 # Stable deployment client URLs, independent from binds and internal RPC targets.
 # Use the same values across replicas; Admin is private unless explicitly disclosed.
 [api.advertised.admin]
-url = ""
+uri = ""
 disclose = false
 
 [api.advertised.storefront]
-url = ""
+uri = ""
 disclose = false
 
 [api.advertised.git_http]
-url = ""
+uri = ""
 disclose = false
 
 [api.rate_limit]

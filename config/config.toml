@@ -40,15 +40,15 @@ deadline = "30s"
 # Deployment-level full client URLs may name roles hosted by other processes.
 # Never advertise internal catalog or Git RPC targets.
 [api.advertised.admin]
-url = ""
+uri = ""
 disclose = false
 
 [api.advertised.storefront]
-url = ""
+uri = ""
 disclose = false
 
 [api.advertised.git_http]
-url = ""
+uri = ""
 disclose = false
 
 [api.profiling]

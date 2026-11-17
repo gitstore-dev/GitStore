@@ -4,6 +4,9 @@
 package config
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -54,9 +57,9 @@ func TestRuntimeRoleAndListenerValidation(t *testing.T) {
 
 func TestAdvertisedDeploymentEndpointsAreExplicitAndPrivateByDefault(t *testing.T) {
 	endpoints := AdvertisedEndpoints{
-		Admin:      AdvertisedEndpoint{URL: "https://private.example/tenant/admin/graphql"},
-		Storefront: AdvertisedEndpoint{URL: "https://shop.example/proxy/storefront/graphql", Disclose: true},
-		GitHTTP:    AdvertisedEndpoint{URL: "https://git.example/prefix/", Disclose: true},
+		Admin:      AdvertisedEndpoint{URI: "https://private.example/tenant/admin/graphql"},
+		Storefront: AdvertisedEndpoint{URI: "https://shop.example/proxy/storefront/graphql", Disclose: true},
+		GitHTTP:    AdvertisedEndpoint{URI: "https://git.example/prefix/", Disclose: true},
 	}
 	require.NoError(t, endpoints.Validate())
 	require.Equal(t, map[string]string{
@@ -71,8 +74,66 @@ func TestAdvertisedDeploymentEndpointsAreExplicitAndPrivateByDefault(t *testing.
 		"https://api.example/admin/graphql#", "https://api.example:/admin/graphql",
 		"https://api.example:0/admin/graphql", "https://api.example:65536/admin/graphql",
 		"https://api.example/graphql", "https://api.example/storefront/graphql", "https://api.example/admin/graphql\n"} {
-		require.Error(t, (AdvertisedEndpoints{Admin: AdvertisedEndpoint{URL: value}}).Validate(), value)
+		require.ErrorContains(t, (AdvertisedEndpoints{Admin: AdvertisedEndpoint{URI: value}}).Validate(), "api.advertised.admin.uri", value)
 	}
 	require.Error(t, (AdvertisedEndpoints{Admin: AdvertisedEndpoint{Disclose: true}}).Validate())
-	require.NoError(t, (AdvertisedEndpoints{Admin: AdvertisedEndpoint{URL: "http://[::1]:4000/prefix/admin/graphql"}}).Validate())
+	require.NoError(t, (AdvertisedEndpoints{Admin: AdvertisedEndpoint{URI: "http://[::1]:4000/prefix/admin/graphql"}}).Validate())
+}
+
+func TestAdvertisedEndpointURIConfigurationContract(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	want := AdvertisedEndpoints{
+		Admin:      AdvertisedEndpoint{URI: "https://management.example/team/admin/graphql"},
+		Storefront: AdvertisedEndpoint{URI: "https://shop.example/team/storefront/graphql"},
+		GitHTTP:    AdvertisedEndpoint{URI: "https://git.example/team"},
+	}
+	encoded, err := json.Marshal(want)
+	require.NoError(t, err)
+	require.JSONEq(t, `{
+		"admin":{"uri":"https://management.example/team/admin/graphql","disclose":false},
+		"storefront":{"uri":"https://shop.example/team/storefront/graphql","disclose":false},
+		"git_http":{"uri":"https://git.example/team","disclose":false}
+	}`, string(encoded))
+	for _, file := range []struct {
+		extension string
+		body      string
+	}{
+		{"toml", `
+[api.advertised.admin]
+uri = "https://management.example/team/admin/graphql"
+[api.advertised.storefront]
+uri = "https://shop.example/team/storefront/graphql"
+[api.advertised.git_http]
+uri = "https://git.example/team"
+`},
+		{"json", `{"api":{"advertised":` + string(encoded) + `}}`},
+	} {
+		t.Run(file.extension, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config."+file.extension)
+			require.NoError(t, os.WriteFile(path, []byte(file.body), 0o600))
+			cfg, err := LoadFrom(path)
+			require.NoError(t, err)
+			require.Equal(t, want, cfg.Api.Advertised)
+		})
+	}
+	t.Setenv("GITSTORE_API__ADVERTISED__ADMIN__URI", want.Admin.URI)
+	t.Setenv("GITSTORE_API__ADVERTISED__STOREFRONT__URI", want.Storefront.URI)
+	t.Setenv("GITSTORE_API__ADVERTISED__GIT_HTTP__URI", want.GitHTTP.URI)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, want, cfg.Api.Advertised)
+}
+
+func TestAdvertisedEndpointDoesNotAliasUnreleasedURLField(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+[api.advertised.admin]
+url = "https://management.example/admin/graphql"
+disclose = true
+`), 0o600))
+	_, err := LoadFrom(path)
+	require.ErrorContains(t, err, "api.advertised.admin.disclose requires api.advertised.admin.uri")
 }

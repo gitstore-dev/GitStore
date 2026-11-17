@@ -89,7 +89,7 @@ func setEndpointDefaults(v *viper.Viper) {
 	}
 	v.SetDefault("api.smart_http.deadline", "2m")
 	for _, endpoint := range []string{"admin", "storefront", "git_http"} {
-		v.SetDefault("api.advertised."+endpoint+".url", "")
+		v.SetDefault("api.advertised."+endpoint+".uri", "")
 		v.SetDefault("api.advertised."+endpoint+".disclose", false)
 	}
 	v.SetDefault("api.admin_port", 4000)

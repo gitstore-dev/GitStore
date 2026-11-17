@@ -93,40 +93,40 @@ func (a ApiConfig) BindAddress(role string) string {
 // binds and internal RPC targets. Empty URLs are deliberately undisclosed.
 // Merely configuring a URL never authorizes forwarding credentials to its origin.
 type AdvertisedEndpoints struct {
-	Admin      AdvertisedEndpoint `mapstructure:"admin"`
-	Storefront AdvertisedEndpoint `mapstructure:"storefront"`
-	GitHTTP    AdvertisedEndpoint `mapstructure:"git_http"`
+	Admin      AdvertisedEndpoint `mapstructure:"admin" json:"admin"`
+	Storefront AdvertisedEndpoint `mapstructure:"storefront" json:"storefront"`
+	GitHTTP    AdvertisedEndpoint `mapstructure:"git_http" json:"git_http"`
 }
 
 type AdvertisedEndpoint struct {
-	URL      string `mapstructure:"url"`
-	Disclose bool   `mapstructure:"disclose"`
+	URI      string `mapstructure:"uri" json:"uri"`
+	Disclose bool   `mapstructure:"disclose" json:"disclose"`
 }
 
 func (a AdvertisedEndpoints) Validate() error {
 	for name, endpoint := range map[string]AdvertisedEndpoint{"admin": a.Admin, "storefront": a.Storefront, "git_http": a.GitHTTP} {
-		if endpoint.URL == "" {
+		if endpoint.URI == "" {
 			if endpoint.Disclose {
-				return fmt.Errorf("api.advertised.%s.disclose requires a URL", name)
+				return fmt.Errorf("api.advertised.%s.disclose requires api.advertised.%s.uri", name, name)
 			}
 			continue
 		}
-		u, err := url.Parse(endpoint.URL)
+		u, err := url.Parse(endpoint.URI)
 		if err != nil || u.Hostname() == "" || u.Opaque != "" || u.User != nil ||
 			u.RawQuery != "" || u.ForceQuery || u.Fragment != "" ||
-			(u.Scheme != "https" && u.Scheme != "http") || strings.ContainsAny(endpoint.URL, " \t\r\n\\#") {
-			return fmt.Errorf("api.advertised.%s.url must be an absolute HTTP(S) URL without credentials, query or fragment", name)
+			(u.Scheme != "https" && u.Scheme != "http") || strings.ContainsAny(endpoint.URI, " \t\r\n\\#") {
+			return fmt.Errorf("api.advertised.%s.uri must be an absolute HTTP(S) URL without credentials, query or fragment", name)
 		}
 		if port := u.Port(); port != "" {
 			number, err := strconv.Atoi(port)
 			if err != nil || number < 1 || number > 65535 {
-				return fmt.Errorf("api.advertised.%s.url port must be in [1,65535]", name)
+				return fmt.Errorf("api.advertised.%s.uri port must be in [1,65535]", name)
 			}
 		} else if strings.HasSuffix(u.Host, ":") {
-			return fmt.Errorf("api.advertised.%s.url must not contain an empty port", name)
+			return fmt.Errorf("api.advertised.%s.uri must not contain an empty port", name)
 		}
 		if name != "git_http" && !strings.HasSuffix(u.Path, "/"+name+"/graphql") {
-			return fmt.Errorf("api.advertised.%s.url must include the complete /%s/graphql path", name, name)
+			return fmt.Errorf("api.advertised.%s.uri must include the complete /%s/graphql path", name, name)
 		}
 	}
 	return nil
@@ -137,8 +137,8 @@ func (a AdvertisedEndpoints) Validate() error {
 func (a AdvertisedEndpoints) Disclosed() map[string]string {
 	result := map[string]string{}
 	for name, endpoint := range map[string]AdvertisedEndpoint{"admin": a.Admin, "storefront": a.Storefront, "git_http": a.GitHTTP} {
-		if endpoint.Disclose && endpoint.URL != "" {
-			result[name] = endpoint.URL
+		if endpoint.Disclose && endpoint.URI != "" {
+			result[name] = endpoint.URI
 		}
 	}
 	return result

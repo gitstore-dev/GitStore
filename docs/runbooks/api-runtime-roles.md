@@ -116,19 +116,24 @@ replicas that do not serve the advertised role:
 
 ```toml
 [api.advertised.admin]
-url = "https://management.example.com/team/admin/graphql"
+uri = "https://management.example.com/team/admin/graphql"
 disclose = false
 
 [api.advertised.storefront]
-url = "https://shop.example.com/team/storefront/graphql"
+uri = "https://shop.example.com/team/storefront/graphql"
 disclose = true
 
 [api.advertised.git_http]
-url = "https://git.example.com/team"
+uri = "https://git.example.com/team"
 disclose = true
 ```
 
-URLs must be complete HTTP(S) URLs without credentials, queries or fragments;
+The configuration keys are `api.advertised.{admin,storefront,git_http}.uri`;
+their environment equivalents are `GITSTORE_API__ADVERTISED__ADMIN__URI`,
+`GITSTORE_API__ADVERTISED__STOREFRONT__URI` and
+`GITSTORE_API__ADVERTISED__GIT_HTTP__URI`.
+
+Values must be complete HTTP(S) URLs without credentials, queries or fragments;
 explicit ports must be between 1 and 65535.
 GraphQL URLs include their fixed prefixed path. Proxy TLS termination and
 deployment path prefixes are supported; configure the proxy to remove only
