@@ -50,6 +50,18 @@ The probe requires HTTP 200, rejects redirects, and times out after one second
 by default (`--timeout` overrides it). Host-side `curl` remains available for
 response-body inspection.
 
+Read process-local metrics without installing a downloader in the image:
+
+```bash
+docker compose exec -T api /app/api gitctl metrics
+```
+
+This command requires HTTP 200, rejects redirects and prints the response only
+after a complete read within five seconds and a 16 MiB ceiling. `--url` and
+`--timeout` support a custom Admin endpoint. Capacity preflight and evidence
+validation compare these in-container process identities with the host-facing
+endpoint identities; keep both checks.
+
 The local overlay loads the issuer PEM through
 `--serviceaccount-signing-key-file /run/secrets/serviceaccount-signing-key`;
 keep that mount API-only. Credential initialization uses a separate Alpine

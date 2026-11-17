@@ -267,6 +267,7 @@ jobs:
         docker run --rm gitstore-api:ci /app/api gitctl migrate --timeout 0s && exit 1 || test "$?" -eq 2
         # A shell-less image must still expose the native readiness probe.
         docker run --rm gitstore-api:ci /app/api gitctl healthcheck && exit 1 || test "$?" -eq 1
+        docker run --rm gitstore-api:ci /app/api gitctl metrics && exit 1 || test "$?" -eq 1
 
   security-scan:
     name: Security Scan

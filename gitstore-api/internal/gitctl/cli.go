@@ -70,6 +70,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	case "healthcheck":
 		return runHealthcheck(args[1:], stderr)
+	case "metrics":
+		return runHTTPProbe("metrics", "http://127.0.0.1:4000/metrics", 5*time.Second, args[1:], stdout, stderr)
 	case "generate":
 		return runGenerate(args[1:], stdout, stderr)
 	case "hash-password":
@@ -133,6 +135,7 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "Usage: api gitctl <subcommand> [args]")
 	fmt.Fprintln(output, "Subcommands:")
 	fmt.Fprintln(output, "  healthcheck [--url http://127.0.0.1:4000/ready] [--timeout 1s]")
+	fmt.Fprintln(output, "  metrics [--url http://127.0.0.1:4000/metrics] [--timeout 5s] (print up to 16 MiB)")
 	fmt.Fprintln(output, "  process-executable (print the live container PID 1 executable)")
 	fmt.Fprintln(output, "  generate authz --root <repository-root> [--catalog <path>] [--check]")
 	fmt.Fprintln(output, "  hash-password <password>")

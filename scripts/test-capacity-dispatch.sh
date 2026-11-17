@@ -388,12 +388,14 @@ set -euo pipefail
 source "${CAPACITY_TEST_FIXTURES}/capacity.sh"
 if [[ "$1" == exec && "${*:3}" == "/app/api gitctl process-executable" ]]; then
   printf '%s\n' "${MOCK_API_EXECUTABLE:-/app/api}"
-elif [[ "$1" == exec ]]; then
+elif [[ "$1" == exec && "${*:3}" == "/app/api gitctl metrics" ]]; then
   case "$2" in
-    api-1) mock_api_metrics a ;;
-    api-2) mock_api_metrics b ;;
+    api-1) mock_api_metrics a container ;;
+    api-2) mock_api_metrics b container ;;
     *) exit 1 ;;
   esac
+elif [[ "$1" == exec ]]; then
+  exit 127
 else
   cat "${MOCK_READINESS_CONTAINERS_FILE}"
 fi
@@ -422,6 +424,10 @@ assert_rejected "production API readiness unexpectedly passed without deployment
 assert_rejected "production API readiness unexpectedly accepted one live process twice" "${test_dir}/output" \
   run_readiness readiness-valid CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-a.internal
 run_readiness readiness-valid MOCK_SAME_START=1
+for mismatch in start instance; do
+  assert_rejected "readiness accepted mismatched container ${mismatch}" "${test_dir}/output" \
+    run_readiness readiness-valid MOCK_CONTAINER_IDENTITY_MISMATCH="${mismatch}"
+done
 assert_rejected "production API readiness unexpectedly accepted an unrelated workload URL" "${test_dir}/output" \
   run_readiness readiness-valid CAPACITY_BASE_URL=http://unverified.internal
 assert_rejected "production API readiness unexpectedly accepted an unready secondary replica" "${test_dir}/output" \
@@ -462,8 +468,10 @@ if [[ "$1" == exec && "${*:3}" == "/app/api gitctl process-executable" ]]; then
   printf '%s\n' "${MOCK_API_EXECUTABLE:-/app/api}"
 elif [[ "$1" == exec ]]; then
   case "$2" in
-    api-1) mock_api_metrics a ;;
-    api-2) mock_api_metrics b ;;
+    api-1|api-2)
+      [[ "${*:3}" == "/app/api gitctl metrics" ]] || exit 127
+      if [[ "$2" == api-1 ]]; then mock_api_metrics a container; else mock_api_metrics b container; fi
+      ;;
     *)
       for ((padding=0; padding<${MOCK_SCYLLA_STATUS_PADDING_LINES:-0}; padding++)); do
         printf 'membership diagnostic padding 0123456789012345678901234567890123456789\n'
@@ -661,6 +669,14 @@ assert_rejected "alpha namespace watch evidence unexpectedly accepted duplicate 
   run_deployed_capacity duplicate-service-run namespace watch alpha \
   CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINER=git-1 \
   MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/duplicate-service-containers.json"
+
+for mismatch in start instance; do
+  assert_rejected "release evidence accepted mismatched container ${mismatch}" "${test_dir}/output" \
+    run_deployed_capacity "container-mismatch-${mismatch}" namespace watch alpha \
+    CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINER=git-1 \
+    MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/service-containers.json" \
+    MOCK_CONTAINER_IDENTITY_MISMATCH="${mismatch}"
+done
 
 # Diagnostic preambles must not block the membership reader at pipe-buffer sizes.
 PATH="${test_dir}/bin:${PATH}" CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \

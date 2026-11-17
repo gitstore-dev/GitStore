@@ -131,7 +131,7 @@ for index in "${!api_endpoints[@]}"; do
     echo "live API endpoint does not expose gitstore_api_process_instance_info: ${endpoint}" >&2
     exit 1
   }
-  container_metrics="$(docker exec "${container}" wget -qO- http://127.0.0.1:4000/metrics)" || {
+  container_metrics="$(docker exec "${container}" /app/api gitctl metrics)" || {
     echo "cannot scrape API metrics inside container: ${container}" >&2
     exit 1
   }
