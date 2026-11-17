@@ -107,6 +107,15 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 
 ## gitstore-api
 
+Runtime roles (`api.roles`, `GITSTORE_API__ROLES`, or `api serve --roles=...`)
+are independent of GraphQL listener layout and advertised client URLs.
+The default/`--all` omits Storefront while publication is unavailable.
+See [API runtime roles](runbooks/api-runtime-roles.md) for shared/dedicated
+listener settings, bind hosts, independent Smart HTTP/catalog budgets,
+role-specific readiness and `api.advertised.{admin,storefront,git_http}`
+URL/disclosure settings. Advertisements must match across deployment replicas;
+they never derive from listener ports or forwarded headers.
+
 **Config file**: `config.toml` (optional, current working directory)
 
 **Explicit file**: `gitstore-api --config-file /path/to/config.toml` (required when selected). Repeat the flag to layer overlays: `--config-file base.toml --config-file overlay.toml` (later file wins per key).
@@ -126,10 +135,12 @@ An empty string (`KEY=`) for a **Required** key is treated identically to an abs
 
 ### Endpoint policies
 
-Admin always serves `/admin/graphql` on `api.admin_port`; Storefront always
-serves `/storefront/graphql` on `api.storefront_port`. `/graphql` is removed.
-Health, readiness and compatibility metrics stay at the Admin listener root.
-All four listener ports must be distinct and between 1 and 65535. Remove
+Selected Admin serves `/admin/graphql` on `api.admin_port`; selected Storefront
+serves `/storefront/graphql` on `api.storefront_port`, or on Admin's listener
+when both roles explicitly use shared GraphQL layout. `/graphql` is removed.
+Health and readiness are local operational routes on every selected HTTP
+listener; catalog-only processes expose gRPC Health Check. Metrics remain
+Admin-only. Active dedicated ports must be distinct and between 1 and 65535. Remove
 `api.port` and `GITSTORE_API__PORT`; their presence now fails startup.
 
 Each endpoint has an independent CORS policy. Empty origin lists allow

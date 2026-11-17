@@ -2,6 +2,13 @@
 
 `api/endpoint-split` measures Admin and the unavailable Storefront boundary:
 
+Select `storefront` explicitly on the test-owned APIs serving the public
+boundary (`api.roles` or `GITSTORE_API__ROLES`). The runtime default and
+`--all` omit that role until publication prerequisites are implemented.
+This profile verifies Admin readiness through `/ready/admin`; aggregate
+readiness remains unavailable while the selected Storefront boundary is
+unavailable. Other profiles retain aggregate readiness checks.
+
 ```sh
 CAPACITY_ADMIN_URLS=http://localhost:4000/admin/graphql \
 CAPACITY_STOREFRONT_URLS=http://localhost:4100/storefront/graphql \

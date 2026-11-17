@@ -16,6 +16,7 @@ action.
 | Need | Guide |
 | --- | --- |
 | Configure and use GitStore | [User guide](../user-guide.md) |
+| Split API runtime roles, configure probes or advertise proxy URLs | [API runtime roles](api-runtime-roles.md) |
 | Provision the reference cloud deployment | [DigitalOcean provisioning](digitalocean-provisioning.md) |
 | Upgrade versions, policies, clients, or schemas | [Upgrade compatibility](upgrades.md) |
 | Rotate credential or signing material | [Secret material rotation](secret-material-rotation.md) |

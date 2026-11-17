@@ -3815,8 +3815,12 @@ func coordinateCapacityReplacement(client *http.Client, cfg capacityConfig, reso
 	}
 }
 
-func endpointReady(client *http.Client, endpoint string) bool {
-	for _, path := range []string{"/health", "/ready"} {
+func endpointReady(client *http.Client, endpoint string, role ...string) bool {
+	readinessPath := "/ready"
+	if len(role) > 0 {
+		readinessPath += "/" + role[0]
+	}
+	for _, path := range []string{"/health", readinessPath} {
 		response, err := client.Get(endpoint + path)
 		if err != nil {
 			return false

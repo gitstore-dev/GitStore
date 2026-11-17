@@ -20,6 +20,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 )
@@ -62,6 +63,19 @@ func NewClientWithAddr(addr, hmacSecret string) (*Client, error) {
 func (c *Client) Close() error {
 	if c.conn != nil {
 		return c.conn.Close()
+	}
+	return nil
+}
+
+// TransportReady deliberately does not ask the peer for dependency readiness:
+// Git calls catalog, which calls Git, so recursive probes cannot converge.
+func (c *Client) TransportReady(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.conn.Connect()
+	if c.conn.GetState() != connectivity.Ready {
+		return fmt.Errorf("git transport unavailable")
 	}
 	return nil
 }

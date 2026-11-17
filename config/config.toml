@@ -18,10 +18,38 @@ timeout = "10s"
 branch_pattern = "^refs/heads/main$"
 
 [api]
+roles = ["smart-http", "catalog", "admin"]
+graphql_layout = "dedicated"
 admin_port = 4000
 storefront_port = 4001
 git_port = 9000
 grpc_port = 6000
+
+# These are bind policies, never client advertisements. Each process can select
+# any role subset through GITSTORE_API__ROLES or api serve --roles=...
+[api.smart_http]
+bind_host = ""
+in_flight = 32
+deadline = "2m"
+
+[api.catalog]
+bind_host = ""
+in_flight = 32
+deadline = "30s"
+
+# Deployment-level full client URLs may name roles hosted by other processes.
+# Never advertise internal catalog or Git RPC targets.
+[api.advertised.admin]
+uri = ""
+disclose = false
+
+[api.advertised.storefront]
+uri = ""
+disclose = false
+
+[api.advertised.git_http]
+uri = ""
+disclose = false
 
 [api.profiling]
 uri = ""

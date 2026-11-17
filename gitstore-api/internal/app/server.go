@@ -84,6 +84,9 @@ type Server struct {
 	providerShutdown []providerShutdowner
 	namespaceWatch   *namespaceWatchRuntime
 	endpointCleanup  []func()
+	bootstrap        *bootstrapRuntime
+	roleReady        *roleReadiness
+	runtimeCancel    context.CancelFunc
 }
 
 type namespaceCDCRunner interface {
@@ -173,6 +176,18 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 	if log == nil {
 		return nil, fmt.Errorf("app: logger is required")
 	}
+	if err := cfg.Api.ValidateRuntime(); err != nil {
+		return nil, err
+	}
+	if err := cfg.Api.ValidatePorts(); err != nil {
+		return nil, err
+	}
+	if err := cfg.Api.ValidateRoleBudgets(); err != nil {
+		return nil, err
+	}
+	if len(cfg.Api.Roles) == 1 && cfg.Api.HasRole(config.RoleStorefront) {
+		return newStorefrontServer(cfg, log)
+	}
 	if cfg.Api.Auth.AuthZ.Provider == "opa" && !enableDynamic {
 		return nil, errors.New("opa authz provider is unavailable: production acceptance is pending")
 	}
@@ -193,9 +208,6 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 			return nil, err
 		}
 	}
-	if err := cfg.Api.ValidatePorts(); err != nil {
-		return nil, err
-	}
 	for kind, endpoint := range map[string]config.EndpointConfig{"admin": cfg.Api.Admin, "storefront": cfg.Api.Storefront} {
 		if endpoint.Limits.BodyBytes != 0 {
 			if err := endpoint.Validate(); err != nil {
@@ -213,14 +225,16 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 	var namespaceWatch *namespaceWatchRuntime
 	var resourceJournal datastore.ResourceWatchJournal
 	{
-		// The durable watch journal reader and CDC materializer are always
-		// on — there is no watch mechanism besides the journal.
 		journal, journalErr := dsfactory.ResourceWatchJournal(rawStore)
 		if journalErr != nil {
 			_ = rawStore.Close()
 			return nil, fmt.Errorf("create resource watch journal: %w", journalErr)
 		}
 		resourceJournal = journal
+	}
+	// Authentication may consume the journal in any authoring role, but only
+	// management roles own its CDC materializer and associated metrics.
+	if cfg.Api.HasRole(config.RoleCatalog) || cfg.Api.HasRole(config.RoleAdmin) {
 		metrics, metricsErr := watchjournal.NewMetrics(otel.Meter("gitstore/watchjournal"))
 		if metricsErr != nil {
 			_ = rawStore.Close()
@@ -233,15 +247,15 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 		}()
 		clock := apiruntime.SystemClock{}
 		namespaceWatch = &namespaceWatchRuntime{
-			journal: journal,
-			materializer: watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{
+			journal: resourceJournal,
+			materializer: watchjournal.NewMaterializer(resourceJournal, watchjournal.MaterializerConfig{
 				EventTTL:         cfg.Api.Watch.Journal.Retention,
 				BookmarkInterval: cfg.Api.Watch.Journal.BookmarkInterval,
 				Clock:            clock,
 				Metrics:          metrics,
 			}),
 			leaseManager: watchjournal.NewLeaseManager(
-				journal,
+				resourceJournal,
 				instanceID,
 				cfg.Api.Watch.Journal.Materializer.LeaseTTL,
 				cfg.Api.Watch.Journal.Materializer.LeaseRenewInterval,
@@ -307,7 +321,7 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 		provisionNamespace = recovery.provisionNamespace
 		option := rbacRuntimeOptions{provider: prepared, prepare: func(ctx context.Context) error {
 			return ensureBootstrapResources(ctx, store, recovery, clock, ids, log)
-		}}
+		}, observeOnly: !cfg.Api.HasRole(config.RoleAdmin) && !cfg.Api.HasRole(config.RoleCatalog)}
 		if len(runtimeOptions) > 0 {
 			option.observeSnapshot = runtimeOptions[0].observeSnapshot
 		}
@@ -326,130 +340,182 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 				Builtins: builtins, Ready: dynamic.Ready, Clock: clock, IDGenerator: ids,
 				ManagedStore: store, ControllerSubject: cfg.Api.Admin.ControllerSubject}
 		}
-	} else if err := ensureBootstrapResources(context.Background(), store, gitClient, clock, ids, log); err != nil {
-		return nil, fmt.Errorf("bootstrap resources: %w", err)
+	}
+	var bootstrap *bootstrapRuntime
+	if prepared == nil && (cfg.Api.HasRole(config.RoleCatalog) || cfg.Api.HasRole(config.RoleAdmin)) {
+		bootstrap = newBootstrapRuntime(func(ctx context.Context) error {
+			return ensureBootstrapResources(ctx, store, gitClient, clock, ids, log)
+		}, log)
+	}
+	roleReady := &roleReadiness{cfg: cfg.Api, store: store, git: gitClient, bootstrap: bootstrap}
+	if dynamic != nil {
+		roleReady.authorization = dynamic.Ready
+	}
+	if namespaceWatch != nil {
+		roleReady.journal = func(ctx context.Context) error {
+			return namespaceWatchReadiness(ctx, namespaceWatch, clock.Now())
+		}
 	}
 
 	// The same admission runtime serves post-receive batches and synchronous
 	// GraphQL committed-manifest convergence. Build it before the GraphQL schema
 	// so resolvers never acquire a datastore-only authoring path.
-	catalogServer, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
-		Registry:              registry,
-		ServiceSecret:         cfg.GrpcAuth.HmacSecret,
-		ServiceSecretPrevious: cfg.GrpcAuth.HmacSecretPrevious,
-		Store:                 store,
-		GitClient:             gitClient,
-		RBACValidator:         validator,
-		RBACGitReader:         recoveryReader,
-		Logger:                log,
-		Clock:                 clock,
-	})
-	if err != nil {
-		return nil, err
+	var catalogServer *cataloggrpc.Server
+	if cfg.Api.HasRole(config.RoleCatalog) || cfg.Api.HasRole(config.RoleAdmin) {
+		catalogServer, err = cataloggrpc.NewServer(cataloggrpc.ServerDeps{
+			Registry:              registry,
+			ServiceSecret:         cfg.GrpcAuth.HmacSecret,
+			ServiceSecretPrevious: cfg.GrpcAuth.HmacSecretPrevious,
+			Store:                 store,
+			GitClient:             gitClient,
+			RBACValidator:         validator,
+			RBACGitReader:         recoveryReader,
+			Logger:                log,
+			Clock:                 clock,
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
-	connections := wsregistry.New()
-	authReloader.setInvalidationHandler(connections.Invalidate)
+	var connections *wsregistry.Registry
+	if cfg.Api.HasRole(config.RoleAdmin) {
+		connections = wsregistry.New()
+		authReloader.setInvalidationHandler(connections.Invalidate)
+	}
 	var endpointCleanup []func()
 	registerCleanup := func(close func()) { endpointCleanup = append(endpointCleanup, close) }
 	defer func() {
 		if !constructed {
-			connections.Close()
+			if connections != nil {
+				connections.Close()
+			}
 			for _, close := range endpointCleanup {
 				close()
 			}
 		}
 	}()
-	gqlRouter, err := NewGraphQLHandler(GraphQLHandlerDeps{
-		ProvisionNamespaceRepository: provisionNamespace,
-		RegisterCleanup:              registerCleanup,
-		ConnectionRegistry:           connections,
-		Endpoint:                     cfg.Api.Admin,
-		TrustedProxies:               cfg.Api.TrustedProxies,
-		Store:                        store,
-		GitWriter:                    gitClient,
-		Logger:                       log,
-		Registry:                     registry,
-		Clock:                        clock,
-		IDs:                          ids,
-		CommittedManifestAdmitter:    catalogServer,
-		RBACValidator:                validator,
-		ResourceJournal:              resourceJournal,
-		NamespaceWatch:               cfg.Api.Watch.Journal,
-		NamespaceMetrics:             namespaceWatchMetrics(namespaceWatch),
-		ServiceAccountAudience:       cfg.Api.Auth.ServiceAccount.Audience,
-		RateLimitPerSecond:           cfg.Api.RateLimit.PerSecond,
-		RateLimitBurst:               cfg.Api.RateLimit.Burst,
-		PushLimits:                   cfg.PushLimits,
-	})
-	if err != nil {
-		return nil, err
+	var httpEndpoints []httpEndpoint
+	if cfg.Api.HasRole(config.RoleAdmin) {
+		gqlRouter, err := NewGraphQLHandler(GraphQLHandlerDeps{
+			ProvisionNamespaceRepository: provisionNamespace,
+			RegisterCleanup:              registerCleanup,
+			ConnectionRegistry:           connections,
+			Endpoint:                     cfg.Api.Admin,
+			TrustedProxies:               cfg.Api.TrustedProxies,
+			Store:                        store,
+			GitWriter:                    gitClient,
+			Logger:                       log,
+			Registry:                     registry,
+			Clock:                        clock,
+			IDs:                          ids,
+			CommittedManifestAdmitter:    catalogServer,
+			RBACValidator:                validator,
+			ResourceJournal:              resourceJournal,
+			NamespaceWatch:               cfg.Api.Watch.Journal,
+			NamespaceMetrics:             namespaceWatchMetrics(namespaceWatch),
+			ServiceAccountAudience:       cfg.Api.Auth.ServiceAccount.Audience,
+			RateLimitPerSecond:           cfg.Api.RateLimit.PerSecond,
+			RateLimitBurst:               cfg.Api.RateLimit.Burst,
+			PushLimits:                   cfg.PushLimits,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		if err := registerIdentityMailRoute(gqlRouter, cfg.Api, authReloader); err != nil {
+			return nil, err
+		}
+		router := gqlRouter
+		healthMetrics := health.NewHandler(health.HandlerDeps{Store: store, Logger: log, Clock: clock,
+			Version: version, InstanceID: instanceID, RegisterCleanup: registerCleanup})
+		router.GET("/metrics", healthMetrics.Metrics)
+		var graphQlHandler http.Handler = router
+		if dynamic != nil {
+			graphQlHandler = rbacServingHandler(graphQlHandler, dynamic.Ready)
+		}
+		if bootstrap != nil {
+			graphQlHandler = bootstrapServingHandler(graphQlHandler, bootstrap.ready)
+		}
+		graphQlHandler = runtimeHTTPHandler(graphQlHandler, roleReady)
+
+		httpServer := &http.Server{
+			Addr:         cfg.Api.BindAddress(config.RoleAdmin),
+			Handler:      graphQlHandler,
+			ReadTimeout:  15 * time.Second,
+			WriteTimeout: 15 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}
+		httpEndpoints = append(httpEndpoints, httpEndpoint{name: "admin", server: httpServer})
 	}
 
-	if err := registerIdentityMailRoute(gqlRouter, cfg.Api, authReloader); err != nil {
-		return nil, err
-	}
-	var ready []func(context.Context) error
-	if dynamic != nil {
-		ready = append(ready, dynamic.Ready)
-	}
-	router := healthHandler(gqlRouter, store, log, clock, namespaceWatch, instanceID, registerCleanup, ready...)
-	var graphQlHandler http.Handler = router
-	if dynamic != nil {
-		graphQlHandler = rbacServingHandler(graphQlHandler, dynamic.Ready)
-	}
-
-	httpServer := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Api.AdminPort),
-		Handler:      graphQlHandler,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
-
-	gitHttpHandler := githttp.NewMux(githttp.SmartHttpDeps{
-		GitClient: gitClient,
-		Store:     store,
-		Logger:    log,
-		Ids:       ids,
-		Registry:  registry,
-	})
-	if dynamic != nil {
-		gitHttpHandler = rbacServingHandler(gitHttpHandler, dynamic.Ready)
-	}
-	gitHttpServer := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Api.GitPort),
-		Handler:      observability.HTTPHandler(gitHttpHandler, log),
-		ReadTimeout:  0,
-		WriteTimeout: 0,
-		IdleTimeout:  60 * time.Second,
+	if cfg.Api.HasRole(config.RoleSmartHTTP) {
+		gitHttpHandler := githttp.NewMux(githttp.SmartHttpDeps{
+			GitClient: gitClient,
+			Store:     store,
+			Logger:    log,
+			Ids:       ids,
+			Registry:  registry,
+		})
+		if dynamic != nil {
+			gitHttpHandler = rbacServingHandler(gitHttpHandler, dynamic.Ready)
+		}
+		gitHttpServer := &http.Server{
+			Addr:              cfg.Api.BindAddress(config.RoleSmartHTTP),
+			Handler:           boundedHTTP(observability.HTTPHandler(gitHttpHandler, log), cfg.Api.SmartHTTP),
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       cfg.Api.SmartHTTP.Deadline,
+			WriteTimeout:      cfg.Api.SmartHTTP.Deadline,
+			IdleTimeout:       60 * time.Second,
+		}
+		gitHttpServer.Handler = runtimeHTTPHandler(gitHttpServer.Handler, roleReady)
+		httpEndpoints = append(httpEndpoints, httpEndpoint{name: "git-http", server: gitHttpServer})
 	}
 
-	grpcListener, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.Api.GrpcPort))
-	if err != nil {
-		return nil, fmt.Errorf("listen on catalog gRPC port %d: %w", cfg.Api.GrpcPort, err)
+	var grpcListener net.Listener
+	var grpcServer *grpc.Server
+	if cfg.Api.HasRole(config.RoleCatalog) {
+		grpcListener, err = net.Listen("tcp", cfg.Api.BindAddress(config.RoleCatalog))
+		if err != nil {
+			return nil, fmt.Errorf("listen on catalog gRPC port %d: %w", cfg.Api.GrpcPort, err)
+		}
+		defer func() {
+			if !constructed {
+				_ = grpcListener.Close()
+			}
+		}()
+		grpcServer = grpc.NewServer(grpc.MaxRecvMsgSize(96<<20), grpc.ChainUnaryInterceptor(catalogTelemetry, boundedCatalog(cfg.Api.Catalog)))
+		catalogv1.RegisterCatalogServiceServer(grpcServer, catalogServer)
+		registerCatalogHealth(grpcServer, roleReady)
 	}
-	publicRouter, err := NewStorefrontHandler(cfg.Api.Storefront, cfg.Api.StorefrontRateLimit, cfg.Api.TrustedProxies, registerCleanup)
-	if err != nil {
-		_ = grpcListener.Close()
-		return nil, err
+	if cfg.Api.HasRole(config.RoleStorefront) {
+		publicRouter, err := NewStorefrontHandler(cfg.Api.Storefront, cfg.Api.StorefrontRateLimit, cfg.Api.TrustedProxies, registerCleanup)
+		if err != nil {
+			return nil, err
+		}
+		publicServer := &http.Server{Addr: cfg.Api.BindAddress(config.RoleStorefront), Handler: runtimeHTTPHandler(publicRouter, roleReady), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+		if cfg.Api.GraphQLLayout == "shared" && cfg.Api.HasRole(config.RoleAdmin) {
+			admin := httpEndpoints[0].server
+			mux := http.NewServeMux()
+			mux.Handle("/storefront/", publicRouter)
+			mux.Handle("/", admin.Handler)
+			admin.Handler = mux
+		} else {
+			httpEndpoints = append(httpEndpoints, httpEndpoint{name: "storefront", server: publicServer})
+		}
 	}
-	publicServer := &http.Server{Addr: fmt.Sprintf(":%d", cfg.Api.StorefrontPort), Handler: publicRouter, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
-	httpEndpoints := []httpEndpoint{{name: "admin", server: httpServer}, {name: "storefront", server: publicServer}, {name: "git-http", server: gitHttpServer}}
-	webhooks, err := kratosWebhookServer(cfg.Api.Auth.Kratos, registry)
-	if err != nil {
-		_ = grpcListener.Close()
-		return nil, err
-	}
-	if webhooks != nil {
-		httpEndpoints = append(httpEndpoints, httpEndpoint{name: "kratos-webhooks", server: webhooks})
+	if cfg.Api.HasRole(config.RoleAdmin) {
+		webhooks, err := kratosWebhookServer(cfg.Api.Auth.Kratos, registry)
+		if err != nil {
+			return nil, err
+		}
+		if webhooks != nil {
+			httpEndpoints = append(httpEndpoints, httpEndpoint{name: "kratos-webhooks", server: webhooks})
+		}
 	}
 	endpoints, err := bindHTTPServers(httpEndpoints)
 	if err != nil {
-		_ = grpcListener.Close()
 		return nil, err
 	}
-	grpcServer := grpc.NewServer(grpc.MaxRecvMsgSize(96<<20), grpc.UnaryInterceptor(catalogTelemetry))
-	catalogv1.RegisterCatalogServiceServer(grpcServer, catalogServer)
 	constructed = true
 
 	return &Server{
@@ -465,6 +531,8 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 		providerShutdown: providerShutdowns,
 		namespaceWatch:   namespaceWatch,
 		endpointCleanup:  endpointCleanup,
+		bootstrap:        bootstrap,
+		roleReady:        roleReady,
 	}, nil
 }
 
@@ -790,6 +858,11 @@ func constructProviderRegistryWithOPA(cfg *config.Config, store serviceAccountSt
 
 // Start starts all servers in background goroutines.
 func (s *Server) Start() {
+	runCtx, runCancel := context.WithCancel(context.Background())
+	s.runtimeCancel = runCancel
+	if s.bootstrap != nil {
+		s.bootstrap.start()
+	}
 	// The CDC materializer is always on — there is no watch mechanism besides
 	// the durable journal.
 	if s.namespaceWatch != nil {
@@ -806,11 +879,17 @@ func (s *Server) Start() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGHUP)
 		go func() {
-			for range sigCh {
-				if err := s.authReloader.Reload(); err != nil {
-					s.log.Error("auth provider reload failed; previous configuration remains active")
-				} else {
-					s.log.Info("auth providers reloaded atomically")
+			defer signal.Stop(sigCh)
+			for {
+				select {
+				case <-runCtx.Done():
+					return
+				case <-sigCh:
+					if err := s.authReloader.Reload(); err != nil {
+						s.log.Error("auth provider reload failed; previous configuration remains active")
+					} else {
+						s.log.Info("auth providers reloaded atomically")
+					}
 				}
 			}
 		}()
@@ -824,23 +903,15 @@ func (s *Server) Start() {
 			}
 		}()
 	}
-
-	go func() {
-		s.log.Info("CatalogService gRPC server starting", zap.Int("port", s.cfg.Api.GrpcPort))
-		if err := s.grpcServer.Serve(s.grpcListener); err != nil {
-			s.log.Error("CatalogService gRPC server error", zap.Error(err))
-		}
-	}()
-
-	s.log.Info("Server ready",
-		zap.String("graphql", fmt.Sprintf("http://localhost:%d/admin/graphql", s.cfg.Api.AdminPort)),
-		zap.String("playground", fmt.Sprintf("http://localhost:%d/admin/playground", s.cfg.Api.AdminPort)),
-		zap.String("health", fmt.Sprintf("http://localhost:%d/health", s.cfg.Api.AdminPort)),
-		zap.String("ready", fmt.Sprintf("http://localhost:%d/ready", s.cfg.Api.AdminPort)),
-		zap.String("storefront", fmt.Sprintf("http://localhost:%d/storefront/graphql", s.cfg.Api.StorefrontPort)),
-		zap.String("git_http", fmt.Sprintf("http://localhost:%d", s.cfg.Api.GitPort)),
-		zap.String("catalog_grpc", fmt.Sprintf("localhost:%d", s.cfg.Api.GrpcPort)),
-	)
+	if s.grpcServer != nil {
+		go func() {
+			s.log.Info("CatalogService gRPC server starting", zap.Int("port", s.cfg.Api.GrpcPort))
+			if err := s.grpcServer.Serve(s.grpcListener); err != nil {
+				s.log.Error("CatalogService gRPC server error", zap.Error(err))
+			}
+		}()
+	}
+	s.log.Info("Selected runtime listeners started; dependencies may still be recovering")
 }
 
 // Shutdown gracefully stops all network servers.
@@ -872,6 +943,12 @@ func (s *Server) Shutdown(ctx context.Context) {
 
 // Close releases non-server resources.
 func (s *Server) Close() {
+	if s.runtimeCancel != nil {
+		s.runtimeCancel()
+	}
+	if s.bootstrap != nil {
+		s.bootstrap.close()
+	}
 	for _, close := range s.endpointCleanup {
 		close()
 	}

@@ -5,15 +5,48 @@ package integration
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestEndpointSplitReadinessKeepsAdminAndLivenessGates(t *testing.T) {
+	var live, adminReady atomic.Bool
+	live.Store(true)
+	adminReady.Store(true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			if live.Load() {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		case "/ready/admin":
+			if adminReady.Load() {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	cfg := repositoryCapacityConfig{endpointSplit: true}
+	require.True(t, cfg.endpointReady(server.Client(), server.URL), "unavailable Storefront must not hide a ready Admin")
+	require.False(t, endpointReady(server.Client(), server.URL), "other profiles retain aggregate readiness")
+	adminReady.Store(false)
+	require.False(t, cfg.endpointReady(server.Client(), server.URL), "Admin readiness remains mandatory")
+	adminReady.Store(true)
+	live.Store(false)
+	require.False(t, cfg.endpointReady(server.Client(), server.URL), "liveness remains mandatory")
+}
 
 func TestEndpointGitReuseRequiresIdenticalBuildInputs(t *testing.T) {
 	preflight, err := os.ReadFile("../../tests/capacity/preflight/api-endpoint-split.sh")

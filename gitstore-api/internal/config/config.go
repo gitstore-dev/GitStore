@@ -40,14 +40,19 @@ type Config struct {
 
 // ApiConfig holds HTTP API server settings and everything gitstore-api owns.
 type ApiConfig struct {
-	AdminPort           int             `mapstructure:"admin_port" validate:"min=1,max=65535"`
-	StorefrontPort      int             `mapstructure:"storefront_port" validate:"min=1,max=65535"`
-	Admin               EndpointConfig  `mapstructure:"admin"`
-	Storefront          EndpointConfig  `mapstructure:"storefront"`
-	StorefrontRateLimit RateLimitConfig `mapstructure:"storefront_rate_limit"`
-	TrustedProxies      []string        `mapstructure:"trusted_proxies"`
-	GitPort             int             `mapstructure:"git_port"  validate:"min=1,max=65535"`
-	GrpcPort            int             `mapstructure:"grpc_port" validate:"min=1,max=65535"`
+	Roles               []string            `mapstructure:"roles"`
+	GraphQLLayout       string              `mapstructure:"graphql_layout"`
+	Advertised          AdvertisedEndpoints `mapstructure:"advertised"`
+	SmartHTTP           RoleBudget          `mapstructure:"smart_http"`
+	Catalog             RoleBudget          `mapstructure:"catalog"`
+	AdminPort           int                 `mapstructure:"admin_port" validate:"min=1,max=65535"`
+	StorefrontPort      int                 `mapstructure:"storefront_port" validate:"min=1,max=65535"`
+	Admin               EndpointConfig      `mapstructure:"admin"`
+	Storefront          EndpointConfig      `mapstructure:"storefront"`
+	StorefrontRateLimit RateLimitConfig     `mapstructure:"storefront_rate_limit"`
+	TrustedProxies      []string            `mapstructure:"trusted_proxies"`
+	GitPort             int                 `mapstructure:"git_port"  validate:"min=1,max=65535"`
+	GrpcPort            int                 `mapstructure:"grpc_port" validate:"min=1,max=65535"`
 
 	RateLimit    RateLimitConfig               `mapstructure:"rate_limit"`
 	GitService   GitServiceEndpointConfig      `mapstructure:"git_service"`
@@ -707,6 +712,12 @@ func load(paths []string) (*Config, error) {
 
 // validateConfig runs all struct validations and returns a combined error.
 func validateConfig(cfg *Config) error {
+	if err := cfg.Api.ValidateRuntime(); err != nil {
+		return err
+	}
+	if err := cfg.Api.ValidateRoleBudgets(); err != nil {
+		return err
+	}
 	if err := cfg.Api.ValidateRates(); err != nil {
 		return err
 	}
@@ -725,6 +736,12 @@ func validateConfig(cfg *Config) error {
 		return err
 	}
 	validate := validator.New()
+	if len(cfg.Api.Roles) == 1 && cfg.Api.HasRole(RoleStorefront) {
+		if err := validate.Struct(cfg.Log); err != nil {
+			return err
+		}
+		return validateLogFormat(&cfg.Log)
+	}
 	if err := validate.Struct(cfg); err != nil {
 		var ve validator.ValidationErrors
 		if errors.As(err, &ve) {

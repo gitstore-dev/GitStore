@@ -2,10 +2,37 @@
 # Copy to /etc/gitstore/gitstore-api.toml and adjust for your deployment.
 
 [api]
+roles = ["smart-http", "catalog", "admin"]
+graphql_layout = "dedicated"
 admin_port = 4000
 storefront_port = 4001
 git_port = 9000
 grpc_port = 6000
+
+# Independent originating-request and callback budgets; do not merge these pools.
+[api.smart_http]
+bind_host = ""
+in_flight = 32
+deadline = "2m"
+
+[api.catalog]
+bind_host = ""
+in_flight = 32
+deadline = "30s"
+
+# Stable deployment client URLs, independent from binds and internal RPC targets.
+# Use the same values across replicas; Admin is private unless explicitly disclosed.
+[api.advertised.admin]
+uri = ""
+disclose = false
+
+[api.advertised.storefront]
+uri = ""
+disclose = false
+
+[api.advertised.git_http]
+uri = ""
+disclose = false
 
 [api.rate_limit]
 per_second = 50

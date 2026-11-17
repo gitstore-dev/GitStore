@@ -52,10 +52,13 @@ func newInitializedCanonicalRBACRuntime(ctx context.Context, store datastore.Dat
 	if len(options) > 0 {
 		option = options[0]
 	}
-	option.initializing = true
+	option.initializing = !option.observeOnly
 	runtime, err := newCanonicalRBACRuntime(ctx, store, journal, git, limits, projector.ReconcileRBACTier, option)
 	if err != nil {
 		return nil, err
+	}
+	if option.observeOnly {
+		return runtime, nil
 	}
 	runtime.bootstrapDone = make(chan struct{})
 	validator := &admission.RBACValidator{Builtins: builtins,
