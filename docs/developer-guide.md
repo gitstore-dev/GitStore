@@ -485,6 +485,12 @@ Purpose:
 - Serve GitService gRPC operations for repository lifecycle, ref advertisement, receive-pack, upload-pack, file reads, commits, deletes, and tags.
 - Run receive hook phases and call the API CatalogService.
 
+`ListFiles` returns each regular or executable file's uncompressed blob byte
+length in `FileEntry.size_bytes`, including zero for empty files. General
+listings use object headers rather than loading complete blob contents; missing
+or invalid blob objects fail the listing rather than appearing as empty files.
+The bounded recursive RBAC listing retains its content validation.
+
 Fetch negotiation acknowledges only offered commit objects present in the
 repository, using the client's single-ACK, `multi_ack`, or
 `multi_ack_detailed` mode. Unknown objects and non-commit objects are not

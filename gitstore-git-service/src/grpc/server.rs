@@ -932,9 +932,16 @@ fn collect_tree_entries(
                         continue;
                     }
                 }
+                // Headers report the decoded size, including for packed delta objects.
+                let header = repo
+                    .find_header(entry.oid)
+                    .map_err(|e| Status::internal(e.to_string()))?;
+                if header.kind() != gix::objs::Kind::Blob {
+                    return Err(Status::internal("not a blob"));
+                }
                 files.push(FileEntry {
                     path: full_path,
-                    size_bytes: 0,
+                    size_bytes: header.size(),
                     blob_sha: entry.oid.to_string(),
                 });
             }
@@ -3774,6 +3781,251 @@ mod tests {
         let files = resp.into_inner().files;
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "products/p1.md");
+        assert_eq!(files[0].size_bytes, b"---\nid: p1\n---\nhello".len() as u64);
+    }
+
+    #[test]
+    fn test_list_files_sizes_and_filters() {
+        let dir = TempDir::new().unwrap();
+        let repo = gix::init_bare(dir.path()).unwrap();
+        let mut tree = repo
+            .edit_tree(gix::ObjectId::empty_tree(gix::hash::Kind::Sha1))
+            .unwrap();
+        for (path, content, mode) in [
+            ("empty", "".as_bytes(), gix::objs::tree::EntryKind::Blob),
+            (
+                "products/a.md",
+                "café 🦀".as_bytes(),
+                gix::objs::tree::EntryKind::Blob,
+            ),
+            (
+                "products/nested/run",
+                b"#!/bin/sh\n".as_slice(),
+                gix::objs::tree::EntryKind::BlobExecutable,
+            ),
+            (
+                "products/link",
+                b"a.md".as_slice(),
+                gix::objs::tree::EntryKind::Link,
+            ),
+        ] {
+            let id = repo.write_blob(content).unwrap().detach();
+            tree.upsert(path, mode, id).unwrap();
+        }
+        let tree = tree.write().unwrap().detach();
+        for (prefix, recursive, expected) in [
+            ("", false, vec![("empty", 0)]),
+            (
+                "",
+                true,
+                vec![
+                    ("empty", 0),
+                    ("products/a.md", 10),
+                    ("products/nested/run", 10),
+                ],
+            ),
+            ("products/", false, vec![("products/a.md", 10)]),
+            (
+                "products/",
+                true,
+                vec![("products/a.md", 10), ("products/nested/run", 10)],
+            ),
+            ("products/a", true, vec![("products/a.md", 10)]),
+            ("products/nested/", false, vec![("products/nested/run", 10)]),
+            ("missing/", true, vec![]),
+        ] {
+            let mut files = Vec::new();
+            collect_tree_entries(&repo, tree, "", prefix, recursive, &mut files).unwrap();
+            let actual: Vec<_> = files
+                .iter()
+                .map(|file| (file.path.as_str(), file.size_bytes))
+                .collect();
+            assert_eq!(actual, expected, "prefix={prefix:?}, recursive={recursive}");
+            for file in files {
+                let blob = repo
+                    .find_blob(gix::ObjectId::from_hex(file.blob_sha.as_bytes()).unwrap())
+                    .unwrap();
+                assert_eq!(file.size_bytes, blob.data.len() as u64);
+            }
+        }
+    }
+
+    #[test]
+    fn test_list_files_large_packed_delta_sizes() {
+        let dir = TempDir::new().unwrap();
+        bare_repo_with_main(dir.path(), TEST_REPO_D);
+        let path = fanout_path(dir.path(), TEST_REPO_D).unwrap();
+        let repo = gix::open(&path).unwrap();
+        let mut tree = repo
+            .edit_tree(gix::ObjectId::empty_tree(gix::hash::Kind::Sha1))
+            .unwrap();
+        let mut ids = Vec::new();
+        let mut content = "catalog entry with multibyte café 🦀\n"
+            .repeat(8192)
+            .into_bytes();
+        for index in 0..3 {
+            content.extend_from_slice(format!("version {index}\n").as_bytes());
+            let id = repo.write_blob(&content).unwrap().detach();
+            ids.push((id, content.len() as u64));
+            tree.upsert(
+                format!("large-{index}.md"),
+                gix::objs::tree::EntryKind::Blob,
+                id,
+            )
+            .unwrap();
+        }
+        let tree = tree.write().unwrap().detach();
+        let signature = gix::actor::Signature {
+            name: "test".into(),
+            email: "test@example.com".into(),
+            time: gix::date::Time::now_local_or_utc(),
+        };
+        let mut buffer = gix::date::parse::TimeBuf::default();
+        let signature = signature.to_ref(&mut buffer);
+        let commit = repo
+            .commit_as(
+                signature,
+                signature,
+                "refs/heads/main",
+                "large listing fixture",
+                tree,
+                [repo.head_id().unwrap().detach()],
+            )
+            .unwrap()
+            .detach();
+        drop(repo);
+        // Pack only this test-owned repository; exercise actual delta headers.
+        for args in [
+            vec!["repack", "-adq", "--window=10", "--depth=10"],
+            vec!["prune-packed", "-q"],
+        ] {
+            assert!(std::process::Command::new("git")
+                .arg("--git-dir")
+                .arg(&path)
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let repo = gix::open(&path).unwrap();
+        assert!(ids
+            .iter()
+            .any(|(id, _)| repo.find_header(*id).unwrap().num_deltas().unwrap() > 0));
+        let files = list_tree_files_gix(&repo, commit, "", true).unwrap();
+        assert_eq!(files.len(), ids.len());
+        for (file, (id, size)) in files.iter().zip(ids) {
+            assert_eq!(file.blob_sha, id.to_string());
+            assert_eq!(file.size_bytes, size);
+        }
+    }
+
+    #[test]
+    #[ignore = "bounded local timing comparison; run explicitly with --ignored --nocapture"]
+    fn benchmark_list_files_sizes_hundreds() {
+        use std::{hint::black_box, time::Instant};
+
+        let dir = TempDir::new().unwrap();
+        let repo = gix::init_bare(dir.path()).unwrap();
+        let mut tree = repo
+            .edit_tree(gix::ObjectId::empty_tree(gix::hash::Kind::Sha1))
+            .unwrap();
+        for index in 0..500 {
+            let content = format!("product {index:04}\n{}", "catalog data\n".repeat(315));
+            let id = repo.write_blob(content.as_bytes()).unwrap().detach();
+            tree.upsert(
+                format!("product-{index:04}.md"),
+                gix::objs::tree::EntryKind::Blob,
+                id,
+            )
+            .unwrap();
+        }
+        let tree_id = tree.write().unwrap().detach();
+        let baseline = || {
+            let tree = repo.find_tree(tree_id).unwrap();
+            tree.decode()
+                .unwrap()
+                .entries
+                .iter()
+                .map(|entry| FileEntry {
+                    path: entry.filename.to_string(),
+                    size_bytes: 0,
+                    blob_sha: entry.oid.to_string(),
+                })
+                .collect::<Vec<_>>()
+        };
+        let listing = || {
+            let mut files = Vec::new();
+            collect_tree_entries(&repo, tree_id, "", "", true, &mut files).unwrap();
+            files
+        };
+        let full_blobs = || {
+            let mut files = baseline();
+            for file in &mut files {
+                file.size_bytes = repo
+                    .find_blob(gix::ObjectId::from_hex(file.blob_sha.as_bytes()).unwrap())
+                    .unwrap()
+                    .data
+                    .len() as u64;
+            }
+            files
+        };
+        for operation in [
+            &baseline as &dyn Fn() -> Vec<FileEntry>,
+            &listing,
+            &full_blobs,
+        ] {
+            assert_eq!(operation().len(), 500);
+        }
+        for (name, operation) in [
+            (
+                "old zero-size baseline",
+                &baseline as &dyn Fn() -> Vec<FileEntry>,
+            ),
+            ("object headers", &listing),
+            ("full blob reads", &full_blobs),
+        ] {
+            let mut samples = Vec::new();
+            for _ in 0..30 {
+                let start = Instant::now();
+                black_box(operation());
+                samples.push(start.elapsed());
+            }
+            samples.sort();
+            println!(
+                "{name}: 500 loose ~4KiB blobs, 30 warm listings; median={:?}, p95={:?}",
+                samples[15], samples[28]
+            );
+        }
+    }
+
+    #[test]
+    fn test_list_files_rejects_missing_or_nonblob_objects() {
+        let dir = TempDir::new().unwrap();
+        let repo = gix::init_bare(dir.path()).unwrap();
+        let empty_tree = repo
+            .write_object(gix::objs::Tree { entries: vec![] })
+            .unwrap()
+            .detach();
+        for oid in [
+            gix::ObjectId::from_hex(b"1111111111111111111111111111111111111111").unwrap(),
+            empty_tree,
+        ] {
+            let tree = repo
+                .write_object(gix::objs::Tree {
+                    entries: vec![gix::objs::tree::Entry {
+                        mode: gix::objs::tree::EntryKind::Blob.into(),
+                        filename: "broken".into(),
+                        oid,
+                    }],
+                })
+                .unwrap()
+                .detach();
+            let mut files = Vec::new();
+            collect_tree_entries(&repo, tree, "", "other", true, &mut files).unwrap();
+            assert!(files.is_empty());
+            let error = collect_tree_entries(&repo, tree, "", "", true, &mut files).unwrap_err();
+            assert_eq!(error.code(), tonic::Code::Internal);
+        }
     }
 
     #[tokio::test]
