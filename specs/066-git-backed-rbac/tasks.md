@@ -11,8 +11,16 @@
 Principle I. Write the named tests first and demonstrate the expected failure
 before implementing the corresponding behavior.
 **Organization**: Setup, shared foundation, then P1 stories US3, US2, US1,
-US6; P2 story US4; P3 story US5; final production acceptance. The P1 order
+US6; P2 story US4; P3 story US5; final correctness acceptance. The P1 order
 puts safe common admission before exposing writes and runtime convergence.
+
+**Owner decision (2026-11-21):** production performance/capacity acceptance
+moves to #451. T096/T098 and T097's thirty-minute fault-load portion are
+deferred, not passed or retired. T097's native functional recovery proof
+and T103's correctness closeout remain feature requirements. Configured
+freshness/revocation/resource bounds, no-wrong-decision checks and the declared
+functional recovery deadline are unchanged. Earlier experiment narratives
+retain their original outcomes; they do not override this delivery scope.
 
 ## Format and execution rules
 
@@ -453,10 +461,11 @@ review permission and hypothetical group handling.
 **Checkpoint**: Inspection and reviews are usable without introducing another
 persisted kind or an alternate authorization evaluator.
 
-## Phase 9: Polish, compatibility and production acceptance
+## Phase 9: Polish, compatibility and correctness acceptance
 
-**Goal**: Prove the declared envelope on owned infrastructure and publish
-supported operating behavior. Tests below must precede runner changes.
+**Goal**: Prove feature correctness on owned infrastructure and publish
+supported operating behavior. Keep the unchanged production-capacity envelope
+pending in #451. Tests below must precede runner changes.
 
 - [X] T089 Add failing local workload/verifier regressions in `tests/integration/rbac_capacity_contract_test.go` and `scripts/test-capacity-dispatch.sh`: exact offered/completed/dropped accounting, independently checked policy revisions, owned topology/dataset proof, private fixtures, fault epochs and unchanged default health-only driver behavior.
 - [ ] T090 Extend the existing namespace/watch harness in `tests/integration/namespace_watch_capacity_test.go` with bounded RBAC fixture seeding and an independent revision-aware decision oracle; verify native counts for 1,000 namespaces, 10,000 roles and 50,000 bindings, rotate subjects/namespaces and avoid catalog-wide scans or a second capacity framework.
@@ -465,14 +474,14 @@ supported operating behavior. Tests below must precede runner changes.
 - [X] T093 Extend `scripts/run-chaos.sh` and its existing regression coverage for explicitly owned journal interruption, API restart and controller replacement; declare bounded fault windows, verify ownership/restoration and process epochs, retain independent controller checkpoint volumes and prohibit overlapping singleton Git replacement.
 - [ ] T094 Add and run `tests/integration/rbac_rolling_upgrade_test.go` for old/new feature-disabled compatibility, additive migration with read-only startup validation, seeded parity, USER-owner catch-up, provider-switch write freeze/traffic drain, snapshot-ready traffic admission, compatible rolling replacements and refusal of stale static-policy rollback.
 - [ ] T095 Measure actual before/after API binary and same-architecture image size, heap/RSS, prepared-evaluation latency and existing SDK telemetry regressions using `docker/api.Dockerfile`, `gitstore-api/internal/auth/metrics_sdk_test.go` and `specs/066-git-backed-rbac/research.md`; distinguish these results from the isolated planning probe and do not claim image-reduction issue #487 is complete.
-- [ ] T096 Run both extended capacity families for the declared unprofiled 30-minute healthy workload and record attributable results in `specs/066-git-backed-rbac/contracts/capacity-recovery.md`: 1,000 requests/s total, 50 admitted RBAC writes/min, at most four writers, decision p99 <=2 ms, propagation p95 <=2 s/p99 <=5 s, zero wrong/dropped decisions and all queue/snapshot/memory limits.
-- [ ] T097 Run the declared 30-minute fault workload through `scripts/run-chaos.sh` while the capacity oracle remains active; prove API restart, below/above-bound journal interruption, cursor-loss resync, controller recovery and recovery <=30 s, distinguishing injection receipts from correct domain recovery in `specs/066-git-backed-rbac/contracts/capacity-recovery.md`.
-- [ ] T098 Run the existing sustained peak catalog-push profile concurrently with RBAC against an eligible owned retained dataset of at least 5,000,000 products, preserving original thresholds/storage/history; record scoped interference acceptance in `specs/066-git-backed-rbac/contracts/capacity-recovery.md`, or leave this task blocked if the required runtime/asset is unavailable rather than reducing the gate or claiming #451 completion.
+- T096 **Deferred to #451 (2026-11-21), not passed**: run both extended capacity families for the declared unprofiled 30-minute healthy workload and record attributable results in `specs/066-git-backed-rbac/contracts/capacity-recovery.md`: 1,000 requests/s total, 50 admitted RBAC writes/min, at most four writers, decision p99 <=2 ms, propagation p99 <=5 s with p95 reported against the non-blocking <=2 s goal, zero wrong/dropped decisions and all queue/snapshot/memory limits. This is no longer a feature-closeout prerequisite.
+- [ ] T097 Prove native functional fault/recovery correctness on two APIs/two controllers and one Git service with bounded owned fault windows and an independent revision-aware decision oracle: API restart, below/above-bound journal interruption, cursor-loss full resync, controller recovery and recovery <=30 s. Verify surviving peers, readiness before traffic, no expired/revoked/stale-UID grants and no duplicate managed bindings. Record actual domain recovery separately from injector/process receipts in `specs/066-git-backed-rbac/contracts/capacity-recovery.md`. The original 30-minute fault-load/rate/percentile acceptance remains pending under #451; it is not required for this functional proof.
+- T098 **Deferred to #451 (2026-11-21), not passed**: run the existing sustained peak catalog-push profile concurrently with RBAC against an eligible owned retained dataset of at least 5,000,000 products, preserving original thresholds/storage/history. Record scoped interference acceptance in `specs/066-git-backed-rbac/contracts/capacity-recovery.md`; an unavailable runtime/asset leaves production acceptance pending, not reduced to alpha. This is no longer a feature-closeout prerequisite.
 - [X] T099 Update `docs/configuration.md`, `docs/api-reference.md`, `docs/storage-groups/transient.md` and `docs/runbooks/controller-auth.md` for implemented provider settings, SubjectAccessReview, freshness/readiness, bootstrap, protected owner bindings, safe cutover/rollback and supported diagnostics; keep user-facing docs free of internal spec/task references and private experiment data.
 - [X] T100 Amend `docs/ADRs/0010-authorization-model.md`, `docs/ADRs/README.md` and `docs/implementation/022-opa-data-authorization.md` for the implemented dynamic model and validation-start boundary, preserving ADR-0010's acceptance date; explicitly verify ADR-0018 remains Proposed because platform-wide lease/fencing is not implemented, and require a separately scoped status-flip task if that core is later approved.
 - [ ] T101 Run focused suites/race checks, `make build`, `make test`, `make lint`, `make check TARGET=all` and the full default `make pr-ready`; refresh the code graph with `graphify update .`, check generated drift and confirm all source changes behind `shared/schemas/admin/rbac.graphqls` and `gitstore-api/internal/rbac/` retain the declared compatibility and no-secret guarantees.
-- [ ] T102 Validate the supported sequence in `specs/066-git-backed-rbac/quickstart.md`, update `tests/capacity/README.md` and relevant scoped command docs with the implemented selectors/evidence contract, and reconcile traceability in `specs/066-git-backed-rbac/plan.md`; do not add an external quickstart-repository parity gate or a feature-specific public Make target.
-- [ ] T103 After every required functional, native-store, replica/rolling, healthy/fault and large-catalog gate passes, update `specs/066-git-backed-rbac/spec.md` to Closed and finalize the acceptance summary in `specs/066-git-backed-rbac/contracts/capacity-recovery.md` in the implementing PR; retain Draft/pending status when evidence is unavailable and leave unrelated Proposed ADRs, #451, #487 and GraphQL-alignment #548 outside completion claims.
+- T102 **Retired (owner decision 2026-11-19), not passed**: the separate quickstart-validation closure gate is no longer required. Command documentation remains maintained under T099 and source validation under T101.
+- [ ] T103 After every non-deferred functional, native-store, concurrent-replica/rolling, bounded-work and functional fault/recovery gate passes, update `specs/066-git-backed-rbac/spec.md` to Closed and finalize an explicitly correctness-only acceptance summary in `specs/066-git-backed-rbac/contracts/capacity-recovery.md` in the implementing PR. Retain Draft/pending status while a correctness proof such as T097 is missing. Leave T096/T098 and sustained fault-load acceptance pending in #451; do not claim production readiness/activation or completion of unrelated Proposed ADRs, #487 or GraphQL-alignment #548.
 
 T089's local test-first foundation is implemented in the existing namespace/watch
 harness. The scheduler computes every scheduled offer independently of timer
@@ -764,13 +773,14 @@ six independently deployable production features.
 | US6 | T062-T064 first. T065-T068 build the shared client/group and lifecycle; T069 must enable the validated template before T070 writes managed bindings; T071/T072 add status/catch-up; T073 joins replica recovery. |
 | US4 | T074/T075 first, then T076-T079; T080 verifies fresh deployment/removal/upgrade independently of a pre-seeded fixture. |
 | US5 | T081/T082 first; T083 defines SDL before T084-T087 handlers/diagnostics; T088 regenerates and joins integration. |
-| Acceptance | T089 precedes T090-T093 runner changes; T094/T095 require complete story implementations. T096-T098 require the extended verified runners and owned runtime. T099/T100 document implemented behavior; T101/T102 validate the final source/docs. T103 requires all prior tasks and may not bypass a pending production gate. |
+| Acceptance | T089 precedes T090-T093 runner changes; T094/T095 require complete story implementations. T097 requires an owned native runtime and independent functional fault/recovery oracle. T096/T098 and sustained fault-load acceptance remain pending in #451. T099/T100 document implemented behavior; T101 validates the final source. T102 is retired. T103 requires all non-retired, non-deferred correctness tasks; it cannot bypass T097 or establish production readiness. |
 
 US1's fixture is explicitly preinitialized; it is not a replacement for US4's
 fresh-bootstrap test. The safe externally usable MVP requires US3 + US2 +
 US1 and shared foundations; enabling fresh production deployments also
-requires US4 and the rollout gates. The complete feature additionally
-requires US6, US5 and all declared acceptance.
+requires US4 and the rollout and production-capacity gates. Correctness-only
+feature completion additionally requires US6, US5 and all non-deferred
+acceptance; it does not authorize production activation.
 
 ## Parallel execution examples
 
@@ -807,8 +817,9 @@ resolver or generated-file edits. Code generation has one owner per batch.
 | FR-022-024 | T003/T004/T019/T024/T060, T094/T100/T102 |
 | FR-025-031 | T057/T060, T062-T073, T094/T096/T097 |
 | PR-001/002/004 | T006/T014/T021/T027-T050/T058-T064/T073/T080/T088/T094 |
-| PR-003/005/006 | T089-T098; native topology, physical faults, full load and retained-dataset gates |
-| SC-001-008 | T047/T061/T073/T080/T088/T094-T098/T103 |
+| PR-003/005 | T089-T092; T096/T098 and sustained fault-load acceptance deferred to #451 with unchanged full-load and retained-dataset gates |
+| PR-006 | T059/T061/T073/T093/T094/T097; native functional domain recovery remains required |
+| SC-001-008 | T047/T061/T073/T080/T088/T094/T097/T103 for correctness; SC-001 percentiles and SC-007 sustained-load latency remain in #451 |
 
 ## Implementation strategy
 
@@ -821,9 +832,11 @@ resolver or generated-file edits. Code generation has one owner per batch.
 3. Add US6 personal-owner/lifecycle work, US4 first-start bootstrap and US5
    diagnostics as separately tested increments. Keep dynamic writes gated
    while old/static serving replicas remain in the cohort.
-4. Prove compatible cutover, healthy load, physical faults and large-catalog
-   interference before production activation and feature closure. Keep
-   ownership, resource bounds, receipts and pending evidence explicit.
+4. Prove compatible cutover, replica correctness, bounded work and native
+   functional fault recovery before correctness-only feature closure.
+   Healthy/fault-load capacity and large-catalog interference remain in #451
+   before production activation. Keep ownership, resource bounds, receipts
+   and pending evidence explicit.
 5. Amend already-Accepted ADR-0010 without changing its acceptance date.
    No Proposed ADR's whole core is implemented by this scope, so there is no
    automatic Proposed-to-Accepted flip. If platform-wide ADR-0018 fencing

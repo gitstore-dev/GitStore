@@ -1,5 +1,30 @@
 # Validation, Capacity and Recovery Contract
 
+## Delivery scope (owner decision 2026-11-21)
+
+Feature delivery is correctness-first. The unchanged sustained performance
+and production-capacity requirements below move to #451; they are not
+passed, waived or deleted. This scope decision supersedes earlier statements
+that every pending capacity gate blocks feature closure. Historical
+measurements and failed attempts keep their original classifications.
+
+| Acceptance | Feature closure | Production acceptance in #451 |
+|---|---|---|
+| Authorization, isolation, privilege containment, exact revision/UID truth | Required; no wrong decisions or false denial-as-recovery claims | Still required at declared load |
+| Native store, two API/controller replicas, rolling upgrades | Required on the actual implemented contracts | Still required during sustained load |
+| Freshness, revocation and bounded work | Configured security/resource bounds remain enforced; no stale grants, unbounded queues or product scans | Measure the full declared envelope without relaxing caps |
+| Functional faults and recovery | T097: actual domain recovery, surviving-peer correctness and <=30 s recovery after source restoration | Original thirty-minute fault-load/rate/percentile workload remains pending |
+| Healthy sustained capacity | T096 deferred, not passed | Declared thirty-minute workload, 1,000 requests/s, 50 RBAC writes/min and original gates |
+| Percentile optimization/acceptance | Not a feature blocker; configured revocation bound is not a percentile waiver | Decision p99 <=2 ms and propagation p99 <=5 s; p95 <=2 s remains a reported non-blocking goal |
+| >=5,000,000-Product peak-push interference | T098 deferred, not passed | Eligible retained catalog plus unchanged peak-push and RBAC gates |
+
+T103 can close the feature only after all non-deferred correctness proofs,
+including T097, pass. It must explicitly leave production acceptance and
+activation unclaimed. T093 injector/stand-in receipts are not native domain
+recovery. Native restart, owner-controller and rolling proofs do not by
+themselves establish the complete journal-interruption/cursor-loss matrix.
+Keep the specification Draft while any required correctness proof is missing.
+
 ## Existing command interface
 
 Use existing `make test`, `make lint`, `make check TARGET=all`,
@@ -326,7 +351,7 @@ Use real memdb and native Scylla contracts, fixed Rego decision fixtures,
 race tests and bounded integration fixtures. In-process providers do not
 prove deployed AuthN/AuthZ or process replacement.
 
-## Healthy workload
+## Healthy workload (production acceptance in #451)
 
 ### Local memory-accounting evidence
 
@@ -379,8 +404,9 @@ admission is not counted as successful throughput.
 Required gates:
 
 - OPA provider-call p99 <=2 ms at declared dataset, without profiler overhead.
-- Propagation to each API p95 <=2 s, p99 <=5 s from successful admission;
-  no allowed decision beyond the configured 5 s revocation bound.
+- Propagation to each API p99 <=5 s from successful admission; report p95
+  against the non-blocking <=2 s optimization goal. No allowed decision may
+  exceed the configured 5 s revocation bound.
 - Zero wrong policy decisions, zero privilege escalations and zero dropped
   scheduled iterations in healthy acceptance.
 - No request-path full product scan; no unbounded queue or goroutine growth.
@@ -394,7 +420,7 @@ propagation, and `make capacity TARGET=api PROFILE=readiness MODE=alpha`
 with explicit RBAC workload selection implemented in the existing driver.
 Do not conflate these selectors with their present health-only behavior.
 
-## Interference and larger-catalog gate
+## Interference and larger-catalog gate (production acceptance in #451)
 
 Reuse an eligible owned existing catalog-capacity fixture, with at least
 5,000,000 products for a production-scale claim, without reseeding or
@@ -410,6 +436,18 @@ feature resolves #451. This gate is implementation validation, not a
 planning-time authorization to launch or mutate retained deployments.
 
 ## Fault and rolling workload
+
+For T097's feature proof, exercise the native domain scenarios below in
+bounded owned windows with an independent decision/revision oracle. Require
+zero wrong or expired grants, ready-only traffic admission, correct
+surviving peers, UID-safe controller recovery and recovery <=30 s after the
+source becomes available. Do not substitute responsive HTTP stand-ins,
+injector success or a restarted PID for authorization recovery. Record
+unavailability distinctly from a correct policy denial.
+
+The following sustained workload remains required by #451, not by
+correctness-only feature closure. Its rates, duration, oracle and gates
+are unchanged.
 
 Repeat the declared 30-minute request/write workload with predeclared,
 bounded fault windows and ownership verification:
