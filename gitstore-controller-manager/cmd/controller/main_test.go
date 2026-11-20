@@ -123,6 +123,85 @@ func TestRBACPrimaryGroupPersistsWorkAcrossIndependentReplicaReplacement(t *test
 	}
 }
 
+func TestRBACRoleLifecycleNotifiesDependentsAcrossCheckpointReplacement(t *testing.T) {
+	for _, kind := range []string{"Role", "ClusterRole"} {
+		for _, change := range []string{"status", "generation", "terminating", "replacement"} {
+			t.Run(kind+"/"+change, func(t *testing.T) {
+				for _, delivery := range []string{"watch", "relist"} {
+					t.Logf("delivery=%s", delivery)
+					ctx, dir := t.Context(), t.TempDir()
+					runner := newRBACDiskRunner(kind, nil, nil, &config.Config{}, zap.NewNop())
+					resource := rbaccontroller.Resource{Kind: kind, Metadata: rbaccontroller.Metadata{
+						UID: "original-role", Name: "reader", ResourceVersion: "1", Generation: 1,
+					}}
+					if kind == "Role" {
+						resource.Metadata.Namespace = "shop"
+					}
+					item := func(resource rbaccontroller.Resource) checkpoint.DiskItem {
+						data, err := json.Marshal(resource)
+						require.NoError(t, err)
+						result := checkpoint.DiskItem{Key: resource.Key(), Version: resource.Metadata.ResourceVersion,
+							Value: data, Indexes: runner.DiskIndexes(resource), Related: runner.DiskRelated(resource)}
+						if runner.DiskRelatedVersion != nil {
+							result.RelatedVersion = runner.DiskRelatedVersion(resource)
+						}
+						return result
+					}
+					store, err := checkpoint.OpenDiskStore(dir, kind)
+					require.NoError(t, err)
+					generation, err := store.BeginSnapshot(ctx)
+					require.NoError(t, err)
+					require.NoError(t, store.PutSnapshotPage(ctx, generation, []checkpoint.DiskItem{item(resource)}))
+					require.NoError(t, store.FinishSnapshot(ctx, generation, "rwv1:test:1"))
+					related, err := store.RelatedPending(ctx, "", 10)
+					require.NoError(t, err)
+					require.Len(t, related, 1)
+					acknowledged, err := store.AcknowledgeRelated(ctx, related[0].Key, related[0].Token)
+					require.NoError(t, err)
+					require.True(t, acknowledged)
+					require.NoError(t, store.Close())
+					store, err = checkpoint.OpenDiskStore(dir, kind)
+					require.NoError(t, err)
+					t.Cleanup(func() { _ = store.Close() })
+					resource.Metadata.ResourceVersion = "2"
+					switch change {
+					case "status":
+						resource.Status.ObservedGeneration = 1
+					case "generation":
+						resource.Metadata.Generation = 2
+					case "terminating":
+						now := time.Now().UTC()
+						resource.Metadata.DeletionTimestamp = &now
+					case "replacement":
+						resource.Metadata.UID = "replacement-role"
+					}
+					if delivery == "relist" {
+						generation, err = store.BeginSnapshot(ctx)
+						require.NoError(t, err)
+						require.NoError(t, store.PutSnapshotPage(ctx, generation, []checkpoint.DiskItem{item(resource)}))
+						require.NoError(t, store.FinishSnapshot(ctx, generation, "rwv1:test:2"))
+					} else {
+						require.NoError(t, store.Apply(ctx, item(resource), false, true, "rwv1:test:2"))
+					}
+					require.NoError(t, store.Close())
+					store, err = checkpoint.OpenDiskStore(dir, kind)
+					require.NoError(t, err)
+					related, err = store.RelatedPending(ctx, "", 10)
+					require.NoError(t, err)
+					if delivery == "watch" && (change == "status" || change == "generation") {
+						require.Empty(t, related, "unchanged role identity/lifecycle must not fan out")
+					} else {
+						require.Len(t, related, 1, "lifecycle changes and cold relists must preserve dependent work")
+						require.Equal(t, types.WorkItemKey{Kind: "RBACRoleChanged",
+							Namespace: resource.Metadata.Namespace, Name: kind + "/" + resource.Metadata.Name}, related[0].Key)
+					}
+					require.NoError(t, store.Close())
+				}
+			})
+		}
+	}
+}
+
 type ownerCatchupSource struct {
 	pages [][]namespacecontroller.Namespace
 	lists atomic.Int64
