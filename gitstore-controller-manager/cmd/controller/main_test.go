@@ -167,7 +167,6 @@ func TestRBACRoleLifecycleNotifiesDependentsAcrossCheckpointReplacement(t *testi
 					switch change {
 					case "status":
 						resource.Status.ObservedGeneration = 1
-						resource.Status.LastAppliedRevision = "main@sha1:acknowledged"
 					case "generation":
 						resource.Metadata.Generation = 2
 					case "terminating":
