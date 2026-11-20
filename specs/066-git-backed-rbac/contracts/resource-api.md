@@ -51,7 +51,7 @@ Planned field families:
 | Mutations | `create<Kind>`, `update<Kind>`, `delete<Kind>`, `complete<Kind>Deletion`; action-specific payload and expected resourceVersion |
 | Status | Extend common status mutation for registered kinds; controller-owned fields only |
 | Watch | Extend existing generic resource-kind dispatch and typed payload union |
-| Review | `accessReview(input: AccessReviewInput!): AccessReviewPayload!`; transient `SubjectAccessReview`, see below |
+| Review | `accessReview(input: AccessReviewInput!): SubjectAccessReview!`; transient result returned directly, see below |
 
 Names above describe schema additions, not new public HTTP routes. Reuse
 existing pagination support/error behavior rather than adding a second
@@ -99,17 +99,16 @@ pattern, not a flat decision object. The
 [transient storage-group catalogue](../../../docs/storage-groups/transient.md#authn-and-authz-checks)
 already identifies `SubjectAccessReview` as a request/response contract.
 Keep `accessReview` on Admin Query; evaluation itself creates no resource.
+Return `SubjectAccessReview` directly; action-specific payload wrappers are
+reserved for mutations.
 
-The input and payload are:
+The input and result are:
 
 ```text
 AccessReviewInput {
   apiVersion = "authorization.gitstore.dev/v1beta1"
   kind = "SubjectAccessReview"
   spec: SubjectAccessReviewSpecInput!
-}
-AccessReviewPayload {
-  subjectAccessReview: SubjectAccessReview
 }
 SubjectAccessReview {
   apiVersion, kind,
@@ -120,8 +119,8 @@ SubjectAccessReview {
 
 The executable SDL is in `shared/schemas/admin/rbac.graphqls`. `apiVersion` and `kind` are
 non-null strings with input defaults; reject unsupported values rather than
-silently overriding them. The payload follows existing action-specific
-payload/error conventions. Do not copy durable `ObjectMeta` requirements:
+silently overriding them. Errors follow the existing GraphQL error
+conventions. Do not copy durable `ObjectMeta` requirements:
 reviews need no name, UID, resourceVersion, generation or ownerReferences.
 They do not implement Node or gain CRUD, list, watch, finalizers or storage.
 Any required durable audit record is a separate resource.
@@ -160,8 +159,8 @@ the configured UserDir; lookup failure is unavailability, not an empty
 group set. Supplied groups, including an explicit empty list, are
 hypothetical and cannot impersonate the reviewer or authorize a write.
 
-The response echoes the accepted parameters in `subjectAccessReview.spec`.
-`subjectAccessReview.status` carries:
+The response echoes the accepted parameters in `accessReview.spec`.
+`accessReview.status` carries:
 
 ```text
 allowed, reason, hypothetical,

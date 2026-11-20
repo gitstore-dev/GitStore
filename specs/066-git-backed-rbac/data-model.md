@@ -153,8 +153,8 @@ Do not persist a provider-native policy copy.
 `SubjectAccessReview` is a transient envelope in
 `authorization.gitstore.dev/v1beta1`, separate from the four Git-backed
 kinds. `AccessReviewInput` carries `apiVersion`, `kind` and `spec`;
-`AccessReviewPayload.subjectAccessReview` returns the versioned envelope
-with echoed `spec` and evaluated `status`. No durable metadata, Node ID,
+The `accessReview` query returns `SubjectAccessReview` directly as the versioned
+envelope with echoed `spec` and evaluated `status`. No durable metadata, Node ID,
 Git manifest, projection row, lifecycle or watch is created.
 
 `spec`: target `principal.subject`, optional `principal.groups`, canonical

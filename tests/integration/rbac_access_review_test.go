@@ -62,11 +62,11 @@ func rbacNativeDecisionMatches(t *testing.T, path string, offset int64, subject,
 }
 
 const rbacNativeReviewQuery = `query($input:AccessReviewInput!){
-  accessReview(input:$input){subjectAccessReview{
+  accessReview(input:$input){
     apiVersion kind spec{principal{subject groups} action resourceRef{id}}
     status{allowed hypothetical catalogDigest builtinDigest
       revisions{tierID namespaceUID gitRevision tierRevision capturedAt}}
-  }}
+  }
 }`
 
 func (f rbacNativeFixture) create(t *testing.T, kind string, manifest map[string]any) rbacNativeResource {
@@ -154,10 +154,10 @@ func (f rbacNativeFixture) review(t *testing.T, api string, input map[string]any
 	response := f.query(t, api, rbacNativeReviewQuery, map[string]any{"input": input})
 	require.Empty(t, response.Errors, "access review HTTP status: %d", response.Status)
 	var result struct {
-		AccessReview struct{ SubjectAccessReview rbacNativeReview }
+		AccessReview rbacNativeReview
 	}
 	require.NoError(t, json.Unmarshal(response.Data, &result))
-	review := result.AccessReview.SubjectAccessReview
+	review := result.AccessReview
 	require.Equal(t, "authorization.gitstore.dev/v1beta1", review.APIVersion)
 	require.Equal(t, "SubjectAccessReview", review.Kind)
 	require.NotEmpty(t, review.Status.CatalogDigest)

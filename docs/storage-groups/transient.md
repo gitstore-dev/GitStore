@@ -67,8 +67,8 @@ status:
 ```
 
 The Admin schema adapts this envelope as
-`accessReview(input:).subjectAccessReview`, with accepted inputs in `spec`
-and the evaluated decision/revision identities in `status`. Dynamic production
+`accessReview(input:)`, returning `SubjectAccessReview` directly, with accepted
+inputs in `spec` and the evaluated decision/revision identities in `status`. Dynamic production
 execution remains gated; see [configuration](../configuration.md#dynamic-rbac-rollout)
 and the [API contract](../api-reference.md#subjectaccessreview).
 The authenticated reviewer needs scope-specific review permission, including

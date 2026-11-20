@@ -13,9 +13,9 @@ One provider-neutral controller group owns RBAC lifecycle and managed USER
 namespace owner bindings; it does not translate data for OPA.
 
 Expose access checks as transient `SubjectAccessReview` envelopes through
-`accessReview(input:)`, following the existing TokenRequest input/payload
-pattern. Requests use `spec`; results use `status`. Reviews are not a fifth
-Git-backed kind and have no durable resource lifecycle.
+the `accessReview(input:)` Admin Query, returning the versioned result directly
+without a mutation payload wrapper. Requests use `spec`; results use `status`.
+Reviews are not a fifth Git-backed kind and have no durable resource lifecycle.
 
 The November 9 clarification deliberately chooses authorization snapshots
 current at validation start, not cross-repository commit-time linearizability.
@@ -239,7 +239,7 @@ This is the input to task generation, not task execution.
 | Resource pipeline | US2/US3 | memdb/Scylla CAS and CDC; pre-receive + GraphQL parity; whole-candidate rejection, projection lag and replay recovery tests |
 | Provider | US1 | Embedded OPA, readiness, snapshot/watch bridge, bounded rebuilds, exact evaluated revisions; cold-start and revoked-grant regressions |
 | Bootstrap/lifecycle | US4/US6 | Immutable built-ins, once-only initial admin, role/binding finalizers, Staff owner template, UID recreation and concurrent controllers |
-| Inspectability | US5 | Authorized resource Node/connection/watch; transient SubjectAccessReview input/payload, spec/status, revision vector and hypothetical-input semantics |
+| Inspectability | US5 | Authorized resource Node/connection/watch; transient SubjectAccessReview query input/result, spec/status, revision vector and hypothetical-input semantics |
 | Acceptance | All | Real replica/rolling/fault matrix, declared load, image delta, docs and lifecycle close-out |
 
 ### Compatibility and cutover

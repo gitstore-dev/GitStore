@@ -254,7 +254,8 @@ Access-review API decision: adapt the existing TokenRequest-style envelope
 for transient `SubjectAccessReview`, not a flat GraphQL decision object.
 `authorization.gitstore.dev/v1beta1` request parameters live in `spec`;
 the response echoes `spec` and places decision/revision diagnostics in
-`status`. `AccessReviewPayload.subjectAccessReview` wraps the result.
+`status`. The `accessReview` Admin Query returns `SubjectAccessReview` directly;
+action-specific payload wrappers are reserved for mutations.
 Evidence: [the existing token contract](../../shared/schemas/admin/serviceaccount.graphqls)
 and [the transient resource catalogue](../../docs/storage-groups/transient.md#authn-and-authz-checks).
 The catalogue already identifies this placement, so no new storage group

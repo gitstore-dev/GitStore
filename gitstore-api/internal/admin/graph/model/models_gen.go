@@ -64,10 +64,6 @@ type AccessReviewInput struct {
 	Spec       *SubjectAccessReviewSpecInput `json:"spec"`
 }
 
-type AccessReviewPayload struct {
-	SubjectAccessReview *SubjectAccessReview `json:"subjectAccessReview,omitempty"`
-}
-
 // Exactly one identifier; workload names are separate from human usernames.
 type ActorBy struct {
 	ID                 *string `json:"id,omitempty"`
