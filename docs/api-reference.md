@@ -1252,30 +1252,28 @@ to roll Git back.
 
 ### SubjectAccessReview
 
-`accessReview(input:)` is an Admin Query returning
-`AccessReviewPayload.subjectAccessReview`. Its default input version and kind
+`accessReview(review:)` is an Admin Query returning `SubjectAccessReview`
+directly, without a mutation payload wrapper. Its default input version and kind
 are `authorization.gitstore.dev/v1beta1` and `SubjectAccessReview`.
 
 ```graphql
 query {
-  accessReview(input: {
+  accessReview(review: {
     spec: {
       principal: {subject: "user-123"}
       action: "product.read"
       resourceRef: {id: "<product-node-id>"}
     }
   }) {
-    subjectAccessReview {
-      apiVersion
-      kind
-      status {
-        allowed
-        reason
-        hypothetical
-        revisions { tierID namespaceUID gitRevision tierRevision capturedAt }
-        catalogDigest
-        builtinDigest
-      }
+    apiVersion
+    kind
+    status {
+      allowed
+      reason
+      hypothetical
+      revisions { tierID namespaceUID gitRevision tierRevision capturedAt }
+      catalogDigest
+      builtinDigest
     }
   }
 }

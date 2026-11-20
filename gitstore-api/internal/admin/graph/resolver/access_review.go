@@ -29,7 +29,7 @@ func reviewForbidden() error {
 	return admission.NewError(admission.CodeForbidden, "RBAC_REVIEW_PERMISSION_REQUIRED", "access review is not authorized").ToGQLError()
 }
 
-func (r *Resolver) reviewAccess(ctx context.Context, input model.AccessReviewInput) (*model.AccessReviewPayload, error) {
+func (r *Resolver) reviewAccess(ctx context.Context, input model.AccessReviewInput) (*model.SubjectAccessReview, error) {
 	if input.APIVersion != accessReviewAPIVersion || input.Kind != "SubjectAccessReview" ||
 		input.Spec == nil || input.Spec.Principal == nil || input.Spec.ResourceRef == nil {
 		return nil, invalidAccessReview()
@@ -165,13 +165,13 @@ func (r *Resolver) reviewAccess(ctx context.Context, input model.AccessReviewInp
 			GitRevision: tier.GitRevision, TierRevision: strconv.FormatUint(tier.Revision, 10), CapturedAt: capturedAt,
 		})
 	}
-	return &model.AccessReviewPayload{SubjectAccessReview: &model.SubjectAccessReview{
+	return &model.SubjectAccessReview{
 		APIVersion: input.APIVersion, Kind: input.Kind, Status: status,
 		Spec: &model.SubjectAccessReviewSpec{
 			Principal: &model.SubjectAccessReviewPrincipal{Subject: spec.Principal.Subject, Groups: slices.Clone(spec.Principal.Groups)},
 			Action:    spec.Action, ResourceRef: &model.SubjectAccessReviewResourceRef{ID: spec.ResourceRef.ID}, Context: spec.Context,
 		},
-	}}, nil
+	}, nil
 }
 
 func validReviewPrincipalInput(input *model.SubjectAccessReviewPrincipalInput) bool {

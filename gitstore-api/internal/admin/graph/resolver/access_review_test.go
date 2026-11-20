@@ -17,11 +17,11 @@ import (
 )
 
 const accessReviewQuery = `query($input:AccessReviewInput!){
-  accessReview(input:$input){subjectAccessReview{
+  accessReview(review:$input){
     apiVersion kind spec{principal{subject groups} action resourceRef{id}}
     status{allowed reason hypothetical catalogDigest builtinDigest
       revisions{tierID namespaceUID gitRevision tierRevision capturedAt}}
-  }}
+  }
 }`
 
 func accessReviewFixture(t *testing.T) (*Resolver, map[string]any) {
@@ -46,7 +46,7 @@ func TestAccessReviewEnvelopeUsesAuthoritativeModelAndNeverChangesAuthority(t *t
 	require.NoError(t, err)
 	data, rejected := rbacGraphQLRequest(t, root, accessReviewQuery, input)
 	require.Empty(t, rejected)
-	review := data["accessReview"]["subjectAccessReview"].(map[string]any)
+	review := data["accessReview"]
 	require.Equal(t, "authorization.gitstore.dev/v1beta1", review["apiVersion"])
 	require.Equal(t, "SubjectAccessReview", review["kind"])
 	expected, err := json.Marshal(input["spec"])
@@ -119,7 +119,7 @@ func TestAccessReviewOmittedGroupsRequireTrustedDirectoryAndErrorsAreUnavailable
 	delete(input["spec"].(map[string]any)["principal"].(map[string]any), "groups")
 	data, rejected := rbacGraphQLRequest(t, root, accessReviewQuery, input)
 	require.Empty(t, rejected)
-	review := data["accessReview"]["subjectAccessReview"].(map[string]any)
+	review := data["accessReview"]
 	require.Equal(t, false, review["status"].(map[string]any)["hypothetical"])
 	require.Positive(t, directory.calls)
 	directory.err = errors.New("directory unavailable")
@@ -140,7 +140,7 @@ func TestAccessReviewReturnsRealDenialAndMarksProposedContextHypothetical(t *tes
 	spec["context"] = map[string]any{"visibility": "public"}
 	data, rejected := rbacGraphQLRequest(t, root, accessReviewQuery, input)
 	require.Empty(t, rejected)
-	status := data["accessReview"]["subjectAccessReview"].(map[string]any)["status"].(map[string]any)
+	status := data["accessReview"]["status"].(map[string]any)
 	require.Equal(t, false, status["allowed"])
 	require.Equal(t, true, status["hypothetical"])
 	require.Len(t, status["revisions"], 2, "a denial still reports its actual model identity")

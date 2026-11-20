@@ -29,38 +29,6 @@ import (
 
 // region    **************************** field.gotpl *****************************
 
-func (ec *executionContext) _AccessReviewPayload_subjectAccessReview(ctx context.Context, field graphql.CollectedField, obj *model.AccessReviewPayload) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_AccessReviewPayload_subjectAccessReview(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.SubjectAccessReview, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.SubjectAccessReview) graphql.Marshaler {
-			return ec.marshalOSubjectAccessReview2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋadminᚋgraphᚋmodelᚐSubjectAccessReview(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_AccessReviewPayload_subjectAccessReview(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "AccessReviewPayload",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_SubjectAccessReview(ctx, field)
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _ClusterRole_id(ctx context.Context, field graphql.CollectedField, obj *model.ClusterRole) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -5045,42 +5013,6 @@ func (ec *executionContext) unmarshalInputUpdateRoleInput(ctx context.Context, o
 
 // region    **************************** object.gotpl ****************************
 
-var accessReviewPayloadImplementors = []string{"AccessReviewPayload"}
-
-func (ec *executionContext) _AccessReviewPayload(ctx context.Context, sel ast.SelectionSet, obj *model.AccessReviewPayload) graphql.Marshaler {
-	fields := graphql.CollectFields(ec.OperationContext, sel, accessReviewPayloadImplementors)
-
-	out := graphql.NewFieldSet(fields)
-	deferred := make(map[string]*graphql.FieldSet)
-	for i, field := range fields {
-		switch field.Name {
-		case "__typename":
-			out.Values[i] = graphql.MarshalString("AccessReviewPayload")
-		case "subjectAccessReview":
-			out.Values[i] = ec._AccessReviewPayload_subjectAccessReview(ctx, field, obj)
-		default:
-			panic("unknown field " + strconv.Quote(field.Name))
-		}
-	}
-	out.Dispatch(ctx)
-	if out.Invalids > 0 {
-		return graphql.Null
-	}
-
-	atomic.AddInt32(&ec.Deferred, int32(min(len(deferred), math.MaxInt32)))
-
-	for label, dfs := range deferred {
-		ec.ProcessDeferredGroup(graphql.DeferredGroup{
-			Label:    label,
-			Path:     graphql.GetPath(ctx),
-			FieldSet: dfs,
-			Context:  ctx,
-		})
-	}
-
-	return out
-}
-
 var clusterRoleImplementors = []string{"ClusterRole", "Node"}
 
 func (ec *executionContext) _ClusterRole(ctx context.Context, sel ast.SelectionSet, obj *model.ClusterRole) graphql.Marshaler {
@@ -7346,20 +7278,6 @@ func (ec *executionContext) unmarshalNAccessReviewInput2githubᚗcomᚋgitstore�
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalNAccessReviewPayload2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋadminᚋgraphᚋmodelᚐAccessReviewPayload(ctx context.Context, sel ast.SelectionSet, v model.AccessReviewPayload) graphql.Marshaler {
-	return ec._AccessReviewPayload(ctx, sel, &v)
-}
-
-func (ec *executionContext) marshalNAccessReviewPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋadminᚋgraphᚋmodelᚐAccessReviewPayload(ctx context.Context, sel ast.SelectionSet, v *model.AccessReviewPayload) graphql.Marshaler {
-	if v == nil {
-		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
-			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
-		}
-		return graphql.Null
-	}
-	return ec._AccessReviewPayload(ctx, sel, v)
-}
-
 func (ec *executionContext) marshalNClusterRole2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋadminᚋgraphᚋmodelᚐClusterRole(ctx context.Context, sel ast.SelectionSet, v *model.ClusterRole) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -8095,6 +8013,20 @@ func (ec *executionContext) marshalNRoleWatchEvent2ᚖgithubᚗcomᚋgitstoreᚑ
 	return ec._RoleWatchEvent(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNSubjectAccessReview2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋadminᚋgraphᚋmodelᚐSubjectAccessReview(ctx context.Context, sel ast.SelectionSet, v model.SubjectAccessReview) graphql.Marshaler {
+	return ec._SubjectAccessReview(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNSubjectAccessReview2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋadminᚋgraphᚋmodelᚐSubjectAccessReview(ctx context.Context, sel ast.SelectionSet, v *model.SubjectAccessReview) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SubjectAccessReview(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNSubjectAccessReviewPrincipal2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋadminᚋgraphᚋmodelᚐSubjectAccessReviewPrincipal(ctx context.Context, sel ast.SelectionSet, v *model.SubjectAccessReviewPrincipal) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -8345,13 +8277,6 @@ func (ec *executionContext) marshalORoleBinding2ᚖgithubᚗcomᚋgitstoreᚑdev
 		return graphql.Null
 	}
 	return ec._RoleBinding(ctx, sel, v)
-}
-
-func (ec *executionContext) marshalOSubjectAccessReview2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋadminᚋgraphᚋmodelᚐSubjectAccessReview(ctx context.Context, sel ast.SelectionSet, v *model.SubjectAccessReview) graphql.Marshaler {
-	if v == nil {
-		return graphql.Null
-	}
-	return ec._SubjectAccessReview(ctx, sel, v)
 }
 
 // endregion ***************************** type.gotpl *****************************
