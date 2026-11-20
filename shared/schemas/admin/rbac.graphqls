@@ -514,7 +514,7 @@ type SubjectAccessReviewRevision {
 
 extend type Query {
   """Requires scope review permission even when reviewing oneself."""
-  accessReview(input: AccessReviewInput!): SubjectAccessReview!
+  accessReview(review: AccessReviewInput!): SubjectAccessReview!
   role(by: RoleBy!): Role
   clusterRole(by: ClusterRoleBy!): ClusterRole
   roleBinding(by: RoleBindingBy!): RoleBinding

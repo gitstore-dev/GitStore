@@ -17,7 +17,7 @@ import (
 )
 
 const accessReviewQuery = `query($input:AccessReviewInput!){
-  accessReview(input:$input){
+  accessReview(review:$input){
     apiVersion kind spec{principal{subject groups} action resourceRef{id}}
     status{allowed reason hypothetical catalogDigest builtinDigest
       revisions{tierID namespaceUID gitRevision tierRevision capturedAt}}

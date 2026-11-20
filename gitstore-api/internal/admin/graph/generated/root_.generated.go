@@ -753,7 +753,7 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		AccessReview        func(childComplexity int, input model.AccessReviewInput) int
+		AccessReview        func(childComplexity int, review model.AccessReviewInput) int
 		Actor               func(childComplexity int, by model.ActorBy) int
 		Actors              func(childComplexity int, first *int32, after *string, last *int32, before *string) int
 		Categories          func(childComplexity int, namespace string, filter *model.CategoryFilterInput, first *int32, after *string, last *int32, before *string) int
@@ -4257,7 +4257,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.AccessReview(childComplexity, args["input"].(model.AccessReviewInput)), true
+		return e.ComplexityRoot.Query.AccessReview(childComplexity, args["review"].(model.AccessReviewInput)), true
 
 	case "Query.actor":
 		if e.ComplexityRoot.Query.Actor == nil {
@@ -9026,7 +9026,7 @@ type SubjectAccessReviewRevision {
 
 extend type Query {
   """Requires scope review permission even when reviewing oneself."""
-  accessReview(input: AccessReviewInput!): SubjectAccessReview!
+  accessReview(review: AccessReviewInput!): SubjectAccessReview!
   role(by: RoleBy!): Role
   clusterRole(by: ClusterRoleBy!): ClusterRole
   roleBinding(by: RoleBindingBy!): RoleBinding

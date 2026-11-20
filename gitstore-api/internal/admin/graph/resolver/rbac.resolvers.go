@@ -161,8 +161,8 @@ func (r *mutationResolver) CompleteClusterRoleBindingDeletion(ctx context.Contex
 }
 
 // AccessReview is the resolver for the accessReview field.
-func (r *queryResolver) AccessReview(ctx context.Context, input model.AccessReviewInput) (*model.SubjectAccessReview, error) {
-	return r.reviewAccess(ctx, input)
+func (r *queryResolver) AccessReview(ctx context.Context, review model.AccessReviewInput) (*model.SubjectAccessReview, error) {
+	return r.reviewAccess(ctx, review)
 }
 
 // Role is the resolver for the role field.

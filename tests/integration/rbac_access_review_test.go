@@ -61,8 +61,8 @@ func rbacNativeDecisionMatches(t *testing.T, path string, offset int64, subject,
 	return false
 }
 
-const rbacNativeReviewQuery = `query($input:AccessReviewInput!){
-  accessReview(input:$input){
+const rbacNativeReviewQuery = `query($review:AccessReviewInput!){
+  accessReview(review:$review){
     apiVersion kind spec{principal{subject groups} action resourceRef{id}}
     status{allowed hypothetical catalogDigest builtinDigest
       revisions{tierID namespaceUID gitRevision tierRevision capturedAt}}
@@ -151,7 +151,7 @@ type rbacNativeReview struct {
 
 func (f rbacNativeFixture) review(t *testing.T, api string, input map[string]any) rbacNativeReview {
 	t.Helper()
-	response := f.query(t, api, rbacNativeReviewQuery, map[string]any{"input": input})
+	response := f.query(t, api, rbacNativeReviewQuery, map[string]any{"review": input})
 	require.Empty(t, response.Errors, "access review HTTP status: %d", response.Status)
 	var result struct {
 		AccessReview rbacNativeReview

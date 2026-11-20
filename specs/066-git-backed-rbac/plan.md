@@ -13,7 +13,7 @@ One provider-neutral controller group owns RBAC lifecycle and managed USER
 namespace owner bindings; it does not translate data for OPA.
 
 Expose access checks as transient `SubjectAccessReview` envelopes through
-the `accessReview(input:)` Admin Query, returning the versioned result directly
+the `accessReview(review:)` Admin Query, returning the versioned result directly
 without a mutation payload wrapper. Requests use `spec`; results use `status`.
 Reviews are not a fifth Git-backed kind and have no durable resource lifecycle.
 

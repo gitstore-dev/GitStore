@@ -51,7 +51,7 @@ Planned field families:
 | Mutations | `create<Kind>`, `update<Kind>`, `delete<Kind>`, `complete<Kind>Deletion`; action-specific payload and expected resourceVersion |
 | Status | Extend common status mutation for registered kinds; controller-owned fields only |
 | Watch | Extend existing generic resource-kind dispatch and typed payload union |
-| Review | `accessReview(input: AccessReviewInput!): SubjectAccessReview!`; transient result returned directly, see below |
+| Review | `accessReview(review: AccessReviewInput!): SubjectAccessReview!`; transient result returned directly, see below |
 
 Names above describe schema additions, not new public HTTP routes. Reuse
 existing pagination support/error behavior rather than adding a second
