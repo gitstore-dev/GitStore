@@ -498,6 +498,12 @@ type rbacCapacitySourceHeader struct {
 func walkRBACCapacitySourceModels(reader io.Reader, visit func(rbacCapacitySourceHeader, []json.RawMessage) error) error {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), 1<<20)
+	var unterminatedLine bool
+	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		advance, line, err := bufio.ScanLines(data, atEOF)
+		unterminatedLine = atEOF && len(data) != 0 && bytes.IndexByte(data, '\n') < 0
+		return advance, line, err
+	})
 	var header *rbacCapacitySourceHeader
 	var resources []json.RawMessage
 	var remaining, modelBytes, total int
@@ -514,6 +520,13 @@ func walkRBACCapacitySourceModels(reader io.Reader, visit func(rbacCapacitySourc
 			Digest        string
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			if unterminatedLine {
+				// A live append can reach the reader before the JSON line is complete.
+				var tail json.RawMessage
+				if err := json.NewDecoder(bytes.NewReader(scanner.Bytes())).Decode(&tail); errors.Is(err, io.ErrUnexpectedEOF) {
+					return io.ErrUnexpectedEOF
+				}
+			}
 			return err
 		}
 		switch record.Type {

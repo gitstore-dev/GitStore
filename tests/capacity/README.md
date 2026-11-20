@@ -128,6 +128,11 @@ independent committed-revision expectations, private fixtures, topology
 constraints and process-epoch counters. These checks do not certify native
 dataset counts, replica propagation, fault recovery or sustained acceptance.
 
+Source-evidence readers treat an unfinished JSON record at the unterminated
+end of an appended stream as pending, not malformed committed evidence.
+Unfinished tails register no source model; malformed complete or interior
+records still fail, and complete models retain their count and digest checks.
+
 Spec 063's `REPOSITORY_CAPACITY_SECRET_SCENARIO=1` selects the connected File-push,
 owned-record fault, resource and evidence collector. It requires explicit
 `CHAOS_CONFIRM=1`, provisioned test-owned fixtures and an acknowledged Product

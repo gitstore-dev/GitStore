@@ -136,6 +136,41 @@ func TestRBACCapacitySourceModelsRejectTamperingGapsAndUncommittedTails(t *testi
 	incomplete := stream.String()
 	require.NoError(t, encoder.Encode(map[string]any{"type": "end", "digest": header.ContentDigest}))
 	complete := stream.String()
+	t.Run("partial-live-lines", func(t *testing.T) {
+		lines := strings.Split(strings.TrimSuffix(complete, "\n"), "\n")
+		prefix := ""
+		for index, line := range lines {
+			partial := complete + prefix + line[:len(line)-1]
+			t.Run([]string{"begin", "resource", "end"}[index], func(t *testing.T) {
+				accepted := 0
+				visit := func(rbacCapacitySourceHeader, []json.RawMessage) error {
+					accepted++
+					return nil
+				}
+				require.ErrorIs(t, walkRBACCapacitySourceModels(strings.NewReader(partial), visit), io.ErrUnexpectedEOF)
+				require.Equal(t, 1, accepted, "an unfinished appended line cannot register another source model")
+				for _, suffix := range []string{"\n", "\n" + complete} {
+					accepted = 0
+					err := walkRBACCapacitySourceModels(strings.NewReader(partial+suffix), visit)
+					require.Error(t, err)
+					require.NotErrorIs(t, err, io.ErrUnexpectedEOF, "malformed committed or interior lines must still fail")
+					require.Equal(t, 1, accepted)
+				}
+			})
+			prefix += line + "\n"
+		}
+		accepted := 0
+		require.NoError(t, walkRBACCapacitySourceModels(strings.NewReader(strings.TrimSuffix(complete, "\n")),
+			func(rbacCapacitySourceHeader, []json.RawMessage) error {
+				accepted++
+				return nil
+			}))
+		require.Equal(t, 1, accepted, "a complete hashed final model remains valid without a trailing newline")
+		err := walkRBACCapacitySourceModels(strings.NewReader(complete+`{"type":!`),
+			func(rbacCapacitySourceHeader, []json.RawMessage) error { return nil })
+		require.Error(t, err)
+		require.NotErrorIs(t, err, io.ErrUnexpectedEOF, "invalid syntax is not an unfinished valid JSON prefix")
+	})
 	for _, tc := range []struct {
 		name, input string
 		accepted    int
