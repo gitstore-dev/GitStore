@@ -177,6 +177,51 @@ func newDiskRunner[T any](kind string, watcher listwatch.ListWatcher[T], store *
 	}
 }
 
+func newRBACDiskRunner(kind string, watcher listwatch.ListWatcher[rbaccontroller.Resource], store *checkpoint.DiskStore, cfg *config.Config, log *zap.Logger) *listwatch.Runner[rbaccontroller.Resource] {
+	runner := newDiskRunner(kind, watcher, store, cfg, log,
+		func(resource rbaccontroller.Resource) types.WorkItemKey { return resource.Key() },
+		func(resource rbaccontroller.Resource) string { return resource.Metadata.ResourceVersion })
+	runner.DiskRelatedVersion = func(resource rbaccontroller.Resource) string {
+		if resource.Kind == "Role" || resource.Kind == "ClusterRole" {
+			return fmt.Sprintf("%s/%t", resource.Metadata.UID, resource.Metadata.DeletionTimestamp != nil)
+		}
+		return ""
+	}
+	runner.DiskIndexes = func(resource rbaccontroller.Resource) []string {
+		ref := resource.Spec.RoleRef
+		if ref == nil {
+			return nil
+		}
+		namespace := ""
+		if ref.Kind == "Role" {
+			namespace = resource.Metadata.Namespace
+		}
+		return []string{relationIndex("rbac-"+ref.Kind, namespace, ref.Name)}
+	}
+	runner.DiskRelated = func(resource rbaccontroller.Resource) []types.WorkItemKey {
+		if resource.Kind == "Role" || resource.Kind == "ClusterRole" {
+			return []types.WorkItemKey{{Kind: "RBACRoleChanged", Namespace: resource.Metadata.Namespace,
+				Name: resource.Kind + "/" + resource.Metadata.Name}}
+		}
+		if resource.Kind == "RoleBinding" && resource.Metadata.Name == rbaccontroller.ManagedBindingName {
+			keys := []types.WorkItemKey{{Kind: "Namespace", Name: resource.Metadata.Namespace}}
+			if resource.Spec.RoleRef != nil {
+				keys = append(keys, types.WorkItemKey{Kind: resource.Spec.RoleRef.Kind, Name: resource.Spec.RoleRef.Name})
+			}
+			return keys
+		}
+		if ref := resource.Spec.RoleRef; ref != nil {
+			key := types.WorkItemKey{Kind: ref.Kind, Name: ref.Name}
+			if ref.Kind == "Role" {
+				key.Namespace = resource.Metadata.Namespace
+			}
+			return []types.WorkItemKey{key}
+		}
+		return nil
+	}
+	return runner
+}
+
 func registerDiskRunner[T any](ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, runner *listwatch.Runner[T], reconciler types.Reconciler, cfg *config.Config, related func(context.Context, types.WorkItemKey) error) error {
 	if err := mgr.Register(manager.ReconcilerRegistration{
 		Kind: runner.Kind, Reconciler: reconciler, Cache: runner.Cache, Disk: runner.Disk,
@@ -248,41 +293,8 @@ func registerDiskControllersWithRBAC(ctx context.Context, runners *sync.WaitGrou
 	rbacRunners := map[string]*listwatch.Runner[rbaccontroller.Resource]{}
 	if enableRBAC {
 		for _, kind := range rbaccontroller.Kinds {
-			runner := newDiskRunner(kind, rbaccontroller.NewGraphQLListWatcher(rbacClient, kind, listwatch.NewNamespaceListWatcher(client)),
-				stores[kind], cfg, log, func(resource rbaccontroller.Resource) types.WorkItemKey { return resource.Key() },
-				func(resource rbaccontroller.Resource) string { return resource.Metadata.ResourceVersion })
-			runner.DiskIndexes = func(resource rbaccontroller.Resource) []string {
-				ref := resource.Spec.RoleRef
-				if ref == nil {
-					return nil
-				}
-				namespace := ""
-				if ref.Kind == "Role" {
-					namespace = resource.Metadata.Namespace
-				}
-				return []string{relationIndex("rbac-"+ref.Kind, namespace, ref.Name)}
-			}
-			runner.DiskRelated = func(resource rbaccontroller.Resource) []types.WorkItemKey {
-				if resource.Kind == "Role" || resource.Kind == "ClusterRole" {
-					return []types.WorkItemKey{{Kind: "RBACRoleChanged", Namespace: resource.Metadata.Namespace,
-						Name: resource.Kind + "/" + resource.Metadata.Name}}
-				}
-				if resource.Kind == "RoleBinding" && resource.Metadata.Name == rbaccontroller.ManagedBindingName {
-					keys := []types.WorkItemKey{{Kind: "Namespace", Name: resource.Metadata.Namespace}}
-					if resource.Spec.RoleRef != nil {
-						keys = append(keys, types.WorkItemKey{Kind: resource.Spec.RoleRef.Kind, Name: resource.Spec.RoleRef.Name})
-					}
-					return keys
-				}
-				if ref := resource.Spec.RoleRef; ref != nil {
-					key := types.WorkItemKey{Kind: ref.Kind, Name: ref.Name}
-					if ref.Kind == "Role" {
-						key.Namespace = resource.Metadata.Namespace
-					}
-					return []types.WorkItemKey{key}
-				}
-				return nil
-			}
+			runner := newRBACDiskRunner(kind, rbaccontroller.NewGraphQLListWatcher(rbacClient, kind, listwatch.NewNamespaceListWatcher(client)),
+				stores[kind], cfg, log)
 			rbacRunners[kind] = runner
 		}
 	}

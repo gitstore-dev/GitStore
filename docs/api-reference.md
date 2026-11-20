@@ -1250,6 +1250,9 @@ it does not promise every API has already consumed it. A committed write with
 projection failure returns partial-outcome diagnostics rather than pretending
 to roll Git back.
 
+Role UID and termination-state changes schedule durable reconciliation of
+dependent bindings. Status-only Role updates do not trigger this fan-out.
+
 ### SubjectAccessReview
 
 `accessReview(review:)` is an Admin Query returning `SubjectAccessReview`
