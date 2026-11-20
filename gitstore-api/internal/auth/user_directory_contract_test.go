@@ -8,6 +8,7 @@ import (
 	"errors"
 	"math"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,11 +20,15 @@ type contractDirectory struct {
 	err       error
 	groupsErr error
 	calls     int
+	lookup    func(context.Context) (*UserProfile, error)
 }
 
 func (*contractDirectory) Name() string { return "contract-directory" }
-func (d *contractDirectory) GetBySubject(context.Context, string) (*UserProfile, error) {
+func (d *contractDirectory) GetBySubject(ctx context.Context, _ string) (*UserProfile, error) {
 	d.calls++
+	if d.lookup != nil {
+		return d.lookup(ctx)
+	}
 	return d.profile, d.err
 }
 func (d *contractDirectory) ListGroups(context.Context, string) ([]string, error) {
@@ -34,6 +39,99 @@ func (*contractDirectory) SearchUsers(context.Context, string, int) ([]*UserProf
 }
 func (*contractDirectory) UpsertProfile(context.Context, *UserProfile) error { return ErrNotSupported }
 func (*contractDirectory) Deactivate(context.Context, string) error          { return ErrNotSupported }
+
+type leaseContractDirectory struct{ *contractDirectory }
+
+func (d leaseContractDirectory) ResolvePrincipal(ctx context.Context, principal *Principal) (*UserProfile, error) {
+	return d.GetBySubject(ctx, principal.Subject)
+}
+
+func (leaseContractDirectory) ListActors(context.Context, ActorPageRequest) (*ActorPage, error) {
+	return nil, ErrNotSupported
+}
+
+func TestDirectoryEnrichmentRefreshesAnExpiredLookupWithinTheOriginalDeadline(t *testing.T) {
+	for _, actor := range []bool{false, true} {
+		t.Run(map[bool]string{false: "profile-and-groups", true: "actor-profile"}[actor], func(t *testing.T) {
+			directory := &contractDirectory{}
+			var firstDeadline time.Time
+			expires := time.Now().Add(time.Minute)
+			directory.lookup = func(ctx context.Context) (*UserProfile, error) {
+				deadline, ok := ctx.Deadline()
+				require.True(t, ok)
+				profile := &UserProfile{Subject: "directory-uid", Username: "canonical-name",
+					Kind: ProfileStaff, Lifecycle: ActorActive, Active: true, FreshUntil: expires,
+					Groups: []string{"system:group:current"}}
+				if directory.calls == 1 {
+					firstDeadline = deadline
+					profile.FreshUntil = time.Now().Add(-time.Nanosecond)
+					profile.Groups = []string{"system:group:retired"}
+				} else {
+					require.Equal(t, firstDeadline, deadline, "renewal must not reset the two-second directory budget")
+				}
+				return profile, nil
+			}
+			var provider UserDirProvider = directory
+			if actor {
+				provider = leaseContractDirectory{directory}
+			}
+			original := &Principal{Subject: "authenticated-name", AuthMethod: "static-users",
+				Issuer: "gitstore/static-users", Groups: []string{"system:authenticated", "system:group:retired"}}
+			enriched, err := EnrichPrincipal(t.Context(), provider, original)
+			require.NoError(t, err)
+			require.Equal(t, 2, directory.calls)
+			require.Equal(t, original.Subject, enriched.Subject)
+			require.Equal(t, original.Issuer, enriched.Issuer)
+			require.Equal(t, expires, enriched.ProfileExpiresAt, "renewal must use the new source lease without extending it")
+			require.NotContains(t, enriched.Groups, "system:group:retired")
+			require.Contains(t, enriched.Groups, "system:staff")
+			if actor {
+				require.Contains(t, enriched.Groups, "system:group:current")
+			}
+			require.Empty(t, original.Username)
+		})
+	}
+}
+
+func TestDirectoryEnrichmentRenewalStaysBoundedAndFailsClosed(t *testing.T) {
+	for _, scenario := range []string{"still-expired", "canceled", "outage", "refresh-outage", "refresh-inactive"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			directory := &contractDirectory{}
+			directory.lookup = func(context.Context) (*UserProfile, error) {
+				if scenario == "outage" || scenario == "refresh-outage" && directory.calls == 2 {
+					return nil, ErrDirectoryUnavailable
+				}
+				if scenario == "canceled" {
+					cancel()
+				}
+				profile := &UserProfile{Username: "canonical-name", Kind: ProfileStaff, Active: true,
+					Lifecycle: ActorActive, FreshUntil: time.Now().Add(-time.Nanosecond)}
+				if scenario == "refresh-inactive" && directory.calls == 2 {
+					profile.Active, profile.Lifecycle = false, ActorSuspended
+					profile.FreshUntil = time.Now().Add(time.Minute)
+				}
+				return profile, nil
+			}
+			enriched, err := EnrichPrincipal(ctx, leaseContractDirectory{directory},
+				&Principal{Subject: "alice", AuthMethod: "static-users"})
+			require.Nil(t, enriched)
+			if scenario == "canceled" {
+				require.ErrorIs(t, err, context.Canceled)
+			} else if scenario == "refresh-inactive" {
+				require.ErrorIs(t, err, ErrProfileInactive)
+			} else {
+				require.ErrorIs(t, err, ErrDirectoryUnavailable)
+			}
+			expectedCalls := 1
+			if scenario == "still-expired" || strings.HasPrefix(scenario, "refresh-") {
+				expectedCalls = 2
+			}
+			require.Equal(t, expectedCalls, directory.calls)
+		})
+	}
+}
 
 func TestDirectoryEnrichmentDistinguishesAbsenceCapabilityAndOutage(t *testing.T) {
 	for _, test := range []struct {

@@ -394,7 +394,9 @@ is missing or deleted, admission fails closed rather than retaining direct
 subject permissions. Missing ServiceAccount mirrors remain unlinked; GitStore
 still enforces their authoritative UID and enablement. Directory failures fail
 closed without treating valid credentials as invalid. Inactive human profiles
-are denied. WebSocket initialization applies the same checks
+are denied. If a profile lease expires during lookup, enrichment retries once
+within the original two-second directory budget; it never extends the old lease
+or accepts expired memberships. WebSocket initialization applies the same checks
 and caps profile leases below five minutes, never extending the cached
 profile's freshness or a shorter token lifetime.
 
