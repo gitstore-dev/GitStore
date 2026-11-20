@@ -1,0 +1,124 @@
+"""The authenticated caller. Identity comes from the trusted request context."""
+type CurrentUser {
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta
+  subject: String!
+  selfAccessReviews(reviews: [SelfSubjectAccessReviewInput!]!): [SelfSubjectAccessReview]!
+}
+
+input SelfSubjectAccessReviewInput {
+  apiVersion: String! = "authorization.gitstore.dev/v1beta1"
+  kind: String! = "SelfSubjectAccessReview"
+  metadata: ObjectMetaInput
+  spec: SelfSubjectAccessReviewSpecInput!
+}
+
+input SelfSubjectAccessReviewSpecInput {
+  action: String!
+  target: SelfAccessReviewTargetInput
+}
+
+"""The canonical action determines kind; all resolved batch scopes must match."""
+input SelfAccessReviewTargetInput @oneOf {
+  id: ID
+  namespacePath: ResourceNamespacePath
+  inNamespace: NamespaceBy
+}
+
+"""A kind-independent namespaced path with the existing selector semantics."""
+input ResourceNamespacePath {
+  namespace: String!
+  name: String!
+}
+
+type SelfSubjectAccessReview {
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta
+  spec: SelfSubjectAccessReviewSpec!
+  status: SelfSubjectAccessReviewStatus!
+}
+
+type SelfSubjectAccessReviewSpec {
+  principal: SubjectAccessReviewPrincipal!
+  action: String!
+  targetRef: CatalogObjectReference
+}
+
+type SelfSubjectAccessReviewStatus {
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [Condition!]!
+  resolved: SubjectAccessReviewStatus!
+}
+
+type DeploymentDiagnostics {
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta
+  status: DeploymentDiagnosticsStatus!
+}
+
+type DeploymentDiagnosticsStatus {
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [Condition!]!
+  resolved: DeploymentDiagnosticsResolved!
+}
+
+type DeploymentDiagnosticsResolved {
+  softwareVersion: String!
+  buildRevision: String!
+  adminSchemaDigest: String!
+  publicationRevision: String
+  components: [DeploymentComponentHealth!]!
+  providers: DeploymentProviderSummary!
+}
+
+type DeploymentComponentHealth {
+  id: String!
+  conditions: [Condition!]!
+}
+
+type DeploymentProviderSummary {
+  authn: [String!]!
+  authz: String!
+  userdir: String!
+}
+
+type DeploymentConfiguration {
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta
+  status: DeploymentConfigurationStatus!
+}
+
+type DeploymentConfigurationStatus {
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [Condition!]!
+  resolved: DeploymentConfigurationResolved!
+}
+
+type DeploymentConfigurationResolved {
+  entries: [DeploymentConfigurationEntry!]!
+}
+
+type DeploymentConfigurationEntry {
+  key: String!
+  state: DeploymentConfigurationState!
+  missingFields: [String!]!
+}
+
+enum DeploymentConfigurationState {
+  CONFIGURED
+  MISSING
+  DISABLED
+}
+
+extend type Query {
+  me: CurrentUser
+  deploymentDiagnostics: DeploymentDiagnostics
+  deploymentConfiguration: DeploymentConfiguration
+}
