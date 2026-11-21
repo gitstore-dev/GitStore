@@ -527,6 +527,12 @@ mod tests {
     use super::*;
     use crate::grpc::server::proto::CreateRepositoryRequest;
 
+    fn signing_key() -> String {
+        let mut key = [0u8; 32];
+        getrandom::fill(&mut key).unwrap();
+        hex(&key)
+    }
+
     #[test]
     fn go_rust_signed_wire_golden() {
         use crate::grpc::server::proto::{
@@ -628,11 +634,12 @@ mod tests {
         let stages = ["dispatch", "lock", "envelope", "replay"];
         let before = stages.map(value);
         let root = tempfile::tempdir().unwrap();
-        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
+        let key = signing_key();
+        let verifier = RPCVerifier::new(&key, None, root.path()).unwrap();
         let method = "/gitstore.git.v1.GitService/CreateRepository";
         let request = sign_request(
             CreateRepositoryRequest::default(),
-            "key",
+            &key,
             "gitstore-git",
             method,
         )
@@ -666,11 +673,12 @@ mod tests {
     #[tokio::test]
     async fn concurrent_replay_executes_once_and_verification_queue_is_bounded() {
         let root = tempfile::tempdir().unwrap();
-        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
+        let key = signing_key();
+        let verifier = RPCVerifier::new(&key, None, root.path()).unwrap();
         let method = "/gitstore.git.v1.GitService/CreateRepository";
         let request = sign_request(
             CreateRepositoryRequest::default(),
-            "key",
+            &key,
             "gitstore-git",
             method,
         )
@@ -707,12 +715,13 @@ mod tests {
         use std::{sync::mpsc, thread, time::Duration};
 
         let root = tempfile::tempdir().unwrap();
-        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
+        let key = signing_key();
+        let verifier = RPCVerifier::new(&key, None, root.path()).unwrap();
         let method = "/gitstore.git.v1.GitService/CreateRepository";
         let request = |now, nonce: &str| {
             signed_at(
                 CreateRepositoryRequest::default(),
-                "key",
+                &key,
                 "gitstore-git",
                 method,
                 now,
@@ -773,7 +782,7 @@ mod tests {
             "spent records must survive until the durable clock fence"
         );
         drop(verifier);
-        let replacement = RPCVerifier::new("key", None, root.path()).unwrap();
+        let replacement = RPCVerifier::new(&key, None, root.path()).unwrap();
         assert_eq!(
             replacement
                 .verify_at(spent.metadata(), method, spent.get_ref(), 1000)
@@ -787,7 +796,8 @@ mod tests {
     fn pending_replay_reservations_survive_cleanup_and_late_completion() {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join(".rpc-replay-v1");
-        let verifier = RPCVerifier::new("key", None, root.path()).unwrap();
+        let key = signing_key();
+        let verifier = RPCVerifier::new(&key, None, root.path()).unwrap();
         let pending = "a".repeat(32);
         let reservation = verifier
             .replay
@@ -798,7 +808,7 @@ mod tests {
         let method = "/gitstore.git.v1.GitService/CreateRepository";
         let request = signed_at(
             CreateRepositoryRequest::default(),
-            "key",
+            &key,
             "gitstore-git",
             method,
             1020,
