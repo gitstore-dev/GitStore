@@ -25,6 +25,45 @@ recovery. Native restart, owner-controller and rolling proofs do not by
 themselves establish the complete journal-interruption/cursor-loss matrix.
 Keep the specification Draft while any required correctness proof is missing.
 
+## Native functional fault/recovery acceptance (2026-11-21)
+
+The journal and controller domain proofs complete T097, not production
+capacity acceptance. On `0fdd4893`, `TestRBACNativeJournalRecovery` passes in
+9.63 seconds with 774.441 ms recovery after CQL connectivity restoration.
+Two healthy APIs, two native controllers and singleton Git remain live while
+an additional API is isolated behind a bounded loopback TCP proxy.
+
+A fresh disposable RF1 keyspace uses four-second journal retention without
+changing the five-second OPA freshness bound. The test physically interrupts
+established connections for 250 ms and then beyond the freshness bound, with
+independent twenty-second safety restoration. Healthy peers preserve grants
+and enforce revocation; the isolated API becomes unready and fails closed even
+for trusted administrators. Recovery requires actual
+`WATCH_EXPIRED` / `RETENTION_EXPIRED` rejection, complete sealed root and
+Namespace source models captured after restoration but before recovery,
+denial at independently read canonical Git revisions and physical API restart
+without restoring the revoked grant. Sources cannot retain a live revoked binding.
+
+The native test exposed request-scoped captures failing to schedule missing
+Namespace snapshots. The provider regression fails before the bounded loader
+fix and passes afterward; cold requests remain unavailable until complete
+publication, rather than silently treating missing state as an empty policy.
+
+On `eaa01fa6`, the existing GraphQL, signed-Git and Namespace-recreation
+controller-replacement scenarios restore actual owner access on both APIs
+in 22.298, 14.468 and 15.638 seconds. Each enforces the unchanged <=30-second
+domain recovery bound, retains original checkpoint directories and preserves
+UID/isolation and duplicate-binding assertions. All three core binary hashes
+match the journal run; only test code changes between these two sources.
+
+Every successful run closes its owned listeners without forced stops and
+preserves the database process, foundation services and retained datasets.
+Earlier failed attempts remain failed. No sustained fault load, throughput,
+percentile or >=5,000,000-Product acceptance is inferred. T096/T098 and the
+original sustained fault-load workload remain deferred to #451; production
+OPA activation remains gated, and other unfinished feature tasks still block
+T103 on this branch.
+
 ## Existing command interface
 
 Use existing `make test`, `make lint`, `make check TARGET=all`,
