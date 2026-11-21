@@ -280,7 +280,7 @@ confidence_window = "500ms"
 			config = strings.Replace(config, `provider = "kratos"`, `provider = "static-users"`, 1)
 			config = strings.Replace(config, `"oidc-jwt", "anonymous"`, `"oidc-jwt", "static-users", "anonymous"`, 1)
 			config += "\n[api.auth.static_users]\nusers_file = \"/fixtures/users.yaml\"\n"
-			config += fmt.Sprintf("\n[api.auth.jwt]\nsecret = %q\n", r.secret)
+			config += fmt.Sprintf("\n[api.auth.static_users.jwt]\nsecret = %q\n", r.secret)
 		}
 		configFile := filepath.Join(privateDir, fmt.Sprintf("api-%d.toml", replica))
 		if r.capacity {

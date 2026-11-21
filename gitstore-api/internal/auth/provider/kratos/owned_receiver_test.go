@@ -562,8 +562,10 @@ func verifyOwnedDirectoryPolicy(t *testing.T, cfg config.KratosUserDirConfig, pr
 	require.NoError(t, err)
 	userFile := filepath.Join(t.TempDir(), "users.yaml")
 	require.NoError(t, os.WriteFile(userFile, []byte("version: v1\nusers:\n  - username: "+profile.Username+"\n    password_hash: "+string(hash)+"\n"), 0600))
-	static, err := staticusers.New(config.AuthConfig{StaticUsers: config.StaticUsersConfig{UsersFile: userFile},
-		JWT: config.JWTConfig{Secret: "owned-only-signing-key-not-a-secret", Issuer: "owned-static", TTL: time.Minute}}, zap.NewNop())
+	static, err := staticusers.New(config.AuthConfig{StaticUsers: config.StaticUsersConfig{
+		UsersFile: userFile,
+		JWT:       config.JWTConfig{Secret: "owned-only-signing-key-not-a-secret", Issuer: "owned-static", TTL: time.Minute},
+	}}, zap.NewNop())
 	require.NoError(t, err)
 	staticToken, _, err := static.IssueSession(t.Context(), profile.Username)
 	require.NoError(t, err)

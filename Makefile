@@ -781,11 +781,11 @@ secret: ## Generate local security material; TARGET=jwt, grpc-hmac, or signing-k
 	@./scripts/run-make-workflow.sh secret "$(TARGET)"
 
 _secret-jwt:
-	@secret=$$(cd "$(API_DIR)" && go run ./cmd/server gitctl gen-jwt-secret | sed -n 's/^GITSTORE_API__AUTH__JWT__SECRET=//p') || { \
+	@secret=$$(cd "$(API_DIR)" && go run ./cmd/server gitctl gen-jwt-secret | sed -n 's/^GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET=//p') || { \
 		echo "Failed to generate JWT secret. Make sure the gitstore-api module builds correctly."; \
 		exit 1; \
 	}; \
-	./scripts/update-env-secret.sh GITSTORE_API__AUTH__JWT__SECRET "$$secret" "$(API_DIR)/.env"
+	./scripts/update-env-secret.sh GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET "$$secret" "$(API_DIR)/.env"
 
 _secret-grpc-hmac:
 	@secret=$$(cd "$(API_DIR)" && go run ./cmd/server gitctl gen-hmac-secret | sed -n 's/^GITSTORE_GRPC_AUTH__HMAC_SECRET=//p') || { \
