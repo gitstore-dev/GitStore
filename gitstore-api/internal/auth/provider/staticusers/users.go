@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"gopkg.in/yaml.v3"
 )
 
@@ -48,6 +49,9 @@ func parseUsers(path string, b []byte) (map[string]UserEntry, error) {
 		}
 		if u.PasswordHash == "" {
 			return nil, usersFileError(path, fmt.Sprintf("password_hash for %q is empty", u.Username), "set users[].password_hash to a bcrypt hash", nil)
+		}
+		if !auth.ValidExternalUsername(u.Username) {
+			return nil, usersFileError(path, "a username is reserved or invalid", "use a non-reserved human username without a system: or serviceaccount: prefix", nil)
 		}
 		if _, exists := users[u.Username]; exists {
 			return nil, usersFileError(path, fmt.Sprintf("username %q is duplicated", u.Username), "keep each users[].username unique", nil)

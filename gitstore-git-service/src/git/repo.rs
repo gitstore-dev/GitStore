@@ -9,6 +9,68 @@ use std::path::{Path, PathBuf};
 use tonic::Status;
 use tracing::{debug, info};
 
+// Share gix object-index state across short RPCs without retaining an
+// unbounded repository map. References remain disk-backed; authorization and
+// lifecycle locks stay at each caller. Config replacement invalidates a handle.
+const OPEN_REPOSITORY_CACHE_CAPACITY: usize = 64;
+
+type CachedRepository = (PathBuf, std::fs::Metadata, gix::ThreadSafeRepository);
+type RepositoryCache = std::sync::Mutex<std::collections::VecDeque<CachedRepository>>;
+static OPEN_REPOSITORIES: std::sync::OnceLock<RepositoryCache> = std::sync::OnceLock::new();
+
+pub fn open_repository(path: &Path) -> Result<gix::Repository> {
+    open_cached_repository(path, OPEN_REPOSITORIES.get_or_init(Default::default))
+}
+
+fn open_cached_repository(path: &Path, cache: &RepositoryCache) -> Result<gix::Repository> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata =
+        std::fs::metadata(path.join("config")).context("read repository configuration identity")?;
+    {
+        let mut entries = cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(position) = entries.iter().position(|(p, old, repository)| {
+            p == path
+                && old.ino() == metadata.ino()
+                && old.dev() == metadata.dev()
+                && old.mtime() == metadata.mtime()
+                && old.mtime_nsec() == metadata.mtime_nsec()
+                && old.len() == metadata.len()
+                && repository.objects.metrics().unused_slots >= 8
+        }) {
+            let entry = entries.remove(position).expect("matched cached repository");
+            let repository = entry.2.to_thread_local();
+            entries.push_back(entry);
+            return Ok(repository);
+        }
+    }
+    let repository = open_repository_uncached(path)?.into_sync();
+    let result = repository.to_thread_local();
+    let mut entries = cache.lock().unwrap_or_else(|e| e.into_inner());
+    entries.retain(|(p, _, _)| p != path);
+    while entries.len() >= OPEN_REPOSITORY_CACHE_CAPACITY {
+        entries.pop_front();
+    }
+    entries.push_back((path.to_path_buf(), metadata, repository));
+    Ok(result)
+}
+
+// Size object-index slots from the repository working set using gix defaults.
+// A nearly exhausted cached store is reopened above so later packs remain visible.
+// Quarantine readers use an independent store so rejected objects cannot remain
+// mapped in the live cache after their temporary links are removed.
+pub fn open_repository_uncached(path: &Path) -> Result<gix::Repository> {
+    Ok(gix::open(path)?)
+}
+
+pub fn forget_repository(path: &Path) {
+    if let Some(cache) = OPEN_REPOSITORIES.get() {
+        cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|(p, _, _)| p != path);
+    }
+}
+
 /// Compute the two-level fanout path for a repository given its UUIDv7 `repo_id`.
 ///
 /// Formula: `{data_root}/{hex[0..2]}/{hex[2..4]}/{repo_id}.git`
@@ -55,6 +117,7 @@ pub fn fanout_path(data_root: &Path, repo_id: &str) -> Result<PathBuf, Status> {
 /// with a symbolic ref edit after init. Remove this shim once gix provides
 /// an init_opts equivalent. Tracked: specs/007-migrate-gitoxide/research.md §6.
 pub fn create_repository(path: &Path) -> Result<()> {
+    forget_repository(path);
     let repo = gix::init_bare(path)
         .with_context(|| format!("Failed to init bare repository at {}", path.display()))?;
     force_head_to_main(&repo)?;
@@ -63,6 +126,7 @@ pub fn create_repository(path: &Path) -> Result<()> {
 
 /// Remove a repository and all its data.
 pub fn delete_repository(path: &Path) -> Result<()> {
+    forget_repository(path);
     std::fs::remove_dir_all(path)
         .with_context(|| format!("Failed to remove repository at {}", path.display()))
 }
@@ -92,7 +156,8 @@ fn force_head_to_main(repo: &gix::Repository) -> Result<()> {
 pub fn init_or_open_repository(path: &Path) -> Result<gix::Repository> {
     if path.exists() {
         debug!(path = %path.display(), "Opening existing repository");
-        gix::open(path).with_context(|| format!("Failed to open repository at {}", path.display()))
+        open_repository(path)
+            .with_context(|| format!("Failed to open repository at {}", path.display()))
     } else {
         info!(path = %path.display(), "Initializing new bare repository");
         let repo = gix::init_bare(path)
@@ -154,6 +219,111 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[test]
+    fn cached_repository_retains_the_declared_workload_working_set() {
+        let directory = TempDir::new().unwrap();
+        let cache = RepositoryCache::default();
+        let hot = directory.path().join("native.git");
+        create_repository(&hot).unwrap();
+        let first = open_cached_repository(&hot, &cache).unwrap();
+        for index in 0..20 {
+            let path = directory.path().join(format!("authoring-{index}.git"));
+            create_repository(&path).unwrap();
+            open_cached_repository(&path, &cache).unwrap();
+        }
+        let again = open_cached_repository(&hot, &cache).unwrap();
+        assert!(
+            std::ptr::eq(first.objects.store_ref(), again.objects.store_ref()),
+            "the native push store must survive the twenty-resource authoring working set"
+        );
+        assert!(
+            again.objects.store_ref().metrics().unused_slots < 1024,
+            "empty repositories must not reserve the pack-index ceiling"
+        );
+    }
+
+    #[test]
+    fn cached_repository_observes_external_ref_and_object_writes() {
+        let directory = TempDir::new().unwrap();
+        create_repository(directory.path()).unwrap();
+        let first = open_repository(directory.path()).unwrap();
+        let external = gix::open(directory.path()).unwrap();
+        let blob = external
+            .write_blob(b"new external object")
+            .unwrap()
+            .detach();
+        external
+            .edit_reference(gix::refs::transaction::RefEdit {
+                change: gix::refs::transaction::Change::Update {
+                    log: gix::refs::transaction::LogChange::default(),
+                    expected: PreviousValue::Any,
+                    new: gix::refs::Target::Object(blob),
+                },
+                name: "refs/tags/external".try_into().unwrap(),
+                deref: false,
+            })
+            .unwrap();
+        let second = open_repository(directory.path()).unwrap();
+        assert_eq!(
+            second
+                .find_reference("refs/tags/external")
+                .unwrap()
+                .target()
+                .try_id(),
+            Some(blob.as_ref())
+        );
+        assert_eq!(
+            second.find_object(blob).unwrap().data,
+            b"new external object"
+        );
+        assert_eq!(
+            first.find_object(blob).unwrap().data,
+            b"new external object"
+        );
+    }
+
+    #[test]
+    fn cached_repository_configuration_and_deletion_are_invalidated() {
+        use std::io::Write;
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("repo.git");
+        create_repository(&path).unwrap();
+        let before = open_repository(&path).unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(path.join("config"))
+            .unwrap()
+            .write_all(b"\n[gitstore]\ncacheTest = refreshed\n")
+            .unwrap();
+        let after = open_repository(&path).unwrap();
+        assert!(!std::ptr::eq(
+            before.objects.store_ref(),
+            after.objects.store_ref()
+        ));
+        delete_repository(&path).unwrap();
+        assert!(open_repository(&path).is_err());
+        create_repository(&path).unwrap();
+        let recreated = open_repository(&path).unwrap();
+        assert!(!std::ptr::eq(
+            after.objects.store_ref(),
+            recreated.objects.store_ref()
+        ));
+    }
+
+    #[test]
+    fn cached_repository_count_stays_bounded() {
+        let directory = TempDir::new().unwrap();
+        for index in 0..OPEN_REPOSITORY_CACHE_CAPACITY + 3 {
+            let path = directory.path().join(index.to_string());
+            create_repository(&path).unwrap();
+            open_repository(&path).unwrap();
+        }
+        assert!(
+            OPEN_REPOSITORIES.get().unwrap().lock().unwrap().len()
+                <= OPEN_REPOSITORY_CACHE_CAPACITY
+        );
+    }
 
     // ── fanout_path ───────────────────────────────────────────────────────────
 

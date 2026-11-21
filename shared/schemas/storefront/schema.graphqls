@@ -1,0 +1,14 @@
+# Boundary-only schema. Production HTTP requests remain unavailable until
+# authoritative publication reads and trusted target binding are implemented.
+# This contract does not promise catalog fields or successful product reads.
+schema {
+  query: Query
+}
+
+type Query {
+  node(id: ID!): Node
+}
+
+type StorefrontProduct implements Node {
+  id: ID!
+}

@@ -10,13 +10,11 @@ services:
     # The API issuer key is intentionally read from this API-only mount. The
     # shared gitstore.toml must never contain api.auth.serviceaccount.signing_key.
     command:
-      - /bin/sh
-      - -ec
-      - |
-        if [ -f /run/secrets/serviceaccount-signing-key ]; then
-          export GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat /run/secrets/serviceaccount-signing-key)"
-        fi
-        exec /app/api --config-file /etc/gitstore/gitstore.toml
+      - /app/api
+      - --config-file
+      - /etc/gitstore/gitstore.toml
+      - --serviceaccount-signing-key-file
+      - /run/secrets/serviceaccount-signing-key
     volumes:
       - ${CONFIG_FILE:-./config/config.toml}:/etc/gitstore/gitstore.toml:ro
       - ./config/policy.yaml:/etc/gitstore/policy.yaml:ro
@@ -47,17 +45,21 @@ services:
 
   credential-bootstrap:
     profiles: [local]
-    image: ghcr.io/gitstore-dev/api
+    image: gitstore-api-debug:local
     build:
       context: .
       dockerfile: docker/api.Dockerfile
+      target: debug
+    # Only initialization needs root to prepare the named credential volumes.
+    user: "0:0"
     command:
       - /bin/sh
       - -ec
       - |
         rm -f /run/controller-bootstrap/serviceaccount.env
-        /app/gitctl generate-signing-key --private-key-path /run/api-issuer/serviceaccount-signing-key
-        /app/gitctl generate-signing-key --private-key-path /run/controller-secrets/.controller-enrollment-key
+        /app/api gitctl generate-signing-key --private-key-path /run/api-issuer/serviceaccount-signing-key
+        chown 65532:65532 /run/api-issuer/serviceaccount-signing-key
+        /app/api gitctl generate-signing-key --private-key-path /run/controller-secrets/.controller-enrollment-key
         private_key=$$(base64 < /run/controller-secrets/.controller-enrollment-key | tr -d '\n')
         printf '{"format":"serviceaccount-signing-key/v1","values":{"privateKey":"%s","keyID":"Y29udHJvbGxlci1rZXk="}}\n' "$$private_key" > /run/controller-secrets/gitstore-controller-manager-signing-key.json
     volumes:
@@ -71,16 +73,16 @@ services:
     build:
       context: .
       dockerfile: docker/api.Dockerfile
+    user: "0:0"
     environment:
       GITSTORE_BOOTSTRAP_ADMIN_USERNAME: ${GITSTORE_BOOTSTRAP_ADMIN_USERNAME:-admin}
       GITSTORE_BOOTSTRAP_ADMIN_PASSWORD: ${GITSTORE_BOOTSTRAP_ADMIN_PASSWORD:-admin123}
     command:
-      - /app/gitctl
+      - /app/api
+      - gitctl
       - enroll-serviceaccount
       - --api-url
-      - http://api:4000/graphql
-      - --namespace
-      - controllers
+      - http://api:4000/admin/graphql
       - --name
       - gitstore-controller-manager
       - --key-id

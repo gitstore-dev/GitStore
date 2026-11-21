@@ -4,6 +4,9 @@ GitStore lets you manage a commerce catalogue as Markdown files in Git and read 
 
 This guide treats GitStore as a running product. It focuses on what you do as a user: start the stack, create a namespace and repository, push catalogue manifests, query GraphQL, and troubleshoot common issues.
 
+To grant users or groups access, see [Configure local authorization](authorization.md)
+for policy examples and namespace and resource-name restrictions.
+
 ## Prerequisites
 
 - Docker and Docker Compose
@@ -23,10 +26,60 @@ The core stack exposes:
 
 | Service | Local endpoint |
 |---|---|
-| GraphQL API | http://localhost:4000/graphql |
-| GraphQL Playground | http://localhost:4000/playground |
+| GraphQL API | http://localhost:4000/admin/graphql |
+| GraphQL Playground | http://localhost:4000/admin/playground |
+| Storefront boundary (currently HTTP 503) | http://localhost:4100/storefront/graphql |
 | Git Smart HTTP | http://localhost:9000 |
 | Controller manager health | http://localhost:5001/health |
+
+## Manage Identities
+
+With a capable UserDir configured and the required administration grants, use
+the Admin API to look up Staff, Customers and ServiceAccounts. Human types share
+the `User` interface; workloads remain `Actor` objects, not human users:
+
+```graphql
+query {
+  actor(by: {username: "alice"}) {
+    id
+    ... on User {
+      fullName
+      metadata { name generation resourceVersion }
+      groups
+      lifecycle { state }
+    }
+  }
+}
+```
+
+Choose exactly one lookup selector: `id`, human `username` or
+`serviceAccountName`. A human and a workload with the same name are distinct
+identities. Unified `actors` uses forward `first`/`after` Relay pages and rejects
+`last`/`before`; the source-backed `serviceAccounts` connection supports both
+directions and works without UserDir. Unified lists may omit workload mirrors
+after missed delivery.
+
+`createStaff` sends a setup invitation, and `resendStaffInvitation` resends it
+while setup/verification remains unfinished. No password or setup link is
+returned. `suspendUser`, `deactivateUser`, `reactivateUser` and `deleteUser`
+administer human accounts. Verification and password setup govern activation;
+reactivation does not restore revoked sessions. Lifecycle states are `INVITED`,
+`PENDING_VERIFICATION`, `ACTIVE`, `INACTIVE` and `SUSPENDED`.
+
+Use `assignUserGroup` and `removeUserGroup` with bare ordinary group names for
+Staff and ServiceAccount memberships; these mutations return `Actor` payloads.
+Customer memberships are configured globally: assigning a configured group is
+a no-op, while individual removal or assignment outside the configuration is
+rejected. Workload groups never change source keys, UID or enablement.
+
+`updateUser` permits authorized full-name, email and consent changes, not
+username/type/group/lifecycle changes. The previous verified deliverable address
+remains in use until the replacement is verified. Administrative deliverability
+updates use `setUserEmailDeliverability`. Staff revisions are best-effort;
+Customer counters are `-1`/`"-1"`, not concurrency tokens. Changes can partially
+succeed across directory, session and mail operations, and other API replicas
+retain bounded freshness. See [identity administration](api-reference.md#identity-administration)
+for permissions, payloads and error behavior.
 
 ## Bootstrap A Repository
 
@@ -87,6 +140,16 @@ catalog-work/
     └── featured.md
 ```
 
+### Enum spelling
+
+Frontmatter enum values use UpperCamelCase; GraphQL enums use
+SCREAMING_SNAKE_CASE. For example, author `Retired`, `Deny` and `NotIn` in Git;
+GraphQL returns `RETIRED`, `DENY` and `NOT_IN`. Existing uppercase/lowercase
+manifest spellings remain accepted through explicit compatibility mappings.
+See the [enum spelling reference](../schemas/gitstore/v1beta1/README.md#enum-spelling)
+for the complete list. Labels, names, option values, URIs and Markdown are
+never case-converted.
+
 ### Product
 
 `Product` is the non-sellable parent descriptor.
@@ -96,6 +159,7 @@ catalog-work/
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore-test
   name: macbook-pro
   labels:
     gitstore.dev/brand: apple
@@ -124,6 +188,7 @@ Portable workstation for demanding creative and engineering work.
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: ProductVariant
 metadata:
+  namespace: gitstore-test
   name: macbook-pro-16-m4-64gb-1tb
 spec:
   title: MacBook Pro 16 M4 Max 64GB 1TB
@@ -144,10 +209,10 @@ spec:
           amount: "3499.00"
           priority: 0
           strategy:
-            type: fixed
+            type: Fixed
   inventory:
     managed: true
-    policy: deny
+    policy: Deny
 ---
 
 High-memory configuration for large builds, media pipelines, and local AI work.
@@ -160,6 +225,7 @@ High-memory configuration for large builds, media pipelines, and local AI work.
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore-test
   name: laptops
 spec:
   title: Laptops
@@ -190,8 +256,8 @@ Featured laptop products.
 For the full resource formats, use the dedicated references:
 
 - [Product spec](products/product-spec.md)
-- [ProductVariant spec](products/product-variants.md)
-- [CategoryTaxonomy spec](categories/category-taxonomy.md)
+- [ProductVariant spec](products/product-variant-spec.md)
+- [CategoryTaxonomy spec](categories/category-taxonomy-spec.md)
 - [Collection spec](collections/collection-spec.md)
 - [Push validation](products/push-validation.md)
 
@@ -212,14 +278,16 @@ After an accepted push, query GraphQL to inspect the admitted state. Post-receiv
 GitStore tracks catalog resources by `apiVersion`, `kind`, namespace, and `metadata.name`, not by file path. 
 You can move a resource file to another directory without changing its `metadata.uid`. Editing the spec or Markdown body increments 
 `generation` and `resourceVersion`; moving the file with the same content only increments `resourceVersion`. 
-Deleting a resource file removes it from GraphQL reads after admission processes the commit. If you delete a resource and add 
-the same identity again later, it receives a new UID.
+Product and CategoryTaxonomy manifest deletion starts guarded foreground
+termination; those resources remain visible until controller completion.
+Collection, ProductVariant and File deletion removes the admitted identity.
+After completed removal, adding the same identity again creates a new UID.
 
 Admission conflicts that require datastore state, such as a duplicate `ProductVariant.spec.sku`, cannot reject a Git push after refs have already been accepted. In that case the existing variant remains unchanged and the conflicting incoming variant is skipped. Check API logs when a pushed resource does not appear after structural validation passed.
 
 ## Query GraphQL
 
-Open http://localhost:4000/playground or use curl.
+Open http://localhost:4000/admin/playground or use curl.
 
 ### List Products
 
@@ -323,8 +391,12 @@ query ListCategories {
         spec {
           title
         }
-        path
-        depth
+        status {
+          resolved {
+            path
+            depth
+          }
+        }
         children {
           metadata {
             name
@@ -373,7 +445,7 @@ query ListCollections {
 ### Query With Curl
 
 ```bash
-curl -s http://localhost:4000/graphql \
+curl -s http://localhost:4000/admin/graphql \
   -H "Content-Type: application/json" \
   -d '{"query":"query { products(namespace: \"gitstore-test\", first: 5) { edges { node { metadata { name } } } } }"}' | jq .
 ```
@@ -421,6 +493,38 @@ Create a namespace and repository manually when you need custom provisioning. Se
 
 Catalogue writes are Git-driven today. Product, category, collection, and variant CRUD over GraphQL will be documented after the Git-backed design is finalized.
 
+## Administer human identities
+
+Use the Admin endpoint with cluster-scoped `user.*` grants. For example:
+
+```graphql
+mutation InviteStaff {
+  createStaff(input: {
+    apiVersion: "authentication.gitstore.dev/v1beta1"
+    kind: "Staff"
+    metadata: {name: "carol"}
+    fullName: "Carol"
+    primaryEmail: "carol@example.test"
+    groups: ["merchandiser"]
+  }) {
+    staff { id metadata { name uid generation resourceVersion } lifecycle { state } }
+  }
+}
+```
+
+Deliver setup links through the configured private mail provider, not GraphQL.
+Use the returned ID for invitation resend, group and human lifecycle operations.
+Setup/verification must complete before activation; reactivation cannot bypass
+those prerequisites. A delivery or session-revocation failure may leave the
+preceding identity write applied.
+
+Look up humans with `actor(by: {username: "carol"})`; use
+`serviceAccountName` for a workload, even when it shares a human's name.
+Use `actors(first: 50)` for forward directory pages and `serviceAccounts`
+for authoritative workload listing independent of directory availability.
+See [identity administration](api-reference.md#identity-administration) for
+inputs, permissions, cursor behavior and limitations.
+
 ## Troubleshooting
 
 ### Stack Is Not Healthy
@@ -434,7 +538,7 @@ make logs SERVICE=git-service
 make logs SERVICE=controller-manager
 ```
 
-If required auth configuration is missing, the API will not become healthy. Set `GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE` and `GITSTORE_API__AUTH__JWT__SECRET`, or use the provided compose defaults for local development.
+If required auth configuration is missing, the API will not become healthy. Set `GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE` and `GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET`, or use the provided compose defaults for local development.
 
 ### Bootstrap Fails
 
@@ -468,8 +572,8 @@ query Repository {
     }
   ) {
     id
-    name
-    defaultBranch
+    metadata { name }
+    spec { defaultBranch }
   }
 }
 ```
@@ -510,6 +614,7 @@ Catalogue manifests reference media; they do not make GitStore an image CDN. Hos
 ## Resources
 
 - [API Reference](api-reference.md)
+- [Documentation Index](README.md)
 - [Developer Guide](developer-guide.md)
 - [Configuration](configuration.md)
 - [Docker Troubleshooting](runbooks/docker-troubleshooting.md)

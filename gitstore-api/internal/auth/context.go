@@ -3,7 +3,11 @@
 
 package auth
 
-import "context"
+import (
+	"context"
+
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+)
 
 type principalContextKey struct{}
 type rawTokenContextKey struct{}
@@ -11,6 +15,11 @@ type authorizedAnonymousContextKey struct{}
 
 // ContextWithPrincipal stores p in ctx under the package-private principalContextKey.
 func ContextWithPrincipal(ctx context.Context, p *Principal) context.Context {
+	actor := ""
+	if p != nil {
+		actor = p.Subject
+	}
+	ctx = datastore.ContextWithRBACAuditActor(ctx, actor)
 	return context.WithValue(ctx, principalContextKey{}, p)
 }
 

@@ -47,18 +47,18 @@ func generateECDSAP256Keypair(t *testing.T) (*ecdsa.PrivateKey, []byte) {
 }
 
 type stubLookup struct {
-	accounts     map[string]*datastore.ServiceAccount // keyed by "namespace/name"
+	accounts     map[string]*datastore.ServiceAccount // keyed by "name"
 	err          error
 	replayErr    error
 	replayMu     sync.Mutex
 	replayedJTIs map[string]time.Time
 }
 
-func (s *stubLookup) GetServiceAccountBySubject(_ context.Context, namespace, name string) (*datastore.ServiceAccount, error) {
+func (s *stubLookup) GetServiceAccountBySubject(_ context.Context, name string) (*datastore.ServiceAccount, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
-	sa, ok := s.accounts[namespace+"/"+name]
+	sa, ok := s.accounts[name]
 	if !ok {
 		return nil, datastore.ErrNotFound
 	}
@@ -131,12 +131,11 @@ func validAssertionClaims(subject, uid string) assertionClaims {
 	}
 }
 
-func testServiceAccount(namespace, name, uid, kid string, pubDER []byte) *datastore.ServiceAccount {
+func testServiceAccount(name, uid, kid string, pubDER []byte) *datastore.ServiceAccount {
 	return &datastore.ServiceAccount{
-		UID:       uid,
-		Namespace: namespace,
-		Name:      name,
-		Disabled:  false,
+		UID:      uid,
+		Name:     name,
+		Disabled: false,
 		PublicKeys: []datastore.ServiceAccountPublicKey{
 			{KeyID: kid, Algorithm: "Ed25519", PublicKey: pubDER, EnrolledAt: time.Now()},
 		},
@@ -145,9 +144,9 @@ func testServiceAccount(namespace, name, uid, kid string, pubDER []byte) *datast
 
 func TestServiceAccountAssertion_RoundTrip_Allow(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "gitstore-controller-manager")
-	sa := testServiceAccount("controllers", "gitstore-controller-manager", "uid-1", "key-1", pubDER)
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/gitstore-controller-manager": sa}}
+	subject := datastore.ServiceAccountSubject("gitstore-controller-manager")
+	sa := testServiceAccount("gitstore-controller-manager", "uid-1", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"gitstore-controller-manager": sa}}
 	p := newTestProvider(t, lookup)
 
 	token := signAssertion(t, priv, "key-1", assertionTyp, validAssertionClaims(subject, "uid-1"))
@@ -158,7 +157,7 @@ func TestServiceAccountAssertion_RoundTrip_Allow(t *testing.T) {
 	require.NotNil(t, principal)
 	assert.Equal(t, subject, principal.Subject)
 	assert.Equal(t, providerName, principal.AuthMethod)
-	assert.Empty(t, principal.Roles)
+
 }
 
 func TestServiceAccountAssertion_NoBearerToken_Challenge(t *testing.T) {
@@ -168,11 +167,24 @@ func TestServiceAccountAssertion_NoBearerToken_Challenge(t *testing.T) {
 	assert.Equal(t, auth.OutcomeChallenge, decision.Outcome)
 }
 
+func TestServiceAccountAssertionRejectsLegacySubject(t *testing.T) {
+	priv, pubDER := generateEd25519Keypair(t)
+	sa := testServiceAccount("manager", "uid", "key", pubDER)
+	p := newTestProvider(t, &stubLookup{accounts: map[string]*datastore.ServiceAccount{"manager": sa}})
+	for _, subject := range []string{"serviceaccount:controllers:manager", "serviceaccount:manager", "system:serviceaccount:ns:manager", "system:api"} {
+		token := signAssertion(t, priv, "key", assertionTyp, validAssertionClaims(subject, "uid"))
+		principal, decision, err := p.Authenticate(t.Context(), bearerRequest(token))
+		require.NoError(t, err)
+		require.Nil(t, principal)
+		require.Equal(t, auth.OutcomeDeny, decision.Outcome)
+	}
+}
+
 func TestServiceAccountAssertion_WrongTyp_Challenge(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-1", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	token := signAssertion(t, priv, "key-1", "some-other-typ", validAssertionClaims(subject, "uid-1"))
@@ -184,9 +196,9 @@ func TestServiceAccountAssertion_WrongTyp_Challenge(t *testing.T) {
 
 func TestServiceAccountAssertion_MissingTyp_Challenge(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-1", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	token := signAssertion(t, priv, "key-1", "", validAssertionClaims(subject, "uid-1"))
@@ -198,7 +210,7 @@ func TestServiceAccountAssertion_MissingTyp_Challenge(t *testing.T) {
 
 func TestServiceAccountAssertion_AccountNotFound_Deny(t *testing.T) {
 	priv, _ := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "ghost")
+	subject := datastore.ServiceAccountSubject("ghost")
 	p := newTestProvider(t, &stubLookup{})
 
 	token := signAssertion(t, priv, "key-1", assertionTyp, validAssertionClaims(subject, "uid-1"))
@@ -210,10 +222,10 @@ func TestServiceAccountAssertion_AccountNotFound_Deny(t *testing.T) {
 
 func TestServiceAccountAssertion_DisabledAccount_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-1", "key-1", pubDER)
 	sa.Disabled = true
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	token := signAssertion(t, priv, "key-1", assertionTyp, validAssertionClaims(subject, "uid-1"))
@@ -225,11 +237,11 @@ func TestServiceAccountAssertion_DisabledAccount_Deny(t *testing.T) {
 
 func TestServiceAccountAssertion_DeletedAccount_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-1", "key-1", pubDER)
 	now := time.Now()
 	sa.DeletionTimestamp = &now
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	token := signAssertion(t, priv, "key-1", assertionTyp, validAssertionClaims(subject, "uid-1"))
@@ -241,9 +253,9 @@ func TestServiceAccountAssertion_DeletedAccount_Deny(t *testing.T) {
 
 func TestServiceAccountAssertion_UIDMismatch_UntrustedClaim_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-current", "key-1", pubDER)
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-current", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	// The untrusted peek's sa_uid doesn't match the current record — must
@@ -257,9 +269,9 @@ func TestServiceAccountAssertion_UIDMismatch_UntrustedClaim_Deny(t *testing.T) {
 
 func TestServiceAccountAssertion_UnknownKID_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-1", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	token := signAssertion(t, priv, "no-such-key", assertionTyp, validAssertionClaims(subject, "uid-1"))
@@ -272,9 +284,9 @@ func TestServiceAccountAssertion_UnknownKID_Deny(t *testing.T) {
 func TestServiceAccountAssertion_BadSignature_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
 	otherPriv, _ := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-1", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	// Signed with a DIFFERENT private key than the enrolled public key.
@@ -288,9 +300,9 @@ func TestServiceAccountAssertion_BadSignature_Deny(t *testing.T) {
 
 func TestServiceAccountAssertion_WrongAudience_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-1", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	claims := validAssertionClaims(subject, "uid-1")
@@ -304,9 +316,9 @@ func TestServiceAccountAssertion_WrongAudience_Deny(t *testing.T) {
 
 func TestServiceAccountAssertion_IssuerNotSubject_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-1", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	claims := validAssertionClaims(subject, "uid-1")
@@ -320,14 +332,14 @@ func TestServiceAccountAssertion_IssuerNotSubject_Deny(t *testing.T) {
 
 func TestServiceAccountAssertion_SubjectNotIssuer_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-1", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	claims := validAssertionClaims(subject, "uid-1")
 	claims.Issuer = subject
-	claims.Subject = "serviceaccount:controllers:someone-else"
+	claims.Subject = "system:serviceaccount:someone-else"
 	token := signAssertion(t, priv, "key-1", assertionTyp, claims)
 
 	_, decision, err := p.Authenticate(context.Background(), bearerRequest(token))
@@ -337,9 +349,9 @@ func TestServiceAccountAssertion_SubjectNotIssuer_Deny(t *testing.T) {
 
 func TestServiceAccountAssertion_Expired_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-1", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	claims := validAssertionClaims(subject, "uid-1")
@@ -354,9 +366,9 @@ func TestServiceAccountAssertion_Expired_Deny(t *testing.T) {
 
 func TestServiceAccountAssertion_LifetimeExceeds60s_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-1", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	claims := validAssertionClaims(subject, "uid-1")
@@ -374,9 +386,9 @@ func TestServiceAccountAssertion_LifetimeExceeds60s_Deny(t *testing.T) {
 
 func TestServiceAccountAssertion_IssuedAtBeyondClockSkew_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-1", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	claims := validAssertionClaims(subject, "uid-1")
@@ -391,9 +403,9 @@ func TestServiceAccountAssertion_IssuedAtBeyondClockSkew_Deny(t *testing.T) {
 
 func TestServiceAccountAssertion_MissingJTI_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-1", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	claims := validAssertionClaims(subject, "uid-1")
@@ -407,9 +419,9 @@ func TestServiceAccountAssertion_MissingJTI_Deny(t *testing.T) {
 
 func TestServiceAccountAssertion_ReplayedJTI_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
-	sa := testServiceAccount("controllers", "x", "uid-1", "key-1", pubDER)
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	subject := datastore.ServiceAccountSubject("x")
+	sa := testServiceAccount("x", "uid-1", "key-1", pubDER)
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	token := signAssertion(t, priv, "key-1", assertionTyp, validAssertionClaims(subject, "uid-1"))
@@ -427,9 +439,9 @@ func TestServiceAccountAssertion_ReplayedJTI_Deny(t *testing.T) {
 
 func TestServiceAccountAssertion_ReplayAcrossProvidersSharingDatastore_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "gitstore-controller-manager")
+	subject := datastore.ServiceAccountSubject("gitstore-controller-manager")
 	const serviceAccountUID = "00000000-0000-0000-0000-000000000002"
-	sa := testServiceAccount("controllers", "gitstore-controller-manager", serviceAccountUID, "key-1", pubDER)
+	sa := testServiceAccount("gitstore-controller-manager", serviceAccountUID, "key-1", pubDER)
 	store, err := memdb.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
@@ -469,16 +481,15 @@ func TestServiceAccountAssertion_ReplayAcrossProvidersSharingDatastore_Deny(t *t
 
 func TestServiceAccountAssertion_ECDSAP256_RoundTrip_Allow(t *testing.T) {
 	priv, pubDER := generateECDSAP256Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
+	subject := datastore.ServiceAccountSubject("x")
 	sa := &datastore.ServiceAccount{
-		UID:       "uid-1",
-		Namespace: "controllers",
-		Name:      "x",
+		UID:  "uid-1",
+		Name: "x",
 		PublicKeys: []datastore.ServiceAccountPublicKey{
 			{KeyID: "key-1", Algorithm: "ECDSA-P256", PublicKey: pubDER, EnrolledAt: time.Now()},
 		},
 	}
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	claims := validAssertionClaims(subject, "uid-1")
@@ -496,17 +507,16 @@ func TestServiceAccountAssertion_ECDSAP256_RoundTrip_Allow(t *testing.T) {
 
 func TestServiceAccountAssertion_AlgorithmMismatchWithEnrollment_Deny(t *testing.T) {
 	priv, pubDER := generateEd25519Keypair(t)
-	subject := datastore.ServiceAccountSubject("controllers", "x")
+	subject := datastore.ServiceAccountSubject("x")
 	sa := &datastore.ServiceAccount{
-		UID:       "uid-1",
-		Namespace: "controllers",
-		Name:      "x",
+		UID:  "uid-1",
+		Name: "x",
 		PublicKeys: []datastore.ServiceAccountPublicKey{
 			// Mislabeled: the key bytes are Ed25519 but Algorithm claims ECDSA-P256.
 			{KeyID: "key-1", Algorithm: "ECDSA-P256", PublicKey: pubDER, EnrolledAt: time.Now()},
 		},
 	}
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, lookup)
 
 	token := signAssertion(t, priv, "key-1", assertionTyp, validAssertionClaims(subject, "uid-1"))

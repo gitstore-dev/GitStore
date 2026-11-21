@@ -7,12 +7,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type fakeStatusClient struct {
@@ -37,17 +44,218 @@ func (f *fakeStorageClient) EnsureStorage(_ context.Context, namespace, name str
 }
 
 type fakeCompletionClient struct {
-	calls []struct{ namespace, name, resourceVersion string }
+	calls []struct{ namespace, name, resourceVersion, uid string }
 	err   error
 }
 
-func (f *fakeCompletionClient) CompleteDeletion(_ context.Context, namespace, name, resourceVersion string) error {
-	f.calls = append(f.calls, struct{ namespace, name, resourceVersion string }{namespace, name, resourceVersion})
+func (f *fakeCompletionClient) CompleteDeletion(_ context.Context, namespace, name, resourceVersion, uid string) error {
+	f.calls = append(f.calls, struct{ namespace, name, resourceVersion, uid string }{namespace, name, resourceVersion, uid})
 	return f.err
 }
 
 func repositoryKey(namespace, name string) types.WorkItemKey {
 	return types.WorkItemKey{Kind: "Repository", Namespace: namespace, Name: name}
+}
+
+func reconcileRepositorySnapshot(t *testing.T, r *Reconciler, key types.WorkItemKey, recording bool) (types.ReconcileResult, []sdktrace.Event) {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	sampler := sdktrace.NeverSample()
+	if recording {
+		sampler = sdktrace.AlwaysSample()
+	}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sampler), sdktrace.WithSpanProcessor(recorder),
+		sdktrace.WithRawSpanLimits(sdktrace.SpanLimits{
+			AttributeValueLengthLimit: 256, AttributeCountLimit: 32,
+			EventCountLimit: 32, LinkCountLimit: 8,
+			AttributePerEventCountLimit: 8, AttributePerLinkCountLimit: 8,
+		}))
+	defer func() { require.NoError(t, provider.Shutdown(context.Background())) }()
+	ctx, span := provider.Tracer("test").Start(t.Context(), "controller.reconcile")
+	result := r.Reconcile(ctx, key)
+	span.End()
+	if !recording {
+		require.Empty(t, recorder.Ended())
+		return result, nil
+	}
+	require.Len(t, recorder.Ended(), 1)
+	return result, recorder.Ended()[0].Events()
+}
+
+func requireRepositorySnapshot(t *testing.T, events []sdktrace.Event, current Repository, exact, invalid bool) {
+	t.Helper()
+	require.Len(t, events, 1)
+	require.Equal(t, "controller.reconcile.snapshot", events[0].Name)
+	uid, rv, revision := current.UID, current.ResourceVersion, current.Revision
+	if invalid {
+		uid, rv, revision = "[invalid]", "[invalid]", "[invalid]"
+	}
+	attributes := make(map[string]attribute.Value)
+	for _, attr := range events[0].Attributes {
+		attributes[string(attr.Key)] = attr.Value
+	}
+	require.Len(t, events[0].Attributes, 5)
+	require.Equal(t, map[string]attribute.Value{
+		"resource.uid":              attribute.StringValue(uid),
+		"resource.resource_version": attribute.StringValue(rv),
+		"resource.generation":       attribute.Int64Value(current.Generation),
+		"resource.revision":         attribute.StringValue(revision),
+		"resource.snapshot.exact":   attribute.BoolValue(exact),
+	}, attributes)
+}
+
+func TestReconcileSnapshotUsesLookupAndAllowsCoalescing(t *testing.T) {
+	key := repositoryKey("acme", "catalog")
+	current := Repository{UID: "old-uid", Namespace: key.Namespace, Name: key.Name, Generation: 3, ResourceVersion: "7",
+		Revision: "main@sha1:" + strings.Repeat("a", 40),
+		Status:   status.ResourceStatus{LastAppliedRevision: "stale-status-revision"}}
+	c := cache.New[Repository]()
+	c.Set(key, current)
+	statuses, completion := &fakeStatusClient{}, &fakeCompletionClient{}
+	r := NewReconcilerWithLookup(cache.LookupFrom(cache.AsReadOnly(c)), statuses, &fakeStorageClient{}, completion)
+	result, events := reconcileRepositorySnapshot(t, r, key, true)
+	require.IsType(t, types.Success{}, result)
+	requireRepositorySnapshot(t, events, current, true, false)
+	require.Len(t, statuses.patches, 1)
+	require.Equal(t, current.ResourceVersion, statuses.patches[0].ResourceVersion)
+	require.Equal(t, current.Generation, *statuses.patches[0].ObservedGeneration)
+	require.Nil(t, statuses.patches[0].LastAppliedRevision)
+
+	// The key is level-triggered: intermediate versions need not be reconciled.
+	current.ResourceVersion, current.Revision = "8", "main@sha1:"+strings.Repeat("b", 40)
+	c.Set(key, current)
+	current.ResourceVersion, current.Revision = "9", "main@sha1:"+strings.Repeat("c", 40)
+	c.Set(key, current)
+	result, events = reconcileRepositorySnapshot(t, r, key, true)
+	require.IsType(t, types.Success{}, result)
+	requireRepositorySnapshot(t, events, current, true, false)
+	require.Len(t, statuses.patches, 2)
+	require.Equal(t, "9", statuses.patches[1].ResourceVersion)
+	require.Equal(t, int64(3), *statuses.patches[1].ObservedGeneration)
+
+	current.UID, current.ResourceVersion = "replacement-uid", "10"
+	current.Finalizers = []string{ForegroundDeletionFinalizer}
+	c.Set(key, current)
+	result, events = reconcileRepositorySnapshot(t, r, key, true)
+	require.IsType(t, types.Success{}, result)
+	requireRepositorySnapshot(t, events, current, true, false)
+	require.Len(t, completion.calls, 1)
+	require.Equal(t, current.UID, completion.calls[0].uid)
+	require.Equal(t, current.ResourceVersion, completion.calls[0].resourceVersion)
+}
+
+func TestReconcileSnapshotPreservesOutcomes(t *testing.T) {
+	failure := errors.New("dependency unavailable")
+	for _, test := range []struct {
+		name                                              string
+		missing, system, deleting                         bool
+		lookupErr, statusErr, provisionErr, completionErr error
+		requeue                                           time.Duration
+	}{
+		{name: "active"},
+		{name: "system", system: true},
+		{name: "missing", missing: true},
+		{name: "lookup I/O error", lookupErr: failure},
+		{name: "lookup cancelled", lookupErr: context.Canceled},
+		{name: "status error", statusErr: failure},
+		{name: "provision error", provisionErr: failure},
+		{name: "status conflict", statusErr: types.ErrConflict, requeue: conflictRequeueDelay},
+		{name: "status rate limit", statusErr: types.ErrRateLimited, requeue: rateLimitRequeueDelay},
+		{name: "provision rate limit", provisionErr: types.ErrRateLimited, requeue: rateLimitRequeueDelay},
+		{name: "deletion", deleting: true},
+		{name: "deletion error", deleting: true, completionErr: failure},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, recording := range []bool{false, true} {
+				current := Repository{UID: "uid", Namespace: "acme", Name: "catalog", ResourceVersion: "7", Generation: 3,
+					Revision: "main@sha1:" + strings.Repeat("a", 40),
+					Status:   status.ResourceStatus{Conditions: []*status.Condition{admissionAccepted(3)}}}
+				if test.system {
+					current.Name = SystemRepositoryName
+				}
+				if test.deleting {
+					current.Finalizers = []string{ForegroundDeletionFinalizer}
+				}
+				statuses, storage, completion := &fakeStatusClient{err: test.statusErr}, &fakeStorageClient{err: test.provisionErr}, &fakeCompletionClient{err: test.completionErr}
+				r := NewReconcilerWithLookup(func(context.Context, types.WorkItemKey) (Repository, bool, error) {
+					return current, !test.missing, test.lookupErr
+				}, statuses, storage, completion)
+				result, events := reconcileRepositorySnapshot(t, r, repositoryKey(current.Namespace, current.Name), recording)
+				if recording && !test.missing && test.lookupErr == nil {
+					requireRepositorySnapshot(t, events, current, true, false)
+				} else {
+					require.Empty(t, events)
+				}
+				switch {
+				case test.requeue > 0:
+					require.Equal(t, types.RequeueAfter{After: test.requeue}, result)
+				case errors.Join(test.lookupErr, test.statusErr, test.provisionErr, test.completionErr) != nil:
+					require.IsType(t, types.TransientFailure{}, result)
+					for _, err := range []error{test.lookupErr, test.statusErr, test.provisionErr, test.completionErr} {
+						if err != nil {
+							require.ErrorIs(t, result.(types.TransientFailure).Err, err)
+						}
+					}
+				default:
+					require.IsType(t, types.Success{}, result)
+				}
+				if test.missing || test.lookupErr != nil || test.system {
+					require.Empty(t, statuses.patches)
+					require.Empty(t, storage.calls)
+					require.Empty(t, completion.calls)
+				}
+			}
+		})
+	}
+}
+
+func TestReconcileSnapshotBoundsDoNotChangeConsumedObject(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		uid, rv, revision string
+		generation        int64
+		exact, invalid    bool
+	}{
+		{"maximum", strings.Repeat("u", 64), strings.Repeat("v", 128), strings.Repeat("r", 256), 3, true, false},
+		{"uid overflow", strings.Repeat("u", 65), "7", "revision", 3, false, true},
+		{"rv overflow", "uid", strings.Repeat("v", 129), "revision", 3, false, true},
+		{"revision overflow", "uid", "7", strings.Repeat("r", 257), 3, false, true},
+		{"invalid UTF-8", "uid", "7", "\xff", 3, false, true},
+		{"absent authored revision", "uid", "7", "", 3, false, false},
+		{"absent UID", "", "7", "revision", 3, false, false},
+		{"absent resource version", "uid", "", "revision", 3, false, false},
+		{"zero generation", "uid", "7", "revision", 0, false, false},
+		{"negative generation", "uid", "7", "revision", -1, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			current := Repository{UID: test.uid, Namespace: "acme", Name: "catalog", ResourceVersion: test.rv, Generation: test.generation, Revision: test.revision,
+				Status: status.ResourceStatus{LastAppliedRevision: "not-authored"}}
+			for _, recording := range []bool{false, true} {
+				statuses := &fakeStatusClient{}
+				r := NewReconcilerWithLookup(func(context.Context, types.WorkItemKey) (Repository, bool, error) {
+					return current, true, nil
+				}, statuses, &fakeStorageClient{}, &fakeCompletionClient{})
+				result, events := reconcileRepositorySnapshot(t, r, repositoryKey(current.Namespace, current.Name), recording)
+				require.IsType(t, types.Success{}, result)
+				require.Len(t, statuses.patches, 1)
+				require.Equal(t, current.ResourceVersion, statuses.patches[0].ResourceVersion)
+				require.Equal(t, current.Generation, *statuses.patches[0].ObservedGeneration)
+				require.Nil(t, statuses.patches[0].LastAppliedRevision)
+				if recording {
+					requireRepositorySnapshot(t, events, current, test.exact, test.invalid)
+				}
+			}
+		})
+	}
+}
+
+func TestReconcileSnapshotNonrecordingDoesNotAllocate(t *testing.T) {
+	r := NewReconcilerWithLookup(func(context.Context, types.WorkItemKey) (Repository, bool, error) {
+		return Repository{Name: SystemRepositoryName}, true, nil
+	}, nil, nil, nil)
+	require.Zero(t, testing.AllocsPerRun(100, func() {
+		r.Reconcile(context.Background(), repositoryKey("acme", SystemRepositoryName))
+	}))
 }
 
 func seedRepositoryCache(t *testing.T, items ...Repository) cache.CacheAccessor[Repository] {
@@ -183,7 +391,7 @@ func TestReconcileSkipsStorageProvisioningWhenRecentlyVerified(t *testing.T) {
 	key := repositoryKey("acme", "catalog")
 	// Simulate having already verified storage recently (e.g. the previous
 	// reconcile): storageVerificationDue must not fire again immediately.
-	r.lastStorageVerification.Store(key, time.Now())
+	r.lastStorageVerification.Store(key, current.UID, time.Now())
 
 	result := r.Reconcile(context.Background(), key)
 	if _, ok := result.(types.Success); !ok {
@@ -222,6 +430,90 @@ func TestReconcileRevalidatesStorageWhenNeverVerifiedByThisProcess(t *testing.T)
 	}
 }
 
+func TestReconcileReplacementCannotBorrowPreviousUIDVerificationAcrossReplicas(t *testing.T) {
+	for _, provisionErr := range []error{nil, errors.New("storage forbidden")} {
+		t.Run(fmt.Sprint(provisionErr), func(t *testing.T) {
+			current, resolvedJSON := repositoryFixtureAlreadyProvisioned(t)
+			var resolved ResolvedStorage
+			if err := json.Unmarshal(resolvedJSON, &resolved); err != nil {
+				t.Fatal(err)
+			}
+			key := repositoryKey(current.Namespace, current.Name)
+			views := [2]*cache.Cache[Repository]{cache.New[Repository](), cache.New[Repository]()}
+			var reconcilers [2]*Reconciler
+			var storages [2]*fakeStorageClient
+			var statuses [2]*fakeStatusClient
+			for replica := range reconcilers {
+				views[replica].Set(key, current)
+				storages[replica] = &fakeStorageClient{resolved: resolved}
+				statuses[replica] = &fakeStatusClient{}
+				reconcilers[replica] = NewReconciler(cache.AsReadOnly(views[replica]), statuses[replica],
+					storages[replica], &fakeCompletionClient{})
+				if result := reconcilers[replica].Reconcile(t.Context(), key); len(storages[replica].calls) != 1 {
+					t.Fatalf("replica %d did not verify the original incarnation: result=%T", replica, result)
+				}
+			}
+			current.UID = "replacement"
+			current.ResourceVersion = "3"
+			current.Status.ResourceVersion = "3"
+			for replica := range reconcilers {
+				views[replica].Set(key, current)
+				storages[replica].err = provisionErr
+			}
+			var results [2]types.ReconcileResult
+			var work sync.WaitGroup
+			work.Add(len(reconcilers))
+			for replica := range reconcilers {
+				go func() {
+					defer work.Done()
+					results[replica] = reconcilers[replica].Reconcile(t.Context(), key)
+				}()
+			}
+			work.Wait()
+			for replica, reconciler := range reconcilers {
+				storage, patches := storages[replica], statuses[replica].patches
+				if len(storage.calls) != 2 {
+					t.Fatalf("replica %d borrowed the retired UID's verification: calls=%d", replica, len(storage.calls))
+				}
+				if provisionErr == nil {
+					if _, ok := results[replica].(types.Success); !ok {
+						t.Fatalf("replica %d successful verification returned %T", replica, results[replica])
+					}
+				} else {
+					failure, ok := results[replica].(types.TransientFailure)
+					if !ok || !errors.Is(failure.Err, provisionErr) {
+						t.Fatalf("replica %d hid the replacement verification error: %#v", replica, results[replica])
+					}
+					if len(patches) != 1 || patches[0].ResourceVersion != "3" {
+						t.Fatalf("replica %d did not retain replacement status CAS: %#v", replica, patches)
+					}
+					if condition(t, patches[0].Conditions, conditionReady).Status != statusFalse {
+						t.Fatalf("replica %d left the unverified replacement ready", replica)
+					}
+				}
+				storage.err = nil
+				if result := reconciler.Reconcile(t.Context(), key); provisionErr != nil {
+					if _, ok := result.(types.Success); !ok || len(storage.calls) != 3 {
+						t.Fatalf("replica %d cached a failed verification: result=%T calls=%d", replica, result, len(storage.calls))
+					}
+				}
+				verifiedCalls := len(storage.calls)
+				reconciler.Reconcile(t.Context(), key)
+				if len(storage.calls) != verifiedCalls {
+					t.Fatalf("replica %d did not reuse its replacement's successful verification", replica)
+				}
+				freshStorage := &fakeStorageClient{resolved: resolved}
+				fresh := NewReconciler(cache.AsReadOnly(views[replica]), &fakeStatusClient{},
+					freshStorage, &fakeCompletionClient{})
+				fresh.Reconcile(t.Context(), key)
+				if len(freshStorage.calls) != 1 {
+					t.Fatalf("replica %d replacement process trusted a persisted status without verification", replica)
+				}
+			}
+		})
+	}
+}
+
 func TestReconcileRevalidatesStorageAfterRevalidationWindowElapses(t *testing.T) {
 	current, resolvedJSON := repositoryFixtureAlreadyProvisioned(t)
 	var gotResolved ResolvedStorage
@@ -232,7 +524,7 @@ func TestReconcileRevalidatesStorageAfterRevalidationWindowElapses(t *testing.T)
 	statuses := &fakeStatusClient{}
 	r := NewReconciler(seedRepositoryCache(t, current), statuses, storage, &fakeCompletionClient{})
 	key := repositoryKey("acme", "catalog")
-	r.lastStorageVerification.Store(key, time.Now().Add(-storageRevalidationInterval-time.Second))
+	r.lastStorageVerification.Store(key, current.UID, time.Now().Add(-storageRevalidationInterval-time.Second))
 
 	result := r.Reconcile(context.Background(), key)
 	if _, ok := result.(types.Success); !ok {
@@ -241,6 +533,38 @@ func TestReconcileRevalidatesStorageAfterRevalidationWindowElapses(t *testing.T)
 	if len(storage.calls) != 1 {
 		t.Fatalf("storage calls = %#v, want exactly one revalidation call once the window elapsed", storage.calls)
 	}
+}
+
+func TestStorageVerificationCacheKeepsBoundAndReplacesUIDInPlace(t *testing.T) {
+	var c storageVerificationCache
+	for i := range 4097 {
+		key := repositoryKey("acme", fmt.Sprint(i))
+		c.Store(key, "first", time.Now())
+		if len(c.entries) > 4096 {
+			t.Fatalf("verification cache exceeded its bound: %d", len(c.entries))
+		}
+	}
+	key := repositoryKey("acme", "4096")
+	c.Store(key, "replacement", time.Now())
+	if len(c.entries) != 4096 {
+		t.Fatalf("UID replacement changed the cache cardinality: %d", len(c.entries))
+	}
+	if _, ok := c.Load(key, "first"); ok {
+		t.Fatal("a retired UID borrowed the replacement's verification")
+	}
+	if _, ok := c.Load(key, "replacement"); !ok {
+		t.Fatal("replacement verification was not retained")
+	}
+	for i := range 4097 {
+		key := repositoryKey("acme", fmt.Sprint(i))
+		if _, retained := c.entries[key]; !retained {
+			if _, verified := c.Load(key, "first"); verified {
+				t.Fatal("eviction retained a trusted verification")
+			}
+			return
+		}
+	}
+	t.Fatal("bounded cache did not evict an entry")
 }
 
 func TestReconcileSkipsNamespaceBootstrapRepository(t *testing.T) {
@@ -309,8 +633,24 @@ func TestReconcileTerminatingRepositoryCompletesDeletion(t *testing.T) {
 	if _, ok := result.(types.Success); !ok {
 		t.Fatalf("Reconcile result = %T, want types.Success", result)
 	}
-	if len(completion.calls) != 1 || completion.calls[0] != (struct{ namespace, name, resourceVersion string }{"acme", "catalog", "9"}) {
+
+	if len(completion.calls) != 1 || completion.calls[0] != (struct{ namespace, name, resourceVersion, uid string }{"acme", "catalog", "9", current.UID}) {
 		t.Fatalf("completion calls = %#v, want acme/catalog/9", completion.calls)
+	}
+}
+
+func TestReconcilePendingRepositoryResumesDeletionWithoutProvisioning(t *testing.T) {
+	current := repositoryFixture(func(repository *Repository) {
+		repository.Status.Conditions = []*status.Condition{{Type: "DeletionPending", Status: "TRUE"}}
+	})
+	storage := &fakeStorageClient{}
+	completion := &fakeCompletionClient{}
+	r := NewReconciler(seedRepositoryCache(t, current), &fakeStatusClient{}, storage, completion)
+	if _, ok := r.Reconcile(context.Background(), repositoryKey(current.Namespace, current.Name)).(types.Success); !ok {
+		t.Fatal("pending deletion did not complete")
+	}
+	if len(completion.calls) != 1 || completion.calls[0].uid != current.UID || len(storage.calls) != 0 {
+		t.Fatalf("completion=%v storage=%v", completion.calls, storage.calls)
 	}
 }
 

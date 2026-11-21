@@ -6,6 +6,10 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/mail"
+	"net/url"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -13,6 +17,8 @@ import (
 	"time"
 
 	units "github.com/docker/go-units"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/go-playground/validator/v10"
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/joho/godotenv"
@@ -26,27 +32,172 @@ import (
 // [push_limits] are shared with gitstore-git-service (and, for log, every
 // service reading this file).
 type Config struct {
-	Api        ApiConfig        `mapstructure:"api"`
-	GrpcAuth   GrpcAuthConfig   `mapstructure:"grpc_auth"`
-	PushLimits PushLimitsConfig `mapstructure:"push_limits"`
-	Log        LogConfig        `mapstructure:"log"`
+	Api           ApiConfig            `mapstructure:"api"`
+	GrpcAuth      GrpcAuthConfig       `mapstructure:"grpc_auth"`
+	PushLimits    PushLimitsConfig     `mapstructure:"push_limits"`
+	Log           LogConfig            `mapstructure:"log"`
+	Observability observability.Config `mapstructure:"observability"`
 }
 
 // ApiConfig holds HTTP API server settings and everything gitstore-api owns.
 type ApiConfig struct {
-	Port     int `mapstructure:"port"      validate:"min=1,max=65535"`
-	GitPort  int `mapstructure:"git_port"  validate:"min=1,max=65535"`
-	GrpcPort int `mapstructure:"grpc_port" validate:"min=1,max=65535"`
+	Roles               []string            `mapstructure:"roles"`
+	GraphQLLayout       string              `mapstructure:"graphql_layout"`
+	Advertised          AdvertisedEndpoints `mapstructure:"advertised"`
+	SmartHTTP           RoleBudget          `mapstructure:"smart_http"`
+	Catalog             RoleBudget          `mapstructure:"catalog"`
+	AdminPort           int                 `mapstructure:"admin_port" validate:"min=1,max=65535"`
+	StorefrontPort      int                 `mapstructure:"storefront_port" validate:"min=1,max=65535"`
+	Admin               EndpointConfig      `mapstructure:"admin"`
+	Storefront          EndpointConfig      `mapstructure:"storefront"`
+	StorefrontRateLimit RateLimitConfig     `mapstructure:"storefront_rate_limit"`
+	TrustedProxies      []string            `mapstructure:"trusted_proxies"`
+	GitPort             int                 `mapstructure:"git_port"  validate:"min=1,max=65535"`
+	GrpcPort            int                 `mapstructure:"grpc_port" validate:"min=1,max=65535"`
 
-	RateLimit  RateLimitConfig          `mapstructure:"rate_limit"`
-	GitService GitServiceEndpointConfig `mapstructure:"git_service"`
-	Auth       AuthConfig               `mapstructure:"auth"`
-	Datastore  DatastoreConfig          `mapstructure:"datastore"`
-	Watch      WatchConfig              `mapstructure:"watch"`
+	RateLimit    RateLimitConfig               `mapstructure:"rate_limit"`
+	GitService   GitServiceEndpointConfig      `mapstructure:"git_service"`
+	Auth         AuthConfig                    `mapstructure:"auth"`
+	Notification NotificationConfig            `mapstructure:"notification"`
+	Datastore    DatastoreConfig               `mapstructure:"datastore"`
+	Watch        WatchConfig                   `mapstructure:"watch"`
+	Profiling    observability.ProfilingConfig `mapstructure:"profiling"`
+}
+
+// OPAConfig holds the OPA provider's dynamic-RBAC rollout and runtime bounds.
+type OPAConfig struct {
+	WritesEnabled       bool          `mapstructure:"writes_enabled"`
+	InitialAdminSubject string        `mapstructure:"initial_admin_subject"`
+	EvidenceDirectory   string        `mapstructure:"evidence_directory"`
+	MaxStaleness        time.Duration `mapstructure:"max_staleness"`
+	ValidationTimeout   time.Duration `mapstructure:"validation_timeout"`
+	RebuildWorkers      int           `mapstructure:"rebuild_workers"`
+	DirtyQueueCapacity  int           `mapstructure:"dirty_queue_capacity"` // Distinct dirty-tier entries, not bytes.
+	SnapshotRetries     int           `mapstructure:"snapshot_retries"`
+	SnapshotMemorySize  string        `mapstructure:"snapshot_memory_size"`
+	SnapshotMemoryBytes int64         `mapstructure:"-"`
+	RebuildMemorySize   string        `mapstructure:"rebuild_memory_size"`
+	RebuildMemoryBytes  int64         `mapstructure:"-"`
+}
+
+func (c OPAConfig) ValidateProvider(provider string) error {
+	if c.EvidenceDirectory != "" {
+		if provider != "opa" {
+			return errors.New("api.auth.opa.evidence_directory requires the opa authz provider")
+		}
+		if !filepath.IsAbs(c.EvidenceDirectory) || filepath.Clean(c.EvidenceDirectory) != c.EvidenceDirectory || c.EvidenceDirectory == "/" {
+			return errors.New("api.auth.opa.evidence_directory requires a clean absolute private directory")
+		}
+	}
+	if c.WritesEnabled && provider != "opa" {
+		return errors.New("api.auth.opa.writes_enabled requires the opa authz provider")
+	}
+	if c.InitialAdminSubject != "" && provider != "opa" {
+		return errors.New("api.auth.opa.initial_admin_subject requires the opa authz provider")
+	}
+	if c.InitialAdminSubject != "" && !auth.ValidTrustedPrincipal(&auth.Principal{Subject: c.InitialAdminSubject, AuthMethod: "bootstrap"}) {
+		return errors.New("api.auth.opa.initial_admin_subject must be a non-reserved authenticated User subject")
+	}
+	return nil
+}
+
+func (c *OPAConfig) Validate(provider string) error {
+	if err := c.ValidateProvider(provider); err != nil {
+		return err
+	}
+	for _, limit := range []struct {
+		key        string
+		value, max time.Duration
+	}{
+		{"max_staleness", c.MaxStaleness, 5 * time.Second},
+		{"validation_timeout", c.ValidationTimeout, 30 * time.Second},
+	} {
+		if limit.value <= 0 || limit.value > limit.max {
+			return fmt.Errorf("api.auth.opa.%s must be positive and at most %s", limit.key, limit.max)
+		}
+	}
+	for _, limit := range []struct {
+		key        string
+		value, max int
+	}{
+		{"rebuild_workers", c.RebuildWorkers, 4},
+		{"dirty_queue_capacity", c.DirtyQueueCapacity, 1024},
+		{"snapshot_retries", c.SnapshotRetries, 3},
+	} {
+		if limit.value < 1 || limit.value > limit.max {
+			return fmt.Errorf("api.auth.opa.%s must be between 1 and %d", limit.key, limit.max)
+		}
+	}
+	for _, limit := range []struct {
+		key, value string
+		bytes      *int64
+		max        int64
+	}{
+		{"snapshot_memory_size", c.SnapshotMemorySize, &c.SnapshotMemoryBytes, 512 << 20},
+		{"rebuild_memory_size", c.RebuildMemorySize, &c.RebuildMemoryBytes, 64 << 20},
+	} {
+		bytes, err := ParseIECBytes(limit.value)
+		if err != nil {
+			return fmt.Errorf("invalid api.auth.opa.%s: %w", limit.key, err)
+		}
+		if bytes < 1 || bytes > limit.max {
+			return fmt.Errorf("api.auth.opa.%s must be positive and at most %d bytes", limit.key, limit.max)
+		}
+		*limit.bytes = bytes
+	}
+	if c.RebuildMemoryBytes > c.SnapshotMemoryBytes {
+		return errors.New("api.auth.opa.rebuild_memory_size must not exceed snapshot_memory_size")
+	}
+	return nil
+}
+
+type NotificationConfig struct {
+	Provider      string                        `mapstructure:"provider"`
+	APIKey        string                        `mapstructure:"api_key"`
+	Timeout       time.Duration                 `mapstructure:"timeout"`
+	MaxConcurrent int                           `mapstructure:"max_concurrent"`
+	MaxBodySize   string                        `mapstructure:"max_body_size"`
+	MaxBodyBytes  int64                         `mapstructure:"-"`
+	Development   DevelopmentNotificationConfig `mapstructure:"development"`
+}
+
+type DevelopmentNotificationConfig struct {
+	SMTPURI string `mapstructure:"smtp_uri"`
+	Sender  string `mapstructure:"sender"`
+}
+
+func (c NotificationConfig) Validate() error {
+	if c.Provider == "" || c.Provider == "none" {
+		return nil
+	}
+	if c.Provider != "development" {
+		return errors.New("api.notification.provider must be none or development")
+	}
+	if len(c.APIKey) < 32 || strings.ContainsAny(c.APIKey, "\r\n") {
+		return errors.New("api.notification.api_key must contain at least 32 characters without header control characters")
+	}
+	if c.Timeout <= 0 || c.Timeout > 10*time.Second || c.MaxConcurrent < 1 || c.MaxConcurrent > 128 || c.MaxBodyBytes < 1 || c.MaxBodyBytes > 1<<20 {
+		return errors.New("api.notification requires bounded timeout, concurrency and body limits")
+	}
+	endpoint, err := url.Parse(c.Development.SMTPURI)
+	if err != nil || (endpoint.Scheme != "smtp" && endpoint.Scheme != "smtps") || endpoint.Hostname() == "" || endpoint.Port() == "" ||
+		endpoint.User != nil || (endpoint.Path != "" && endpoint.Path != "/") || endpoint.Fragment != "" {
+		return errors.New("api.notification.development.smtp_uri must name an unauthenticated development mail-catcher SMTP endpoint")
+	}
+	query, err := url.ParseQuery(endpoint.RawQuery)
+	if err != nil || len(query) > 1 || (len(query) != 0 && (endpoint.Scheme != "smtps" ||
+		(query.Get("skip_ssl_verify") != "true" && query.Get("skip_ssl_verify") != "false"))) {
+		return errors.New("api.notification.development.smtp_uri contains an unsupported TLS setting")
+	}
+	sender, err := mail.ParseAddress(c.Development.Sender)
+	if err != nil || sender.Address != c.Development.Sender {
+		return errors.New("api.notification.development.sender must be an email address")
+	}
+	return nil
 }
 
 // RateLimitConfig is the sustained per-client-IP request rate allowed on
-// /graphql before responses are rejected with HTTP 429, plus the token-bucket
+// /admin/graphql before responses are rejected with HTTP 429, plus the token-bucket
 // burst size layered on top of it.
 type RateLimitConfig struct {
 	PerSecond float64 `mapstructure:"per_second" validate:"gt=0"`
@@ -59,14 +210,15 @@ type GitServiceEndpointConfig struct {
 	Uri string `mapstructure:"uri" validate:"required"`
 }
 
-// AuthConfig holds authentication and JWT settings.
+// AuthConfig holds authentication, authorization and user-directory settings.
 type AuthConfig struct {
-	StaticUsers StaticUsersConfig `mapstructure:"static_users"`
-	JWT         JWTConfig         `mapstructure:"jwt"`
-	AuthN       AuthNConfig       `mapstructure:"authn"`
-	AuthZ       AuthZConfig       `mapstructure:"authz"`
-	UserDir     UserDirConfig     `mapstructure:"userdir"`
-	RBACLocal   RBACConfig        `mapstructure:"rbac_local"`
+	StaticUsers StaticUsersConfig   `mapstructure:"static_users"`
+	AuthN       AuthNConfig         `mapstructure:"authn"`
+	AuthZ       AuthZConfig         `mapstructure:"authz"`
+	UserDir     UserDirConfig       `mapstructure:"userdir"`
+	RBACLocal   RBACConfig          `mapstructure:"rbac_local"`
+	OPA         OPAConfig           `mapstructure:"opa"`
+	Kratos      KratosUserDirConfig `mapstructure:"kratos"`
 
 	// ServiceAccount configures the serviceaccount-assertion/serviceaccount-jwt
 	// AuthN providers (spec 061). SigningKey is required only when one of
@@ -125,7 +277,8 @@ type ServiceAccountConfig struct {
 // between gitstore-api and gitstore-git-service via the top-level
 // [grpc_auth] table.
 type GrpcAuthConfig struct {
-	HmacSecret string `mapstructure:"hmac_secret" validate:"required"`
+	HmacSecret         string `mapstructure:"hmac_secret" validate:"required"`
+	HmacSecretPrevious string `mapstructure:"hmac_secret_previous"`
 }
 
 // AuthNConfig controls the authentication provider chain.
@@ -146,13 +299,102 @@ type UserDirConfig struct {
 	Provider string `mapstructure:"provider"`
 }
 
+type SubjectMapping struct {
+	Provider string `mapstructure:"provider"`
+	Issuer   string `mapstructure:"issuer"`
+	Mode     string `mapstructure:"mode"`
+	Prefix   string `mapstructure:"prefix"`
+}
+
+type KratosUserDirConfig struct {
+	AdminURI         string           `mapstructure:"admin_uri"`
+	WebhookURI       string           `mapstructure:"webhook_uri"`
+	AdminToken       string           `mapstructure:"admin_token"`
+	Timeout          time.Duration    `mapstructure:"timeout"`
+	MaxConcurrent    int              `mapstructure:"max_concurrent"`
+	MaxResponseSize  string           `mapstructure:"max_response_size"`
+	MaxResponseBytes int64            `mapstructure:"-"`
+	CacheEntries     int              `mapstructure:"cache_entries"`
+	CacheTTL         time.Duration    `mapstructure:"cache_ttl"`
+	Mappings         []SubjectMapping `mapstructure:"mappings"`
+	CustomerGroups   []string         `mapstructure:"customer_groups"`
+}
+
+func (c KratosUserDirConfig) Validate() error {
+	if err := c.ValidateWebhookURI(); err != nil {
+		return err
+	}
+	endpoint, err := url.Parse(c.AdminURI)
+	if err != nil || endpoint.Hostname() == "" || (endpoint.Scheme != "https" && endpoint.Scheme != "http") ||
+		endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return errors.New("api.auth.kratos.admin_uri must be an HTTP(S) endpoint without credentials, query or fragment")
+	}
+	if strings.ContainsAny(c.AdminToken, "\r\n") {
+		return errors.New("api.auth.kratos.admin_token must not contain header control characters")
+	}
+	if c.Timeout <= 0 || c.Timeout > 2*time.Second {
+		return errors.New("api.auth.kratos.timeout must be positive and at most 2s")
+	}
+	if c.CacheTTL <= 0 || c.CacheTTL > 5*time.Minute || c.CacheEntries < 1 || c.CacheEntries > 100000 {
+		return errors.New("api.auth.kratos cache requires 1..100000 entries and a positive TTL at most 5m")
+	}
+	if c.MaxConcurrent < 1 || c.MaxConcurrent > 256 || c.MaxResponseBytes < 1 || c.MaxResponseBytes > 4<<20 {
+		return errors.New("api.auth.kratos requires 1..256 concurrent requests and a response bound at most 4MiB")
+	}
+	if len(c.Mappings) == 0 || len(c.Mappings) > 128 {
+		return errors.New("api.auth.kratos requires 1..128 explicitly qualified subject mappings")
+	}
+	seen := make(map[string]bool, len(c.Mappings))
+	for _, mapping := range c.Mappings {
+		if strings.TrimSpace(mapping.Provider) == "" || strings.TrimSpace(mapping.Issuer) == "" {
+			return errors.New("api.auth.kratos mappings require provider and issuer qualification")
+		}
+		key := mapping.Provider + "\x00" + mapping.Issuer
+		if seen[key] {
+			return errors.New("api.auth.kratos mappings contain duplicate provider/issuer qualification")
+		}
+		seen[key] = true
+		switch mapping.Mode {
+		case "uid", "username", "serviceaccount_uid":
+		case "external_id":
+			if mapping.Prefix == "" {
+				return errors.New("api.auth.kratos external_id mappings require an explicit prefix")
+			}
+		default:
+			return errors.New("api.auth.kratos mapping mode must be uid, username, external_id or serviceaccount_uid")
+		}
+	}
+	for _, group := range c.CustomerGroups {
+		if strings.TrimSpace(group) == "" || strings.HasPrefix(group, "system:") {
+			return errors.New("api.auth.kratos customer groups must be nonempty ordinary group names")
+		}
+	}
+	return nil
+}
+
+func (c KratosUserDirConfig) ValidateWebhookURI() error {
+	if c.WebhookURI == "" {
+		return nil
+	}
+	endpoint, err := url.Parse(c.WebhookURI)
+	if err != nil || endpoint.Scheme != "http" || endpoint.User != nil || endpoint.Port() == "" ||
+		endpoint.RawQuery != "" || endpoint.Fragment != "" || (endpoint.Path != "" && endpoint.Path != "/") {
+		return errors.New("api.auth.kratos.webhook_uri must be an internal HTTP listener URI")
+	}
+	host := net.ParseIP(endpoint.Hostname())
+	if host == nil || (!host.IsPrivate() && !host.IsLoopback() && !host.IsUnspecified()) {
+		return errors.New("api.auth.kratos.webhook_uri must bind a private, loopback or container address")
+	}
+	return nil
+}
+
 // RBACConfig holds rbac-local provider settings.
 type RBACConfig struct {
 	// PolicyFile is the path to the YAML policy file. Defaults to "policy.yaml".
 	PolicyFile string `mapstructure:"policy_file"`
 }
 
-// JWTConfig holds JWT token settings.
+// JWTConfig holds static-users session token settings.
 type JWTConfig struct {
 	Secret       string        `mapstructure:"secret"`
 	TTL          time.Duration `mapstructure:"ttl"`
@@ -160,9 +402,10 @@ type JWTConfig struct {
 	RefreshGrace time.Duration `mapstructure:"refresh_grace"`
 }
 
-// StaticUsersConfig configures the file-backed local user list.
+// StaticUsersConfig configures the local user list and static-users sessions.
 type StaticUsersConfig struct {
-	UsersFile string `mapstructure:"users_file"`
+	UsersFile string    `mapstructure:"users_file"`
+	JWT       JWTConfig `mapstructure:"jwt"`
 }
 
 // WatchConfig holds durable-watch-journal settings shared by every watched
@@ -272,64 +515,6 @@ type ScyllaConfig struct {
 	AddressTranslator interface{} `mapstructure:"-"`
 }
 
-// legacyKey names a removed or renamed configuration path that must fail
-// startup rather than silently falling back to a default. replacement names
-// the new path (or explains the removal) in operator-facing form.
-type legacyKey struct {
-	path        string
-	replacement string
-}
-
-// legacyKeys lists every TOML path gitstore-api used to own before the
-// config-grouping refactor. Each one is checked independently of viper's
-// final merged state so a renamed/removed key never silently resolves to a
-// default. Ordered most-specific-first so the most helpful match wins.
-var legacyKeys = []legacyKey{
-	{"api.rate_limit_per_second", "api.rate_limit.per_second"},
-	{"api.rate_limit_burst", "api.rate_limit.burst"},
-	{"git.grpc.uri", "api.git_service.uri"},
-	{"git.grpc", "api.git_service.uri"},
-	{"git.repo.max_file_size", "push_limits.max_file_size (now a shared static ceiling)"},
-	{"git.repo.max_pack_size_bytes", "push_limits.max_pack_size (now a shared static ceiling)"},
-	{"git.repo", "push_limits"},
-	{"git", "api.git_service.uri / push_limits"},
-	{"datastore.backend", "api.datastore.backend"},
-	{"datastore.scylla", "api.datastore.scylla"},
-	{"datastore", "api.datastore"},
-	{"auth.staticusers", "api.auth.static_users"},
-	{"auth.grpc.hmac_secret", "grpc_auth.hmac_secret"},
-	{"auth.grpc", "grpc_auth"},
-	{"auth.jwt.duration", "api.auth.jwt.ttl"},
-	{"auth.rbac.policy_file", "api.auth.rbac_local.policy_file"},
-	{"auth.rbac", "api.auth.rbac_local"},
-	{"auth.oidc", "api.auth.oidc_jwt"},
-	{"auth.jwt", "api.auth.jwt"},
-	{"auth.authn", "api.auth.authn"},
-	{"auth.authz", "api.auth.authz"},
-	{"auth.userdir", "api.auth.userdir"},
-	{"auth.serviceaccount", "api.auth.serviceaccount"},
-	{"auth", "api.auth"},
-	{"watch.namespace.readers_enabled", "removed; the durable watch journal reader is always on"},
-	{"watch.namespace.materializer_enabled", "removed; the CDC materializer is always on"},
-	{"watch.namespace.cdc_retention_seconds", "removed; fixed at 14 days by the baseline schema"},
-	{"watch.namespace.bucket_size", "removed; fixed at 4096, persisted on first init"},
-	{"watch.namespace.journal_retention_seconds", "api.watch.journal.retention"},
-	{"watch.namespace.cdc_confidence_window_millis", "api.watch.journal.cdc.confidence_window"},
-	{"watch.namespace.read_batch_size", "api.watch.journal.read.batch_size"},
-	{"watch.namespace.max_replay_events", "api.watch.journal.read.max_replay_events"},
-	{"watch.namespace.subscriber_buffer", "api.watch.journal.subscriber.buffer"},
-	{"watch.namespace.subscriber_backpressure_millis", "api.watch.journal.subscriber.backpressure"},
-	{"watch.namespace.poll_min_millis", "api.watch.journal.poll.min"},
-	{"watch.namespace.poll_max_millis", "api.watch.journal.poll.max"},
-	{"watch.namespace.bookmark_interval_seconds", "api.watch.journal.bookmark_interval"},
-	{"watch.namespace.lease_ttl_seconds", "api.watch.journal.materializer.lease_ttl"},
-	{"watch.namespace.lease_renew_interval_seconds", "api.watch.journal.materializer.lease_renew_interval"},
-	{"watch.namespace.max_materializer_lag_seconds", "api.watch.journal.materializer.max_lag"},
-	{"watch.namespace", "api.watch.journal"},
-	{"watch", "api.watch"},
-	{"features.namespace_repository_fence", "removed; the namespace repository fence is always enabled"},
-}
-
 // Load reads configuration from all sources (defaults → config file → env vars)
 // and returns the resolved, validated Config.
 func Load() (*Config, error) {
@@ -369,7 +554,7 @@ func load(paths []string) (*Config, error) {
 
 	// Defaults — all known keys must have a default so AutomaticEnv populates them
 	// during Unmarshal, even if the default is an empty string.
-	v.SetDefault("api.port", 4000)
+	setEndpointDefaults(v)
 	v.SetDefault("api.git_port", 9000)
 	v.SetDefault("api.grpc_port", 6000)
 	v.SetDefault("api.rate_limit.per_second", 50)
@@ -377,17 +562,49 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("api.git_service.uri", "dns:///localhost:50051")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
+	v.SetDefault("observability.otlp.uri", "")
+	v.SetDefault("observability.otlp.trace_sample_ratio", 0.05)
+	v.SetDefault("api.profiling.uri", "")
+	v.SetDefault("api.profiling.token", "")
 	v.SetDefault("grpc_auth.hmac_secret", "")
+	v.SetDefault("grpc_auth.hmac_secret_previous", "")
 	v.SetDefault("push_limits.max_pack_size", "512MiB")
 	v.SetDefault("push_limits.max_file_size", "100MiB")
 	v.SetDefault("api.auth.static_users.users_file", "users.yaml")
-	v.SetDefault("api.auth.jwt.secret", "")
-	v.SetDefault("api.auth.jwt.ttl", "24h")
-	v.SetDefault("api.auth.jwt.issuer", "gitstore")
-	v.SetDefault("api.auth.jwt.refresh_grace", "60s")
+	v.SetDefault("api.auth.static_users.jwt.secret", "")
+	v.SetDefault("api.auth.static_users.jwt.ttl", "24h")
+	v.SetDefault("api.auth.static_users.jwt.issuer", "gitstore")
+	v.SetDefault("api.auth.static_users.jwt.refresh_grace", "60s")
 	v.SetDefault("api.auth.authn.chain", []string{"static-users", "anonymous"})
 	v.SetDefault("api.auth.authz.provider", "rbac-local")
+	v.SetDefault("api.auth.opa.writes_enabled", false)
+	v.SetDefault("api.auth.opa.initial_admin_subject", "")
+	v.SetDefault("api.auth.opa.evidence_directory", "")
+	v.SetDefault("api.auth.opa.max_staleness", "5s")
+	v.SetDefault("api.auth.opa.validation_timeout", "30s")
+	v.SetDefault("api.auth.opa.rebuild_workers", 4)
+	v.SetDefault("api.auth.opa.dirty_queue_capacity", 1024)
+	v.SetDefault("api.auth.opa.snapshot_retries", 3)
+	v.SetDefault("api.auth.opa.snapshot_memory_size", "512MiB")
+	v.SetDefault("api.auth.opa.rebuild_memory_size", "64MiB")
 	v.SetDefault("api.auth.userdir.provider", "none")
+	v.SetDefault("api.auth.kratos.admin_uri", "")
+	v.SetDefault("api.auth.kratos.webhook_uri", "")
+	v.SetDefault("api.auth.kratos.admin_token", "")
+	v.SetDefault("api.auth.kratos.timeout", "2s")
+	v.SetDefault("api.auth.kratos.max_concurrent", 16)
+	v.SetDefault("api.auth.kratos.max_response_size", "1MiB")
+	v.SetDefault("api.auth.kratos.cache_entries", 4096)
+	v.SetDefault("api.auth.kratos.cache_ttl", "5m")
+	v.SetDefault("api.notification.provider", "none")
+	v.SetDefault("api.notification.api_key", "")
+	v.SetDefault("api.notification.timeout", "2s")
+	v.SetDefault("api.notification.max_concurrent", 16)
+	v.SetDefault("api.notification.max_body_size", "64KiB")
+	v.SetDefault("api.notification.development.smtp_uri", "")
+	v.SetDefault("api.notification.development.sender", "noreply@gitstore.local")
+	v.SetDefault("api.auth.kratos.mappings", []SubjectMapping{})
+	v.SetDefault("api.auth.kratos.customer_groups", []string{})
 	v.SetDefault("api.auth.rbac_local.policy_file", "policy.yaml")
 	v.SetDefault("api.auth.serviceaccount.issuer", "gitstore")
 	v.SetDefault("api.auth.serviceaccount.audience", "gitstore-api")
@@ -465,10 +682,6 @@ func load(paths []string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
 	v.AutomaticEnv()
 
-	if err := checkLegacyKeys(v); err != nil {
-		return nil, err
-	}
-
 	var cfg Config
 	decodeHook := mapstructure.ComposeDecodeHookFunc(
 		strictDurationHookFunc,
@@ -476,6 +689,21 @@ func load(paths []string) (*Config, error) {
 	)
 	if err := v.Unmarshal(&cfg, viper.DecodeHook(decodeHook)); err != nil {
 		return nil, err
+	}
+
+	cfg.Api.Auth.Kratos.MaxResponseBytes, err = ParseIECBytes(cfg.Api.Auth.Kratos.MaxResponseSize)
+	if err != nil {
+		return nil, fmt.Errorf("invalid api.auth.kratos.max_response_size: %w", err)
+	}
+	if cfg.Api.Auth.Kratos.MaxResponseBytes < 1 || cfg.Api.Auth.Kratos.MaxResponseBytes > 4<<20 {
+		return nil, errors.New("api.auth.kratos.max_response_size must be positive and at most 4MiB")
+	}
+	cfg.Api.Notification.MaxBodyBytes, err = ParseIECBytes(cfg.Api.Notification.MaxBodySize)
+	if err != nil {
+		return nil, fmt.Errorf("invalid api.notification.max_body_size: %w", err)
+	}
+	if cfg.Api.Notification.MaxBodyBytes < 1 || cfg.Api.Notification.MaxBodyBytes > 1<<20 {
+		return nil, errors.New("api.notification.max_body_size must be positive and at most 1MiB")
 	}
 
 	if err := validateConfig(&cfg); err != nil {
@@ -493,26 +721,38 @@ func load(paths []string) (*Config, error) {
 	return &cfg, nil
 }
 
-// checkLegacyKeys fails startup when any removed/renamed configuration path
-// (TOML or env var) is present, naming its replacement. One file is mounted
-// into every service, so this cannot use a global strict/deny-unknown-fields
-// check — each service checks only the keys it used to own.
-func checkLegacyKeys(v *viper.Viper) error {
-	for _, legacy := range legacyKeys {
-		if v.IsSet(legacy.path) {
-			envName := "GITSTORE_" + strings.ToUpper(strings.ReplaceAll(legacy.path, ".", "__"))
-			return fmt.Errorf(
-				"config: %s (env: %s) is no longer recognised; use %s instead",
-				legacy.path, envName, legacy.replacement,
-			)
-		}
-	}
-	return nil
-}
-
 // validateConfig runs all struct validations and returns a combined error.
 func validateConfig(cfg *Config) error {
+	if err := cfg.Api.ValidateRuntime(); err != nil {
+		return err
+	}
+	if err := cfg.Api.ValidateRoleBudgets(); err != nil {
+		return err
+	}
+	if err := cfg.Api.ValidateRates(); err != nil {
+		return err
+	}
+	if err := cfg.Api.ValidatePorts(); err != nil {
+		return err
+	}
+	for _, policy := range []EndpointConfig{cfg.Api.Admin, cfg.Api.Storefront} {
+		if err := policy.Validate(); err != nil {
+			return err
+		}
+	}
+	if err := cfg.Api.Profiling.Validate(); err != nil {
+		return fmt.Errorf("api.%w", err)
+	}
+	if err := cfg.Observability.OTLP.Validate(); err != nil {
+		return err
+	}
 	validate := validator.New()
+	if len(cfg.Api.Roles) == 1 && cfg.Api.HasRole(RoleStorefront) {
+		if err := validate.Struct(cfg.Log); err != nil {
+			return err
+		}
+		return validateLogFormat(&cfg.Log)
+	}
 	if err := validate.Struct(cfg); err != nil {
 		var ve validator.ValidationErrors
 		if errors.As(err, &ve) {
@@ -533,6 +773,9 @@ func validateConfig(cfg *Config) error {
 	if err := validateAuthChainConfig(cfg); err != nil {
 		return err
 	}
+	if err := cfg.Api.Auth.OPA.Validate(cfg.Api.Auth.AuthZ.Provider); err != nil {
+		return err
+	}
 	if err := validatePushLimitsConfig(&cfg.PushLimits); err != nil {
 		return err
 	}
@@ -545,13 +788,21 @@ func validateConfig(cfg *Config) error {
 	if err := validateOIDCAuthChainConfig(&cfg.Api.Auth); err != nil {
 		return err
 	}
+	if cfg.Api.Auth.UserDir.Provider == "kratos" {
+		if err := cfg.Api.Auth.Kratos.Validate(); err != nil {
+			return err
+		}
+	}
+	if err := cfg.Api.Notification.Validate(); err != nil {
+		return err
+	}
 	return validateLogFormat(&cfg.Log)
 }
 
 func validateAuthChainConfig(cfg *Config) error {
 	for _, provider := range cfg.Api.Auth.AuthN.Chain {
-		if strings.EqualFold(strings.TrimSpace(provider), "static-users") && cfg.Api.Auth.JWT.Secret == "" {
-			return errors.New("startup failed: api.auth.jwt.secret is required\n\n  Problem: static-users is present in api.auth.authn.chain, but api.auth.jwt.secret (env: GITSTORE_API__AUTH__JWT__SECRET) is empty. static-users cannot issue or verify session tokens without it\n\n  To fix, do ONE of the following:\n    1. Set GITSTORE_API__AUTH__JWT__SECRET to a random string (32+ chars). You can generate one with: make secret TARGET=jwt\n    2. If you don't intend to use static-users, remove it from api.auth.authn.chain (GITSTORE_API__AUTH__AUTHN__CHAIN)\n\n  See specs/060-local-multiuser-authn/quickstart.md, step 4, for a worked example")
+		if strings.EqualFold(strings.TrimSpace(provider), "static-users") && cfg.Api.Auth.StaticUsers.JWT.Secret == "" {
+			return errors.New("startup failed: api.auth.static_users.jwt.secret is required\n\n  Problem: static-users is present in api.auth.authn.chain, but api.auth.static_users.jwt.secret (env: GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET) is empty. static-users cannot issue or verify session tokens without it\n\n  To fix, do ONE of the following:\n    1. Set GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET to a random string (32+ chars). You can generate one with: make secret TARGET=jwt\n    2. If you don't intend to use static-users, remove it from api.auth.authn.chain (GITSTORE_API__AUTH__AUTHN__CHAIN)\n\n  See specs/060-local-multiuser-authn/quickstart.md, step 4, for a worked example")
 		}
 	}
 	return nil
@@ -808,16 +1059,22 @@ func validateLogFormat(log *LogConfig) error {
 // MarshalLogObject implements zap.ObjectMarshaler for structured startup logging.
 // Sensitive fields are always redacted.
 func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
-	enc.AddInt("api.port", c.Api.Port)
+	enc.AddInt("api.admin_port", c.Api.AdminPort)
+	enc.AddInt("api.storefront_port", c.Api.StorefrontPort)
 	enc.AddInt("api.git_port", c.Api.GitPort)
 	enc.AddInt("api.grpc_port", c.Api.GrpcPort)
 	enc.AddString("api.git_service.uri", c.Api.GitService.Uri)
+	enc.AddString("api.auth.userdir.provider", c.Api.Auth.UserDir.Provider)
+	enc.AddString("api.auth.kratos.admin_token", redact(c.Api.Auth.Kratos.AdminToken))
+	enc.AddString("api.notification.provider", c.Api.Notification.Provider)
+	enc.AddString("api.notification.api_key", redact(c.Api.Notification.APIKey))
 	enc.AddString("api.auth.static_users.users_file", c.Api.Auth.StaticUsers.UsersFile)
-	enc.AddString("api.auth.jwt.secret", redact(c.Api.Auth.JWT.Secret))
-	enc.AddDuration("api.auth.jwt.ttl", c.Api.Auth.JWT.TTL)
-	enc.AddString("api.auth.jwt.issuer", c.Api.Auth.JWT.Issuer)
-	enc.AddDuration("api.auth.jwt.refresh_grace", c.Api.Auth.JWT.RefreshGrace)
+	enc.AddString("api.auth.static_users.jwt.secret", redact(c.Api.Auth.StaticUsers.JWT.Secret))
+	enc.AddDuration("api.auth.static_users.jwt.ttl", c.Api.Auth.StaticUsers.JWT.TTL)
+	enc.AddString("api.auth.static_users.jwt.issuer", c.Api.Auth.StaticUsers.JWT.Issuer)
+	enc.AddDuration("api.auth.static_users.jwt.refresh_grace", c.Api.Auth.StaticUsers.JWT.RefreshGrace)
 	enc.AddString("grpc_auth.hmac_secret", redact(c.GrpcAuth.HmacSecret))
+	enc.AddString("grpc_auth.hmac_secret_previous", redact(c.GrpcAuth.HmacSecretPrevious))
 	enc.AddString("api.auth.serviceaccount.issuer", c.Api.Auth.ServiceAccount.Issuer)
 	enc.AddString("api.auth.serviceaccount.audience", c.Api.Auth.ServiceAccount.Audience)
 	enc.AddString("api.auth.serviceaccount.assertion_audience", c.Api.Auth.ServiceAccount.AssertionAudience)

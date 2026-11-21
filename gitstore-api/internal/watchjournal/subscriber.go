@@ -220,6 +220,12 @@ func (s *Subscriber) replayThrough(ctx context.Context, cursor *datastore.Namesp
 }
 
 func (s *Subscriber) deliver(ctx context.Context, events chan<- datastore.NamespaceWatchEvent, event datastore.NamespaceWatchEvent) error {
+	if event.Type == datastore.ResourceWatchProgress {
+		event = datastore.ResourceWatchEvent{
+			Epoch: event.Epoch, Sequence: event.Sequence, At: event.At,
+			Type: datastore.ResourceWatchBookmark,
+		}
+	}
 	timer := time.NewTimer(s.cfg.BackpressureTimeout)
 	defer timer.Stop()
 	select {

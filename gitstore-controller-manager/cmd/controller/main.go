@@ -29,15 +29,21 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	namespacecontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/namespace"
 	productcontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/product"
+	rbaccontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/rbac"
 	repositorycontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/repository"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/secret"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/version"
+	"github.com/gitstore-dev/gitstore/observability"
 	"go.uber.org/zap"
 )
 
 func main() {
+	run(false)
+}
+
+func run(enableRBAC bool) {
 	configFiles, err := parseConfigFiles(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to parse arguments: %v\n", err)
@@ -61,10 +67,32 @@ func main() {
 	}
 	defer log.Sync() //nolint:errcheck
 
-	mgr := manager.New().WithLogger(log)
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	log, shutdownTelemetry, err := observability.InitTelemetry(ctx, cfg.Observability.OTLP, observability.ControllerService, version.Version, log)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "Failed to initialize telemetry")
+		os.Exit(1)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(ctx); err != nil {
+			log.Error("telemetry shutdown failed")
+		}
+	}()
+	shutdownProfiler, err := observability.StartCapacityProfiler(cfg.Controller.Profiling, log)
+	if err != nil {
+		log.Fatal("Failed to initialize capacity profiler", zap.Error(err))
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownProfiler(ctx); err != nil {
+			log.Error("capacity profiler shutdown failed", zap.Error(err))
+		}
+	}()
+	mgr := manager.New().WithLogger(log)
 
 	credentials, err := buildCredentialSource(ctx, cfg, log)
 	if err != nil {
@@ -87,7 +115,7 @@ func main() {
 	// wait for each Runner's final checkpoint flush before the process exits.
 	var runners sync.WaitGroup
 
-	closeStores, err := registerDiskControllers(ctx, &runners, mgr, cfg, log, client)
+	closeStores, err := registerDiskControllersWithRBAC(ctx, &runners, mgr, cfg, log, client, enableRBAC)
 	if err != nil {
 		log.Fatal("failed to register durable controllers", zap.Error(err))
 	}
@@ -149,6 +177,51 @@ func newDiskRunner[T any](kind string, watcher listwatch.ListWatcher[T], store *
 	}
 }
 
+func newRBACDiskRunner(kind string, watcher listwatch.ListWatcher[rbaccontroller.Resource], store *checkpoint.DiskStore, cfg *config.Config, log *zap.Logger) *listwatch.Runner[rbaccontroller.Resource] {
+	runner := newDiskRunner(kind, watcher, store, cfg, log,
+		func(resource rbaccontroller.Resource) types.WorkItemKey { return resource.Key() },
+		func(resource rbaccontroller.Resource) string { return resource.Metadata.ResourceVersion })
+	runner.DiskRelatedVersion = func(resource rbaccontroller.Resource) string {
+		if resource.Kind == "Role" || resource.Kind == "ClusterRole" {
+			return fmt.Sprintf("%s/%t", resource.Metadata.UID, resource.Metadata.DeletionTimestamp != nil)
+		}
+		return ""
+	}
+	runner.DiskIndexes = func(resource rbaccontroller.Resource) []string {
+		ref := resource.Spec.RoleRef
+		if ref == nil {
+			return nil
+		}
+		namespace := ""
+		if ref.Kind == "Role" {
+			namespace = resource.Metadata.Namespace
+		}
+		return []string{relationIndex("rbac-"+ref.Kind, namespace, ref.Name)}
+	}
+	runner.DiskRelated = func(resource rbaccontroller.Resource) []types.WorkItemKey {
+		if resource.Kind == "Role" || resource.Kind == "ClusterRole" {
+			return []types.WorkItemKey{{Kind: "RBACRoleChanged", Namespace: resource.Metadata.Namespace,
+				Name: resource.Kind + "/" + resource.Metadata.Name}}
+		}
+		if resource.Kind == "RoleBinding" && resource.Metadata.Name == rbaccontroller.ManagedBindingName {
+			keys := []types.WorkItemKey{{Kind: "Namespace", Name: resource.Metadata.Namespace}}
+			if resource.Spec.RoleRef != nil {
+				keys = append(keys, types.WorkItemKey{Kind: resource.Spec.RoleRef.Kind, Name: resource.Spec.RoleRef.Name})
+			}
+			return keys
+		}
+		if ref := resource.Spec.RoleRef; ref != nil {
+			key := types.WorkItemKey{Kind: ref.Kind, Name: ref.Name}
+			if ref.Kind == "Role" {
+				key.Namespace = resource.Metadata.Namespace
+			}
+			return []types.WorkItemKey{key}
+		}
+		return nil
+	}
+	return runner
+}
+
 func registerDiskRunner[T any](ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, runner *listwatch.Runner[T], reconciler types.Reconciler, cfg *config.Config, related func(context.Context, types.WorkItemKey) error) error {
 	if err := mgr.Register(manager.ReconcilerRegistration{
 		Kind: runner.Kind, Reconciler: reconciler, Cache: runner.Cache, Disk: runner.Disk,
@@ -169,6 +242,10 @@ func registerDiskRunner[T any](ctx context.Context, runners *sync.WaitGroup, mgr
 }
 
 func registerDiskControllers(ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client) (func() error, error) {
+	return registerDiskControllersWithRBAC(ctx, runners, mgr, cfg, log, client, false)
+}
+
+func registerDiskControllersWithRBAC(ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client, enableRBAC bool) (func() error, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	stores := make(map[string]*checkpoint.DiskStore, 4)
 	closeStores := func() error {
@@ -180,7 +257,12 @@ func registerDiskControllers(ctx context.Context, runners *sync.WaitGroup, mgr *
 		}
 		return result
 	}
-	for _, kind := range []string{"Namespace", "Repository", "CategoryTaxonomy", "Product"} {
+	kinds := []string{"Namespace", "Repository", "CategoryTaxonomy", "Product"}
+	if enableRBAC {
+		kinds = append(kinds, rbaccontroller.Kinds...)
+		kinds = append(kinds, rbaccontroller.NamespaceCleanupWorkKind)
+	}
+	for _, kind := range kinds {
 		store, err := checkpoint.OpenDiskStore(cfg.Controller.Checkpoint.Dir, kind)
 		if err != nil {
 			return nil, errors.Join(err, closeStores())
@@ -207,6 +289,15 @@ func registerDiskControllers(ctx context.Context, runners *sync.WaitGroup, mgr *
 			return types.WorkItemKey{Kind: "Product", Namespace: p.Namespace, Name: p.Name}
 		},
 		func(p categorytaxonomy.Product) string { return p.ResourceVersion })
+	rbacClient := rbaccontroller.NewGraphQLClient(client)
+	rbacRunners := map[string]*listwatch.Runner[rbaccontroller.Resource]{}
+	if enableRBAC {
+		for _, kind := range rbaccontroller.Kinds {
+			runner := newRBACDiskRunner(kind, rbaccontroller.NewGraphQLListWatcher(rbacClient, kind, listwatch.NewNamespaceListWatcher(client)),
+				stores[kind], cfg, log)
+			rbacRunners[kind] = runner
+		}
+	}
 	cat.AcceptUpdate, cat.ShouldEnqueueUpdate = categorytaxonomy.AcceptWatchUpdate, categorytaxonomy.ShouldEnqueueWatchUpdate
 	cat.DiskIndexes = func(c categorytaxonomy.CategoryTaxonomy) []string {
 		if c.ParentRefName == "" {
@@ -237,6 +328,18 @@ func registerDiskControllers(ctx context.Context, runners *sync.WaitGroup, mgr *
 		return []types.WorkItemKey{{Kind: "CategoryTaxonomy", Namespace: p.Namespace, Name: p.CategoryRefName}}
 	}
 	related := func(ctx context.Context, key types.WorkItemKey) error {
+		if key.Kind == "RBACRoleChanged" {
+			roleKind, name, ok := strings.Cut(key.Name, "/")
+			if !ok {
+				return errors.New("invalid RBAC relation work key")
+			}
+			for _, kind := range []string{"RoleBinding", "ClusterRoleBinding"} {
+				if err := stores[kind].RequestFanout(ctx, relationIndex("rbac-"+roleKind, key.Namespace, name)); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		if key.Kind == "ProductCategory" {
 			return product.Disk.RequestFanout(ctx, relationIndex("category", key.Namespace, key.Name))
 		}
@@ -267,9 +370,14 @@ func registerDiskControllers(ctx context.Context, runners *sync.WaitGroup, mgr *
 		func(ctx context.Context, key types.WorkItemKey) error {
 			return cat.Disk.RequestFanout(ctx, relationIndex("parent", key.Namespace, key.Name))
 		}, categorytaxonomy.NewGraphQLDeletionClient(client))
+	namespaceReconciler := namespacecontroller.NewReconcilerWithLookup(ns.Lookup, status.NewGraphQLNamespaceStatusClient(client),
+		namespacecontroller.NewGraphQLRepositoryClient(client), namespacecontroller.NewGraphQLDeletionClient(client))
+	if enableRBAC {
+		namespaceReconciler.WithOwnerAccess(rbacClient)
+	}
 	registrations := []func() error{
 		func() error {
-			return registerDiskRunner(ctx, runners, mgr, ns, namespacecontroller.NewReconcilerWithLookup(ns.Lookup, status.NewGraphQLNamespaceStatusClient(client), namespacecontroller.NewGraphQLRepositoryClient(client), namespacecontroller.NewGraphQLDeletionClient(client)), cfg, related)
+			return registerDiskRunner(ctx, runners, mgr, ns, namespaceReconciler, cfg, related)
 		},
 		func() error {
 			return registerDiskRunner(ctx, runners, mgr, repo, repositorycontroller.NewReconcilerWithLookup(repo.Lookup, status.NewGraphQLRepositoryStatusClient(client), repositorycontroller.NewGraphQLStorageClient(client), repositorycontroller.NewGraphQLCompletionClient(client)), cfg, related)
@@ -281,6 +389,35 @@ func registerDiskControllers(ctx context.Context, runners *sync.WaitGroup, mgr *
 	}
 	for _, register := range registrations {
 		if err := register(); err != nil {
+			return nil, errors.Join(err, closeStores())
+		}
+	}
+	if enableRBAC {
+		reconciler := rbaccontroller.NewReconciler(func(ctx context.Context, key types.WorkItemKey) (rbaccontroller.Resource, bool, error) {
+			runner := rbacRunners[key.Kind]
+			if runner == nil {
+				return rbaccontroller.Resource{}, false, types.ErrKindNotRegistered
+			}
+			if !runner.Cache.HasSynced() || runner.Cache.RecoveryState().Recovering {
+				return rbaccontroller.Resource{}, false, checkpoint.ErrSnapshotInProgress
+			}
+			return runner.Lookup(ctx, key)
+		}, rbacClient).WithRoleLookup(rbacClient.Get)
+		for _, kind := range rbaccontroller.Kinds {
+			if err := registerDiskRunner(ctx, runners, mgr, rbacRunners[kind], reconciler, cfg, related); err != nil {
+				return nil, errors.Join(err, closeStores())
+			}
+		}
+		cleanupCache := cache.New[rbaccontroller.Resource]()
+		cleanupCache.MarkSynced()
+		if err := mgr.Register(manager.ReconcilerRegistration{
+			Kind:       rbaccontroller.NamespaceCleanupWorkKind,
+			Reconciler: rbaccontroller.NewNamespaceCleanupPoller(rbacClient),
+			Cache:      cleanupCache, Disk: stores[rbaccontroller.NamespaceCleanupWorkKind], WorkerCount: 1,
+		}); err != nil {
+			return nil, errors.Join(err, closeStores())
+		}
+		if err := mgr.Enqueue(types.WorkItemKey{Kind: rbaccontroller.NamespaceCleanupWorkKind, Name: "pending"}); err != nil {
 			return nil, errors.Join(err, closeStores())
 		}
 	}
@@ -315,7 +452,7 @@ func buildCredentialSource(ctx context.Context, cfg *config.Config, log *zap.Log
 		return nil, fmt.Errorf("configure controller.serviceaccount.key_ref")
 	}
 
-	owner := "serviceaccount:" + controller.ServiceAccount.Namespace + ":" + controller.ServiceAccount.Name + ":" + controller.ServiceAccount.UID
+	owner := "system:serviceaccount:" + controller.ServiceAccount.Name + ":" + controller.ServiceAccount.UID
 	resolver, err := secret.NewBootstrapResolver(controller.SecretProviders.Bootstrap, owner,
 		controller.ServiceAccount.KeyRef, secret.NewObserver(log))
 	if err != nil {
@@ -327,7 +464,6 @@ func buildCredentialSource(ctx context.Context, cfg *config.Config, log *zap.Log
 	}
 	return graphqlclient.NewServiceAccountSource(
 		controller.ApiURI,
-		controller.ServiceAccount.Namespace,
 		controller.ServiceAccount.Name,
 		signer,
 		controller.ServiceAccount.AssertionAudience,

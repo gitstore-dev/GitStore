@@ -1,0 +1,472 @@
+# Research: Git-Backed RBAC and Embedded OPA
+
+**Date**: 2026-11-09
+**Scope**: Planning decisions; implementation and production acceptance pending.
+
+## 1. Current integration baseline
+
+Decision: extend existing boundaries rather than implement doc 022 literally.
+
+Evidence:
+
+- `gitstore-api/internal/auth/types.go:139-160,218-232`: `Decision`,
+  `ResourceContext` and `AuthZProvider.Authorize` already exist.
+- `gitstore-api/internal/auth/registry.go:36-86`: optional immutable
+  authorization snapshot diagnostics and registry/catalog identities exist.
+- `gitstore-api/internal/auth/provider/rbaclocal/policy.go:18-69` and
+  `provider.go:235-332`: structured v1beta1 rules, subjects, conditions and
+  canonical lookup are the semantic reference.
+- `gitstore-api/internal/app/graphql.go:214-223`: Admin GraphQL already uses
+  `/admin/graphql`, including WebSockets. The endpoint split is not new work.
+- `gitstore-api/internal/admission/committed_manifest.go:15-38,73-77`:
+  Git is authoritative and common committed admission projects it.
+- `gitstore-api/internal/datastore/entities.go:20-128` and
+  `datastore.go:58-82,665-676`: existing metadata, journal, fencing and
+  per-kind store conventions; no RBAC resource store currently exists.
+- `gitstore-api/internal/watchjournal/readiness.go:17-44`: progress and
+  continuity are available, but complete per-tier snapshot acquisition
+  must be added.
+- `gitstore-controller-manager/internal/types/types.go:23-81`,
+  `internal/status/patch.go:55-114` and
+  `internal/checkpoint/filesystem.go:180-216`: reuse reconcile/status and
+  durable per-kind work, not new controller infrastructure.
+
+Rationale: These contracts shipped after the original spec was written;
+existing metadata/errors/diagnostics and Staff classification must remain
+the compatibility baseline.
+
+Alternatives: a separate IAM service, resolver-only enforcement or a new
+watch channel would duplicate existing ownership and durability mechanisms.
+
+## 2. Embedded OPA
+
+Decision: pin `github.com/open-policy-agent/opa v1.22.2`; use the
+`/v1/rego` prepared-query API with a fixed, embedded Rego module. Prepare
+policy once per provider runtime, not per manifest or decision. Keep
+indexed, immutable tier data separate; publish data, readiness and evaluated
+identity together. Use read transactions if mutable OPA storage is chosen;
+otherwise pass immutable selected-tier data as query input.
+
+The implementation must allow only deterministic policy built-ins needed by
+the fixed module. No `http.send`, filesystem fetch, remote bundles, plugins
+or operator module loading. Undefined, malformed or errored output denies.
+
+Rationale: Meets no-network ordinary decisions without creating another
+service. Native Rego permits testing the fixed semantics directly.
+Prepared policy must not imply a cached decision or stale data binding.
+
+Alternatives: OPA SDK server-management/plugins add unneeded management
+machinery; sidecar/remote OPA violates this feature's embedded/no-network
+decision boundary; Cedar/OpenFGA are future providers, not implemented here.
+
+Verified upstream references on 2026-11-09:
+
+- [OPA v1.22.2 release](https://github.com/open-policy-agent/opa/releases/tag/v1.22.2),
+  published 2026-11-06.
+- [OPA Go integration](https://www.openpolicyagent.org/docs/integration).
+- [Prepared Rego API](https://pkg.go.dev/github.com/open-policy-agent/opa/v1/rego).
+- [Pinned module manifest](https://github.com/open-policy-agent/opa/blob/v1.22.2/go.mod):
+  upstream minimum Go 1.26.0; local Go 1.27.2 satisfies it.
+
+### Planning size probe
+
+Measured an isolated module with Go 1.27.2 on macOS/arm64, cross-built for
+Linux/amd64, `CGO_ENABLED=0`, `-trimpath -ldflags="-s -w"`. The baseline
+prints `true`; the OPA executable imports `/v1/rego`, prepares a fixed
+allow query and evaluates an input. Native execution returned `true`.
+
+| Artifact | Bytes |
+|---|---:|
+| Baseline stripped executable | 1,507,488 |
+| Embedded OPA executable | 23,171,232 |
+| Difference | 21,663,744 (20.66 MiB) |
+
+This is a linked evaluator probe, **not** the marginal API binary size,
+compressed image-layer delta, runtime memory, or latency benchmark. Existing
+API dependencies overlap with OPA, and minimal-version selection may update
+transitive dependencies. Implementation must measure before/after API
+binaries and same-architecture images with identical build flags, review
+module changes and run existing SDK telemetry regressions. Image-reduction
+work remains #487, separate from this feature.
+
+### Implementation API baseline
+
+Before adding OPA, built the actual API image from `docker/api.Dockerfile`
+for `linux/arm64`, at runtime-source revision
+`c4874fc0fd30c2f59bcf8b41d40fb06bc1570c08`.
+The builder was `golang:1.27.2-alpine3.23`
+(`sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079`);
+the runtime was `alpine:3.23.3`
+(`sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659`).
+Both binaries used the shipped `CGO_ENABLED=0 GOOS=linux go build`
+commands, without stripping or `-trimpath`. No running deployment was
+replaced.
+
+| Pre-OPA artifact | Bytes |
+|---|---:|
+| `/app/api` | 64,479,538 |
+| `/app/gitctl` | 39,047,408 |
+| Docker-reported image size | 168,804,961 |
+
+The image size is Docker's reported local size, not compressed registry
+transfer size. Preserve the same platform, Dockerfile, base-image digests
+and build flags for the linked-OPA comparison; this baseline alone does
+not establish the final OPA delta.
+
+### Same-platform implementation comparison
+
+On 2026-11-15, rebuilt the clean pre-OPA source above and the linked implementation
+at `083d9af4ecb7fe04930f3fb2d8d168d71c52cab5` using the unchanged shipped
+Dockerfile, `linux/arm64`, the same two explicitly pinned base-image digests and
+the same unstripped build flags. Both builds used the local Docker engine;
+no running deployment was replaced.
+
+| Artifact | Fresh pre-OPA baseline, bytes | Linked implementation, bytes | Difference, bytes |
+|---|---:|---:|---:|
+| `/app/api` | 64,479,538 | 84,700,951 | +20,221,413 |
+| `/app/gitctl` | 39,047,408 | 39,068,140 | +20,732 |
+| Docker-reported local image size | 168,804,986 | 196,378,071 | +27,573,085 |
+
+Both baseline binary sizes reproduce the earlier measurement exactly. The fresh
+baseline's Docker-reported size differs by 25 bytes from the historical record;
+the table compares the two fresh builds, not mixed measurement batches. Image
+and extracted-binary identities, build metadata and layer histories are retained
+with the private evidence. The image figures are Docker's reported local sizes,
+not compressed registry transfer sizes or an isolated evaluator-layer delta.
+The source interval includes the RBAC implementation and its dependency changes;
+the entire difference must not be attributed to OPA alone.
+
+This completes the actual binary/image comparison slice. The paired runtime
+measurement below completes the heap/RSS slice separately; neither establishes
+sustained acceptance or completes image-reduction issue #487.
+
+### Paired release-runtime heap/RSS measurement
+
+On 2026-11-17, ran the exact retained pre-OPA and linked-implementation images
+above serially on the same shared local Docker engine (`linux/arm64`). Each
+container had the same two-CPU/2-GiB limit, memdb datastore, static-users AuthN,
+allow-all AuthZ and no UserDir or profiler. Each used a fresh private Git
+directory and one non-overlapping native Git process from source `466f99a2`;
+neither accessed retained dataset storage. Both `/ready` checks passed before
+400 `/health` probes spaced 50 ms apart, followed by ten SDK `/metrics` samples
+spaced one second apart. No forced garbage collection was requested.
+
+| Runtime measurement, bytes | Pre-OPA minimum / median / maximum | Linked minimum / median / maximum | Median difference |
+|---|---:|---:|---:|
+| `go_memstats_heap_alloc_bytes` | 20,526,496 / 22,205,104 / 23,792,312 | 22,023,592 / 23,607,640 / 25,199,600 | +1,402,536 |
+| `process_resident_memory_bytes` | 50,352,128 / 51,859,456 / 53,497,856 | 58,658,816 / 60,096,512 / 61,734,912 | +8,237,056 |
+
+These are actual health-warmed process measurements, not estimated allocations,
+post-GC retained heap, peak memory or an activated RBAC working set. The same
+source interval and attribution caveat as the binary comparison apply: the
+delta includes implementation/dependency changes, not OPA alone. The prepared
+decision component and active full-geometry working-set measurements below
+cover different scopes and must not be subtracted from this baseline.
+Image identities, private configurations, raw metric samples and normal
+shutdown evidence are retained privately; all comparison listeners closed.
+The current-source API auth, OPA provider and app race suites, plus the shared
+observability race suite, pass, including the existing SDK telemetry,
+reservation/release, bounded-label and collector/export regressions.
+
+Together with the binary/image and prepared-decision measurements, this closes
+T095's cost/telemetry measurement requirement, not the thirty-minute healthy,
+fault or large-catalog acceptance gates.
+
+Adding OPA v1.22.2 raised the selected versions of gqlparser
+v2.5.33 -> v2.5.58, x/time v0.15.0 -> v0.16.0, go-json
+v0.10.5 -> v0.10.6 and logrus v1.9.4 -> v1.10.2. The existing
+shared-module and Scylla driver replacements were retained. Module
+verification and the existing config, app and auth suites passed after
+resolution. Prune unused indirect modules when the embedded evaluator is
+linked; adding the module alone does not link OPA into the API.
+
+### Representative translation reservation probe
+
+The aggregate reservation regression now reflects the seeded policy mix:
+ten Roles with read/list permissions on Role, Product and CategoryTaxonomy,
+alternating Namespace conditions, fifty bindings, a group, a built-in role
+reference and a deliberately unresolved reference. The earlier four-action,
+unconditional fixture understated this mix. Before deduplication, its declared
+one-thousand-Namespace reservation with replacement headroom required
+557,909,312 bytes, exceeding the unchanged 536,870,912-byte limit.
+
+Translation now stores each authored rule once per Role and indexes its
+position by action, instead of copying its conditions and resource names into
+every expanded action. Decision matching and conservative coverage use the same
+indexes. The eightfold reservation multiplier, translated-memory limit and
+logical wildcard-expansion bound are unchanged; logical expansion is checked
+separately from shared retained storage.
+
+On 2026-11-15, a local `darwin/arm64` Apple M3 Pro run of
+`BenchmarkProviderDeclaredNamespaceTranslation` used `GOMAXPROCS=2`,
+`-benchtime=100ms` and `-benchmem`, once before and once after the change.
+Retained heap is sampled across sixteen prepared tiers after garbage collection.
+
+| Per-tier measurement | Before | After |
+|---|---:|---:|
+| Reserved bytes | 554,352 | 526,912 |
+| Sampled retained heap bytes | 181,444 | 124,812 |
+| Cumulative allocated bytes per rebuild | 7,264,798 | 7,157,298 |
+
+The representative aggregate reservation regression now passes with unchanged
+headroom and limits. These are local translation measurements, not process RSS,
+provider-call latency, native one-thousand-Namespace execution, sustained
+capacity acceptance or completion of the image-size comparison.
+
+### Representative prepared-decision component measurement
+
+The existing provider benchmark now evaluates ordinary Product lists against a
+prepared cluster tier and one representative Namespace tier, using the same ten
+Roles and fifty bindings as the reservation fixture above. Authenticated direct
+User, conditional Group, built-in view and unbound User cases check their exact
+expected allow or deny outcome on every iteration; unavailable outcomes cannot
+count as denials. Tier preparation is excluded from timed evaluation.
+
+On 2026-11-15, `BenchmarkProviderDeclaredNamespaceDecision` ran on the shared
+local `darwin/arm64` Apple M3 Pro with `GOMAXPROCS=2`, `-benchtime=200ms`,
+`-benchmem` and three repetitions. The following figures are the median of
+three per-run means, not request percentiles.
+
+| Ordinary decision case | Mean-call median, microseconds | Allocated bytes/call median | Allocations/call |
+|---|---:|---:|---:|
+| Direct User allowance | 34.837 | 21,213 | 339 |
+| Conditional Group allowance | 42.739 | 23,548 | 400 |
+| Built-in view allowance | 34.474 | 20,884 | 331 |
+| Unbound User denial | 14.863 | 14,616 | 207 |
+
+These are component calls through the linked provider, not an isolated Rego
+query, HTTP latency, p99, process RSS or a one-thousand-Namespace working set.
+Allocated bytes are cumulative per call, not retained heap. The existing auth,
+SDK telemetry, RBAC and app suites also pass with race detection on this source.
+An earlier authenticated-fixture batch measured approximately 39-110 microseconds
+per call across these cases; shared-host variability must not be interpreted
+as an implementation improvement.
+The paired release-runtime heap/RSS measurement above and this component
+measurement have deliberately distinct scopes. Sustained healthy/fault evidence
+remains required. The following full-scale diagnostic supplements, rather than
+replaces, either measurement.
+
+### Full native working-set decision diagnostic
+
+Source `7c814edeb29b2bef80b0c576909b312ad5e2a5ca` passes the independently
+verified 1,000-Namespace/10,000-Role/50,000-binding retained replay on the shared
+local `darwin/arm64` host. Its 500-second read-only window offers 40 requests/s
+across two APIs, with exactly 20,000 completed and zero wrong, unavailable or
+dropped decisions. Both independent source joins and the five original ordinary
+policy cases pass.
+
+Timing uses the unsampled decision stream's integer `latency_ns`, measured by
+`DecisionLogger.Authorize` around the whole provider call. Filter by the exact
+ordinary request-ID suffix, `product.list`/`role.list` action and matching
+resource kind. Each API has exactly one selected decision for each of its
+10,000 primary offers: 6,000 Product and 4,000 Role lists, with no missing or
+invalid timings. Percentiles use nearest rank over individual calls, not
+histogram interpolation or averages of aggregates.
+
+| API | p50, ms | p95, ms | p99, ms | Maximum, ms | Terminal heap bytes | Terminal RSS bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| A | 0.128125 | 0.201542 | 0.329917 | 1.157875 | 261,692,640 | 396,738,560 |
+| B | 0.129125 | 0.262958 | 0.404167 | 0.754417 | 262,489,968 | 396,722,176 |
+
+These are instrumented native fixture provider calls with already prepared
+tiers, not isolated Rego evaluations, HTTP timings or release-container
+acceptance. Heap/RSS are actual final SDK samples, not peaks, retained-after-GC
+sizes or a paired before/after comparison. Source/decision capture and SDK
+telemetry remain enabled; the observed p99 does not establish the unprofiled
+1,000-request/s thirty-minute latency or memory gates. No freshness, worker,
+resource or acceptance threshold changed.
+
+## 3. Translation and lifecycle ownership
+
+Decision: one provider-neutral RBAC controller group owns lifecycle,
+finalizers, ownerReferences and managed personal-owner bindings. Each API's
+active dynamic provider consumes a common revisioned RBAC model and
+translates locally. `rbac-local` remains static, without resource merging.
+
+Rationale: Controller state must not depend on engine-native representation.
+OPA data is disposable; Git and datastore projections survive replacement.
+
+Alternatives: one controller per provider, persisted OPA translations or
+in-memory-only grants create unnecessary coupling or lost-state risk.
+
+## 4. Authoritative validation snapshots
+
+Decision, explicitly chosen by the user: capture authoritative per-tier
+snapshots at validation start. A write may complete after a concurrent
+cross-repository revocation. No globally atomic vector, commit-time global
+fence, or distributed authorization transaction is claimed.
+
+For each tier, read the current canonical Git tip, require the projected
+desired state to match that admitted tip, and acquire a complete stable
+projection generation including current lifecycle state. Lag/error returns
+retryable unavailability; it never falls back to the ordinary watch cache.
+Each captured tier has its own capture time, Git revision, projection
+revision, namespace UID, catalog digest and built-in digest. Pin these for
+the whole validation. A new candidate after Git conflict starts over.
+
+Rationale: This is the selected tradeoff after identifying that per-repository
+Git serialization cannot make a cross-repository check linearizable.
+
+Alternatives: a durable global fence with crash-recoverable Git intents
+would enforce a stronger model but was not selected. A last-moment reread
+without commit fencing would still race and falsely imply stronger safety.
+
+Access reviews follow the same captured-revision semantics. Ordinary
+decisions remain watch-driven with no per-decision datastore/Git reads.
+
+Access-review API decision: adapt the existing TokenRequest-style envelope
+for transient `SubjectAccessReview`, not a flat GraphQL decision object.
+`authorization.gitstore.dev/v1beta1` request parameters live in `spec`;
+the response echoes `spec` and places decision/revision diagnostics in
+`status`. The `accessReview` Admin Query returns `SubjectAccessReview` directly;
+action-specific payload wrappers are reserved for mutations.
+Evidence: [the existing token contract](../../shared/schemas/admin/serviceaccount.graphqls)
+and [the transient resource catalogue](../../docs/storage-groups/transient.md#authn-and-authz-checks).
+The catalogue already identifies this placement, so no new storage group
+or persisted review kind is needed. Retain the query, canonical GitStore
+actions, authoritative target lookup and scope review permissions.
+A distinct self-review API and Kubernetes-specific resource/non-resource
+attribute semantics are not introduced.
+
+## 5. Conservative grant coverage
+
+Decision, explicitly chosen by the user: require explicit `bind` or
+`escalate` whenever complete permission coverage cannot be proved.
+
+Expand candidate rules against the finite catalog. For each action, a
+safe ordinary proof requires a covering caller grant at equal-or-broader
+scope, with no principal-dependent condition, and unrestricted resource
+names or a superset of every proposed resource name. An unrestricted
+candidate cannot be justified by enumerating today's resources. A
+conditional candidate can be covered by an unconditional caller grant,
+but evaluating an owner condition for the caller alone is not proof of
+the grant's behavior for another subject.
+
+Expose this as a bounded optional coverage capability evaluated by the
+active provider on the pinned model, alongside ordinary `Authorize`
+checks. The fixed OPA module may answer a named coverage query; do not
+replace OPA enforcement with a second production decision evaluator.
+Providers without coverage evidence require explicit bind/escalate.
+Bindings to absent roles require `bind`, remain unresolved and grant nothing.
+
+Rationale: finite actions do not make resource names, subjects or conditional
+attributes finite. A concrete successful authorization cannot establish
+universal containment.
+
+Alternatives: a general symbolic containment solver is unnecessary scope.
+Treating an absent role as an empty grant invites later privilege activation.
+
+## 6. Projection and complete snapshots
+
+Decision: use one logical authoritative RBAC resource collection partitioned
+by tier identity, with kind/name clustering, full existing envelopes and a
+same-partition revision/count sentinel. Apply an admitted bounded candidate
+as a single conditional transaction within the tier. Scylla uses a
+single-partition conditional batch; memdb provides equivalent atomicity.
+Verify native Scylla batch/CDC behavior in datastore contracts before
+depending on it.
+
+A stable paged snapshot reads the revision sentinel before and after the
+scan at the required consistency; differing revisions cause bounded retry.
+Metadata/status writes participate in the same revision protocol. A CAS
+failure cannot publish some resources or advance quota counts. Query-first
+secondary indexes remain projections, never the source of the snapshot.
+
+Register full-image CDC in the existing journal. A journal event marks a
+tier dirty; consumers rebuild a complete snapshot rather than publishing
+partial rows from a multi-resource change. Capture a watch cursor before
+the snapshot scan, retain a bounded dirty signal through installation and
+verify source progress/continuity. Missing cursors, buffer overflow,
+unstable snapshots or lost source progress deny and resync.
+
+Rationale: independent resource pages plus an unrelated journal high-water
+do not establish a complete, consistent policy. Tier serialization is a
+small bounded domain constraint, not global cross-repository locking.
+
+Alternatives: global scans and incremental publication of incomplete CDC
+batches violate readiness. Versioning every full policy snapshot durably
+would unnecessarily duplicate reconciled state.
+
+## 7. Admission and Git publication
+
+Decision: add RBAC validation to blocking pre-receive, not the existing
+fire-and-forget post-receive callout alone. Validate final candidate trees
+and deletions as a unit with authenticated actor and old/new Git OIDs;
+revalidate changed authority for a new candidate. GraphQL commits use the
+same candidate pipeline.
+
+`gitstore-git-service/src/git/hooks/mod.rs:131-210,280-314` provides blocking
+validators. `src/git/hooks/admission_handler.rs:18-20,59-122` currently
+always accepts after scheduling its post-receive notification. That
+notification is projection triggering, not an RBAC security gate.
+
+Only the canonical branch is authoritative for RBAC. Reject multi-ref
+RBAC-changing pushes unless the transport guarantees atomic ref publication;
+never report all-or-none acceptance while accepting only some refs. Ordinary
+multi-manifest single-ref commits remain supported. Other branches do not
+change effective RBAC and cannot shadow protected system paths.
+
+Committed Git remains authority if projection is delayed or an acknowledgment
+is lost. Retry projection from the committed OID; never roll back Git
+silently, publish part of the tier, or treat a projection timeout as proof
+the write did not happen.
+
+## 8. Bootstrap and personal namespaces
+
+Decision: release built-ins are virtual immutable resources with deterministic
+IDs and release digest. Keep `namespace-owner -> system:authenticated`;
+change `namespace-creator -> system:staff` in line with implemented spec 065.
+The initial-admin binding is different: persist an ordinary removable
+manifest once, with a durable initialization receipt on existing root
+Namespace bootstrap status. Its removal must survive restart.
+
+The RBAC controller provisions fixed-name `namespace-owner-access` in each
+USER namespace, tied to the Namespace UID and verified Staff owner. Its
+binding points to `namespace-full-control`. The existing enrolled controller
+identity receives only the necessary cataloged controller capabilities;
+API admission additionally enforces the protected fixed template, actor
+classification and UID/version preconditions. No user gets bootstrap bind
+or escalate authority. The controller is never allowed to maintain arbitrary
+role references or subjects through this path.
+
+Rationale: deterministic identity plus UID fences permits retries and
+same-name recreation without silently adopting user-created manifests.
+The initial-admin receipt prevents unwanted re-granting after removal.
+
+Alternatives: per-user substitutions in static policy and blindly accepting
+caller-supplied managed annotations violate the spec.
+
+## 9. Lifecycle, telemetry and compatibility
+
+Decision: binding role references are immutable; replacement means
+delete/create. Namespace owner links are non-blocking; role links are
+blocking, once resolved by UID. No reference reattaches to a same-name
+replacement role implicitly. Deletion suppresses grants before finalization.
+Built-ins have virtual ownership and cannot be deleted.
+Cross-tier reference resolution uses a durable per-role UID claim guard;
+an eventually updated relation index cannot fence ClusterRole finalization
+against a binding in another namespace. Claim/release is idempotent by
+binding UID and uncertainty blocks completion until reconciled.
+
+Reuse SDK metrics, bounded decision logging and registry metadata. Add
+exact evaluated cluster/namespace revisions, builtin/catalog digests and
+bounded failure classes. Do not label metrics by namespace, subject,
+resource, commit, cursor or revision. Use finite tier-class/health labels
+and bounded diagnostic detail for individual tiers.
+
+Deploy compatible binaries with feature disabled, migrate additively, seed
+and verify parity, then perform a controlled provider switch. A static
+provider cannot observe new dynamic revocations; prevent dynamic writes
+while old/static replicas can still serve.
+
+## 10. Verification and lifecycle status
+
+Decision: extend current test/Makefile families rather than invent a public
+RBAC command family. Native topology and offered-load correctness need new
+fixtures; current watch/readiness profiles alone are not evidence.
+
+ADR-0010 is already Accepted. ADR-0018 is Proposed; this plan adopts scoped
+CAS/ownership practices but does not implement its platform-wide fencing
+core, so it remains Proposed. Review that boundary explicitly in the
+implementation PR. Spec 066 closes only with its acceptance; #451 and
+#487 remain separate work.

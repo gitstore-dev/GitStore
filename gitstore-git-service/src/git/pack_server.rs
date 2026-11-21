@@ -49,19 +49,21 @@ impl HttpPackServer {
     pub fn handle_upload_pack(&self, body: &[u8]) -> Result<Vec<u8>> {
         let start = Instant::now();
         let repo = open_repo(&self.repo_path)?;
-        let (wants, haves, done_seen) = parse_wants_and_haves(body);
+        let (wants, haves, done_seen, ack_mode) = parse_upload_pack_request(body);
         let mut response = Vec::new();
 
-        if wants.is_empty() || !done_seen {
-            // NAK — nothing requested or negotiation still in progress
+        if wants.is_empty() {
             write_pkt_line(&mut response, b"NAK\n")?;
             response.extend_from_slice(b"0000");
             emit_span("upload-pack-rpc", &self.repo_path, start, "ok", 0);
             return Ok(response);
         }
 
-        // NAK then pack stream
-        write_pkt_line(&mut response, b"NAK\n")?;
+        write_upload_pack_acknowledgements(&repo, &haves, done_seen, ack_mode, &mut response)?;
+        if !done_seen {
+            emit_span("upload-pack-rpc", &self.repo_path, start, "ok", 0);
+            return Ok(response);
+        }
 
         let pack_data = build_pack_for_wants(&repo, &wants, &haves)?;
         // Chunk pack into sideband pkt-lines: pkt-line max data = 65512 bytes,
@@ -99,7 +101,7 @@ impl HttpPackServer {
 // ---------------------------------------------------------------------------
 
 fn open_repo(path: &std::path::Path) -> Result<gix::Repository> {
-    gix::open(path).with_context(|| format!("open repo {}", path.display()))
+    crate::git::repo::open_repository(path).with_context(|| format!("open repo {}", path.display()))
 }
 
 fn emit_span(
@@ -175,7 +177,7 @@ fn collect_refs(repo: &gix::Repository) -> Result<Vec<(String, String)>> {
     let mut refs: Vec<(String, String)> = Vec::new();
 
     // Explicitly resolve HEAD first so it always appears in the advertisement.
-    if let Ok(head_id) = repo.head_id() {
+    if let Some(head_id) = repo.head().ok().and_then(|head| head.id()) {
         refs.push(("HEAD".to_string(), head_id.to_string()));
     }
 
@@ -188,8 +190,8 @@ fn collect_refs(repo: &gix::Repository) -> Result<Vec<(String, String)>> {
             Err(_) => continue,
         };
         let name = reference.name().as_bstr().to_string();
-        if name == "HEAD" {
-            continue; // already added above
+        if name == "HEAD" || name == "refs/gitstore" || name.starts_with("refs/gitstore/") {
+            continue;
         }
         let oid = match reference.target() {
             TargetRef::Object(id) => id.to_string(),
@@ -239,9 +241,23 @@ fn collect_refs(repo: &gix::Repository) -> Result<Vec<(String, String)>> {
 /// Returns `(wants, haves, done_seen)`. `done_seen` is `true` when the client sent
 /// `done`, signalling it has finished negotiation and expects a pack in response.
 pub fn parse_wants_and_haves(body: &[u8]) -> (Vec<String>, Vec<String>, bool) {
+    let (wants, haves, done_seen, _) = parse_upload_pack_request(body);
+    (wants, haves, done_seen)
+}
+
+#[derive(Clone, Copy, Default)]
+enum UploadPackAckMode {
+    #[default]
+    Single,
+    Multi,
+    Detailed,
+}
+
+fn parse_upload_pack_request(body: &[u8]) -> (Vec<String>, Vec<String>, bool, UploadPackAckMode) {
     let mut wants = Vec::new();
     let mut haves = Vec::new();
     let mut done_seen = false;
+    let mut ack_mode = UploadPackAckMode::default();
     let mut pos = 0;
 
     while pos + 4 <= body.len() {
@@ -265,8 +281,20 @@ pub fn parse_wants_and_haves(body: &[u8]) -> (Vec<String>, Vec<String>, bool) {
         if let Ok(s) = std::str::from_utf8(line) {
             let s = s.trim_end_matches('\n').split('\0').next().unwrap_or("");
             if let Some(rest) = s.strip_prefix("want ") {
-                let oid = rest.split_whitespace().next().unwrap_or("").to_string();
+                let mut fields = rest.split_whitespace();
+                let oid = fields.next().unwrap_or("").to_string();
                 if !oid.is_empty() {
+                    if wants.is_empty() {
+                        for capability in fields {
+                            match capability {
+                                "multi_ack_detailed" => ack_mode = UploadPackAckMode::Detailed,
+                                "multi_ack" if !matches!(ack_mode, UploadPackAckMode::Detailed) => {
+                                    ack_mode = UploadPackAckMode::Multi;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     wants.push(oid);
                 }
             } else if let Some(rest) = s.strip_prefix("have ") {
@@ -280,7 +308,47 @@ pub fn parse_wants_and_haves(body: &[u8]) -> (Vec<String>, Vec<String>, bool) {
         }
         pos += len;
     }
-    (wants, haves, done_seen)
+    (wants, haves, done_seen, ack_mode)
+}
+
+fn write_upload_pack_acknowledgements(
+    repo: &gix::Repository,
+    haves: &[String],
+    done_seen: bool,
+    mode: UploadPackAckMode,
+    response: &mut Vec<u8>,
+) -> Result<()> {
+    let mut common = None;
+    for have in haves {
+        let Ok(id) = gix::ObjectId::from_hex(have.as_bytes()) else {
+            continue;
+        };
+        let object = repo
+            .try_find_object(id)
+            .context("resolve offered fetch common commit")?;
+        if object.is_none_or(|object| object.kind != gix::object::Kind::Commit) {
+            continue;
+        }
+        common = Some(id);
+        let status = match mode {
+            UploadPackAckMode::Single => {
+                write_pkt_line(response, format!("ACK {id}\n").as_bytes())?;
+                return Ok(());
+            }
+            UploadPackAckMode::Multi => "continue",
+            UploadPackAckMode::Detailed => "common",
+        };
+        if !done_seen {
+            write_pkt_line(response, format!("ACK {id} {status}\n").as_bytes())?;
+        }
+    }
+    if let Some(id) = common.filter(|_| done_seen) {
+        write_pkt_line(response, format!("ACK {id}\n").as_bytes())?;
+    } else {
+        // A common commit does not prove that every wanted history is complete.
+        write_pkt_line(response, b"NAK\n")?;
+    }
+    Ok(())
 }
 
 /// Build a pack file containing objects reachable from `wants` but not from `haves`.
@@ -361,9 +429,7 @@ pub fn build_pack_for_wants(
     }
 
     // Count commit-reachable objects (trees + blobs via TreeContents expansion).
-    let mut ids_iter = walk_ids
-        .iter()
-        .map(|id| Ok::<_, Box<dyn std::error::Error + Send + Sync>>(*id));
+    let mut ids_iter = walk_ids.iter().map(|id| Ok::<_, gix::Error>(*id));
 
     let (mut counts, _) = gix_pack::data::output::count::objects_unthreaded(
         &odb,
@@ -376,9 +442,7 @@ pub fn build_pack_for_wants(
 
     // Include tag objects themselves (AsIs — no expansion needed for tag blobs).
     if !extra_objects.is_empty() {
-        let mut tag_iter = extra_objects
-            .iter()
-            .map(|id| Ok::<_, Box<dyn std::error::Error + Send + Sync>>(*id));
+        let mut tag_iter = extra_objects.iter().map(|id| Ok::<_, gix::Error>(*id));
         let (tag_counts, _) = gix_pack::data::output::count::objects_unthreaded(
             &odb,
             &mut tag_iter,
@@ -402,14 +466,14 @@ pub fn build_pack_for_wants(
             thread_limit: Some(1),
             ..Default::default()
         },
-    );
+    )
+    .context("resolving pack entry locations")?;
 
     // Collect all entries first so we know the exact count before creating
     // FromEntriesIter. Passing an incorrect count causes an index-out-of-bounds
     // panic in gix-pack 0.71.0 when delta expansion inflates the entry count
     // beyond counts.len().
-    type BatchResult =
-        Result<Vec<output::Entry>, gix_pack::data::output::entry::iter_from_counts::Error>;
+    type BatchResult = Result<Vec<output::Entry>, gix::Error>;
     let all_entries: Vec<Vec<output::Entry>> = entries_iter
         .into_iter()
         .map(|r| -> BatchResult { r.map(|(_seq, entries)| entries) })
@@ -424,9 +488,7 @@ pub fn build_pack_for_wants(
     let mut pack_bytes: Vec<u8> = Vec::new();
     type EntryBatch = Vec<output::Entry>;
     let mut bytes_iter = gix_pack::data::output::bytes::FromEntriesIter::new(
-        all_entries
-            .into_iter()
-            .map(Ok::<EntryBatch, std::convert::Infallible>),
+        all_entries.into_iter().map(Ok::<EntryBatch, gix::Error>),
         &mut pack_bytes,
         num_entries,
         gix_pack::data::Version::V2,
@@ -521,7 +583,7 @@ impl std::io::Read for ChannelReader {
 
 /// Write incoming pack data to a temporary quarantine directory from any `Read`.
 /// The pack and index files are NOT visible to the live ODB until
-/// `promote_quarantine` moves them into the real pack directory.
+/// `promote_quarantine` publishes accepted objects as loose files or retained packs.
 ///
 /// Pass `odb` to resolve base objects for thin packs sent by incremental pushes.
 pub fn stage_pack_from_reader<R: std::io::Read, O: gix_pack::Find + gix::prelude::Find>(
@@ -540,11 +602,12 @@ pub fn stage_pack_from_reader<R: std::io::Read, O: gix_pack::Find + gix::prelude
         &mut progress,
         &interrupt,
         odb,
+        gix::hash::Kind::Sha1,
         Options {
             thread_limit: Some(1),
             iteration_mode: gix_pack::data::input::Mode::Verify,
             index_version: gix_pack::index::Version::V2,
-            object_hash: gix::hash::Kind::Sha1,
+            ..Default::default()
         },
     )
     .context("write pack to quarantine")?;
@@ -565,10 +628,65 @@ pub fn stage_pack_from_reader<R: std::io::Read, O: gix_pack::Find + gix::prelude
     })
 }
 
-/// Move quarantined pack/index files into the repository's live pack directory.
-/// Called only after the ref transaction has committed successfully.
-/// Falls back to copy+delete when rename fails across filesystem boundaries (e.g. Docker overlay).
+// Share the same finite decoding policy for request-local validation and
+// accepted small-pack publication. Keep larger packs on the disk-backed path.
+const SMALL_PACK_BYTES: u64 = 2 * 1024 * 1024;
+const SMALL_PACK_OBJECTS: u32 = 64;
+const SMALL_PACK_DECODED_BYTES: usize = 8 * 1024 * 1024;
+
+pub(crate) fn small_pack_objects(
+    path: &std::path::Path,
+) -> Option<Vec<(gix::ObjectId, gix::object::Kind, Vec<u8>)>> {
+    if std::fs::metadata(path).ok()?.len() > SMALL_PACK_BYTES {
+        return None;
+    }
+    let mut bundle = gix_pack::Bundle::at(path, gix::hash::Kind::Sha1).ok()?;
+    if bundle.index.num_objects() > SMALL_PACK_OBJECTS {
+        return None;
+    }
+    bundle.pack = bundle
+        .pack
+        .with_alloc_limit_bytes(Some(SMALL_PACK_DECODED_BYTES));
+    let mut output = Vec::new();
+    let mut inflate = gix::zlib::Inflate::default();
+    let mut total = 0usize;
+    let mut objects = Vec::new();
+    for entry in bundle.index.iter() {
+        let (object, _) = bundle
+            .find(
+                &entry.oid,
+                &mut output,
+                &mut inflate,
+                &mut gix_pack::cache::Never,
+            )
+            .ok()??;
+        total = total.checked_add(object.data.len())?;
+        if total > SMALL_PACK_DECODED_BYTES {
+            return None;
+        }
+        objects.push((entry.oid, object.kind, object.data.to_owned()));
+    }
+    Some(objects)
+}
+
+/// Publish accepted objects before committing the prepared ref transaction.
+/// Small packs become loose objects; larger packs keep their pack/index files.
+/// Cross-filesystem pack moves fall back to copy and deletion.
 pub fn promote_quarantine(repo: &gix::Repository, q: Quarantine) -> Result<()> {
+    if let Some(objects) = small_pack_objects(&q.pack_path) {
+        use gix::objs::Write;
+        for (id, kind, data) in objects {
+            repo.objects
+                .write_buf_with_known_id(kind, &data, id)
+                .context("publish accepted loose object")?;
+        }
+        info!(
+            objects_written = q.num_objects,
+            storage = "loose",
+            "pack promoted to object database"
+        );
+        return Ok(());
+    }
     let pack_dir = repo.objects.store_ref().path().join("pack");
     std::fs::create_dir_all(&pack_dir).context("ensure pack dir")?;
 
@@ -642,13 +760,13 @@ pub fn check_blob_sizes_in_quarantine_paths(
             | gix_pack::data::entry::Header::RefDelta { .. } => {
                 // Delta-encoded entry: decode to resolve the true object size and kind.
                 let mut out = Vec::new();
-                let mut inflate = gix::features::zlib::Inflate::default();
+                let mut inflate = gix::zlib::Inflate::default();
                 let outcome = pack_file
                     .decode_entry(
                         pack_entry,
                         &mut out,
                         &mut inflate,
-                        &|_, _| None,
+                        &|_, _| Ok(None),
                         &mut gix_pack::cache::Never,
                     )
                     .with_context(|| {
@@ -678,6 +796,170 @@ pub fn check_blob_sizes_in_quarantine_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn small_accepted_pack_is_visible_without_refreshing_cached_indexes() {
+        let (_source_directory, source) = make_test_repo();
+        let commit = make_commit(&source, "accepted incremental content", None);
+        let pack = build_pack_for_wants(&source, &[commit.to_string()], &[]).unwrap();
+        let quarantine =
+            stage_pack_from_reader(std::io::Cursor::new(pack), Some((*source.objects).clone()))
+                .unwrap();
+        let (directory, target) = make_test_repo();
+        let cached = crate::git::repo::open_repository(directory.path()).unwrap();
+        assert!(cached.find_object(commit).is_err());
+        let before = cached.objects.store_ref().metrics().num_refreshes;
+        promote_quarantine(&target, quarantine).unwrap();
+        assert_eq!(
+            std::fs::read_dir(directory.path().join("objects/pack"))
+                .unwrap()
+                .count(),
+            0,
+            "small accepted packs must not add another pack index"
+        );
+        assert!(cached.find_object(commit).is_ok());
+        assert_eq!(
+            cached.objects.store_ref().metrics().num_refreshes,
+            before,
+            "new loose objects must be visible without index discovery"
+        );
+    }
+
+    #[test]
+    fn larger_accepted_packs_keep_the_disk_backed_promotion() {
+        let (_source_directory, source) = make_test_repo();
+        let mut commit = None;
+        for n in 0..22 {
+            commit = Some(make_commit(&source, &format!("content {n}"), commit));
+        }
+        let commit = commit.unwrap();
+        let pack = build_pack_for_wants(&source, &[commit.to_string()], &[]).unwrap();
+        let quarantine =
+            stage_pack_from_reader(std::io::Cursor::new(pack), Some((*source.objects).clone()))
+                .unwrap();
+        assert!(quarantine.num_objects > 64);
+        let (directory, target) = make_test_repo();
+        promote_quarantine(&target, quarantine).unwrap();
+        assert_eq!(
+            std::fs::read_dir(directory.path().join("objects/pack"))
+                .unwrap()
+                .count(),
+            2
+        );
+        assert!(crate::git::repo::open_repository(directory.path())
+            .unwrap()
+            .find_object(commit)
+            .is_ok());
+    }
+
+    #[test]
+    fn advertisement_reads_head_as_a_ref_without_opening_its_object() {
+        let (directory, _repo) = make_test_repo();
+        let oid = "1234567890123456789012345678901234567890";
+        std::fs::create_dir_all(directory.path().join("refs/heads")).unwrap();
+        std::fs::write(directory.path().join("refs/heads/main"), format!("{oid}\n")).unwrap();
+        for head in ["ref: refs/heads/main\n".to_owned(), format!("{oid}\n")] {
+            std::fs::write(directory.path().join("HEAD"), head).unwrap();
+            let server = HttpPackServer::new(directory.path().to_path_buf(), 0);
+            for response in [
+                server.advertise_receive_pack_refs().unwrap(),
+                server.advertise_upload_pack_refs().unwrap(),
+            ] {
+                let text = String::from_utf8(response).unwrap();
+                assert!(
+                    text.contains(&format!("{oid} HEAD\0")),
+                    "HEAD advertisement must not require loading its object: {text}"
+                );
+                assert!(text.contains(&format!("{oid} refs/heads/main\n")));
+            }
+        }
+    }
+
+    #[test]
+    fn rejected_quarantine_is_not_retained_by_live_repository_cache() {
+        let (_source_directory, source) = make_test_repo();
+        let commit = make_commit(&source, "rejected content", None);
+        let pack = build_pack_for_wants(&source, &[commit.to_string()], &[]).unwrap();
+        let quarantine =
+            stage_pack_from_reader(std::io::Cursor::new(pack), Some((*source.objects).clone()))
+                .unwrap();
+        let (target_directory, _target) = make_test_repo();
+        let cached = crate::git::repo::open_repository(target_directory.path()).unwrap();
+        assert!(cached.find_object(commit).is_err());
+        let rejected: Result<(), String> = crate::git::hooks::with_quarantine_repo(
+            target_directory.path(),
+            Some(quarantine.dir.path()),
+            |repository| {
+                assert!(repository.find_object(commit).is_ok());
+                assert_eq!(
+                    std::fs::read_dir(target_directory.path().join("objects/pack"))
+                        .unwrap()
+                        .count(),
+                    0,
+                    "small quarantine views must not publish temporary pack links"
+                );
+                Err("policy denied".to_owned())
+            },
+        );
+        assert!(rejected.is_err());
+        let live = crate::git::repo::open_repository(target_directory.path()).unwrap();
+        assert!(
+            live.find_object(commit).is_err(),
+            "rejected objects must not survive in a cached pack mapping"
+        );
+    }
+
+    #[test]
+    fn large_quarantine_views_fall_back_without_changing_object_visibility() {
+        for size in [5 * 1024 * 1024, 9 * 1024 * 1024] {
+            let (_source_directory, source) = make_test_repo();
+            // The helper places contents in both blob and commit message: 5 MiB
+            // exercises the aggregate cap, and 9 MiB the decoder allocation cap.
+            let content = "x".repeat(size);
+            let commit = make_commit(&source, &content, None);
+            let pack = build_pack_for_wants(&source, &[commit.to_string()], &[]).unwrap();
+            let quarantine =
+                stage_pack_from_reader(std::io::Cursor::new(pack), Some((*source.objects).clone()))
+                    .unwrap();
+            let (directory, _target) = make_test_repo();
+            crate::git::hooks::with_quarantine_repo(
+                directory.path(),
+                Some(quarantine.dir.path()),
+                |repository| {
+                    assert!(
+                        std::fs::read_dir(directory.path().join("objects/pack"))
+                            .unwrap()
+                            .count()
+                            > 0,
+                        "large views retain the isolated disk-backed fallback"
+                    );
+                    let object = repository.find_object(commit).unwrap();
+                    assert_eq!(
+                        object
+                            .try_into_commit()
+                            .unwrap()
+                            .decode()
+                            .unwrap()
+                            .message
+                            .len(),
+                        size
+                    );
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                std::fs::read_dir(directory.path().join("objects/pack"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+            assert!(crate::git::repo::open_repository(directory.path())
+                .unwrap()
+                .find_object(commit)
+                .is_err());
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Test helpers
@@ -885,7 +1167,7 @@ mod tests {
     }
 
     #[test]
-    fn t056_handle_upload_pack_wants_no_done_returns_nak_flush() {
+    fn t056_handle_upload_pack_wants_no_done_returns_nak() {
         let (_dir, repo) = make_test_repo();
         let commit_oid = make_commit(&repo, "initial", None);
 
@@ -905,8 +1187,185 @@ mod tests {
 
         let mut expected = Vec::new();
         write_pkt_line(&mut expected, b"NAK\n").unwrap();
-        expected.extend_from_slice(b"0000");
-        assert_eq!(resp, expected, "wants without done must return NAK+0000");
+        assert_eq!(
+            resp, expected,
+            "negotiation ends at NAK without an extra flush"
+        );
+    }
+
+    #[test]
+    fn upload_pack_acknowledges_only_known_commits_in_the_negotiated_mode() {
+        let (_dir, repo) = make_test_repo();
+        let root = make_commit(&repo, "root", None);
+        let parent = make_commit(&repo, "parent", Some(root));
+        let tip = make_commit(&repo, "tip", Some(parent));
+        let blob = repo.write_blob("not a common commit").unwrap().detach();
+        let unknown = "f".repeat(40);
+        let server = HttpPackServer::new(repo.path().to_path_buf(), 64 * 1024 * 1024);
+        for (capabilities, status, final_common) in [
+            ("multi_ack_detailed thin-pack", Some("common"), parent),
+            ("thin-pack multi_ack", Some("continue"), parent),
+            ("multi_ack multi_ack_detailed", Some("common"), parent),
+            ("multi_ack_detailed multi_ack", Some("common"), parent),
+            ("thin-pack", None, root),
+        ] {
+            let want = format!("want {tip} {capabilities}\n");
+            let mut request = pkt_lines(&[want.as_bytes()]);
+            flush(&mut request);
+            for have in [
+                &unknown,
+                &blob.to_string(),
+                &root.to_string(),
+                &parent.to_string(),
+            ] {
+                request.extend_from_slice(&pkt_lines(&[format!("have {have}\n").as_bytes()]));
+            }
+            let mut negotiation = request.clone();
+            flush(&mut negotiation);
+            let mut expected = Vec::new();
+            if let Some(status) = status {
+                for common in [root, parent] {
+                    write_pkt_line(&mut expected, format!("ACK {common} {status}\n").as_bytes())
+                        .unwrap();
+                }
+                write_pkt_line(&mut expected, b"NAK\n").unwrap();
+            } else {
+                write_pkt_line(&mut expected, format!("ACK {root}\n").as_bytes()).unwrap();
+            }
+            assert_eq!(
+                server.handle_upload_pack(&negotiation).unwrap(),
+                expected,
+                "{capabilities}: known commits must not disappear between stateless rounds"
+            );
+            request.extend_from_slice(&pkt_lines(&[b"done\n"]));
+            let response = server.handle_upload_pack(&request).unwrap();
+            let mut final_ack = Vec::new();
+            write_pkt_line(&mut final_ack, format!("ACK {final_common}\n").as_bytes()).unwrap();
+            assert!(
+                response.starts_with(&final_ack),
+                "{capabilities}: missing final ACK"
+            );
+            assert_eq!(
+                &response[final_ack.len() + 4..final_ack.len() + 9],
+                b"\x01PACK"
+            );
+        }
+        let want = format!("want {tip} multi_ack_detailed\n");
+        let mut request = pkt_lines(&[want.as_bytes()]);
+        flush(&mut request);
+        for have in [unknown, blob.to_string()] {
+            request.extend_from_slice(&pkt_lines(&[format!("have {have}\n").as_bytes()]));
+        }
+        flush(&mut request);
+        assert_eq!(server.handle_upload_pack(&request).unwrap(), b"0008NAK\n");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stock_git_fetch_bounds_common_history_negotiation() {
+        use axum::routing::{get, post};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        async fn git(directory: &std::path::Path, args: &[&str]) -> String {
+            let output = tokio::time::timeout(
+                Duration::from_secs(30),
+                tokio::process::Command::new("git")
+                    .args([
+                        "-c",
+                        "protocol.version=0",
+                        "-c",
+                        "fetch.negotiationAlgorithm=consecutive",
+                        "-c",
+                        "credential.helper=",
+                    ])
+                    .args(args)
+                    .current_dir(directory)
+                    .env("GIT_CONFIG_NOSYSTEM", "1")
+                    .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                    .env("GIT_TERMINAL_PROMPT", "0")
+                    .kill_on_drop(true)
+                    .output(),
+            )
+            .await
+            .expect("Git client command timed out")
+            .expect("run Git client");
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        }
+
+        let (_dir, repo) = make_test_repo();
+        let mut tip = make_commit(&repo, "root", None);
+        for index in 0..128 {
+            tip = make_commit(&repo, &format!("shared {index}"), Some(tip));
+        }
+        let native = Arc::new(HttpPackServer::new(
+            repo.path().to_path_buf(),
+            64 * 1024 * 1024,
+        ));
+        let advertisements = Arc::clone(&native);
+        let negotiations = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::clone(&negotiations);
+        let router = axum::Router::new()
+            .route(
+                "/repo.git/info/refs",
+                get(move || {
+                    let server = Arc::clone(&advertisements);
+                    async move {
+                        (
+                            [(
+                                "content-type",
+                                "application/x-git-upload-pack-advertisement",
+                            )],
+                            server.advertise_upload_pack_refs().unwrap(),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/repo.git/git-upload-pack",
+                post(move |body: axum::body::Bytes| {
+                    let server = Arc::clone(&native);
+                    let requests = Arc::clone(&requests);
+                    async move {
+                        requests.fetch_add(1, Ordering::Relaxed);
+                        (
+                            [("content-type", "application/x-git-upload-pack-result")],
+                            server.handle_upload_pack(&body).unwrap(),
+                        )
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let serving = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let client = tempfile::TempDir::new().unwrap();
+        let remote = format!("http://{address}/repo.git");
+        git(
+            client.path(),
+            &["clone", "--quiet", "--branch", "main", &remote, "."],
+        )
+        .await;
+        negotiations.store(0, Ordering::Relaxed);
+        tip = make_commit(&repo, "after shared history", Some(tip));
+        git(client.path(), &["fetch", "--quiet", "origin", "main"]).await;
+        assert_eq!(
+            git(client.path(), &["rev-parse", "origin/main"]).await,
+            tip.to_string()
+        );
+        let rounds = negotiations.load(Ordering::Relaxed);
+        serving.abort();
+        let _ = serving.await;
+        assert!(
+            (1..=2).contains(&rounds),
+            "common history must not cause repeated negotiation rounds: {rounds}"
+        );
     }
 
     // -----------------------------------------------------------------------

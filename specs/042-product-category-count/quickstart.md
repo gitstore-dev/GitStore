@@ -110,4 +110,4 @@ query {
 }
 ```
 
-Expect `productCount: 1` to appear within one reconciliation cycle, with no push to the category itself. Then push a category reassignment (edit the product's `categoryRef` to a different category) and confirm the original category's count drops back to `0` while the new category's count becomes `1`, and that a third, unrelated category's `productCount`/status are untouched (no status write, verifiable via the existing `docs/runbooks/controller-lag.md` reconcile-count signal for that category's key staying flat).
+Expect `productCount: 1` to appear within one reconciliation cycle, with no push to the category itself. Then push a category reassignment (edit the product's `categoryRef` to a different category) and confirm the original category's count drops back to `0` while the new category's count becomes `1`, and that a third, unrelated category's `productCount`/status are untouched (no status write, verifiable via the existing `docs/runbooks/controller-recovery.md` reconcile-count signal for that category's key staying flat).

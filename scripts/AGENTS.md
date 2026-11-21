@@ -1,0 +1,145 @@
+# Workspace commands, configuration and helper instructions
+
+GraphQL clients use complete `/admin/graphql` URLs; operational URLs stay at the
+Admin root. Keep named Admin/Storefront ports explicit in replica mappings.
+The existing aggregate generated-source check covers both endpoint schemas.
+`api/endpoint-split` uses the capacity dispatcher and the connected-evidence
+prerequisites documented in `tests/capacity/README.md`.
+
+These instructions also apply to the root `Makefile`, Compose files,
+container wiring and configuration.
+
+- API role selection uses `api.roles` / `GITSTORE_API__ROLES` or the same
+  binary's optional `serve --roles` / `serve --all` flags. The default omits
+  Storefront; endpoint-boundary fixtures must explicitly select `storefront`.
+  GraphQL layout and deployment advertisements are independent settings;
+  see `../docs/runbooks/api-runtime-roles.md`. Do not infer public URLs from
+  local ports or add role-specific binaries/Makefile targets.
+
+- Use the root Makefile as the public interface and `make help` for current
+  commands. Extend existing selector families (`TARGET`, `PROFILE`,
+  `DATASTORE`) and helpers, not feature-specific public targets or overlays.
+- `make check TARGET=licenses` uses `check-license-headers.sh` for all source
+  languages. Keep staged checks index-only, language-specific generated
+  exceptions and pinned upstream Apache attribution intact. Focused
+  regressions in `test-license-headers.sh` also run in the default test suite.
+- `install-git-hooks.sh` resolves Git's clone-shared hook directory from either
+  checkout type. Installation affects every linked worktree, never changes
+  hook configuration and refuses custom hook paths or differing existing
+  hooks. Test installation only in fresh test-owned repositories/worktrees.
+- Keep command documentation in the relevant README and scoped instructions
+  synchronized with supported behavior. Do not describe a proposed command
+  as implemented.
+- Existing `make build`, `make test`, `make lint` and `make pr-ready` include
+  the pinned `shared/scylla-cdc-go` reader patch alongside the other Go modules.
+- `make test TARGET=datastore DATASTORE=scylla` serializes tagged packages
+  sharing one Scylla fixture, not the concurrent writers within each test.
+  Preserve that scheduling in the command-dispatch regression.
+- Go formatting checks use each module's selected `go env GOROOT` formatter,
+  not an unrelated `gofmt` on `PATH`; formatter errors must fail lint.
+- `make git`, `make api` and `make controller` run native services in the
+  foreground. `make dev` uses the existing native startup helper and shutdown
+  trapping. Follow its current credential prerequisites rather than
+  generating, replacing or enrolling keys implicitly.
+- `make compose` uses the `local` profile and shared `CONFIG_FILE`
+  (default `./config/config.toml`), with memdb by default. `DATASTORE=scylla`
+  selects Scylla; `PROFILE=cluster` selects the existing three-node overlay.
+  `make scylla` runs Scylla alone. Reuse these files and selectors.
+- Use the existing `make ps`, `make logs`, `make stop` and `make down`
+  lifecycle interface, with `SERVICE` where supported. Scope actions to
+  explicitly owned deployments; never remove another deployment's storage.
+- `make compose OBSERVABILITY=otel` uses the existing observability profile.
+  Pass the same selector to lifecycle commands. Preserve native telemetry
+  and the Git service's singleton storage semantics.
+- `make compose IDENTITY=oidc` includes the optional reference provider;
+  `make oidc` runs OIDC alone. Keep the same selector for lifecycle actions.
+  See [../config/oidc/oidc.env.example](../config/oidc/oidc.env.example).
+- Use the existing identity/bootstrap helpers for user records, role
+  bindings, authentication material and resources. Preserve private material
+  and never put credentials in versioned files, logs or diagnostic evidence.
+- `/app/api gitctl migrate` prepares schema independently in the API image.
+  Native helpers use `go run ./cmd/server gitctl` from `gitstore-api/`. With
+  `GITSTORE_API__DATASTORE__SCYLLA__AUTO_MIGRATE=false`, API startup validates
+  migration history read-only; the compatible default is `true`. This
+  command does not transfer data. Read
+  [../.claude/rules/scylla-migrations.md](../.claude/rules/scylla-migrations.md).
+- The default API image is shell-less and runs as UID/GID `65532:65532`.
+  Use its native `gitctl healthcheck`; shell-based credential initialization
+  explicitly selects `docker/api.Dockerfile`'s `debug` target as root. Keep
+  issuer key mounts API-only and readable only by the API identity.
+- `make clean TARGET=<git-data|controller-checkpoints> CONFIRM=1` removes
+  selected local runtime state, never Docker volumes.
+- For capacity, profiling, chaos and owned-deployment helpers, read
+  [../tests/capacity/AGENTS.md](../tests/capacity/AGENTS.md). Keep
+  scenario-specific command details in the existing scenario documentation.
+- `make chaos CHAOS_PROFILE=identity-restart` requires `CHAOS_CONFIRM=1`, one
+  Kratos `CHAOS_TARGET` and a matching `CHAOS_OWNER` ownership label. The default
+  label is `com.docker.compose.project`; owned fixtures can explicitly override
+  `CHAOS_OWNERSHIP_LABEL`. Process restoration receipts are not authentication
+  recovery passes; see [../tests/chaos/README.md](../tests/chaos/README.md).
+- `make capacity TARGET=api PROFILE=readiness` retains health-only smoke
+  behavior unless `CAPACITY_IDENTITY_READINESS=1`. Identity acceptance requires
+  the private principal fixture, verified native counts, SDK timing/bounds
+  and live-delivery companion; see [../tests/capacity/README.md](../tests/capacity/README.md).
+  `CAPACITY_IDENTITY_CHAOS=1` additionally requires predeclared bounded fault
+  windows, confirmed restart/recovery receipts and process-segmented counters;
+  `USER_DIRECTORY_TEST_CHAOS=1` selects that opt-in owned driver.
+- `CAPACITY_RBAC_WORKLOAD=1` selects bounded owned native diagnostics or the
+  strict healthy-alpha runner in `api/readiness` and `namespace/watch`, with
+  `MODE=diagnostic|alpha`; production remains refused rather than falling back
+  to a non-RBAC driver. Alpha requires full 1,800-second Namespace writing,
+  1,860-second ordinary traffic, maximum root preamble, actual SDK bounds,
+  revision-joined percentile gates and independent sealed postflight. Require the
+  private seed/live-topology declarations documented in the capacity README.
+  The default
+  test suite covers the local scheduler/oracle contracts; these are not native
+  dataset, propagation or fault-recovery evidence.
+  The selected RBAC Go driver has a four-hour outer lifetime for bounded
+  full-geometry setup plus load; individual operations, seed readback,
+  propagation and workload deadlines remain unchanged.
+- `make build TARGET=api|controller|git CAPACITY_BUILD_OUTPUT=<absolute-path>
+  CAPACITY_BUILD_RECEIPT=<absolute-path>` produces private source/artifact
+  receipts from a clean checkout. `CAPACITY_BUILD_KIND=owned-rbac` selects only
+  the existing owned API or controller test host; the default `release` recipe does not bypass
+  production activation. Matching source-identical receipts permit artifact
+  reuse; never adopt or overwrite an unreceipted/live binary. See the capacity
+  README for the complete private deployment/evidence contract.
+- `make chaos CHAOS_RBAC=1` requires an owned target and a predeclared fault
+  window of at most 30 seconds. Controller restart also requires an unchanged
+  owned peer with non-overlapping writable checkpoint mounts. Journal-source
+  pause affects all consumers, not one receiver; injector/restoration receipts
+  never certify domain recovery. See [../tests/chaos/README.md](../tests/chaos/README.md).
+
+## Infrastructure command instructions
+
+- Reuse the root Makefile selector families and existing helpers.
+- `make bootstrap TARGET=infrastructure PROFILE=digitalocean ACTION=<init|plan|show|apply|output>`
+  operates `deploy/digitalocean`. The default action is `plan`; `apply` consumes
+  the reviewed saved plan without prompting. Never invoke it from checks.
+- `init` requires `INFRA_BACKEND_CONFIG`; `plan` requires `INFRA_VAR_FILE`.
+  Use absolute paths to private files and environment-based credentials.
+- `make check TARGET=infrastructure PROFILE=digitalocean` runs formatting,
+  backend-disabled initialization, validation and mocked topology tests. It is
+  opt-in because it needs OpenTofu and the pinned provider download; `TOFU_BIN`
+  overrides the executable.
+- Provisioning prepares hosts and storage, not running application containers.
+  Follow `../docs/runbooks/digitalocean-provisioning.md` for runtime handoff,
+  state protection, singleton Git fencing and retained-volume recovery.
+
+## Signing and enrollment commands
+
+- `make secret TARGET=signing-key` generates the native controller's matching
+  PEM and JSON record. With `DESTINATION_PATH`, the default record is
+  `<DESTINATION_PATH>.json`; `RECORD_OUTPUT_PATH` overrides it, and an explicitly
+  empty value requests PEM only. Relative output paths resolve from the root.
+  Preserve existing keys and identical records; reject differing records.
+- `make enroll-controller-serviceaccount` explicitly enrolls the existing
+  public key and saves the API-assigned UID. It does not generate private
+  material or JSON. Development fixture credentials are for local APIs only.
+- `make controller` consumes the existing record and enrolled UID; it must
+  not regenerate credentials. Keep `CONTROLLER_*` overrides consistent across
+  generation, enrollment and startup.
+- `make dev` automates local generation/enrollment and starts all three native
+  core services with shutdown trapping. See `../docs/developer-guide.md`.
+- Extend the existing Makefile selector families; do not add feature-specific
+  public targets.

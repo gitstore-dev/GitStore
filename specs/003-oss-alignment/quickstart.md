@@ -3,6 +3,11 @@
 **Feature**: 003-oss-alignment  
 **Date**: 2026-05-02
 
+**Historical feature record:** the Admin add-on and Compose commands below
+describe the original alignment plan, not the current checkout. For supported
+startup and service boundaries, use the [user guide](../../docs/user-guide.md)
+and [current architecture](../../docs/architecture/README.md).
+
 ## What This Feature Changes
 
 After this feature lands, the repository structure and workflows change in three ways:
@@ -41,7 +46,8 @@ docker compose -f compose.yml -f compose.admin.yml ps
 # Expected: gitstore-git-service, gitstore-api, and gitstore-admin
 ```
 
-See [docs/admin/quickstart.md](../../docs/admin/quickstart.md) for full admin setup documentation.
+The historical Admin add-on guide is no longer part of this repository.
+Use the [current Admin API reference](../../docs/api-reference.md).
 
 ---
 

@@ -282,7 +282,7 @@ func TestCatalogueUpdateAuthoritativeFailurePerformsNoProjectionWrites(t *testin
 
 func TestCatalogueStaleVersionPerformsNoWrites(t *testing.T) {
 	writes := 0
-	err := validateResourceVersionTransition("3", "2")
+	err := datastore.ValidateCatalogUpdateVersion("3", "1", "2")
 	if err == nil {
 		writes++
 	}

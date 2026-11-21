@@ -8,7 +8,7 @@ The core compose stack includes:
 
 | Service            | Container                     | Ports                                  |
 |--------------------|-------------------------------|----------------------------------------|
-| API                | `gitstore-api`                | `4000`, `9000` (Git HTTP host), `6000` |
+| API                | `gitstore-api`                | `4000` (Admin), `4100` (Storefront host), `9000` (Git HTTP host), `6000` |
 | Git service        | `gitstore-git-service`        | `50051`                                |
 | Controller manager | `gitstore-controller-manager` | `5001`                                 |
 
@@ -33,6 +33,56 @@ curl -s http://localhost:4000/health | jq .
 curl -s http://localhost:4000/ready | jq .
 ```
 
+The API image contains one static Go binary and CA certificates, runs as
+UID/GID `65532:65532`, and has no shell or `wget`. Operator commands run as
+`/app/api gitctl <command>` without starting the server. Compose probes use:
+
+```bash
+docker compose exec api /app/api gitctl healthcheck
+```
+
+For live process verification without installing tools in the container, use
+`docker compose exec api /app/api gitctl process-executable`; PID 1 should be
+`/app/api`.
+
+For a custom Admin port, pass `--url http://127.0.0.1:<port>/ready`.
+The probe requires HTTP 200, rejects redirects, and times out after one second
+by default (`--timeout` overrides it). Host-side `curl` remains available for
+response-body inspection.
+
+Read process-local metrics without installing a downloader in the image:
+
+```bash
+docker compose exec -T api /app/api gitctl metrics
+```
+
+This command requires HTTP 200, rejects redirects and prints the response only
+after a complete read within five seconds and a 16 MiB ceiling. `--url` and
+`--timeout` support a custom Admin endpoint. Capacity preflight and evidence
+validation compare these in-container process identities with the host-facing
+endpoint identities; keep both checks.
+
+The local overlay loads the issuer PEM through
+`--serviceaccount-signing-key-file /run/secrets/serviceaccount-signing-key`;
+keep that mount API-only. Credential initialization uses a separate Alpine
+debug image as root to prepare the named volumes and assign the issuer PEM to
+the API UID. Enrollment also needs write access to its identity volume; the
+long-running API remains non-root. Preserve existing volumes and key material.
+Configuration, policy and user-directory bind mounts must also be readable by
+UID `65532`; keep private issuer keys mode `0600` and owned by that UID.
+
+For an interactive diagnostic shell, build the opt-in target from the same
+reviewed source as the runtime image, then start a disposable container:
+
+```bash
+docker build --target debug -f docker/api.Dockerfile -t gitstore-api:debug .
+docker run --rm -it gitstore-api:debug /bin/sh
+```
+
+The debug target defaults to the same non-root identity. It is not the default
+published runtime image. Do not mount production credentials or writable data
+volumes merely to inspect the image.
+
 Check controller-manager health:
 
 ```bash
@@ -42,7 +92,7 @@ curl -s http://localhost:5001/health | jq .
 Check GraphQL:
 
 ```bash
-curl -s http://localhost:4000/graphql \
+curl -s http://localhost:4000/admin/graphql \
   -H "Content-Type: application/json" \
   -d '{"query":"query { namespaces(first: 1) { pageInfo { hasNextPage } } }"}' | jq .
 ```
@@ -84,7 +134,8 @@ List repository data inside the Git service container:
 docker compose exec git-service ls -la /var/lib/gitstore/repos
 ```
 
-The exact repository storage path is generated from the repository identity and is exposed on the `Repository.storagePath` GraphQL field:
+The exact repository storage path is generated from the repository identity
+and published after reconciliation in `Repository.status.resolved.storagePath`:
 
 ```graphql
 query Repository {
@@ -97,7 +148,11 @@ query Repository {
     }
   ) {
     id
-    storagePath
+    status {
+      resolved {
+        storagePath
+      }
+    }
   }
 }
 ```
@@ -117,7 +172,7 @@ CONFIG_FILE=./config/config.toml docker compose --profile local \
 For non-profile/manual startup, check the active auth settings:
 
 - `api.auth.static_users.users_file` points to a readable users file
-- `GITSTORE_API__AUTH__JWT__SECRET`
+- `GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET`
 
 Inspect logs:
 
@@ -130,9 +185,9 @@ make logs SERVICE=api
 Confirm the namespace and repository exist:
 
 ```bash
-curl -s http://localhost:4000/graphql \
+curl -s http://localhost:4000/admin/graphql \
   -H "Content-Type: application/json" \
-  -d '{"query":"query { repository(by: { namespacePath: { namespace: \"gitstore-test\", name: \"catalog\" } }) { id name } }"}' | jq .
+  -d '{"query":"query { repository(by: { namespacePath: { namespace: \"gitstore-test\", name: \"catalog\" } }) { id metadata { name } } }"}' | jq .
 ```
 
 Use the API-fronted clone URL with the `.git` suffix:
@@ -175,13 +230,16 @@ make logs SERVICE=api
 make logs SERVICE=controller-manager
 ```
 
-The compose default is:
+Configure the Admin client with a complete browser-accessible Admin URL, such
+as `http://localhost:4000/admin/graphql`. A server-side client on the Compose
+network uses:
 
 ```text
-GITSTORE_GRAPHQL_URL=http://api:4000/graphql
+http://api:4000/admin/graphql
 ```
 
-For more admin-specific checks, see [docs/admin/quickstart.md](../admin/quickstart.md).
+Configure CORS to allow the browser origin if it differs from the API origin.
+The external Admin client's environment-variable name depends on its release.
 
 ## Log Commands
 
@@ -200,19 +258,22 @@ make logs SERVICE=api 2>&1 | grep '{' | jq .
 
 ## Clean Restart
 
-Stop and remove containers:
+Stop and remove containers while retaining persistent state:
 
 ```bash
 make down
 ```
 
-Remove volumes when you explicitly want to discard local repository and datastore state:
+Normal restarts do not require deleting volumes or re-bootstrapping existing
+state. The following is a destructive reset, only for disposable local fixtures
+you explicitly intend to discard. Never use it for an operator deployment or a
+retained capacity baseline:
 
 ```bash
 docker compose -f compose.yml -f compose.scylla.yml down --volumes
 ```
 
-Start again:
+Start again; bootstrap only when initializing fresh state:
 
 ```bash
 make compose DETACH=1

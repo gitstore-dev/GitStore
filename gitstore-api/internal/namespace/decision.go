@@ -23,6 +23,8 @@ const (
 	ReasonBootstrapNamespace       Reason = "BOOTSTRAP_NAMESPACE"
 	ReasonPushPolicyExceedsCeiling Reason = "PUSH_POLICY_EXCEEDS_CEILING"
 	ReasonTierDemotion             Reason = "TIER_DEMOTION"
+	ReasonTierImmutable            Reason = "TIER_IMMUTABLE"
+	ReasonUserNamespaceIdentity    Reason = "USER_NAMESPACE_IDENTITY"
 	ReasonNamespaceTerminating     Reason = "NAMESPACE_TERMINATING"
 	ReasonNamespaceAlreadyExists   Reason = "NAMESPACE_ALREADY_EXISTS"
 	ReasonNamespaceNotFound        Reason = "NAMESPACE_NOT_FOUND"
@@ -61,6 +63,21 @@ type Decision struct {
 	Field    string
 	Message  string
 	FilePath string
+}
+
+func (d *Decision) Error() string { return d.Message }
+
+func (d *Decision) Unwrap() error {
+	switch d.Reason {
+	case ReasonTierDemotion:
+		return ErrTierDemotion
+	case ReasonTierImmutable:
+		return ErrTierImmutable
+	case ReasonUserNamespaceIdentity:
+		return ErrUserNamespaceIdentity
+	default:
+		return nil
+	}
 }
 
 func (d Decision) Constraint() string {

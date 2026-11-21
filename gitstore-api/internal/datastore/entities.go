@@ -65,6 +65,9 @@ const (
 	ResourceWatchModified ResourceWatchEventType = "MODIFIED"
 	ResourceWatchDeleted  ResourceWatchEventType = "DELETED"
 	ResourceWatchBookmark ResourceWatchEventType = "BOOKMARK"
+	// ResourceWatchProgress is internal source progress, not an API resource.
+	// Public subscribers project it to an opaque, payload-free bookmark.
+	ResourceWatchProgress ResourceWatchEventType = "PROGRESS"
 )
 
 // ResourceWatchCursor identifies one ordered event inside a journal epoch.
@@ -75,8 +78,9 @@ type ResourceWatchCursor struct {
 }
 
 // ResourceWatchEvent is the backend-neutral durable journal record. Payload
-// is a full committed resource postimage for ADDED/MODIFIED and nil for
-// DELETED/BOOKMARK. SelectorLabels preserves the postimage labels (or the
+// is a full committed resource postimage for ADDED/MODIFIED, source-supplied
+// identity for DELETED, internal progress for PROGRESS and nil for BOOKMARK.
+// SelectorLabels preserves the postimage labels (or the
 // last-known labels for DELETED), while PreviousSelectorLabels preserves the
 // MODIFIED preimage labels. Together they let filtered watches express a
 // resource entering or leaving a selector without exposing deleted payloads.
@@ -429,17 +433,12 @@ type NamespaceMapping struct {
 	RepoID      string
 }
 
-// ServiceAccount is the persistent, namespaced, non-human identity record
-// backing the serviceaccount-assertion/serviceaccount-jwt AuthN providers
-// (spec 061). Datastore-backed (memdb + Scylla) from the first implementation
-// phase — unlike the assertion-replay cache and WebSocket connection
-// registry, which are intentionally in-memory-only (single-instance scope).
+// ServiceAccount is a cluster-scoped non-human identity. Assertions and access
+// tokens bind both the global name and UID to the current enrolled keys.
 type ServiceAccount struct {
-	// Identity (primary key: Namespace + Name; subject string is derived as
-	// "serviceaccount:<Namespace>:<Name>", never stored redundantly)
-	UID       string // stable, survives Disabled toggles; changes only on delete+recreate
-	Namespace string // convention string, e.g. "controllers" — not GitStore's Namespace resource
-	Name      string // e.g. "gitstore-controller-manager" — names the *process*, not one of its reconcilers
+	// Subject is derived as "system:serviceaccount:<Name>".
+	UID  string // stable until delete/recreate
+	Name string // globally unique process identity
 
 	Disabled bool // true blocks new assertion exchange and new access-token authentication immediately
 

@@ -6,9 +6,14 @@
 package scylla_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -33,6 +38,50 @@ type namespaceWatchBatchAppender interface {
 	AppendBatch(context.Context, datastore.NamespaceWatchLease, []datastore.NamespaceWatchEvent, time.Duration) ([]datastore.NamespaceWatchEvent, error)
 }
 
+func TestCDCCheckpointBatchPreservesProgressAndLeaseFencing(t *testing.T) {
+	store := newTestStore(t)
+	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+	ctx := t.Context()
+	lease, acquired, err := journal.AcquireLease(ctx, "checkpoint-batch", time.Now().UTC(), time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	t.Cleanup(func() { require.NoError(t, journal.ReleaseLease(context.Background(), lease)) })
+
+	for _, source := range []string{"Namespace", "RBAC"} {
+		t.Run(source, func(t *testing.T) {
+			progress := make(map[string]gocql.UUID, 65)
+			for index := range 65 {
+				progress[fmt.Sprintf("checkpoint-batch-%03d", index)] = gocql.TimeUUID()
+			}
+			require.NoError(t, scylla.SaveCDCProgressBatchForTest(ctx, store, lease, source, progress))
+			prefix := ""
+			if source != "Namespace" {
+				prefix = source + ":"
+			}
+			for key, point := range progress {
+				got, err := journal.LoadProgress(ctx, prefix+key)
+				require.NoError(t, err)
+				require.Equal(t, point.Bytes(), got.Position)
+			}
+			stale := lease
+			stale.FencingToken++
+			attempt := make(map[string]gocql.UUID, len(progress)+1)
+			for key := range progress {
+				attempt[key] = gocql.TimeUUID()
+			}
+			attempt["checkpoint-batch-new"] = gocql.TimeUUID()
+			require.ErrorIs(t, scylla.SaveCDCProgressBatchForTest(ctx, store, stale, source, attempt), datastore.ErrStaleWatchLease)
+			for key, point := range progress {
+				got, err := journal.LoadProgress(ctx, prefix+key)
+				require.NoError(t, err)
+				require.Equal(t, point.Bytes(), got.Position, "stale lease must not overwrite checkpoints")
+			}
+			_, err := journal.LoadProgress(ctx, prefix+"checkpoint-batch-new")
+			require.ErrorIs(t, err, datastore.ErrNotFound)
+		})
+	}
+}
+
 func TestNamespaceWatchBatchAppendPublishesContiguousRangesAcrossBuckets(t *testing.T) {
 	raw := newRawSession(t)
 	require.NoError(t, raw.Query("TRUNCATE resource_watch_events").Exec())
@@ -45,7 +94,7 @@ func TestNamespaceWatchBatchAppendPublishesContiguousRangesAcrossBuckets(t *test
 		require.NoError(t, cleanup.Query("TRUNCATE resource_watch_clock").Exec())
 	})
 
-	store := newTestStoreWithWatchBucket(t, 3)
+	store := newTestStoreWithWatchBucket(t, 35)
 	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
 	batcher := journal.(namespaceWatchBatchAppender)
 	ctx := context.Background()
@@ -54,11 +103,12 @@ func TestNamespaceWatchBatchAppendPublishesContiguousRangesAcrossBuckets(t *test
 	require.True(t, acquired)
 	t.Cleanup(func() { require.NoError(t, journal.ReleaseLease(context.Background(), lease)) })
 
-	events := make([]datastore.NamespaceWatchEvent, 5)
+	events := make([]datastore.NamespaceWatchEvent, 37)
 	for index := range events {
 		events[index] = datastore.NamespaceWatchEvent{
 			Type: datastore.NamespaceWatchAdded, Name: fmt.Sprintf("batch-%d", index+1),
 			DeduplicationKey: fmt.Sprintf("batch-key-%d", index+1), At: time.Now().UTC(),
+			Payload: bytes.Repeat([]byte{byte('a' + index%26)}, 17<<10),
 		}
 	}
 	appended, err := batcher.AppendBatch(ctx, lease, events, time.Hour)
@@ -67,11 +117,12 @@ func TestNamespaceWatchBatchAppendPublishesContiguousRangesAcrossBuckets(t *test
 	for index, event := range appended {
 		require.Equal(t, uint64(index+1), event.Sequence)
 	}
-	read, err := journal.ReadAfter(ctx, datastore.NamespaceWatchCursor{Epoch: appended[0].Epoch}, 10)
+	read, err := journal.ReadAfter(ctx, datastore.NamespaceWatchCursor{Epoch: appended[0].Epoch}, 40)
 	require.NoError(t, err)
 	require.Len(t, read, len(events))
 	for index, event := range read {
 		require.Equal(t, fmt.Sprintf("batch-%d", index+1), event.Name)
+		require.Equal(t, events[index].Payload, event.Payload)
 	}
 }
 
@@ -379,8 +430,81 @@ func TestNamespaceAuthoritativeCommitsProduceCDCButRejectedWritesDoNot(t *testin
 	time.Sleep(200 * time.Millisecond)
 	assert.Equal(t, afterUpdate, namespaceCDCRowCount(t), "conflict must not create CDC rows")
 
+	expected = current.ResourceVersion
+	deletedAt := time.Now().UTC().Truncate(time.Millisecond)
+	current.DeletionTimestamp = &deletedAt
+	datastore.AdvanceNamespaceSystemVersion(current)
+	require.NoError(t, store.MarkNamespaceDeletion(ctx, current, expected))
+	afterMark := waitForNamespaceCDCRows(t, afterUpdate)
 	require.NoError(t, store.DeleteNamespaceWithResourceVersion(ctx, current.UID, current.ResourceVersion))
-	assert.Greater(t, waitForNamespaceCDCRows(t, afterUpdate), afterUpdate)
+	assert.Greater(t, waitForNamespaceCDCRows(t, afterMark), afterMark)
+}
+
+func TestNamespaceCDCDeletionRepairsOrphanedProjectionsWithoutRemovingReplacement(t *testing.T) {
+	for _, scenario := range []string{"orphaned name", "replacement name", "authoritative row remains"} {
+		t.Run(scenario, func(t *testing.T) {
+			store := newTestStore(t)
+			raw := newRawSession(t)
+			defer raw.Close()
+			ctx := t.Context()
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			namespace := &datastore.Namespace{
+				APIVersion: "gitstore.dev/v1beta1", Kind: "Namespace", UID: newID(),
+				Name: "cdc-repair-" + newID()[:8], Tier: datastore.NamespaceTierUser,
+				ResourceVersion: "1", Generation: 1, CreationTimestamp: now, UpdateTimestamp: now,
+			}
+			require.NoError(t, store.CreateNamespace(ctx, namespace))
+			if scenario != "authoritative row remains" {
+				require.NoError(t, store.DeleteNamespace(ctx, namespace.UID))
+			} else {
+				t.Cleanup(func() { require.NoError(t, store.DeleteNamespace(context.Background(), namespace.UID)) })
+			}
+			var replacement *datastore.Namespace
+			if scenario == "replacement name" {
+				copy := *namespace
+				copy.UID = newID()
+				copy.CreationTimestamp = now.Add(time.Millisecond)
+				replacement = &copy
+				require.NoError(t, store.CreateNamespace(ctx, replacement))
+				t.Cleanup(func() { require.NoError(t, store.DeleteNamespace(context.Background(), replacement.UID)) })
+			}
+			uid, err := gocql.ParseUUID(namespace.UID)
+			require.NoError(t, err)
+			bucket := now.Format("2006-01")
+			require.NoError(t, raw.Query(
+				"INSERT INTO namespaces_by_bucket (bucket,creation_timestamp,uid) VALUES (?,?,?)",
+				bucket, now, uid).Exec())
+			if scenario == "orphaned name" {
+				require.NoError(t, raw.Query("INSERT INTO namespaces_by_name (name,uid) VALUES (?,?)", namespace.Name, uid).Exec())
+			}
+			ready, err := scylla.NamespaceCDCDeletionReadyForTest(ctx, store, namespace, false)
+			require.NoError(t, err)
+			require.False(t, ready, "uncommitted deletion must not repair projections")
+			ready, err = scylla.NamespaceCDCDeletionReadyForTest(ctx, store, namespace, true)
+			if scenario == "authoritative row remains" {
+				require.Error(t, err)
+				require.False(t, ready)
+				current, err := store.GetNamespaceByName(ctx, namespace.Name)
+				require.NoError(t, err)
+				require.Equal(t, namespace.UID, current.UID)
+				return
+			}
+			require.NoError(t, err)
+			require.True(t, ready)
+			var found gocql.UUID
+			require.ErrorIs(t, raw.Query(
+				"SELECT uid FROM namespaces_by_bucket WHERE bucket=? AND creation_timestamp=? AND uid=?",
+				bucket, now, uid).Scan(&found), gocql.ErrNotFound)
+			current, err := store.GetNamespaceByName(ctx, namespace.Name)
+			if replacement == nil {
+				require.ErrorIs(t, err, datastore.ErrNotFound)
+				require.ErrorIs(t, raw.Query("SELECT uid FROM namespaces_by_name WHERE name=?", namespace.Name).Scan(&found), gocql.ErrNotFound)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, replacement.UID, current.UID)
+			}
+		})
+	}
 }
 
 func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
@@ -498,6 +622,192 @@ func TestNamespaceCDCReaderMaterializesCommittedEvent(t *testing.T) {
 		}
 	}
 	t.Fatalf("committed Namespace CDC change was not materialized into the durable journal; bounds_err=%v observed=%+v", lastBoundsErr, observed)
+}
+
+func serviceAccountAmbiguousWriter(t *testing.T) (*gocql.Session, <-chan struct{}) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	dropped := make(chan struct{}, 1)
+	accepted := make(chan struct{})
+	var workers sync.WaitGroup
+	go func() {
+		defer close(accepted)
+		for {
+			client, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				defer client.Close()
+				upstream, err := net.DialTimeout("tcp", scyllaAddr, 5*time.Second)
+				if err != nil {
+					return
+				}
+				defer upstream.Close()
+				go func() {
+					_, _ = io.Copy(upstream, client)
+					_ = upstream.Close()
+				}()
+				for {
+					var header [9]byte
+					if _, err := io.ReadFull(upstream, header[:]); err != nil {
+						return
+					}
+					length := binary.BigEndian.Uint32(header[5:])
+					if length > 16<<20 {
+						return
+					}
+					body := make([]byte, length)
+					if _, err := io.ReadFull(upstream, body); err != nil {
+						return
+					}
+					// Drop native LWT result rows, not connection setup or prepared responses.
+					if header[4] == 0x08 && len(body) >= 4 &&
+						binary.BigEndian.Uint32(body[:4]) == 2 && bytes.Contains(body, []byte("[applied]")) {
+						select {
+						case dropped <- struct{}{}:
+						default:
+						}
+						continue
+					}
+					if _, err := client.Write(append(header[:], body...)); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		require.NoError(t, listener.Close())
+		<-accepted
+		stopped := make(chan struct{})
+		go func() { workers.Wait(); close(stopped) }()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			t.Error("owned CQL response proxy did not stop")
+		}
+	})
+	address := listener.Addr().(*net.TCPAddr)
+	cluster := gocql.NewCluster("127.0.0.1")
+	cluster.Port, cluster.ProtoVersion, cluster.Keyspace = address.Port, 4, scyllaKeyspace
+	cluster.Timeout, cluster.ConnectTimeout = 2*time.Second, 5*time.Second
+	cluster.DisableShardAwarePort, cluster.IgnorePeerAddr = true, true
+	cluster.AddressTranslator = contactPointTranslator("127.0.0.1", address.Port)
+	cluster.RetryPolicy = &gocql.SimpleRetryPolicy{NumRetries: 0}
+	writer, err := cluster.CreateSession()
+	require.NoError(t, err)
+	t.Cleanup(writer.Close)
+	return writer, dropped
+}
+
+func TestServiceAccountCDCReaderEnrollmentDeletionAndNameReuse(t *testing.T) {
+	store := newTestStore(t)
+	journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	lease, acquired, err := journal.AcquireLease(t.Context(), "serviceaccount-native-reader", time.Now().UTC(), 2*time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	t.Cleanup(func() { require.NoError(t, journal.ReleaseLease(context.Background(), lease)) })
+	ctx, cancel := context.WithCancel(t.Context())
+	done, ready := make(chan error, 1), make(chan struct{})
+	go func() {
+		done <- store.(catalogCDCTestRunner).RunCatalogCDC(ctx, "ServiceAccount",
+			watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour}),
+			lease, 14*24*time.Hour, 500*time.Millisecond, func() { close(ready) })
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			require.True(t, err == nil || errors.Is(err, context.Canceled))
+		case <-time.After(5 * time.Second):
+			t.Error("owned ServiceAccount CDC reader did not stop")
+		}
+	})
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatalf("ServiceAccount CDC reader failed: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("ServiceAccount CDC reader did not become ready")
+	}
+	raw := newRawSession(t)
+	partialName := "partial-" + newID()[:8]
+	partialUID := gocql.TimeUUID()
+	require.NoError(t, raw.Query("INSERT INTO service_accounts_by_cluster_name (name,uid,creation_timestamp,enrollment_complete,generation,resource_version,public_keys) VALUES (?,?,?,?,?,?,?)",
+		partialName, partialUID, time.Now().UTC(), false, int64(1), "1", "[]").Exec())
+	account := &datastore.ServiceAccount{UID: newID(), Name: "cdc-bot-" + newID()[:8], CreationTimestamp: time.Now().UTC(),
+		Generation: 1, ResourceVersion: "1"}
+	require.NoError(t, store.CreateServiceAccount(t.Context(), account))
+	require.ErrorIs(t, store.CreateServiceAccount(t.Context(), account), datastore.ErrAlreadyExists)
+	cursor := datastore.ResourceWatchCursor{}
+	var observed []datastore.ResourceWatchEvent
+	wait := func(kind datastore.ResourceWatchEventType, uid string) {
+		t.Helper()
+		deadline := time.NewTimer(30 * time.Second)
+		defer deadline.Stop()
+		for {
+			events, err := journal.ReadAfter(t.Context(), cursor, 256)
+			require.NoError(t, err)
+			for _, event := range events {
+				cursor = datastore.ResourceWatchCursor{Epoch: event.Epoch, Sequence: event.Sequence}
+				require.NotEqual(t, partialName, event.Name, "incomplete enrollment must never publish")
+				if event.Kind != "ServiceAccount" || event.Name != account.Name {
+					continue
+				}
+				observed = append(observed, event)
+				var payload datastore.ServiceAccount
+				require.NoError(t, json.Unmarshal(event.Payload, &payload))
+				if event.Type == kind && payload.UID == uid {
+					return
+				}
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("ServiceAccount CDC reader failed: %v", err)
+			case <-deadline.C:
+				t.Fatal("committed ServiceAccount event was not materialized")
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}
+	wait(datastore.ResourceWatchAdded, account.UID)
+	_, err = store.UpdateServiceAccountKeys(t.Context(), account.UID, nil, nil, "stale")
+	require.ErrorIs(t, err, datastore.ErrConflict)
+	writer, dropped := serviceAccountAmbiguousWriter(t)
+	statement := fmt.Sprintf("UPDATE service_accounts_by_cluster_name SET disabled=true,generation=2,resource_version='2' WHERE name='%s' IF uid=%s AND enrollment_complete=true AND resource_version='1'",
+		account.Name, account.UID)
+	applied, err := writer.Query(statement).WithContext(t.Context()).MapScanCAS(map[string]any{})
+	require.Error(t, err, "a physically discarded native CAS result must not acknowledge the committed write")
+	require.False(t, applied)
+	select {
+	case <-dropped:
+	case <-time.After(time.Second):
+		t.Fatal("the proxy did not observe and discard a native conditional result")
+	}
+	current, err := store.GetServiceAccountByUID(t.Context(), account.UID)
+	require.NoError(t, err)
+	require.True(t, current.Disabled, "the native source must prove commit independently of the lost acknowledgement")
+	require.Equal(t, "2", current.ResourceVersion)
+	wait(datastore.ResourceWatchModified, account.UID)
+	var modified datastore.ServiceAccount
+	require.NoError(t, json.Unmarshal(observed[len(observed)-1].Payload, &modified))
+	require.True(t, modified.Disabled)
+	require.Equal(t, "2", modified.ResourceVersion, "the shared journal must publish the committed full postimage")
+	applied, err = raw.Query(statement).MapScanCAS(map[string]any{})
+	require.NoError(t, err)
+	require.False(t, applied, "retrying the original conditional write must not apply twice")
+	require.NoError(t, store.DeleteServiceAccount(t.Context(), account.UID))
+	wait(datastore.ResourceWatchDeleted, account.UID)
+	require.JSONEq(t, `{"UID":"`+account.UID+`"}`, string(observed[len(observed)-1].Payload))
+	replacement := *account
+	replacement.UID = newID()
+	require.NoError(t, store.CreateServiceAccount(t.Context(), &replacement))
+	wait(datastore.ResourceWatchAdded, replacement.UID)
+	require.Len(t, observed, 4, "only enrolled, successful authoritative transitions may publish")
 }
 
 // Product foreground deletion is controller-driven, so the terminating
@@ -648,7 +958,7 @@ func TestFileCDCReaderReplaysCommittedWritesAcrossMaterializerReplacement(t *tes
 	file := &datastore.File{UID: newID(), Namespace: "cdc-files", Name: "hero-" + newID()[:8],
 		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", ResourceVersion: "1", Generation: 1,
 		CreationTimestamp: time.Now().UTC().Truncate(time.Millisecond), RepositoryID: newID(),
-		Labels: map[string]string{"team": "media"}, Spec: json.RawMessage(`{"contentType":"image/jpeg","source":{"type":"s3","uri":"s3://fixture"}}`)}
+		Labels: map[string]string{"team": "media"}, Spec: json.RawMessage(`{"contentType":"image/jpeg","provider":"s3","source":{"uri":"s3://fixture"}}`)}
 	next := func(eventType datastore.ResourceWatchEventType, version string) datastore.ResourceWatchEvent {
 		var found datastore.ResourceWatchEvent
 		require.Eventually(t, func() bool {
@@ -676,6 +986,12 @@ func TestFileCDCReaderReplaysCommittedWritesAcrossMaterializerReplacement(t *tes
 		}, 75*time.Second, 100*time.Millisecond, "File CDC event %s version %s was not persisted", eventType, version)
 		return found
 	}
+	require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{
+		UID: newID(), Name: file.Namespace, CreationTimestamp: file.CreationTimestamp,
+	}))
+	require.NoError(t, store.CreateRepositoryInActiveNamespace(t.Context(), &datastore.Repository{
+		UID: file.RepositoryID, Namespace: file.Namespace, Name: "catalog", CreationTimestamp: file.CreationTimestamp,
+	}))
 	require.NoError(t, store.CreateFile(t.Context(), file))
 	added := next(datastore.ResourceWatchAdded, "1")
 	require.Equal(t, file.Labels, added.SelectorLabels)
@@ -805,7 +1121,7 @@ func TestCategoryTaxonomyCDCReaderMaterializesLifecycle(t *testing.T) {
 	require.Equal(t, terminating.ResourceVersion, observed.ResourceVersion)
 	require.NotNil(t, observed.DeletionTimestamp)
 
-	_, err = deletion.CompleteCategoryTaxonomyDeletion(context.Background(), category.Namespace, category.Name, terminating.ResourceVersion)
+	_, err = deletion.CompleteCategoryTaxonomyDeletion(context.Background(), category.Namespace, category.Name, terminating.ResourceVersion, category.UID)
 	require.NoError(t, err)
 	deleted := next(datastore.ResourceWatchDeleted)
 	require.Empty(t, deleted.Payload)

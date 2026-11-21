@@ -5,6 +5,7 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sync"
@@ -30,6 +31,151 @@ type ProviderRegistry struct {
 	authnChain *ChainedAuthN
 	authz      AuthZProvider
 	userdir    UserDirProvider
+}
+
+// AuthorizationSnapshot is non-secret metadata from one immutable policy.
+// Implementations must not perform I/O.
+type AuthorizationSnapshot struct {
+	Loaded        bool                        `json:"loaded"`
+	APIVersion    string                      `json:"apiVersion"`
+	Digest        string                      `json:"digest"`
+	Roles         int                         `json:"roles"`
+	Bindings      int                         `json:"bindings"`
+	Rules         int                         `json:"rules"`
+	ModelVersion  string                      `json:"modelVersion,omitempty"`
+	CatalogDigest string                      `json:"catalogDigest,omitempty"`
+	BuiltinDigest string                      `json:"builtinDigest,omitempty"`
+	Tiers         []AuthorizationTierIdentity `json:"tiers,omitempty"`
+}
+
+type AuthorizationTierIdentity struct {
+	TierID        string `json:"tierID"`
+	Revision      uint64 `json:"revision"`
+	GitRevision   string `json:"gitRevision"`
+	ContentDigest string `json:"contentDigest"`
+}
+
+// AuthorizationSnapshotProvider is optional; false means unsupported.
+type AuthorizationSnapshotProvider interface {
+	AuthorizationSnapshot() (AuthorizationSnapshot, bool)
+}
+
+type ProviderDiagnostics struct {
+	AuthN         []string                `json:"authn"`
+	AuthZ         string                  `json:"authz"`
+	UserDir       string                  `json:"userdir"`
+	CatalogDigest string                  `json:"catalogDigest"`
+	Policy        *AuthorizationSnapshot  `json:"policy,omitempty"`
+	Readiness     *AuthorizationReadiness `json:"readiness,omitempty"`
+}
+
+// The generated tuples are in canonical action order and contain no user data.
+var authorizationCatalogDigest = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprint(authorizationActions))))
+
+func AuthorizationCatalogDigest() string { return authorizationCatalogDigest }
+
+func (r *ProviderRegistry) PinAuthorization(ctx context.Context, model AuthorizationModel) (PinnedAuthorization, error) {
+	return PinAuthorization(ctx, r.AuthZ(), model)
+}
+
+func PinAuthorization(ctx context.Context, selected AuthZProvider, model AuthorizationModel) (PinnedAuthorization, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	provider, ok := selected.(AuthorizationPinProvider)
+	if !ok {
+		return nil, ErrNotSupported
+	}
+	evaluation, err := provider.PinAuthorization(ctx, model)
+	if err != nil {
+		if evaluation != nil {
+			evaluation.Close()
+		}
+		return nil, err
+	}
+	if evaluation == nil {
+		return nil, ErrAuthorizationUnavailable
+	}
+	return evaluation, nil
+}
+
+func CheckAuthorizationCoverage(ctx context.Context, evaluation PinnedAuthorization, principal *Principal, request AuthorizationCoverageRequest) (AuthorizationCoverage, error) {
+	if err := ctx.Err(); err != nil {
+		return AuthorizationCoverage{}, err
+	}
+	provider, ok := evaluation.(AuthorizationCoverageProvider)
+	if !ok {
+		return AuthorizationCoverage{}, ErrNotSupported
+	}
+	result, err := provider.Covers(ctx, principal, request)
+	if err != nil {
+		return AuthorizationCoverage{}, err
+	}
+	return result, nil
+}
+
+func (r *ProviderRegistry) AuthorizationReadiness(tierID string) (AuthorizationReadiness, bool) {
+	if provider, ok := r.AuthZ().(AuthorizationReadinessProvider); ok {
+		return provider.AuthorizationReadiness(tierID)
+	}
+	return AuthorizationReadiness{}, false
+}
+
+func (r *ProviderRegistry) Diagnostics() ProviderDiagnostics {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	result := ProviderDiagnostics{CatalogDigest: authorizationCatalogDigest, AuthN: []string{}}
+	if r.authnChain != nil {
+		seen := make(map[string]bool)
+		for _, provider := range r.authnChain.providers {
+			name := provider.Name()
+			if !seen[name] {
+				result.AuthN = append(result.AuthN, name)
+				seen[name] = true
+			}
+		}
+	}
+	if r.authz != nil {
+		result.AuthZ = r.authz.Name()
+		if provider, ok := r.authz.(AuthorizationSnapshotProvider); ok {
+			if snapshot, available := provider.AuthorizationSnapshot(); available {
+				snapshot.Tiers = append([]AuthorizationTierIdentity(nil), snapshot.Tiers...)
+				result.Policy = &snapshot
+			}
+		}
+		if provider, ok := r.authz.(AuthorizationReadinessProvider); ok {
+			if readiness, available := provider.AuthorizationReadiness(datastore.RBACClusterTierID); available {
+				result.Readiness = &readiness
+			}
+		}
+	}
+	if r.userdir != nil {
+		result.UserDir = r.userdir.Name()
+	}
+	return result
+}
+
+// EffectivePermissionChecker is an optional local-policy validation capability;
+// it does not change the runtime AuthZProvider contract or enumerate resources.
+type EffectivePermissionChecker interface {
+	HasEffectivePermission(*Principal) bool
+}
+
+// ValidateActiveUserPermissions checks every configured active user, including
+// the groups synthesized at authentication. A bound admin cannot mask an
+// unbound user. Disabled directory profiles do not need a grant.
+func ValidateActiveUserPermissions(checker EffectivePermissionChecker, users []*UserProfile) error {
+	for _, user := range users {
+		if user == nil || !user.Active {
+			continue
+		}
+		groups := append([]string(nil), user.Groups...)
+		groups = append(groups, "system:authenticated")
+		if !checker.HasEffectivePermission(&Principal{Subject: user.Subject, AuthMethod: "static-users", Groups: groups}) {
+			return fmt.Errorf("rbac-local: active local user %q has no satisfiable v1beta1 grant; add a User or Group binding", user.Subject)
+		}
+	}
+	return nil
 }
 
 func NewProviderRegistry(chain *ChainedAuthN, authz AuthZProvider, userdir UserDirProvider) *ProviderRegistry {
@@ -84,7 +230,11 @@ func (c *ChainedAuthN) Authenticate(ctx context.Context, req AuthRequest) (*Prin
 		}
 		switch decision.Outcome {
 		case OutcomeAllow:
-			return principal, decision, nil
+			normalized, valid := normalizeAuthenticatedPrincipal(p.Name(), principal)
+			if !valid {
+				return nil, Deny(p.Name(), "invalid or reserved authenticated identity"), nil
+			}
+			return normalized, decision, nil
 		case OutcomeDeny:
 			return nil, decision, nil
 		case OutcomeChallenge:

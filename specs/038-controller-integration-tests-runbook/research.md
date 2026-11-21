@@ -40,7 +40,7 @@ No `[NEEDS CLARIFICATION]` markers remain in the spec (see `checklists/requireme
 
 ## Decision: Runbook format and location
 
-**Decision**: Runbooks are plain markdown files under a new `docs/runbooks/` directory (`controller-lag.md`, `controller-replay-window-exceeded.md`, `controller-poisoned-item.md`), each following a consistent structure: Symptom → Diagnostic Steps (with exact metric names / PromQL-style queries / API calls) → Recovery Actions → Verification. Each is linked from `docs/developer-guide.md`'s existing controller-manager section (which already links out to per-spec quickstarts, e.g. line 386-388).
+**Decision**: Runbooks are plain markdown files under a new `docs/runbooks/` directory (`controller-recovery.md`, `controller-recovery.md`, `controller-recovery.md`), each following a consistent structure: Symptom → Diagnostic Steps (with exact metric names / PromQL-style queries / API calls) → Recovery Actions → Verification. Each is linked from `docs/developer-guide.md`'s existing controller-manager section (which already links out to per-spec quickstarts, e.g. line 386-388).
 
 **Rationale**: No runbook precedent exists yet in this repo (`docs/` has no `runbooks/` or `operations/` subdirectory); `docs/developer-guide.md` is the established place for controller-manager operational documentation, so linking from there keeps discovery consistent with how spec quickstarts are already surfaced. Per project guideline ("After implementing a feature update the documentation in `docs/`"), this is the correct location rather than nesting docs solely under `specs/038-.../`.
 

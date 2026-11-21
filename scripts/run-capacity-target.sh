@@ -15,6 +15,8 @@ usage: make capacity TARGET=<target> PROFILE=<profile> MODE=<mode>
 
 valid target/profile combinations:
   api/readiness
+  api/endpoint-split
+  api/authorization (diagnostic only until reload-soak evidence is implemented)
   namespace/admission
   namespace/validation
   namespace/watch
@@ -33,10 +35,38 @@ case "${mode}" in
   *) usage; exit 2 ;;
 esac
 
+case "${CAPACITY_RBAC_WORKLOAD:-0}" in
+  0) ;;
+  1)
+    [[ "${mode}" != production ]] || {
+      echo "production RBAC selection requires separate interference and fault/recovery acceptance" >&2; exit 2;
+    }
+    [[ "${target}/${profile}" == api/readiness || "${target}/${profile}" == namespace/watch ]] || {
+      echo "RBAC workload selection requires api/readiness or namespace/watch" >&2; exit 2;
+    }
+    ;;
+  *)
+    echo "CAPACITY_RBAC_WORKLOAD must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
+
 case "${target}/${profile}" in
   api/readiness)
     runner_kind=k6
     command=(make --no-print-directory _capacity-k6 CAPACITY_PROFILE=api-readiness "MODE=${mode}")
+    ;;
+  api/endpoint-split)
+    runner_kind=k6
+    command=(make --no-print-directory _capacity-k6 CAPACITY_PROFILE=api-endpoint-split "MODE=${mode}")
+    ;;
+  api/authorization)
+    [[ "${mode}" == diagnostic ]] || {
+      echo 'authorization sampling is diagnostic until reload-soak and zero-I/O acceptance evidence are complete' >&2
+      exit 2
+    }
+    runner_kind=go-test
+    command=(make --no-print-directory _capacity-authorization "MODE=${mode}")
     ;;
   namespace/admission)
     runner_kind=k6
@@ -76,6 +106,11 @@ case "${target}/${profile}" in
     ;;
   *) usage; exit 2 ;;
 esac
+
+if [[ "${CAPACITY_RBAC_WORKLOAD:-0}" == 1 ]]; then
+  runner_kind=go-test
+  command=(make --no-print-directory _capacity-namespace-watch "MODE=${mode}" CAPACITY_RBAC_WORKLOAD=1)
+fi
 
 case "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" in
   0) ;;
@@ -120,10 +155,20 @@ if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == "1" ]]; then
     exit 2
   }
 fi
-run_id="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
+run_id="${CAPACITY_RUN_ID:-$(date -u +%Y%m%dt%H%M%Sz)}"
 evidence_root="${CAPACITY_EVIDENCE_DIR:-${repo_root}/.gitstore/capacity}"
 evidence_dir="${evidence_root}/${target}/${profile}/${mode}/${run_id}"
-mkdir -p "${evidence_dir}"
+if [[ "${CAPACITY_RBAC_WORKLOAD:-0}" == 1 && "${mode}" == alpha ]]; then
+  (umask 077; mkdir -p "$(dirname "${evidence_dir}")" && mkdir "${evidence_dir}") || {
+    echo "RBAC alpha requires a fresh private run directory; preserve previous failed or passed evidence" >&2; exit 2;
+  }
+else
+  mkdir -p "${evidence_dir}"
+fi
+if [[ "${CAPACITY_RBAC_WORKLOAD:-0}" == 1 ]]; then
+  chmod 700 "${evidence_dir}"
+  evidence_dir="$(cd "${evidence_dir}" && pwd -P)"
+fi
 export CAPACITY_RUN_ID="${run_id}"
 
 observability="${CAPACITY_OBSERVABILITY:-none}"
@@ -184,7 +229,8 @@ jq -n \
   --arg config_digest "$(if [[ -f "${evidence_dir}/config.json" ]]; then shasum -a 256 "${evidence_dir}/config.json" | awk '{print $1}'; fi)" \
   --arg environment_digest "$(if [[ -f "${evidence_dir}/environment.json" ]]; then shasum -a 256 "${evidence_dir}/environment.json" | awk '{print $1}'; fi)" \
   --argjson worktree_dirty "${worktree_dirty}" \
-  '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,evidenceClass:$mode,productionTargets:{visibilityP95Seconds:1,visibilityP99Seconds:3},runId:$run_id,startedAt:$started_at,gitRevision:$git_revision,worktreeDirty:$worktree_dirty,sourceStateSha256:$source_state_sha256,verifier:{kind:"go-test"}} + (if $config_digest == "" then {} else {configDigest:$config_digest} end) + (if $environment_digest == "" then {} else {environmentDigest:$environment_digest} end)' \
+  --argjson rbac "$([[ "${CAPACITY_RBAC_WORKLOAD:-0}" == 1 ]] && echo true || echo false)" \
+  '{schemaVersion:1,target:$target,profile:$profile,mode:$mode,evidenceClass:$mode,productionTargets:(if $rbac then {providerP99Milliseconds:2,propagationP95Seconds:2,propagationP99Seconds:5} else {visibilityP95Seconds:1,visibilityP99Seconds:3} end),runId:$run_id,startedAt:$started_at,gitRevision:$git_revision,worktreeDirty:$worktree_dirty,sourceStateSha256:$source_state_sha256,verifier:{kind:"go-test"}} + (if $config_digest == "" then {} else {configDigest:$config_digest} end) + (if $environment_digest == "" then {} else {environmentDigest:$environment_digest} end)' \
   >"${metadata}"
 
 source_status=0
@@ -196,9 +242,15 @@ fi
 preflight_status=${source_status}
 if (( source_status == 0 )); then
   set +e
-  "${repo_root}/scripts/validate-capacity-evidence.sh" "${evidence_dir}" "${target}" "${profile}" "${mode}" \
-    2>&1 | tee "${evidence_dir}/preflight.log"
-  preflight_status=${PIPESTATUS[0]}
+  if [[ "${CAPACITY_RBAC_WORKLOAD:-0}" == 1 ]]; then
+    CAPACITY_EVIDENCE_DIR="${evidence_dir}" MODE="${mode}" "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${evidence_dir}" \
+      2>&1 | tee "${evidence_dir}/preflight.log"
+    preflight_status=${PIPESTATUS[0]}
+  else
+    "${repo_root}/scripts/validate-capacity-evidence.sh" "${evidence_dir}" "${target}" "${profile}" "${mode}" \
+      2>&1 | tee "${evidence_dir}/preflight.log"
+    preflight_status=${PIPESTATUS[0]}
+  fi
   set -e
 fi
 
@@ -228,7 +280,25 @@ fi
 
 postflight_status=0
 if (( preflight_status == 0 && container_check_status == 0 && verifier_status == 0 )) &&
-  [[ "${mode}" != "diagnostic" ]] &&
+  [[ "${CAPACITY_RBAC_WORKLOAD:-0}" == 1 && "${mode}" == alpha ]]; then
+  set +e
+  {
+    CAPACITY_EVIDENCE_DIR="${evidence_dir}" MODE="${mode}" \
+      "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${evidence_dir}" &&
+      CAPACITY_EVIDENCE_DIR="${evidence_dir}" MODE="${mode}" \
+      "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${evidence_dir}"
+  } >"${evidence_dir}/postflight.log" 2>&1
+  postflight_status=$?
+  if (( postflight_status == 0 )); then
+    jq -e --arg revision "${git_revision}" \
+      '.Passed == true and .SourceRevision == $revision and
+       (.Window.ProfileDigest | strings | length == 64) and
+       (.Window.Owner | strings | length > 0)' \
+      "${evidence_dir}/rbac-alpha-verifier.json" >/dev/null || postflight_status=2
+  fi
+  set -e
+elif (( preflight_status == 0 && container_check_status == 0 && verifier_status == 0 )) &&
+  [[ "${mode}" != "diagnostic" && "${CAPACITY_RBAC_WORKLOAD:-0}" != 1 ]] &&
   [[ "${target}/${profile}" == "namespace/watch" || "${target}/${profile}" == "namespace/recovery" || "${target}/${profile}" == "repository/lifecycle" ]]; then
   set +e
   "${repo_root}/scripts/validate-capacity-evidence.sh" "${evidence_dir}" "${target}" "${profile}" "${mode}" postflight \
@@ -273,19 +343,21 @@ source_state_unchanged=false
 if [[ "$(git rev-parse HEAD)" == "${git_revision}" &&
       "$(capacity_source_state_sha256)" == "${source_state_sha256}" ]]; then
   source_state_unchanged=true
-elif [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]]; then
-  echo "secret capacity verifier source changed during the run" >&2
+elif [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ||
+        ( "${CAPACITY_RBAC_WORKLOAD:-0}" == 1 && "${mode}" == alpha ) ]]; then
+  echo "capacity verifier source changed during the run" >&2
   source_status=2
   status=2
 fi
 jq --arg completed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --argjson rbac "$([[ "${CAPACITY_RBAC_WORKLOAD:-0}" == 1 ]] && echo true || echo false)" \
   --argjson source_state_unchanged "${source_state_unchanged}" \
   --argjson exit_code "${status}" --argjson preflight_exit_code "${preflight_status}" \
   --argjson source_exit_code "${source_status}" \
   --argjson verifier_exit_code "${verifier_status}" --argjson datastore_exit_code "${container_check_status}" \
   --argjson postflight_exit_code "${postflight_status}" \
   --argjson prometheus_exit_code "${prometheus_status}" \
-  '. + {completedAt:$completed_at,exitCode:$exit_code,sourceStateExitCode:$source_exit_code,sourceStateUnchanged:$source_state_unchanged,preflightRequired:(.mode != "diagnostic"),preflightExitCode:$preflight_exit_code,verifierRequired:true,verifierExitCode:$verifier_exit_code,postflightRequired:(.mode != "diagnostic" and ((.target == "namespace" and (.profile == "watch" or .profile == "recovery")) or (.target == "repository" and .profile == "lifecycle"))),postflightExitCode:$postflight_exit_code,datastoreVerifierExitCode:$datastore_exit_code,prometheusExitCode:$prometheus_exit_code,passed:($exit_code == 0 and .mode != "diagnostic" and .worktreeDirty == false)}' \
+  '. + {completedAt:$completed_at,exitCode:$exit_code,sourceStateExitCode:$source_exit_code,sourceStateUnchanged:$source_state_unchanged,preflightRequired:(.mode != "diagnostic"),preflightExitCode:$preflight_exit_code,verifierRequired:true,verifierExitCode:$verifier_exit_code,postflightRequired:(.mode != "diagnostic" and ($rbac or (.target == "namespace" and (.profile == "watch" or .profile == "recovery")) or (.target == "repository" and .profile == "lifecycle"))),postflightExitCode:$postflight_exit_code,datastoreVerifierExitCode:$datastore_exit_code,prometheusExitCode:$prometheus_exit_code,passed:($exit_code == 0 and .mode != "diagnostic" and .worktreeDirty == false and (if $rbac then $source_state_unchanged else true end))}' \
   "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
 if [[ "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" == 1 ]] && (( status == 0 )); then

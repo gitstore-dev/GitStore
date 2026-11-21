@@ -1,0 +1,314 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 GitStore contributors
+
+package resolver_test
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/resolver"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/config"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
+	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
+	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"github.com/gitstore-dev/gitstore/api/internal/validate"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// mockGitWriter implements resolver.GitWriter for testing.
+type mockGitWriter struct {
+	mu             sync.Mutex
+	commitCalls    []gitclient.CommitFileParams
+	commitRepoIDs  []string
+	deleteCalls    []gitclient.DeleteFileParams
+	createTagCalls []gitclient.CreateTagParams
+
+	createRepoCalls []string
+	deleteRepoCalls []string
+	files           map[string][]byte
+
+	commitErr     error
+	readErr       error
+	deleteErr     error
+	createRepoErr error
+	deleteRepoErr error
+}
+
+// testCommittedNamespaceAdmitter keeps Service unit tests focused on GraphQL
+// error mapping and Git delegation. Production uses cataloggrpc.Server, which
+// owns this shared committed-manifest boundary; this small in-memory adapter
+// is deliberately test-only.
+type testCommittedNamespaceAdmitter struct {
+	store datastore.Datastore
+	ids   apiruntime.IDGenerator
+	now   func() time.Time
+}
+
+func (a testCommittedNamespaceAdmitter) AdmitCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	if req.Operation == admission.OperationDelete {
+		if req.Kind == "Repository" {
+			repo, err := a.store.GetRepository(ctx, req.ExpectedUID)
+			if err != nil {
+				return nil, err
+			}
+			if err := admission.MarkInfrastructureDeletion(ctx, a.store, repo, time.Now().UTC(), req.ActorSubject); err != nil {
+				return nil, err
+			}
+			return &admission.CommittedManifestResult{Kind: req.Kind, Name: req.Name, CommitSHA: req.CommitSHA}, nil
+		}
+		ns, err := a.store.GetNamespaceByName(ctx, req.Name)
+		if err != nil {
+			return nil, err
+		}
+		if ns.UID != req.ExpectedUID {
+			return nil, datastore.ErrConflict
+		}
+		if err := admission.MarkInfrastructureDeletion(ctx, a.store, ns, time.Now().UTC(), req.ActorSubject); err != nil {
+			return nil, err
+		}
+		return &admission.CommittedManifestResult{Kind: req.Kind, Name: req.Name, CommitSHA: req.CommitSHA}, nil
+	}
+	parsed, body, err := validate.NewParser().ParseResource(bytes.NewReader(req.Content))
+	if err != nil || parsed == nil || parsed.Namespace == nil {
+		if err == nil {
+			err = errors.New("expected Namespace manifest")
+		}
+		return nil, err
+	}
+	resource := parsed.Namespace
+	now := time.Now
+	if a.now != nil {
+		now = a.now
+	}
+	namespace, _, err := namespaceadmission.ApplyManifestOrdered(
+		ctx, a.store, a.ids, resource, now().UTC(), strings.TrimPrefix(req.RefName, "refs/heads/")+"@sha1:"+req.CommitSHA, req.ActorSubject,
+		namespaceadmission.ApplyManifestOptions{
+			Operation: req.Operation, WriteAttempts: namespaceadmission.AdmissionWriteAttempts,
+			Body: body, SourcePath: req.Path, GitCommitSHA: req.CommitSHA, GitRef: req.RefName,
+			CheckAuthoringRef: func(context.Context) (bool, error) { return true, nil },
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &admission.CommittedManifestResult{Kind: "Namespace", Name: namespace.Name, CommitSHA: req.CommitSHA}, nil
+}
+
+func (m *mockGitWriter) CreateRepository(_ context.Context, repositoryID, _ string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.createRepoCalls = append(m.createRepoCalls, repositoryID)
+	if m.createRepoErr != nil {
+		return "", m.createRepoErr
+	}
+	return "/data/xx/yy/" + repositoryID + ".git", nil
+}
+
+func (m *mockGitWriter) DeleteRepository(_ context.Context, repositoryID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleteRepoCalls = append(m.deleteRepoCalls, repositoryID)
+	return m.deleteRepoErr
+}
+
+func (m *mockGitWriter) CommitFile(_ context.Context, p gitclient.CommitFileParams) (string, error) {
+	return m.CommitFileForRepo(context.Background(), "", p)
+}
+
+func (m *mockGitWriter) CommitFileForRepo(_ context.Context, repositoryID string, p gitclient.CommitFileParams) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.commitCalls = append(m.commitCalls, p)
+	m.commitRepoIDs = append(m.commitRepoIDs, repositoryID)
+	if m.commitErr != nil {
+		return "", m.commitErr
+	}
+	if m.files == nil {
+		m.files = make(map[string][]byte)
+	}
+	m.files[p.Path] = append([]byte(nil), p.Content...)
+	return "deadbeef", nil
+}
+
+func (m *mockGitWriter) ResolveRefForRepo(_ context.Context, _ string, _ string) (string, error) {
+	return "deadbeef", nil
+}
+
+func (m *mockGitWriter) ReadFileForRepo(_ context.Context, _, path, _ string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	content, ok := m.files[path]
+	if !ok {
+		if m.readErr != nil {
+			return nil, m.readErr
+		}
+		return nil, status.Error(codes.NotFound, "file not found")
+	}
+	return append([]byte(nil), content...), nil
+}
+
+func (m *mockGitWriter) setFile(path string, content []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.files == nil {
+		m.files = make(map[string][]byte)
+	}
+	m.files[path] = append([]byte(nil), content...)
+}
+
+func (m *mockGitWriter) DeleteFile(_ context.Context, p gitclient.DeleteFileParams) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleteCalls = append(m.deleteCalls, p)
+	if m.deleteErr != nil {
+		return "", m.deleteErr
+	}
+	delete(m.files, p.Path)
+	return "cafe1234", nil
+}
+func (m *mockGitWriter) DeleteFileForRepo(_ context.Context, _ string, p gitclient.DeleteFileParams) (string, error) {
+	return m.DeleteFile(context.Background(), p)
+}
+
+func (m *mockGitWriter) CreateTag(_ context.Context, p gitclient.CreateTagParams) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.createTagCalls = append(m.createTagCalls, p)
+	return "tag123", nil
+}
+
+// testPushLimits mirrors config.Load's production push_limits defaults
+// (512MiB/100MiB) so tests exercising namespace/repository push-policy
+// fields see a realistic, non-zero platform ceiling.
+var testPushLimits = config.PushLimitsConfig{
+	MaxPackSize:      "512MiB",
+	MaxFileSize:      "100MiB",
+	MaxPackSizeBytes: 512 << 20,
+	MaxFileSizeBytes: 100 << 20,
+}
+
+// newTestSvc builds a Service backed by an in-memory datastore.
+func newTestSvc(t *testing.T, writer *mockGitWriter) *resolver.Service {
+	t.Helper()
+	store, err := memdb.New()
+	require.NoError(t, err)
+	now := time.Now().UTC()
+	systemNamespace := &datastore.Namespace{
+		ID:                uuid.New().String(),
+		Name:              "gitstore-system",
+		Title:             "GitStore System",
+		Tier:              datastore.NamespaceTierOrganization,
+		CreationTimestamp: now,
+		CreationActor:     "system",
+		UpdateTimestamp:   now,
+		UpdateActor:       "system",
+	}
+	require.NoError(t, store.CreateNamespace(context.Background(), systemNamespace))
+	systemRepository := &datastore.Repository{
+		UID:               uuid.New().String(),
+		Namespace:         systemNamespace.Name,
+		Name:              resolver.SystemRepositoryName,
+		DefaultBranch:     "main",
+		StorageClass:      "default",
+		CreationTimestamp: now,
+		CreationActor:     "system",
+		UpdateTimestamp:   now,
+		UpdateActor:       "system",
+	}
+	systemRepository.RepositoryID = systemRepository.UID
+	require.NoError(t, store.CreateRepository(context.Background(), systemRepository))
+	require.NoError(t, store.CreateNamespaceMapping(context.Background(), &datastore.NamespaceMapping{
+		Namespace:    systemNamespace.Name,
+		Name:         resolver.SystemRepositoryName,
+		RepositoryID: systemRepository.UID,
+	}))
+	svc, err := resolver.NewService(resolver.ServiceDeps{
+		Store:                     store,
+		GitWriter:                 writer,
+		Logger:                    zap.NewNop(),
+		CommittedManifestAdmitter: testCommittedNamespaceAdmitter{store: store, ids: apiruntime.UUIDGenerator{}},
+		PushLimits:                testPushLimits,
+	})
+	require.NoError(t, err)
+	return svc
+}
+
+func prepareRepositoryDeletion(t *testing.T, svc *resolver.Service, writer *mockGitWriter, repo *datastore.Repository) {
+	t.Helper()
+	ctx := context.Background()
+	require.NoError(t, svc.ProvisionSystemRepository(ctx, repo.Namespace, "controller"))
+	current, err := svc.GetRepository(ctx, repo.UID)
+	require.NoError(t, err)
+	expected := current.ResourceVersion
+	current.SourcePath = "repositories/" + current.Name + ".md"
+	current.GitRef, current.GitCommitSHA = "refs/heads/main", "deadbeef"
+	datastore.AdvanceRepositorySystemVersion(current)
+	require.NoError(t, svc.Store().UpdateRepository(ctx, current, expected))
+	writer.setFile(current.SourcePath, []byte(fmt.Sprintf("---\napiVersion: gitstore.dev/v1beta1\nkind: Repository\nmetadata:\n  name: %s\n  namespace: %s\nspec:\n  defaultBranch: main\n---\n", current.Name, current.Namespace)))
+}
+
+func createNamespaceInput(name string, tier model.NamespaceTier) model.CreateNamespaceInput {
+	return model.CreateNamespaceInput{
+		APIVersion: "gitstore.dev/v1beta1",
+		Kind:       "Namespace",
+		Metadata:   &model.ObjectMetaInput{Name: name},
+		Spec:       &model.NamespaceSpecInput{Tier: tier},
+	}
+}
+
+func updateNamespaceInput(name string, tier model.NamespaceTier) model.UpdateNamespaceInput {
+	return model.UpdateNamespaceInput{
+		APIVersion: "gitstore.dev/v1beta1",
+		Kind:       "Namespace",
+		Metadata:   &model.ObjectMetaInput{Name: name},
+		Spec:       &model.NamespaceSpecInput{Tier: tier},
+	}
+}
+
+func TestServiceDeleteProductRemovesFromDatastore(t *testing.T) {
+	ctx := context.Background()
+	store, err := memdb.New()
+	require.NoError(t, err)
+	svc, err := resolver.NewService(resolver.ServiceDeps{
+		Store:     store,
+		GitWriter: &mockGitWriter{},
+		Logger:    zap.NewNop(),
+	})
+	require.NoError(t, err)
+
+	uid := "a0000000-0000-0000-0000-000000000001"
+	require.NoError(t, store.CreateProduct(ctx, &datastore.Product{
+		UID:       uid,
+		Namespace: "test-store",
+		Name:      "to-delete",
+	}))
+
+	require.NoError(t, svc.DeleteProduct(ctx, uid))
+
+	_, err = svc.GetProductByUID(ctx, uid)
+	require.Error(t, err)
+}
+
+func TestServiceDeleteProductNotFound(t *testing.T) {
+	svc := newTestSvc(t, &mockGitWriter{})
+
+	err := svc.DeleteProduct(context.Background(), "a0000000-0000-0000-0000-000000000099")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}

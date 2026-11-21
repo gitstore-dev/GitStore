@@ -22,15 +22,20 @@ import (
 )
 
 type sequencerStore struct {
-	mu       sync.Mutex
-	names    []string
-	events   []datastore.ResourceWatchEvent
-	sequence uint64
+	mu        sync.Mutex
+	names     []string
+	events    []datastore.ResourceWatchEvent
+	sequence  uint64
+	failAfter int
+	appendErr error
 }
 
 func (s *sequencerStore) Append(_ context.Context, _ datastore.NamespaceWatchLease, event datastore.NamespaceWatchEvent, _ time.Duration) (datastore.NamespaceWatchEvent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.appendErr != nil && len(s.events) == s.failAfter {
+		return datastore.NamespaceWatchEvent{}, s.appendErr
+	}
 	s.sequence++
 	event.Sequence = s.sequence
 	s.names = append(s.names, event.Name)
@@ -71,6 +76,122 @@ func TestNamespaceCDCSequencerOrdersConcurrentStreams(t *testing.T) {
 	store.mu.Unlock()
 	cancel()
 	assert.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestCDCConsumersAdmitCompletedWindowsWithoutInventingChanges(t *testing.T) {
+	for _, kind := range []string{"Namespace", "Repository", "Product"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(&sequencerStore{}, watchjournal.MaterializerConfig{}), datastore.ResourceWatchLease{})
+			var consumer scyllacdc.QueryCompletedNotificationConsumer
+			switch kind {
+			case "Namespace":
+				consumer = &namespaceCDCConsumer{sequencer: sequencer, streamID: "quiet"}
+			case "Repository":
+				consumer = &repositoryCDCConsumer{sequencer: sequencer, streamID: "quiet"}
+			default:
+				consumer = &catalogCDCConsumer{sequencer: sequencer, streamID: "quiet", kind: kind}
+			}
+			through := gocql.MinTimeUUID(time.Now().UTC())
+			done := make(chan error, 1)
+			go func() { done <- consumer.QueryCompleted(ctx, through) }()
+			select {
+			case message := <-sequencer.messages:
+				assert.Equal(t, namespaceCDCEnqueue, message.kind)
+				assert.Equal(t, "quiet", message.request.streamID)
+				assert.Equal(t, through, message.request.cdcTime)
+				assert.True(t, message.request.progressOnly)
+				assert.Empty(t, message.request.change)
+				assert.Empty(t, message.request.changes)
+				require.NotNil(t, message.request.markProgress)
+				message.result <- nil
+			case <-ctx.Done():
+				t.Fatal("completed window did not reach the sequencer")
+			}
+			require.NoError(t, <-done)
+		})
+	}
+}
+
+func TestCDCCompletedWindowUnblocksBusyStreamWithoutRetiringQuietStream(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.ResourceWatchLease{})
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"busy", "quiet"})
+	require.NoError(t, sequencer.Register(ctx, "busy"))
+	require.NoError(t, sequencer.Register(ctx, "quiet"))
+	base := time.Now().UTC()
+	progressed := make(chan string, 3)
+	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("busy", "event", gocql.MinTimeUUID(base), progressed)))
+	select {
+	case <-progressed:
+		t.Fatal("busy stream published before the quiet stream completed its window")
+	case <-time.After(2 * namespaceCDCFlushInterval):
+	}
+	through := gocql.MinTimeUUID(base.Add(time.Second))
+	for _, stream := range []string{"busy", "quiet"} {
+		request := sequenceTestRequest(stream, stream+"-window", through, progressed)
+		request.progressOnly = true
+		require.NoError(t, sequencer.Submit(ctx, request))
+	}
+	var checkpoints []string
+	for range 2 {
+		select {
+		case name := <-progressed:
+			checkpoints = append(checkpoints, name)
+		case <-ctx.Done():
+			t.Fatal("completed windows did not unblock materialization")
+		}
+	}
+	assert.ElementsMatch(t, []string{"busy-window", "quiet-window"}, checkpoints, "only the latest checkpoint per stream is needed")
+	store.mu.Lock()
+	assert.Equal(t, []string{"event"}, store.names, "completed windows must not become public events")
+	store.mu.Unlock()
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestCDCReadProgressUsesPublishedMinimumAcrossEveryStream(t *testing.T) {
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.ResourceWatchLease{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	through := make(chan time.Time, 2)
+	sequencer.persistReadProgress = func(_ context.Context, at time.Time) error {
+		store.mu.Lock()
+		count := len(store.events)
+		store.mu.Unlock()
+		if count == 0 {
+			return errors.New("source readiness advanced before journal publication")
+		}
+		through <- at
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	defer func() { cancel(); require.ErrorIs(t, <-done, context.Canceled) }()
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"fast", "slow"})
+	require.NoError(t, sequencer.Register(ctx, "fast"))
+	require.NoError(t, sequencer.Register(ctx, "slow"))
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	progressed := make(chan string, 4)
+	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("fast", "future", gocql.MinTimeUUID(now.Add(time.Second)), progressed)))
+	select {
+	case <-through:
+		t.Fatal("one active stream cannot prove another stream's readiness")
+	case <-time.After(60 * time.Millisecond):
+	}
+	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("slow", "present", gocql.MinTimeUUID(now), progressed)))
+	select {
+	case actual := <-through:
+		require.Equal(t, now, actual)
+	case <-time.After(time.Second):
+		t.Fatal("complete safe source frontier was not persisted")
+	}
 }
 
 func TestRepositoryCDCUsesSharedSequencerAndJournalEnvelope(t *testing.T) {
@@ -223,6 +344,67 @@ func TestNamespaceCDCSequencerDoesNotCheckpointWhenFrontierPersistenceFails(t *t
 	store.mu.Unlock()
 }
 
+func TestNamespaceCDCSequencerCoalescesIdleCheckpointsWithoutDelayingChanges(t *testing.T) {
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		require.ErrorIs(t, <-done, context.Canceled)
+	})
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"stream-a"})
+	require.NoError(t, sequencer.Register(ctx, "stream-a"))
+	checkpoints := make(chan namespaceCDCPublishedBatch, 64)
+	sequencer.persistFrontier = func(_ context.Context, batch namespaceCDCPublishedBatch) error {
+		checkpoints <- batch
+		return nil
+	}
+	base := time.Now().UTC()
+	progressed := make(chan string, 64)
+	submitEmpty := func(index int) {
+		request := sequenceTestRequest("stream-a", "empty", gocql.MinTimeUUID(base.Add(time.Duration(index)*time.Millisecond)), progressed)
+		request.progressOnly = true
+		require.NoError(t, sequencer.Submit(ctx, request))
+	}
+	submitEmpty(0)
+	select {
+	case <-checkpoints:
+	case <-time.After(time.Second):
+		t.Fatal("initial idle checkpoint did not persist")
+	}
+	for index := 1; index <= 20; index++ {
+		submitEmpty(index)
+		time.Sleep(5 * time.Millisecond)
+	}
+	select {
+	case <-checkpoints:
+		t.Fatal("idle query completions persisted again inside the batching interval")
+	default:
+	}
+	require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest("stream-a", "changed",
+		gocql.MinTimeUUID(base.Add(21*time.Millisecond)), progressed)))
+	select {
+	case <-checkpoints:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("a resource change was delayed behind idle checkpoint batching")
+	}
+	require.Eventually(t, func() bool {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		return len(store.names) == 1 && store.names[0] == "changed"
+	}, time.Second, time.Millisecond)
+	submitEmpty(22)
+	select {
+	case batch := <-checkpoints:
+		require.Equal(t, gocql.MinTimeUUID(base.Add(22*time.Millisecond)),
+			batch.Progress[cdcProgressKeyEncoded(batch.Generation, "namespaces_by_uid", "stream-a")])
+	case <-time.After(time.Second):
+		t.Fatal("the latest quiet query completion did not eventually persist")
+	}
+}
+
 func TestNamespaceCDCSequencerFailsClosedWhenStreamMovesBackward(t *testing.T) {
 	store := &sequencerStore{}
 	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
@@ -265,6 +447,186 @@ func TestNamespaceCDCSequencerRejectsNewStreamBehindPublishedFrontier(t *testing
 	require.ErrorContains(t, <-done, "behind published frontier")
 }
 
+func TestResourceCDCSequencerDoesNotOrderNewGenerationAgainstOldEmptyWindow(t *testing.T) {
+	for _, kind := range []string{"Namespace", "Repository", "Product", "CategoryTaxonomy", "File"} {
+		t.Run(kind, func(t *testing.T) {
+			store := &sequencerStore{}
+			sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- sequencer.Run(ctx) }()
+
+			base := time.Now().UTC()
+			require.NoError(t, sequencer.BeginGeneration(ctx, base, []string{"old-stream"}))
+			require.NoError(t, sequencer.Register(ctx, "old-stream"))
+			progressed := make(chan string, 3)
+			original := sequenceTestRequest("old-stream", "original", gocql.MinTimeUUID(base), progressed)
+			original.change.Kind = kind
+			require.NoError(t, sequencer.Submit(ctx, original))
+			select {
+			case <-progressed:
+			case <-ctx.Done():
+				t.Fatal("original event did not publish")
+			}
+
+			// scylla-cdc-go can finish the retiring generation with a query
+			// window past the next generation's start, even when it is empty.
+			empty := sequenceTestRequest("old-stream", "empty", gocql.MinTimeUUID(base.Add(time.Second)), progressed)
+			empty.progressOnly = true
+			require.NoError(t, sequencer.Submit(ctx, empty))
+			require.NoError(t, sequencer.Unregister("old-stream"))
+			require.Equal(t, "empty", <-progressed)
+
+			require.NoError(t, sequencer.BeginGeneration(ctx, base.Add(500*time.Millisecond), []string{"new-stream"}))
+			require.NoError(t, sequencer.Register(ctx, "new-stream"))
+			next := sequenceTestRequest("new-stream", "next", gocql.MinTimeUUID(base.Add(750*time.Millisecond)), progressed)
+			next.change.Kind = kind
+			require.NoError(t, sequencer.Submit(ctx, next))
+			require.NoError(t, sequencer.Unregister("new-stream"))
+			require.Equal(t, "next", <-progressed)
+
+			store.mu.Lock()
+			assert.Equal(t, []string{"original", "next"}, store.names)
+			store.mu.Unlock()
+			cancel()
+			require.ErrorIs(t, <-done, context.Canceled)
+		})
+	}
+}
+
+func TestNamespaceCDCIdleCheckpointRestoresReadProgressWithoutInventingPublishedEvents(t *testing.T) {
+	for _, publishFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("previous-event=%t", publishFirst), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			db, err := memdb.New()
+			require.NoError(t, err)
+			journal := db.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+			lease, acquired, err := journal.AcquireLease(ctx, "replica-a", time.Now().UTC(), time.Minute)
+			require.NoError(t, err)
+			require.True(t, acquired)
+			observed := make(chan time.Time, 2)
+			manager := &namespaceCDCProgressManager{
+				journal: journal, lease: lease,
+				observeProgress: func(at time.Time) { observed <- at },
+			}
+			store := &sequencerStore{}
+			sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), lease)
+			sequencer.progressTable = "test_keyspace.namespaces_by_uid"
+			sequencer.persistFrontier = manager.SavePublishedFrontier
+			runCtx, stop := context.WithCancel(ctx)
+			defer stop()
+			done := make(chan error, 1)
+			go func() { done <- sequencer.Run(runCtx) }()
+
+			base := time.Now().UTC()
+			stream := scyllacdc.StreamID("old-stream")
+			streamID := encodeCDCStreamID(stream)
+			require.NoError(t, sequencer.BeginGeneration(ctx, base, []string{streamID}))
+			require.NoError(t, sequencer.Register(ctx, streamID))
+			progressed := make(chan string, 2)
+			var wantFrontier gocql.UUID
+			if publishFirst {
+				wantFrontier = gocql.MinTimeUUID(base)
+				require.NoError(t, sequencer.Submit(ctx, sequenceTestRequest(streamID, "original", wantFrontier, progressed)))
+			}
+			readThrough := gocql.MinTimeUUID(base.Add(time.Second))
+			empty := sequenceTestRequest(streamID, "empty", readThrough, progressed)
+			empty.progressOnly = true
+			require.NoError(t, sequencer.Submit(ctx, empty))
+			require.NoError(t, sequencer.Unregister(streamID))
+			for acknowledged := false; !acknowledged; {
+				select {
+				case name := <-progressed:
+					acknowledged = name == "empty"
+				case <-ctx.Done():
+					t.Fatal("idle checkpoint did not complete")
+				}
+			}
+			stop()
+			require.ErrorIs(t, <-done, context.Canceled)
+			var latestObserved time.Time
+			for len(observed) > 0 {
+				latestObserved = <-observed
+			}
+			require.Equal(t, readThrough.Time().UTC(), latestObserved, "idle queries must keep readiness fresh")
+
+			// No per-stream checkpoint was saved: recover from the batch
+			// manifest, as after a crash between its write and MarkProgress.
+			restarted := &namespaceCDCProgressManager{journal: journal, lease: lease}
+			frontier, found, err := restarted.PublishedFrontier(ctx)
+			require.NoError(t, err)
+			require.Equal(t, publishFirst, found)
+			require.Equal(t, wantFrontier, frontier)
+			recovered, err := restarted.GetProgress(ctx, base, sequencer.progressTable, stream)
+			require.NoError(t, err)
+			require.Equal(t, readThrough, recovered.LastProcessedRecordTime)
+
+			nextSequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), lease)
+			nextSequencer.publishedThrough, nextSequencer.hasPublished = frontier, found
+			go func() { done <- nextSequencer.Run(ctx) }()
+			require.NoError(t, nextSequencer.BeginGeneration(ctx, base.Add(500*time.Millisecond), []string{"new-stream"}))
+			require.NoError(t, nextSequencer.Register(ctx, "new-stream"))
+			nextProgress := make(chan string, 1)
+			require.NoError(t, nextSequencer.Submit(ctx, sequenceTestRequest("new-stream", "next", gocql.MinTimeUUID(base.Add(750*time.Millisecond)), nextProgress)))
+			require.NoError(t, nextSequencer.Unregister("new-stream"))
+			select {
+			case <-nextProgress:
+			case <-ctx.Done():
+				t.Fatal("new-generation event did not publish")
+			}
+			store.mu.Lock()
+			wantNames := []string{"next"}
+			if publishFirst {
+				wantNames = []string{"original", "next"}
+			}
+			assert.Equal(t, wantNames, store.names)
+			store.mu.Unlock()
+			cancel()
+			require.ErrorIs(t, <-done, context.Canceled)
+		})
+	}
+}
+
+func TestNamespaceCDCProgressManagerRecoversUnqualifiedV1ManifestKeys(t *testing.T) {
+	ctx := context.Background()
+	db, err := memdb.New()
+	require.NoError(t, err)
+	journal := db.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
+	generation := time.Now().UTC()
+	lease, acquired, err := journal.AcquireLease(ctx, "replacement", generation, time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	stream := scyllacdc.StreamID("legacy-stream")
+	position := gocql.MinTimeUUID(generation.Add(time.Millisecond))
+	encoded, err := json.Marshal(struct {
+		Version    int               `json:"version"`
+		Frontier   string            `json:"frontier"`
+		Generation int64             `json:"generation"`
+		Progress   map[string]string `json:"progress"`
+	}{
+		Version: 1, Frontier: position.String(), Generation: generation.UnixNano(),
+		Progress: map[string]string{cdcProgressKey(generation, "namespaces_by_uid", stream): position.String()},
+	})
+	require.NoError(t, err)
+	require.NoError(t, journal.SaveProgress(ctx, lease, datastore.NamespaceCDCProgress{
+		StreamID: namespaceCDCPublishedFrontierProgress, Position: encoded, UpdatedAt: generation,
+	}))
+
+	manager := &namespaceCDCProgressManager{journal: journal, lease: lease}
+	frontier, found, err := manager.PublishedFrontier(ctx)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, position, frontier)
+	progress, err := manager.GetProgress(ctx, generation, "gitstore.namespaces_by_uid", stream)
+	require.NoError(t, err)
+	require.Equal(t, position, progress.LastProcessedRecordTime)
+	saved, err := journal.LoadProgress(ctx, cdcProgressKey(generation, "gitstore.namespaces_by_uid", stream))
+	require.NoError(t, err)
+	require.Equal(t, position.Bytes(), saved.Position, "recovered progress must use the reader's qualified key")
+}
+
 func TestNamespaceCDCConsumerFactoryReturnsNonNilConsumerAfterSequencerFailure(t *testing.T) {
 	store := &sequencerStore{}
 	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.NamespaceWatchLease{})
@@ -291,6 +653,9 @@ func TestNamespaceCDCConsumerFactoryReturnsNonNilConsumerAfterSequencerFailure(t
 	require.NoError(t, err)
 	require.NotNil(t, consumer)
 	require.Error(t, consumer.Consume(ctx, scyllacdc.Change{}))
+	completed, ok := consumer.(scyllacdc.QueryCompletedNotificationConsumer)
+	require.True(t, ok)
+	require.Error(t, completed.QueryCompleted(ctx, gocql.MinTimeUUID(base)))
 }
 
 func TestCatalogCDCConsumerFactorySignalsReadyAfterStreamPoll(t *testing.T) {
@@ -742,4 +1107,79 @@ func sequenceTestRequest(streamID, name string, at gocql.UUID, progressed chan<-
 func beginSequenceTestGeneration(t *testing.T, sequencer *namespaceCDCSequencer, ctx context.Context, streams []string) {
 	t.Helper()
 	require.NoError(t, sequencer.BeginGeneration(ctx, time.Now().UTC(), streams))
+}
+
+func TestCatalogCDCRejectsMalformedOrUnboundedFramesBeforeProgress(t *testing.T) {
+	consumer := &catalogCDCConsumer{kind: "File"}
+	for _, change := range []scyllacdc.Change{
+		{PreImage: []*scyllacdc.ChangeRow{nil}},
+		{PostImage: []*scyllacdc.ChangeRow{{}}},
+		{PostImage: make([]*scyllacdc.ChangeRow, catalogCDCMaxRowsPerChange+1)},
+	} {
+		require.ErrorIs(t, consumer.Consume(t.Context(), change), datastore.ErrNamespaceWatchDiscontinuity)
+	}
+}
+
+func TestCatalogCDCSequencerPublishesWholeFrameBeforeCheckpoint(t *testing.T) {
+	store := &sequencerStore{}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.ResourceWatchLease{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"file-stream"})
+	require.NoError(t, sequencer.Register(ctx, "file-stream"))
+	checkpointed := make(chan struct{}, 1)
+	request := namespaceCDCSequenceRequest{
+		streamID: "file-stream", cdcTime: gocql.TimeUUID(),
+		markProgress: func(context.Context) error {
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			assert.Len(t, store.events, 4, "no source checkpoint may hide unpublished rows at the same CDC position")
+			checkpointed <- struct{}{}
+			return nil
+		},
+	}
+	for i := range 4 {
+		request.changes = append(request.changes, watchjournal.Change{
+			Kind: "File", Namespace: "shop", Name: fmt.Sprintf("file-%d", i),
+			DeduplicationKey: fmt.Sprintf("frame:file-%d", i),
+			After:            json.RawMessage(fmt.Sprintf(`{"UID":"uid-%d","Name":"file-%d","Labels":{"team":"catalog"}}`, i, i)),
+			At:               request.cdcTime.Time().UTC(),
+		})
+	}
+	require.NoError(t, sequencer.Submit(ctx, request))
+	require.NoError(t, sequencer.Unregister("file-stream"))
+	<-checkpointed
+	store.mu.Lock()
+	require.Equal(t, []string{"file-0", "file-1", "file-2", "file-3"}, store.names)
+	store.mu.Unlock()
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestCatalogCDCSequencerDoesNotCheckpointPartialFrame(t *testing.T) {
+	sentinel := errors.New("journal append failed after one frame row")
+	store := &sequencerStore{failAfter: 1, appendErr: sentinel}
+	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.ResourceWatchLease{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- sequencer.Run(ctx) }()
+	beginSequenceTestGeneration(t, sequencer, ctx, []string{"file-stream"})
+	require.NoError(t, sequencer.Register(ctx, "file-stream"))
+	checkpointed := false
+	request := sequenceTestRequest("file-stream", "frame", gocql.TimeUUID(), make(chan string, 1))
+	request.markProgress = func(context.Context) error { checkpointed = true; return nil }
+	for i := range 4 {
+		change := request.change
+		change.Kind, change.Name, change.DeduplicationKey = "File", fmt.Sprintf("file-%d", i), fmt.Sprintf("frame:%d", i)
+		request.changes = append(request.changes, change)
+	}
+	require.NoError(t, sequencer.Submit(ctx, request))
+	require.ErrorIs(t, <-done, sentinel)
+	require.False(t, checkpointed, "every unpublished frame row must remain replayable")
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	require.Equal(t, []string{"file-0"}, store.names)
 }

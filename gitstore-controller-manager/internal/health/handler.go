@@ -8,7 +8,7 @@ import (
 	"net/http"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/gitstore-dev/gitstore/observability"
 )
 
 // ManagerStats is the subset of Manager that the health handler queries.
@@ -83,7 +83,7 @@ func NewHandler(mgr ManagerStats, version string, credentialReadiness ...Credent
 
 // NewMetricsHandler returns an http.Handler for GET /metrics (Prometheus scrape).
 func NewMetricsHandler(mgr ManagerStats) http.Handler {
-	metrics := promhttp.Handler()
+	metrics := observability.MetricsHandler()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mgr.KindStats()
 		metrics.ServeHTTP(w, r)

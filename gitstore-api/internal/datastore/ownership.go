@@ -11,6 +11,11 @@ import "strings"
 // plane, so it is never a candidate for a user-chosen annotation key.
 const OwnerAnnotationKey = "rbac.authorization.gitstore.dev/owner"
 
+const (
+	OwnerAuthMethodAnnotationKey = "rbac.authorization.gitstore.dev/owner-auth-method"
+	OwnerIssuerAnnotationKey     = "rbac.authorization.gitstore.dev/owner-issuer"
+)
+
 // OwnerKind is the principal type that can own a resource (ADR-0010 §14/§7).
 type OwnerKind string
 

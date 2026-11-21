@@ -10,9 +10,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gitstore-dev/gitstore/observability"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 const closureCursorPrefix = "closure"
@@ -20,17 +22,11 @@ const closureCursorPrefix = "closure"
 var (
 	// CategoryAncestorIndexWritesTotal counts ancestor-index projection
 	// writes by outcome (applied, skipped_newer, failed).
-	CategoryAncestorIndexWritesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "gitstore_category_ancestor_index_writes_total",
-		Help: "CategoryTaxonomy ancestor index row writes by result.",
-	}, []string{"result"})
+	CategoryAncestorIndexWritesTotal = observability.MustInstrument(otel.Meter("gitstore/datastore").Float64Counter("gitstore_category_ancestor_index_writes_total", metric.WithDescription("CategoryTaxonomy ancestor index row writes by result.")))
 
 	// CategoryAncestorIndexRepairRequiredTotal counts status or delete
 	// mutations whose index projection writes failed after retry.
-	CategoryAncestorIndexRepairRequiredTotal = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "gitstore_category_ancestor_index_repair_required_total",
-		Help: "CategoryTaxonomy ancestor index mutations that require projection repair.",
-	})
+	CategoryAncestorIndexRepairRequiredTotal = observability.MustInstrument(otel.Meter("gitstore/datastore").Float64Counter("gitstore_category_ancestor_index_repair_required_total", metric.WithDescription("CategoryTaxonomy ancestor index mutations that require projection repair.")))
 )
 
 // EncodeClosureCursor encodes a ListCategoryDescendants position.

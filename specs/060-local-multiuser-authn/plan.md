@@ -116,7 +116,7 @@ docs/
 └── api-reference.md                                    # line 25's static-admin example updated
 ```
 
-**Explicitly out of scope for this plan** (research.md Decision 7): `gitstore-api/gen/gitstore/git/v1/*` (generated code — never hand-edited); `docs/implementation/021-controller_service_account_auth.md` (a separate, unimplemented spec's own premise — flagged, not edited); `docs/implementation/019-pluggable_auth_design.md` (superseded historical record).
+**Explicitly out of scope for this plan** (research.md Decision 7): `gitstore-api/gen/gitstore/git/v1/*` (generated code — never hand-edited); `docs/implementation/021-controller_service_account_auth.md` (a separate feature's historical premise — flagged, not edited); the earlier pluggable-auth design (subsequently removed as a superseded duplicate of `docs/implementation/020-pluggable_auth_architecture.md`).
 
 **Structure Decision**: A direct in-place replacement of one provider package by another, sibling to `rbac-local`; one additive read-only method on `rbac-local`; config-struct removal plus one conditional-validation fix on the same already-being-touched config surface; a test-harness migration confined to `tests/integration/` plus the handful of unit-test files that directly imported the removed package. No new service, no new datastore backend, no `AuthNProvider`/`UserDirProvider`/`AuthZProvider` interface change.
 
@@ -163,7 +163,7 @@ All technical unknowns are resolved; no `NEEDS CLARIFICATION` remains.
 7. Delete `gitstore-api/internal/auth/provider/staticadmin/` entirely. Fix the resulting compile errors in `gitstore-api/cmd/server/main_test.go`, `gitstore-api/internal/middleware/security/secure_test.go`, `gitstore-api/internal/graph/resolver/auth_resolvers_test.go` by switching their `staticadmin.New(...)` calls to `staticusers.New(...)`.
 8. Relabel the cosmetic `"static-admin"` `AuthMethod` string literals in `gitstore-api/internal/middleware/security/{graphql_test.go,graphql_file_status_test.go}`, `gitstore-api/internal/auth/provider/rbaclocal/rbaclocal_test.go`, `gitstore-api/internal/auth/provider/allowall/allowall_test.go` to `"static-users"`.
 9. Migrate `tests/integration/namespace_contract_test.go` (backdoor removal, `staticadmin`→`staticusers` bootstrap migration, `namespaceOwnerAuthZ` fix) and `tests/integration/authz_repository_contract_test.go` per `contracts/backdoor-retirement.md`. Confirm `grep -rn "test-user:\|staticadmin\|static-admin" tests/integration/` returns zero matches.
-10. Update `Makefile` operator helpers and bootstrap hints, `gitstore-api/.env.example`, `docs/implementation/020-pluggable_auth_architecture.md` (§2a/§5a/§7), `docs/user-guide.md`, `docs/api-reference.md`. Note `docs/implementation/021-controller_service_account_auth.md`'s stale premise as a flagged, not-performed-here follow-up (mirroring how the first draft flagged `docs/runbooks/production-readiness-testing.md`). Run targeted tests, `make build`, `make test`, `make pr-ready`.
+10. Update `Makefile` operator helpers and bootstrap hints, `gitstore-api/.env.example`, `docs/implementation/020-pluggable_auth_architecture.md` (§2a/§5a/§7), `docs/user-guide.md`, `docs/api-reference.md`. Note `docs/implementation/021-controller_service_account_auth.md`'s stale premise as a flagged, not-performed-here follow-up (mirroring how the first draft flagged `docs/development/production-readiness-testing.md`). Run targeted tests, `make build`, `make test`, `make pr-ready`.
 
 ## Complexity Tracking
 

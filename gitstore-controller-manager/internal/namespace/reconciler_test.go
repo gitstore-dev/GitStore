@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,10 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type fakeStatusClient struct {
@@ -53,16 +58,220 @@ type fakeDeletionClient struct {
 	err   error
 	calls []string
 	rvs   []string
+	uids  []string
 }
 
-func (f *fakeDeletionClient) CompleteDeletion(_ context.Context, namespace, resourceVersion string) error {
+func (f *fakeDeletionClient) CompleteDeletion(_ context.Context, namespace, resourceVersion, uid string) error {
 	f.calls = append(f.calls, namespace)
 	f.rvs = append(f.rvs, resourceVersion)
+	f.uids = append(f.uids, uid)
 	return f.err
 }
 
 func namespaceKey(name string) types.WorkItemKey {
 	return types.WorkItemKey{Kind: "Namespace", Name: name}
+}
+
+func reconcileNamespaceSnapshot(t *testing.T, r *Reconciler, key types.WorkItemKey, recording bool) (types.ReconcileResult, []sdktrace.Event) {
+	t.Helper()
+	recorder := tracetest.NewSpanRecorder()
+	sampler := sdktrace.NeverSample()
+	if recording {
+		sampler = sdktrace.AlwaysSample()
+	}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sampler), sdktrace.WithSpanProcessor(recorder),
+		sdktrace.WithRawSpanLimits(sdktrace.SpanLimits{
+			AttributeValueLengthLimit: 256, AttributeCountLimit: 32,
+			EventCountLimit: 32, LinkCountLimit: 8,
+			AttributePerEventCountLimit: 8, AttributePerLinkCountLimit: 8,
+		}))
+	defer func() { require.NoError(t, provider.Shutdown(context.Background())) }()
+	ctx, span := provider.Tracer("test").Start(t.Context(), "controller.reconcile")
+	result := r.Reconcile(ctx, key)
+	span.End()
+	if !recording {
+		require.Empty(t, recorder.Ended())
+		return result, nil
+	}
+	require.Len(t, recorder.Ended(), 1)
+	return result, recorder.Ended()[0].Events()
+}
+
+func requireNamespaceSnapshot(t *testing.T, events []sdktrace.Event, current Namespace, exact, invalid bool) {
+	t.Helper()
+	require.Len(t, events, 1)
+	require.Equal(t, "controller.reconcile.snapshot", events[0].Name)
+	uid, rv, revision := current.UID, current.ResourceVersion, current.Revision
+	if invalid {
+		uid, rv, revision = "[invalid]", "[invalid]", "[invalid]"
+	}
+	attributes := make(map[string]attribute.Value)
+	for _, attr := range events[0].Attributes {
+		attributes[string(attr.Key)] = attr.Value
+	}
+	require.Len(t, events[0].Attributes, 5)
+	require.Equal(t, map[string]attribute.Value{
+		"resource.uid":              attribute.StringValue(uid),
+		"resource.resource_version": attribute.StringValue(rv),
+		"resource.generation":       attribute.Int64Value(current.Generation),
+		"resource.revision":         attribute.StringValue(revision),
+		"resource.snapshot.exact":   attribute.BoolValue(exact),
+	}, attributes)
+}
+
+func TestReconcileSnapshotUsesLookupAndAllowsCoalescing(t *testing.T) {
+	key := namespaceKey("acme")
+	current := Namespace{
+		UID: "old-uid", Name: key.Name, Generation: 3, ResourceVersion: "7",
+		Revision: "main@sha1:" + strings.Repeat("a", 40),
+		Status:   status.ResourceStatus{LastAppliedRevision: "stale-status-revision"},
+	}
+	c := cache.New[Namespace]()
+	c.Set(key, current)
+	statuses, deletion := &fakeStatusClient{}, &fakeDeletionClient{}
+	r := NewReconcilerWithLookup(cache.LookupFrom(cache.AsReadOnly(c)), statuses, &fakeRepositoryClient{}, deletion)
+	result, events := reconcileNamespaceSnapshot(t, r, key, true)
+	require.IsType(t, types.Success{}, result)
+	requireNamespaceSnapshot(t, events, current, true, false)
+	require.Len(t, statuses.patches, 1)
+	require.Equal(t, current.ResourceVersion, statuses.patches[0].ResourceVersion)
+	require.Equal(t, current.Generation, *statuses.patches[0].ObservedGeneration)
+	require.Nil(t, statuses.patches[0].LastAppliedRevision)
+
+	// The key is level-triggered: intermediate versions need not be reconciled.
+	current.ResourceVersion, current.Revision = "8", "main@sha1:"+strings.Repeat("b", 40)
+	c.Set(key, current)
+	current.ResourceVersion, current.Revision = "9", "main@sha1:"+strings.Repeat("c", 40)
+	c.Set(key, current)
+	result, events = reconcileNamespaceSnapshot(t, r, key, true)
+	require.IsType(t, types.Success{}, result)
+	requireNamespaceSnapshot(t, events, current, true, false)
+	require.Len(t, statuses.patches, 2)
+	require.Equal(t, "9", statuses.patches[1].ResourceVersion)
+	require.Equal(t, int64(3), *statuses.patches[1].ObservedGeneration)
+
+	current.UID, current.ResourceVersion = "replacement-uid", "10"
+	current.Finalizers = []string{ForegroundDeletionFinalizer}
+	c.Set(key, current)
+	result, events = reconcileNamespaceSnapshot(t, r, key, true)
+	require.IsType(t, types.Success{}, result)
+	requireNamespaceSnapshot(t, events, current, true, false)
+	require.Equal(t, []string{current.UID}, deletion.uids)
+	require.Equal(t, []string{current.ResourceVersion}, deletion.rvs)
+}
+
+func TestReconcileSnapshotPreservesOutcomes(t *testing.T) {
+	failure := errors.New("dependency unavailable")
+	for _, test := range []struct {
+		name                                            string
+		missing, bootstrap, deleting                    bool
+		lookupErr, statusErr, provisionErr, deletionErr error
+	}{
+		{name: "active"},
+		{name: "bootstrap", bootstrap: true},
+		{name: "missing", missing: true},
+		{name: "lookup I/O error", lookupErr: failure},
+		{name: "lookup cancelled", lookupErr: context.Canceled},
+		{name: "status error", statusErr: failure},
+		{name: "provision error", provisionErr: failure},
+		{name: "deletion", deleting: true},
+		{name: "deletion error", deleting: true, deletionErr: failure},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var baseline types.ReconcileResult
+			for _, recording := range []bool{false, true} {
+				current := Namespace{UID: "uid", Name: "acme", ResourceVersion: "7", Generation: 3,
+					Revision: "main@sha1:" + strings.Repeat("a", 40),
+					Status:   status.ResourceStatus{Conditions: []*status.Condition{admittedCondition(3)}}}
+				if test.bootstrap {
+					current.Name = "default"
+				}
+				if test.deleting {
+					current.Finalizers = []string{ForegroundDeletionFinalizer}
+				}
+				statuses, repos, deletion := &fakeStatusClient{err: test.statusErr}, &fakeRepositoryClient{ensureErr: test.provisionErr}, &fakeDeletionClient{err: test.deletionErr}
+				r := NewReconcilerWithLookup(func(context.Context, types.WorkItemKey) (Namespace, bool, error) {
+					return current, !test.missing, test.lookupErr
+				}, statuses, repos, deletion)
+				result, events := reconcileNamespaceSnapshot(t, r, namespaceKey(current.Name), recording)
+				if recording && !test.missing && test.lookupErr == nil {
+					requireNamespaceSnapshot(t, events, current, true, false)
+				} else {
+					require.Empty(t, events)
+				}
+				expectedErr := errors.Join(test.lookupErr, test.statusErr, test.provisionErr, test.deletionErr)
+				if expectedErr == nil {
+					require.IsType(t, types.Success{}, result)
+				} else {
+					require.IsType(t, types.TransientFailure{}, result)
+					for _, err := range []error{test.lookupErr, test.statusErr, test.provisionErr, test.deletionErr} {
+						if err != nil {
+							require.ErrorIs(t, result.(types.TransientFailure).Err, err)
+						}
+					}
+				}
+				if recording {
+					require.Equal(t, reflect.TypeOf(baseline), reflect.TypeOf(result))
+				} else {
+					baseline = result
+				}
+				if test.missing || test.lookupErr != nil || test.bootstrap {
+					require.Empty(t, statuses.patches)
+					require.Empty(t, repos.ensured)
+					require.Empty(t, deletion.calls)
+				}
+			}
+		})
+	}
+}
+
+func TestReconcileSnapshotBoundsDoNotChangeConsumedObject(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		uid, rv, revision string
+		generation        int64
+		exact, invalid    bool
+	}{
+		{"maximum", strings.Repeat("u", 64), strings.Repeat("v", 128), strings.Repeat("r", 256), 3, true, false},
+		{"uid overflow", strings.Repeat("u", 65), "7", "revision", 3, false, true},
+		{"rv overflow", "uid", strings.Repeat("v", 129), "revision", 3, false, true},
+		{"revision overflow", "uid", "7", strings.Repeat("r", 257), 3, false, true},
+		{"invalid UTF-8", "uid", "7", "\xff", 3, false, true},
+		{"absent authored revision", "uid", "7", "", 3, false, false},
+		{"absent UID", "", "7", "revision", 3, false, false},
+		{"absent resource version", "uid", "", "revision", 3, false, false},
+		{"zero generation", "uid", "7", "revision", 0, false, false},
+		{"negative generation", "uid", "7", "revision", -1, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			current := Namespace{UID: test.uid, Name: "acme", ResourceVersion: test.rv, Generation: test.generation, Revision: test.revision,
+				Status: status.ResourceStatus{LastAppliedRevision: "not-authored"}}
+			for _, recording := range []bool{false, true} {
+				statuses := &fakeStatusClient{}
+				r := NewReconcilerWithLookup(func(context.Context, types.WorkItemKey) (Namespace, bool, error) {
+					return current, true, nil
+				}, statuses, &fakeRepositoryClient{}, &fakeDeletionClient{})
+				result, events := reconcileNamespaceSnapshot(t, r, namespaceKey(current.Name), recording)
+				require.IsType(t, types.Success{}, result)
+				require.Len(t, statuses.patches, 1)
+				require.Equal(t, current.ResourceVersion, statuses.patches[0].ResourceVersion)
+				require.Equal(t, current.Generation, *statuses.patches[0].ObservedGeneration)
+				require.Nil(t, statuses.patches[0].LastAppliedRevision)
+				if recording {
+					requireNamespaceSnapshot(t, events, current, test.exact, test.invalid)
+				}
+			}
+		})
+	}
+}
+
+func TestReconcileSnapshotNonrecordingDoesNotAllocate(t *testing.T) {
+	r := NewReconcilerWithLookup(func(context.Context, types.WorkItemKey) (Namespace, bool, error) {
+		return Namespace{Name: "default"}, true, nil
+	}, nil, nil, nil)
+	require.Zero(t, testing.AllocsPerRun(100, func() {
+		r.Reconcile(context.Background(), namespaceKey("default"))
+	}))
 }
 
 func seedNamespaceCache(t *testing.T, items ...Namespace) cache.CacheAccessor[Namespace] {
@@ -370,24 +579,40 @@ func TestReconcileBootstrapNamespacesAreIgnored(t *testing.T) {
 	}
 }
 
-func TestReconcileTerminatingNamespaceRequeuesWhileRepositoriesRemain(t *testing.T) {
+func TestReconcileTerminatingNamespaceDelegatesSystemRepositoryCleanup(t *testing.T) {
 	current := Namespace{
 		Name:            "acme",
 		ResourceVersion: "9",
 		Finalizers:      []string{ForegroundDeletionFinalizer},
 	}
+
 	repos := &fakeRepositoryClient{hasRepos: true}
 	deletion := &fakeDeletionClient{}
 	r := NewReconciler(seedNamespaceCache(t, current), &fakeStatusClient{}, repos, deletion)
 
 	result := r.Reconcile(context.Background(), namespaceKey("acme"))
 
-	requeue, ok := result.(types.RequeueAfter)
-	if !ok || requeue.After <= 0 {
-		t.Fatalf("Reconcile result = %#v, want positive types.RequeueAfter", result)
+	if _, ok := result.(types.Success); !ok {
+		t.Fatalf("Reconcile result = %#v, want success", result)
 	}
-	if len(deletion.calls) != 0 {
-		t.Fatalf("CompleteDeletion calls = %v, want none while repositories remain", deletion.calls)
+	if len(deletion.calls) != 1 {
+		t.Fatalf("CompleteDeletion calls = %v, want API-owned system repository cleanup", deletion.calls)
+	}
+}
+
+func TestReconcilePendingNamespaceResumesDeletionWithoutProvisioning(t *testing.T) {
+	current := Namespace{
+		UID: "namespace-incarnation", Name: "acme", ResourceVersion: "9",
+		Status: status.ResourceStatus{Conditions: []*status.Condition{{Type: "DeletionPending", Status: "TRUE"}}},
+	}
+	repos := &fakeRepositoryClient{}
+	deletion := &fakeDeletionClient{}
+	r := NewReconciler(seedNamespaceCache(t, current), &fakeStatusClient{}, repos, deletion)
+	if _, ok := r.Reconcile(context.Background(), namespaceKey("acme")).(types.Success); !ok {
+		t.Fatal("pending deletion did not complete")
+	}
+	if len(deletion.calls) != 1 || deletion.uids[0] != current.UID || len(repos.ensured) != 0 {
+		t.Fatalf("pending deletion calls=%v uids=%v provisioning=%v", deletion.calls, deletion.uids, repos.ensured)
 	}
 }
 

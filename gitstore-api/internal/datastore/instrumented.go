@@ -10,11 +10,13 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
-	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 )
 
-// InstrumentedDatastore wraps any Datastore with per-operation Prometheus
+// InstrumentedDatastore wraps any Datastore with per-operation OpenTelemetry
 // metrics (latency histogram, error counter) and structured zap error logs.
 type InstrumentedDatastore struct {
 	next    Datastore
@@ -24,35 +26,34 @@ type InstrumentedDatastore struct {
 }
 
 // NewInstrumentedDatastore returns a Datastore that records metrics and logs
-// errors for every operation on next. Metrics are registered on the default
-// Prometheus registry.
+// errors for every operation on next. Metrics are recorded through the shared SDK meter provider.
 func NewInstrumentedDatastore(next Datastore, backend string, log *zap.Logger) Datastore {
-	return NewInstrumentedDatastoreWithRegistry(next, backend, log, prometheus.DefaultRegisterer)
+	return NewInstrumentedDatastoreWithMeter(next, backend, log, otel.Meter("gitstore/datastore"))
 }
 
-// NewInstrumentedDatastoreWithRegistry is like NewInstrumentedDatastore but
-// registers metrics on reg, enabling isolated registries in tests.
-func NewInstrumentedDatastoreWithRegistry(next Datastore, backend string, log *zap.Logger, reg prometheus.Registerer) Datastore {
-	return &InstrumentedDatastore{next: next, backend: backend, log: log, metrics: newMetrics(reg)}
+// NewInstrumentedDatastoreWithMeter is like NewInstrumentedDatastore but
+// uses an explicit meter, enabling isolated SDK providers in tests.
+func NewInstrumentedDatastoreWithMeter(next Datastore, backend string, log *zap.Logger, meter metric.Meter) Datastore {
+	return &InstrumentedDatastore{next: next, backend: backend, log: log, metrics: newMetrics(meter)}
 }
 
 func (d *InstrumentedDatastore) observe(op string, start time.Time, err error) {
 	elapsed := time.Since(start)
-	d.metrics.duration.WithLabelValues(op, d.backend).Observe(elapsed.Seconds())
+	d.metrics.duration.Record(context.Background(), elapsed.Seconds(), metric.WithAttributes(attribute.String("operation", op), attribute.String("backend", d.backend)))
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return
 		}
-		d.metrics.errors.WithLabelValues(op, d.backend).Inc()
+		d.metrics.errors.Add(context.Background(), 1, metric.WithAttributes(attribute.String("operation", op), attribute.String("backend", d.backend)))
 		var repair *RepairRequiredError
 		if errors.As(err, &repair) {
 			kind := repair.Step.ResourceKind
 			projection := repair.Step.Projection
 			operation := repair.Step.Operation
-			d.metrics.projectionFailures.WithLabelValues(operation, d.backend, kind, projection).Inc()
-			d.metrics.compensationAttempts.WithLabelValues(operation, d.backend, kind, projection).Inc()
+			d.metrics.projectionFailures.Add(context.Background(), 1, metric.WithAttributes(attribute.String("operation", operation), attribute.String("backend", d.backend), attribute.String("resource_kind", kind), attribute.String("projection", projection)))
+			d.metrics.compensationAttempts.Add(context.Background(), 1, metric.WithAttributes(attribute.String("operation", operation), attribute.String("backend", d.backend), attribute.String("resource_kind", kind), attribute.String("projection", projection)))
 			if repair.Compensation != nil {
-				d.metrics.compensationFailures.WithLabelValues(operation, d.backend, kind, projection).Inc()
+				d.metrics.compensationFailures.Add(context.Background(), 1, metric.WithAttributes(attribute.String("operation", operation), attribute.String("backend", d.backend), attribute.String("resource_kind", kind), attribute.String("projection", projection)))
 			}
 		}
 		d.log.Error("datastore operation failed",
@@ -65,13 +66,7 @@ func (d *InstrumentedDatastore) observe(op string, start time.Time, err error) {
 }
 
 func (d *InstrumentedDatastore) observeFinding(finding ProjectionFinding) {
-	d.metrics.findings.WithLabelValues(
-		finding.Operation,
-		d.backend,
-		finding.ResourceKind,
-		finding.Projection,
-		string(finding.Type),
-	).Inc()
+	d.metrics.findings.Add(context.Background(), 1, metric.WithAttributes(attribute.String("operation", finding.Operation), attribute.String("backend", d.backend), attribute.String("resource_kind", finding.ResourceKind), attribute.String("projection", finding.Projection), attribute.String("finding_type", string(finding.Type))))
 	d.log.Warn("datastore projection inconsistency",
 		zap.String("operation", finding.Operation),
 		zap.String("backend", d.backend),
@@ -117,9 +112,9 @@ func (d *InstrumentedDatastore) ListProducts(ctx context.Context, namespace stri
 	return v, err
 }
 
-func (d *InstrumentedDatastore) UpdateProduct(ctx context.Context, p *Product) error {
+func (d *InstrumentedDatastore) UpdateProduct(ctx context.Context, p *Product, expectedResourceVersion string) error {
 	start := time.Now()
-	err := d.next.UpdateProduct(d.withFindingObserver(ctx), p)
+	err := d.next.UpdateProduct(d.withFindingObserver(ctx), p, expectedResourceVersion)
 	d.observe("UpdateProduct", start, err)
 	return err
 }
@@ -255,9 +250,9 @@ func (d *InstrumentedDatastore) ListCategoryTaxonomies(ctx context.Context, name
 	return v, err
 }
 
-func (d *InstrumentedDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy) error {
+func (d *InstrumentedDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *CategoryTaxonomy, expectedResourceVersion string) error {
 	start := time.Now()
-	err := d.next.UpdateCategoryTaxonomy(d.withFindingObserver(ctx), c)
+	err := d.next.UpdateCategoryTaxonomy(d.withFindingObserver(ctx), c, expectedResourceVersion)
 	d.observe("UpdateCategoryTaxonomy", start, err)
 	return err
 }
@@ -320,9 +315,9 @@ func (d *InstrumentedDatastore) ListProductVariantsByProductRef(ctx context.Cont
 	return result, err
 }
 
-func (d *InstrumentedDatastore) UpdateProductVariant(ctx context.Context, v *ProductVariant) error {
+func (d *InstrumentedDatastore) UpdateProductVariant(ctx context.Context, v *ProductVariant, expectedResourceVersion string) error {
 	start := time.Now()
-	err := d.next.UpdateProductVariant(d.withFindingObserver(ctx), v)
+	err := d.next.UpdateProductVariant(d.withFindingObserver(ctx), v, expectedResourceVersion)
 	d.observe("UpdateProductVariant", start, err)
 	return err
 }
@@ -371,9 +366,9 @@ func (d *InstrumentedDatastore) ListCollections(ctx context.Context, namespace s
 	return v, err
 }
 
-func (d *InstrumentedDatastore) UpdateCollection(ctx context.Context, c *Collection) error {
+func (d *InstrumentedDatastore) UpdateCollection(ctx context.Context, c *Collection, expectedResourceVersion string) error {
 	start := time.Now()
-	err := d.next.UpdateCollection(d.withFindingObserver(ctx), c)
+	err := d.next.UpdateCollection(d.withFindingObserver(ctx), c, expectedResourceVersion)
 	d.observe("UpdateCollection", start, err)
 	return err
 }
@@ -528,6 +523,17 @@ func (d *InstrumentedDatastore) HasCatalogResources(ctx context.Context, repoID 
 	return v, err
 }
 
+func (d *InstrumentedDatastore) CompleteRepositoryDeletion(ctx context.Context, uid, expectedResourceVersion string) error {
+	start := time.Now()
+	store, ok := d.next.(RepositoryDeletionStore)
+	if !ok {
+		return ErrInvalidArgument
+	}
+	err := store.CompleteRepositoryDeletion(d.withFindingObserver(ctx), uid, expectedResourceVersion)
+	d.observe("CompleteRepositoryDeletion", start, err)
+	return err
+}
+
 // ── NamespaceMapping ──────────────────────────────────────────────────────
 
 func (d *InstrumentedDatastore) CreateNamespaceMapping(ctx context.Context, m *NamespaceMapping) error {
@@ -656,7 +662,7 @@ func (d *InstrumentedDatastore) MarkCategoryTaxonomyDeletion(ctx context.Context
 	return v, err
 }
 
-func (d *InstrumentedDatastore) CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string) (*CategoryTaxonomy, error) {
+func (d *InstrumentedDatastore) CompleteCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion, expectedUID string) (*CategoryTaxonomy, error) {
 	start := time.Now()
 	lifecycle, ok := d.next.(CategoryTaxonomyDeletionStore)
 	if !ok {
@@ -664,7 +670,7 @@ func (d *InstrumentedDatastore) CompleteCategoryTaxonomyDeletion(ctx context.Con
 		d.observe("CompleteCategoryTaxonomyDeletion", start, err)
 		return nil, err
 	}
-	v, err := lifecycle.CompleteCategoryTaxonomyDeletion(d.withFindingObserver(ctx), namespace, name, expectedResourceVersion)
+	v, err := lifecycle.CompleteCategoryTaxonomyDeletion(d.withFindingObserver(ctx), namespace, name, expectedResourceVersion, expectedUID)
 	d.observe("CompleteCategoryTaxonomyDeletion", start, err)
 	return v, err
 }
@@ -683,9 +689,9 @@ func (d *InstrumentedDatastore) GetServiceAccountByUID(ctx context.Context, uid 
 	d.observe("GetServiceAccountByUID", start, err)
 	return v, err
 }
-func (d *InstrumentedDatastore) GetServiceAccountBySubject(ctx context.Context, namespace, name string) (*ServiceAccount, error) {
+func (d *InstrumentedDatastore) GetServiceAccountBySubject(ctx context.Context, name string) (*ServiceAccount, error) {
 	start := time.Now()
-	v, err := d.next.GetServiceAccountBySubject(d.withFindingObserver(ctx), namespace, name)
+	v, err := d.next.GetServiceAccountBySubject(d.withFindingObserver(ctx), name)
 	d.observe("GetServiceAccountBySubject", start, err)
 	return v, err
 }

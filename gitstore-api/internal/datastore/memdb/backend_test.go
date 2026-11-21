@@ -7,6 +7,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +26,44 @@ func newBackend(t *testing.T) datastore.Datastore {
 	require.NoError(t, err)
 	t.Cleanup(func() { ds.Close() }) //nolint:errcheck
 	return ds
+}
+
+func TestMemdbServiceAccountClusterUniquenessAndRecreate(t *testing.T) {
+	ds := newBackend(t)
+	ctx := t.Context()
+	var wg sync.WaitGroup
+	results := make(chan error, 16)
+	for i := range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- ds.CreateServiceAccount(ctx, &datastore.ServiceAccount{UID: fmt.Sprintf("00000000-0000-0000-0000-%012d", i), Name: "controller", ResourceVersion: "1", CreationTimestamp: time.Now()})
+		}()
+	}
+	wg.Wait()
+	close(results)
+	winners := 0
+	for err := range results {
+		if err == nil {
+			winners++
+		} else {
+			require.ErrorIs(t, err, datastore.ErrAlreadyExists)
+		}
+	}
+	require.Equal(t, 1, winners)
+	page, err := ds.ListServiceAccounts(ctx, datastore.PageParams{First: 20})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	original := page.Items[0]
+	err = ds.CreateServiceAccount(ctx, &datastore.ServiceAccount{UID: original.UID, Name: "different"})
+	require.ErrorIs(t, err, datastore.ErrAlreadyExists, "UID cannot be reserved by two names")
+	require.NoError(t, ds.DeleteServiceAccount(ctx, original.UID))
+	require.NoError(t, ds.CreateServiceAccount(ctx, &datastore.ServiceAccount{UID: "00000000-0000-0000-0001-000000000001", Name: "controller", ResourceVersion: "1", CreationTimestamp: time.Now()}))
+	_, err = ds.GetServiceAccountByUID(ctx, original.UID)
+	require.True(t, errors.Is(err, datastore.ErrNotFound), "old UID never routes to a replacement")
+	require.ErrorIs(t, ds.DeleteServiceAccount(ctx, original.UID), datastore.ErrNotFound)
+	_, err = ds.GetServiceAccountByUID(ctx, "00000000-0000-0000-0001-000000000001")
+	require.NoError(t, err, "stale deletion cannot remove replacement")
 }
 
 func productFixture(uid, namespace, name string) *datastore.Product {
@@ -202,7 +243,9 @@ func TestMemdb_UpdateProduct(t *testing.T) {
 	require.NoError(t, ds.CreateProduct(ctx, p))
 
 	p.GitRef = "main"
-	require.NoError(t, ds.UpdateProduct(ctx, p))
+	expected := p.ResourceVersion
+	datastore.AdvanceProductSystemVersion(p)
+	require.NoError(t, ds.UpdateProduct(ctx, p, expected))
 
 	got, err := ds.GetProduct(ctx, p.UID)
 	require.NoError(t, err)
@@ -242,7 +285,7 @@ func TestMemdb_UpdateProductStatus_PreservesResourceFieldsAndUsesCAS(t *testing.
 func TestMemdb_UpdateProduct_NotFound(t *testing.T) {
 	ds := newBackend(t)
 	p := productFixture("a0000000-0000-0000-0000-000000000099", "my-store", "no-such")
-	err := ds.UpdateProduct(context.Background(), p)
+	err := ds.UpdateProduct(context.Background(), p, "1")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
@@ -302,7 +345,7 @@ func TestMemdb_CreateCategoryTaxonomy_DuplicateNameReturnsAlreadyExists(t *testi
 func TestMemdb_UpdateCategoryTaxonomy_NotFound(t *testing.T) {
 	ds := newBackend(t)
 	c := categoryTaxonomyFixture("b0000000-0000-0000-0000-000000000099", "ghost-cat")
-	err := ds.UpdateCategoryTaxonomy(context.Background(), c)
+	err := ds.UpdateCategoryTaxonomy(context.Background(), c, "1")
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 

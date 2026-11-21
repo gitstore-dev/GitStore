@@ -85,7 +85,18 @@ func TestList_DecodesCategoryLifecycleMetadata(t *testing.T) {
 	metadata["ownerReferences"] = []any{map[string]any{
 		"uid": "parent-uid", "kind": "CategoryTaxonomy", "blockOwnerDeletion": true,
 	}}
+	revision := "main@sha1:" + strings.Repeat("a", 40)
+	metadata["revision"] = revision
+	node["status"] = map[string]any{"lastAppliedRevision": "stale-status-revision"}
+	nullRevision := categoryNodeJSON("uid-2", "nullable", "acme", "8", 1, "")
+	nullRevision["metadata"].(map[string]any)["revision"] = nil
+	nullRevision["status"] = node["status"]
+	omittedRevision := categoryNodeJSON("uid-3", "legacy", "acme", "9", 1, "")
+	omittedRevision["status"] = node["status"]
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/admin/graphql" {
+			t.Errorf("request path = %q, want /admin/graphql", r.URL.Path)
+		}
 		if serveCategoryBootstrap(t, w, r, "journal-cursor-9") {
 			return
 		}
@@ -101,16 +112,34 @@ func TestList_DecodesCategoryLifecycleMetadata(t *testing.T) {
 			}}})
 			return
 		}
+		if !strings.Contains(req.Query, "generation revision") {
+			t.Error("category list must select metadata.revision")
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"categories": map[string]any{
-			"edges":    []any{map[string]any{"node": node}},
+			"edges": []any{
+				map[string]any{"node": node},
+				map[string]any{"node": nullRevision},
+				map[string]any{"node": omittedRevision},
+			},
 			"pageInfo": map[string]any{"hasNextPage": false},
 		}}})
 	}))
 	defer srv.Close()
 
-	response, err := listwatch.NewCategoryTaxonomyListWatcher(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))).List(context.Background())
+	response, err := listwatch.NewCategoryTaxonomyListWatcher(graphqlclient.New(srv.URL+"/admin/graphql", graphqlclient.NewStaticToken("test-token"))).List(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(response.Items) != 3 {
+		t.Fatalf("len(Items) = %d, want 3", len(response.Items))
+	}
+	for i, want := range []string{revision, "", ""} {
+		if response.Items[i].Revision != want {
+			t.Errorf("item %d authored revision = %q, want %q", i, response.Items[i].Revision, want)
+		}
+		if response.Items[i].Status.LastAppliedRevision != "stale-status-revision" {
+			t.Errorf("item %d status revision = %q", i, response.Items[i].Status.LastAppliedRevision)
+		}
 	}
 	category := response.Items[0]
 	if category.DeletionTimestamp == nil || category.DeletionTimestamp.Format(time.RFC3339) != deletionTimestamp {
@@ -270,6 +299,9 @@ func stubWatchCategoriesServer(t *testing.T, messages []map[string]any) *httptes
 		if err := conn.ReadJSON(&subMsg); err != nil {
 			return
 		}
+		if !strings.Contains(subMsg["payload"].(map[string]any)["query"].(string), "generation revision") {
+			t.Error("category watch must select metadata.revision")
+		}
 		id := subMsg["id"]
 		for _, m := range messages {
 			out := map[string]any{"id": id}
@@ -279,6 +311,44 @@ func stubWatchCategoriesServer(t *testing.T, messages []map[string]any) *httptes
 			}
 		}
 	}))
+}
+
+func TestWatch_DecodesCategoryAuthoredRevisionAndLegacyMetadata(t *testing.T) {
+	revision := "main@sha1:" + strings.Repeat("a", 40)
+	var messages []map[string]any
+	for i, value := range []any{revision, nil, nil} {
+		node := categoryNodeJSON("uid-1", "electronics", "acme", "7", 1, "")
+		if i < 2 {
+			node["metadata"].(map[string]any)["revision"] = value
+		}
+		node["status"] = map[string]any{"lastAppliedRevision": "stale-status-revision"}
+		messages = append(messages, map[string]any{"type": "next", "payload": map[string]any{"data": map[string]any{
+			"watchCategories": map[string]any{
+				"type": "MODIFIED", "namespace": "acme", "name": "electronics", "resourceVersion": "7", "category": node,
+			},
+		}}})
+	}
+	srv := stubWatchCategoriesServer(t, messages)
+	defer srv.Close()
+	lw := listwatch.NewCategoryTaxonomyListWatcher(graphqlclient.New(srv.URL+"/admin/graphql", graphqlclient.NewStaticToken("test-token")))
+	watcher, err := lw.Watch(t.Context(), "cursor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer watcher.Stop()
+	for i, want := range []string{revision, "", ""} {
+		select {
+		case event, ok := <-watcher.Events():
+			if !ok {
+				t.Fatalf("watch closed before event %d: %v", i, watcher.Err())
+			}
+			if event.Object.Revision != want || event.Object.Status.LastAppliedRevision != "stale-status-revision" {
+				t.Errorf("event %d authored/status revisions = %q/%q", i, event.Object.Revision, event.Object.Status.LastAppliedRevision)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for event %d", i)
+		}
+	}
 }
 
 func TestWatch_MapsAddedModifiedDeletedEvents(t *testing.T) {

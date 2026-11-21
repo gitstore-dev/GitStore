@@ -1,5 +1,16 @@
 # Service-Account Authentication for GitStore Controllers
-**Status**: 🟡️ Proposed (not yet implemented)
+**Status**: Historical research; superseded operationally by [controller authentication](../runbooks/controller-auth.md) and the [authorization configuration](../configuration.md#authorization-and-user-directory).
+
+> **064 implementation update (2026-10-11):** Current ServiceAccounts are
+> cluster-scoped, named globally and bound to immutable UIDs. Subjects use
+> `system:serviceaccount:<name>`; namespace arguments/configuration and legacy
+> namespaced tokens are rejected, not translated. The current principal carries
+> trusted subject/groups, never roles. Token issuance requires both the canonical
+> `serviceAccount.token.issue` decision and valid enrolled-key proof, audience,
+> UID and atomic replay checks. Controllers use bounded, coalesced reacquisition
+> on definitive authentication rejection, not blind retries of mutations.
+> The namespaced examples and proposed interfaces below document the original
+> research only; they are not supported configuration or an upgrade path.
 
 > **Configuration update (spec 063, 2026-10-03):** The controller
 > configuration now uses nested typed settings with the same `GITSTORE_` /
@@ -342,7 +353,7 @@ type ServiceAccount implements Actor {
   kind: String!
   metadata: ObjectMeta!
   keyIDs: [String!]!
-  status: ActorStatus!
+  lifecycle: ActorLifecycle!
 }
 
 type TokenRequest {
@@ -548,7 +559,7 @@ role_bindings:
 ```
 
 **Why `repository.create.any` rather than `repository.create.own`.**
-`Resolver.authorizeRepositoryTenant` (`gitstore-api/internal/graph/resolver/repository_authorization.go`)
+`Resolver.authorizeRepositoryTenant` (`gitstore-api/internal/admin/graph/resolver/repository_authorization.go`)
 picks the `.own`/`.any` suffix by comparing the target namespace's `CreationActor` to
 `principal.Subject`, and falls back to `.any` whenever they differ. A controller's subject
 (`serviceaccount:controllers:...`) never equals a human-created namespace's `CreationActor`, so
@@ -612,7 +623,7 @@ At every phase, `static-admin` login and the existing `ChainedAuthN` short-circu
 - **Metrics:** extend the existing `gitstore_git_http_auth_requests_total{outcome,service}` pattern (already shipped for git-http, `020-pluggable_auth_architecture.md` Phase 5) with a GraphQL-side equivalent, `gitstore_api_authn_requests_total{provider,outcome}`, so `serviceaccount-jwt` outcomes are distinguishable from `static-admin`/`anonymous` in the same dashboard.
 - **Structured logs:** every `Authorize` call already emits `provider, subject, action, resource_kind, resource_name, outcome, reason, request_id, latency_ms` via the `DecisionLogger` (`020-pluggable_auth_architecture.md` §6 Decision 2) — `subject` for a service account naturally renders as `serviceaccount:<namespace>:<name>`, giving the audit trail the human/anonymous/service-account/inter-service distinction the objective asks for, for free, with zero new logging code.
 - **Controller-side readiness:** the controller-manager's existing `/health` handler (`gitstore-controller-manager/internal/health`) should report not-ready while no valid `CredentialSource.Current()` can be obtained — this turns "credential acquisition failed at startup" into a scrapeable/alertable signal instead of a silent retry loop.
-- **Runbook addition (new `docs/runbooks/controller-auth.md`, alongside the existing `controller-lag.md`):** steps for (a) rotating the API issuer key with zero downtime (§7e), (b) rotating/re-enrolling a controller public key without copying bearer tokens, (c) diagnosing "controller stuck in backoff" by distinguishing assertion exchange from watch-layer failure, and (d) recovering from accidental ServiceAccount deletion by explicitly re-enrolling the identity and invalidating the deleted UID.
+- **Runbook addition (new `docs/runbooks/controller-auth.md`, alongside the existing `controller-recovery.md`):** steps for (a) rotating the API issuer key with zero downtime (§7e), (b) rotating/re-enrolling a controller public key without copying bearer tokens, (c) diagnosing "controller stuck in backoff" by distinguishing assertion exchange from watch-layer failure, and (d) recovering from accidental ServiceAccount deletion by explicitly re-enrolling the identity and invalidating the deleted UID.
 
 ---
 

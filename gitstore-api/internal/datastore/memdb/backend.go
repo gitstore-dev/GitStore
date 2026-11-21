@@ -150,19 +150,20 @@ func decodeCursor(cursor string) (*datastore.PageCursor, error) {
 type memdbDatastore struct {
 	db *gomemdb.MemDB
 
-	namespaceMutationMu     sync.Mutex
-	fileMutationMu          sync.Mutex
-	categoryMutationMu      sync.Mutex
-	namespaceWatchMu        sync.RWMutex
-	namespaceWatchEpoch     string
-	namespaceWatchSequence  uint64
-	namespaceWatchEvents    []datastore.NamespaceWatchEvent
-	namespaceWatchBookmark  time.Time
-	namespaceWatchLease     datastore.NamespaceWatchLease
-	namespaceWatchProgress  map[string]datastore.NamespaceCDCProgress
-	namespaceWatchRetention time.Duration
-	sessionRevocationMu     sync.RWMutex
-	sessionRevocations      map[string]time.Time
+	namespaceMutationMu      sync.Mutex
+	fileMutationMu           sync.Mutex
+	categoryMutationMu       sync.Mutex
+	serviceAccountMutationMu sync.Mutex
+	namespaceWatchMu         sync.RWMutex
+	namespaceWatchEpoch      string
+	namespaceWatchSequence   uint64
+	namespaceWatchEvents     []datastore.NamespaceWatchEvent
+	namespaceWatchBookmark   time.Time
+	namespaceWatchLease      datastore.NamespaceWatchLease
+	namespaceWatchProgress   map[string]datastore.NamespaceCDCProgress
+	namespaceWatchRetention  time.Duration
+	sessionRevocationMu      sync.RWMutex
+	sessionRevocations       map[string]time.Time
 	// categoryProducts is a projection, not an alternate product store. Keys
 	// are namespace/category UID and values are product UIDs. Keeping it
 	// alongside memdb makes the development backend exercise the same bounded
@@ -236,6 +237,10 @@ func (m *memdbDatastore) ReplaceCategoryProductMembership(_ context.Context, pro
 }
 
 func (m *memdbDatastore) ListCategoryProducts(_ context.Context, namespace, categoryUID string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+	page, err := page.BoundedProductPage()
+	if err != nil {
+		return nil, err
+	}
 	if page.First > datastore.DefaultPageSize {
 		page.First = datastore.DefaultPageSize
 	}
@@ -308,6 +313,10 @@ func (m *memdbDatastore) CreateFile(_ context.Context, f *datastore.File) error 
 	defer m.fileMutationMu.Unlock()
 	f = cloneFile(f)
 	txn := m.db.Txn(true)
+	if err := catalogParentsActive(txn, f.Namespace, f.RepositoryID); err != nil {
+		txn.Abort()
+		return err
+	}
 	if raw, _ := txn.First("file", "id", f.UID); raw != nil {
 		txn.Abort()
 		return fmt.Errorf("%w: file uid %s", datastore.ErrAlreadyExists, f.UID)
@@ -376,6 +385,10 @@ func (m *memdbDatastore) UpdateFile(_ context.Context, f *datastore.File, expect
 	defer m.fileMutationMu.Unlock()
 	f = cloneFile(f)
 	txn := m.db.Txn(true)
+	if err := catalogParentsActive(txn, f.Namespace, f.RepositoryID); err != nil {
+		txn.Abort()
+		return err
+	}
 	raw, _ := txn.First("file", "id", f.UID)
 	if raw == nil {
 		txn.Abort()
@@ -495,6 +508,10 @@ func (m *memdbDatastore) CreateProduct(_ context.Context, p *datastore.Product) 
 	}
 	stored := cloneProduct(p)
 	txn := m.db.Txn(true)
+	if err := catalogParentsActive(txn, p.Namespace, p.RepositoryID); err != nil {
+		txn.Abort()
+		return err
+	}
 	if raw, _ := txn.First("product", "id", p.UID); raw != nil {
 		txn.Abort()
 		return fmt.Errorf("%w: product uid %s", datastore.ErrAlreadyExists, p.UID)
@@ -537,11 +554,14 @@ func (m *memdbDatastore) GetProductByName(_ context.Context, namespace, name str
 }
 
 func (m *memdbDatastore) ListProducts(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Product], error) {
+	page, err := page.BoundedProductPage()
+	if err != nil {
+		return nil, err
+	}
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
 	var it gomemdb.ResultIterator
-	var err error
 	if namespace != "" {
 		it, err = txn.Get("product", "namespace", namespace)
 	} else {
@@ -561,15 +581,23 @@ func (m *memdbDatastore) ListProducts(_ context.Context, namespace string, page 
 	}), nil
 }
 
-func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product) error {
+func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product, expectedResourceVersion string) error {
 	if p == nil {
 		return fmt.Errorf("%w: product is nil", datastore.ErrInvalidArgument)
 	}
 	txn := m.db.Txn(true)
+	if err := catalogParentsActive(txn, p.Namespace, p.RepositoryID); err != nil {
+		txn.Abort()
+		return err
+	}
 	raw, _ := txn.First("product", "id", p.UID)
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: product uid %s", datastore.ErrNotFound, p.UID)
+	}
+	if err := datastore.ValidateCatalogUpdateVersion(raw.(*datastore.Product).ResourceVersion, expectedResourceVersion, p.ResourceVersion); err != nil {
+		txn.Abort()
+		return err
 	}
 	if raw, _ := txn.First("product", "name_namespace", p.Namespace, p.Name); raw != nil && raw.(*datastore.Product).UID != p.UID {
 		txn.Abort()
@@ -706,6 +734,10 @@ func (m *memdbDatastore) CreateProductVariant(_ context.Context, v *datastore.Pr
 	}
 	stored := cloneProductVariant(v)
 	txn := m.db.Txn(true)
+	if err := catalogParentsActive(txn, v.Namespace, v.RepositoryID); err != nil {
+		txn.Abort()
+		return err
+	}
 	if raw, _ := txn.First("product_variant", "id", v.UID); raw != nil {
 		txn.Abort()
 		return fmt.Errorf("%w: product_variant uid %s", datastore.ErrAlreadyExists, v.UID)
@@ -800,15 +832,23 @@ func (m *memdbDatastore) ListProductVariantsByProductRef(_ context.Context, name
 	return result, nil
 }
 
-func (m *memdbDatastore) UpdateProductVariant(_ context.Context, v *datastore.ProductVariant) error {
+func (m *memdbDatastore) UpdateProductVariant(_ context.Context, v *datastore.ProductVariant, expectedResourceVersion string) error {
 	if v == nil {
 		return fmt.Errorf("%w: product variant is nil", datastore.ErrInvalidArgument)
 	}
 	txn := m.db.Txn(true)
+	if err := catalogParentsActive(txn, v.Namespace, v.RepositoryID); err != nil {
+		txn.Abort()
+		return err
+	}
 	raw, _ := txn.First("product_variant", "id", v.UID)
 	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: product_variant uid %s", datastore.ErrNotFound, v.UID)
+	}
+	if err := datastore.ValidateCatalogUpdateVersion(raw.(*datastore.ProductVariant).ResourceVersion, expectedResourceVersion, v.ResourceVersion); err != nil {
+		txn.Abort()
+		return err
 	}
 	if raw, _ := txn.First("product_variant", "name_namespace", v.Namespace, v.Name); raw != nil && raw.(*datastore.ProductVariant).UID != v.UID {
 		txn.Abort()
@@ -873,6 +913,10 @@ func (m *memdbDatastore) CreateCategoryTaxonomy(_ context.Context, c *datastore.
 	m.categoryMutationMu.Lock()
 	defer m.categoryMutationMu.Unlock()
 	txn := m.db.Txn(true)
+	if err := catalogParentsActive(txn, c.Namespace, c.RepositoryID); err != nil {
+		txn.Abort()
+		return err
+	}
 	if raw, _ := txn.First("category_taxonomy", "id", c.UID); raw != nil {
 		txn.Abort()
 		return fmt.Errorf("%w: category_taxonomy uid %s", datastore.ErrAlreadyExists, c.UID)
@@ -940,17 +984,25 @@ func (m *memdbDatastore) ListCategoryTaxonomies(_ context.Context, namespace str
 	}), nil
 }
 
-func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.CategoryTaxonomy) error {
+func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.CategoryTaxonomy, expectedResourceVersion string) error {
 	if c == nil {
 		return fmt.Errorf("%w: category taxonomy is nil", datastore.ErrInvalidArgument)
 	}
 	m.categoryMutationMu.Lock()
 	defer m.categoryMutationMu.Unlock()
 	txn := m.db.Txn(true)
+	if err := catalogParentsActive(txn, c.Namespace, c.RepositoryID); err != nil {
+		txn.Abort()
+		return err
+	}
 	previous, _ := txn.First("category_taxonomy", "id", c.UID)
 	if previous == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: category_taxonomy uid %s", datastore.ErrNotFound, c.UID)
+	}
+	if err := datastore.ValidateCatalogUpdateVersion(previous.(*datastore.CategoryTaxonomy).ResourceVersion, expectedResourceVersion, c.ResourceVersion); err != nil {
+		txn.Abort()
+		return err
 	}
 	if raw, _ := txn.First("category_taxonomy", "name_namespace", c.Namespace, c.Name); raw != nil && raw.(*datastore.CategoryTaxonomy).UID != c.UID {
 		txn.Abort()
@@ -1039,6 +1091,10 @@ func (m *memdbDatastore) CreateCollection(_ context.Context, c *datastore.Collec
 	}
 	stored := cloneCollection(c)
 	txn := m.db.Txn(true)
+	if err := catalogParentsActive(txn, c.Namespace, c.RepositoryID); err != nil {
+		txn.Abort()
+		return err
+	}
 	if raw, _ := txn.First("collection", "id", c.UID); raw != nil {
 		txn.Abort()
 		return fmt.Errorf("%w: collection uid %s", datastore.ErrAlreadyExists, c.UID)
@@ -1050,6 +1106,10 @@ func (m *memdbDatastore) CreateCollection(_ context.Context, c *datastore.Collec
 	if err := txn.Insert("collection", stored); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: insert collection: %w", err)
+	}
+	if err := syncOwnerReferenceProjections(txn, stored.Namespace, stored.RepositoryID, "Collection", stored.UID, stored.Name, stored.ResourceVersion, stored.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
 	}
 	txn.Commit()
 	return nil
@@ -1091,14 +1151,23 @@ func (m *memdbDatastore) ListCollections(_ context.Context, namespace string, pa
 	}), nil
 }
 
-func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collection) error {
+func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collection, expectedResourceVersion string) error {
 	if c == nil {
 		return fmt.Errorf("%w: collection is nil", datastore.ErrInvalidArgument)
 	}
 	txn := m.db.Txn(true)
-	if raw, _ := txn.First("collection", "id", c.UID); raw == nil {
+	if err := catalogParentsActive(txn, c.Namespace, c.RepositoryID); err != nil {
+		txn.Abort()
+		return err
+	}
+	raw, _ := txn.First("collection", "id", c.UID)
+	if raw == nil {
 		txn.Abort()
 		return fmt.Errorf("%w: collection uid %s", datastore.ErrNotFound, c.UID)
+	}
+	if err := datastore.ValidateCatalogUpdateVersion(raw.(*datastore.Collection).ResourceVersion, expectedResourceVersion, c.ResourceVersion); err != nil {
+		txn.Abort()
+		return err
 	}
 	if raw, _ := txn.First("collection", "name_namespace", c.Namespace, c.Name); raw != nil && raw.(*datastore.Collection).UID != c.UID {
 		txn.Abort()
@@ -1107,6 +1176,10 @@ func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collec
 	if err := txn.Insert("collection", cloneCollection(c)); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: update collection: %w", err)
+	}
+	if err := syncOwnerReferenceProjections(txn, c.Namespace, c.RepositoryID, "Collection", c.UID, c.Name, c.ResourceVersion, c.OwnerReferences); err != nil {
+		txn.Abort()
+		return err
 	}
 	txn.Commit()
 	return nil
@@ -1130,6 +1203,10 @@ func (m *memdbDatastore) deleteCollection(uid, expectedResourceVersion string, c
 	if checkResourceVersion && raw.(*datastore.Collection).ResourceVersion != expectedResourceVersion {
 		txn.Abort()
 		return datastore.ErrConflict
+	}
+	if err := deleteOwnerReferenceProjections(txn, "Collection", uid); err != nil {
+		txn.Abort()
+		return err
 	}
 	if err := txn.Delete("collection", raw); err != nil {
 		txn.Abort()
@@ -1252,6 +1329,27 @@ func (m *memdbDatastore) UpdateNamespace(_ context.Context, ns *datastore.Namesp
 		return fmt.Errorf("%w: namespace uid %s", datastore.ErrNotFound, ns.UID)
 	}
 	current := normalizedNamespaceCopy(raw.(*datastore.Namespace))
+	if current.DeletionTimestamp != nil && ns.DeletionTimestamp == nil {
+		txn.Abort()
+		return datastore.ErrConflict
+	}
+	if current.Name != ns.Name {
+		txn.Abort()
+		return datastore.ErrConflict
+	}
+	if (ns.DeletionTimestamp != nil || datastore.HasDeletionIntent(ns.Status)) &&
+		current.DeletionTimestamp == nil && !datastore.HasDeletionIntent(current.Status) {
+		if err := namespaceDeletionCheck(txn, current); err != nil {
+			txn.Abort()
+			return err
+		}
+	}
+	status, err := datastore.MergeNamespaceInfrastructureStatus(current, ns)
+	if err != nil {
+		txn.Abort()
+		return err
+	}
+	ns.Status = status
 	if current.ResourceVersion != expectedResourceVersion {
 		txn.Abort()
 		return datastore.ErrConflict
@@ -1270,7 +1368,7 @@ func (m *memdbDatastore) UpdateNamespace(_ context.Context, ns *datastore.Namesp
 }
 
 func (m *memdbDatastore) MarkNamespaceDeletion(_ context.Context, ns *datastore.Namespace, expectedResourceVersion string) error {
-	if ns == nil {
+	if ns == nil || ns.DeletionTimestamp == nil {
 		return fmt.Errorf("%w: namespace is nil", datastore.ErrInvalidArgument)
 	}
 	datastore.NormalizeNamespaceContract(ns)
@@ -1283,7 +1381,7 @@ func (m *memdbDatastore) MarkNamespaceDeletion(_ context.Context, ns *datastore.
 		return fmt.Errorf("%w: namespace uid %s", datastore.ErrNotFound, ns.UID)
 	}
 	current := normalizedNamespaceCopy(raw.(*datastore.Namespace))
-	if current.ResourceVersion != expectedResourceVersion {
+	if current.ResourceVersion != expectedResourceVersion || ns.Name != current.Name {
 		txn.Abort()
 		return datastore.ErrConflict
 	}
@@ -1291,15 +1389,16 @@ func (m *memdbDatastore) MarkNamespaceDeletion(_ context.Context, ns *datastore.
 		txn.Abort()
 		return datastore.ErrNamespaceNotActive
 	}
-	repository, err := txn.First("repository", "namespace", current.Name)
+	if err := namespaceDeletionCheck(txn, current); err != nil {
+		txn.Abort()
+		return err
+	}
+	status, err := datastore.PreserveDeletionStatus(current.Status, ns.Status)
 	if err != nil {
 		txn.Abort()
-		return fmt.Errorf("memdb: mark namespace deletion repository check: %w", err)
+		return err
 	}
-	if repository != nil {
-		txn.Abort()
-		return datastore.ErrNamespaceNotEmpty
-	}
+	ns.Status = status
 	if err := txn.Insert("namespaces", normalizedNamespaceCopy(ns)); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: mark namespace deletion: %w", err)
@@ -1341,6 +1440,17 @@ func (m *memdbDatastore) DeleteNamespaceWithResourceVersion(_ context.Context, u
 	if current.ResourceVersion != expectedResourceVersion {
 		txn.Abort()
 		return datastore.ErrConflict
+	}
+	if current.DeletionTimestamp == nil || !datastore.DeletionFinalizersClear(current.Finalizers, datastore.NamespaceForegroundDeletionFinalizer) {
+		txn.Abort()
+		return datastore.ErrConflict
+	}
+	if repository, err := txn.First("repository", "namespace", current.Name); err != nil || repository != nil {
+		txn.Abort()
+		if err != nil {
+			return err
+		}
+		return datastore.ErrNamespaceNotEmpty
 	}
 	if err := txn.Delete("namespaces", raw); err != nil {
 		txn.Abort()
@@ -1398,17 +1508,24 @@ func (m *memdbDatastore) createRepository(r *datastore.Repository, requireActive
 	}
 	stored := normalizedRepositoryCopy(r)
 	txn := m.db.Txn(true)
-	if requireActiveNamespace {
+	if deleted, err := txn.First("deleted_repository", "id", r.UID); err != nil || deleted != nil {
+		txn.Abort()
+		if err != nil {
+			return err
+		}
+		return datastore.ErrConflict
+	}
+	{
 		rawNamespace, err := txn.First("namespaces", "name", r.Namespace)
 		if err != nil {
 			txn.Abort()
 			return fmt.Errorf("memdb: repository namespace lookup: %w", err)
 		}
-		if rawNamespace == nil {
+		if rawNamespace == nil && requireActiveNamespace {
 			txn.Abort()
 			return fmt.Errorf("%w: namespace %s", datastore.ErrNotFound, r.Namespace)
 		}
-		if rawNamespace.(*datastore.Namespace).DeletionTimestamp != nil {
+		if rawNamespace != nil && (rawNamespace.(*datastore.Namespace).DeletionTimestamp != nil || datastore.HasDeletionIntent(rawNamespace.(*datastore.Namespace).Status)) {
 			txn.Abort()
 			return datastore.ErrNamespaceNotActive
 		}
@@ -1443,6 +1560,21 @@ func (m *memdbDatastore) GetRepository(_ context.Context, uid string) (*datastor
 func (m *memdbDatastore) ListRepositoriesByNamespace(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Repository], error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
+	if page.After == "" && page.Before == "" && page.Last == 0 {
+		it, err := txn.Get("repository", "namespace_created_prefix", namespace)
+		if err != nil {
+			return nil, err
+		}
+		result := &datastore.PageResult[datastore.Repository]{}
+		for raw := it.Next(); raw != nil; raw = it.Next() {
+			if len(result.Items) == page.Limit() {
+				result.HasNext = true
+				break
+			}
+			result.Items = append(result.Items, normalizedRepositoryCopy(raw.(*datastore.Repository)))
+		}
+		return result, nil
+	}
 	it, err := txn.Get("repository", "namespace", namespace)
 	if err != nil {
 		return nil, fmt.Errorf("memdb: list repositories by namespace: %w", err)
@@ -1484,6 +1616,27 @@ func (m *memdbDatastore) UpdateRepository(_ context.Context, r *datastore.Reposi
 		return fmt.Errorf("%w: repository uid %s", datastore.ErrNotFound, r.UID)
 	}
 	current := normalizedRepositoryCopy(raw.(*datastore.Repository))
+	if current.DeletionTimestamp != nil && r.DeletionTimestamp == nil {
+		txn.Abort()
+		return datastore.ErrConflict
+	}
+	if (r.DeletionTimestamp != nil || datastore.HasDeletionIntent(r.Status)) &&
+		current.DeletionTimestamp == nil && !datastore.HasDeletionIntent(current.Status) {
+		blocked, err := hasCatalogResources(txn, current.UID)
+		if err != nil || blocked {
+			txn.Abort()
+			if err != nil {
+				return err
+			}
+			return datastore.ErrConflict
+		}
+	}
+	status, err := datastore.MergeInfrastructureStatus(current.Status, r.Status)
+	if err != nil {
+		txn.Abort()
+		return err
+	}
+	r.Status = status
 	if current.ResourceVersion != expectedResourceVersion {
 		txn.Abort()
 		return datastore.ErrConflict
@@ -1541,11 +1694,15 @@ func (m *memdbDatastore) DeleteRepository(_ context.Context, uid string) error {
 
 // catalogTablesWithRepositoryID lists every table indexed on RepositoryID,
 // checked in order by HasCatalogResources with short-circuit on first match.
-var catalogTablesWithRepositoryID = []string{"product", "product_variant", "category_taxonomy", "collection"}
+var catalogTablesWithRepositoryID = []string{"product", "product_variant", "category_taxonomy", "collection", "file"}
 
 func (m *memdbDatastore) HasCatalogResources(_ context.Context, repositoryID string) (bool, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
+	return hasCatalogResources(txn, repositoryID)
+}
+
+func hasCatalogResources(txn *gomemdb.Txn, repositoryID string) (bool, error) {
 	for _, table := range catalogTablesWithRepositoryID {
 		raw, err := txn.First(table, "repository_id", repositoryID)
 		if err != nil {
@@ -1556,6 +1713,109 @@ func (m *memdbDatastore) HasCatalogResources(_ context.Context, repositoryID str
 		}
 	}
 	return false, nil
+}
+
+func namespaceDeletionCheck(txn *gomemdb.Txn, namespace *datastore.Namespace) error {
+	repositories, err := txn.Get("repository", "namespace", namespace.Name)
+	if err != nil {
+		return err
+	}
+	first := repositories.Next()
+	if first == nil {
+		return nil
+	}
+	repository := first.(*datastore.Repository)
+	if repositories.Next() != nil || !datastore.IsNamespaceSystemRepository(namespace, repository) {
+		return datastore.ErrNamespaceNotEmpty
+	}
+	blocked, err := hasCatalogResources(txn, repository.UID)
+	if err != nil {
+		return err
+	}
+	if blocked {
+		return datastore.ErrNamespaceNotEmpty
+	}
+	return nil
+}
+
+func (m *memdbDatastore) CompleteRepositoryDeletion(_ context.Context, uid, expectedResourceVersion string) error {
+	txn := m.db.Txn(true)
+	defer txn.Abort()
+	raw, err := txn.First("repository", "id", uid)
+	if err != nil {
+		return err
+	}
+	if raw == nil {
+		return datastore.ErrNotFound
+	}
+	repository := raw.(*datastore.Repository)
+	if repository.ResourceVersion != expectedResourceVersion || repository.DeletionTimestamp == nil ||
+		!datastore.DeletionFinalizersClear(repository.Finalizers, datastore.RepositoryForegroundDeletionFinalizer) {
+		return datastore.ErrConflict
+	}
+	blocked, err := hasCatalogResources(txn, uid)
+	if err != nil {
+		return err
+	}
+	if blocked {
+		return datastore.ErrConflict
+	}
+	mapping, err := txn.First("namespace_mapping", "repository_id", uid)
+	if err != nil {
+		return err
+	}
+	if mapping != nil {
+		if err := txn.Delete("namespace_mapping", mapping); err != nil {
+			return err
+		}
+	}
+	if err := txn.Delete("repository", raw); err != nil {
+		return err
+	}
+	if err := txn.Insert("deleted_repository", normalizedRepositoryCopy(repository)); err != nil {
+		return err
+	}
+	txn.Commit()
+	m.recordCommittedRepository(datastore.ResourceWatchDeleted, normalizedRepositoryCopy(repository), nil)
+	return nil
+}
+
+func catalogParentsActive(txn *gomemdb.Txn, namespace, repositoryID string) error {
+	raw, err := txn.First("namespaces", "name", namespace)
+	if err != nil {
+		return err
+	}
+	if raw != nil {
+		ns := raw.(*datastore.Namespace)
+		if ns.DeletionTimestamp != nil || datastore.HasDeletionIntent(ns.Status) {
+			return datastore.ErrNamespaceNotActive
+		}
+	}
+	if repositoryID == "" {
+		return nil
+	}
+	if _, err := uuid.Parse(repositoryID); err != nil {
+		// Legacy owner-reference fixtures carry opaque repository scopes.
+		return nil
+	}
+	if deleted, err := txn.First("deleted_repository", "id", repositoryID); err != nil || deleted != nil {
+		if err != nil {
+			return err
+		}
+		return datastore.ErrNotFound
+	}
+	raw, err = txn.First("repository", "id", repositoryID)
+	if err != nil {
+		return err
+	}
+	if raw == nil {
+		return datastore.ErrNotFound
+	}
+	repository := raw.(*datastore.Repository)
+	if repository.Namespace != namespace || repository.DeletionTimestamp != nil || datastore.HasDeletionIntent(repository.Status) {
+		return datastore.ErrConflict
+	}
+	return nil
 }
 
 // ── NamespaceMapping ──────────────────────────────────────────────────────────
@@ -1770,23 +2030,26 @@ func cloneTimePointer(value *time.Time) *time.Time {
 // ── ServiceAccount ───────────────────────────────────────────────────────────
 
 func (m *memdbDatastore) CreateServiceAccount(_ context.Context, sa *datastore.ServiceAccount) error {
-	if sa == nil {
-		return fmt.Errorf("%w: service account is nil", datastore.ErrInvalidArgument)
+	if sa == nil || sa.UID == "" || sa.Name == "" {
+		return fmt.Errorf("%w: service account uid and global name are required", datastore.ErrInvalidArgument)
 	}
+	m.serviceAccountMutationMu.Lock()
+	defer m.serviceAccountMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	if raw, _ := txn.First("service_account", "id", sa.UID); raw != nil {
 		txn.Abort()
 		return fmt.Errorf("%w: service account uid %s", datastore.ErrAlreadyExists, sa.UID)
 	}
-	if raw, _ := txn.First("service_account", "name_namespace", sa.Namespace, sa.Name); raw != nil {
+	if raw, _ := txn.First("service_account", "name", sa.Name); raw != nil {
 		txn.Abort()
-		return fmt.Errorf("%w: service account %s/%s", datastore.ErrAlreadyExists, sa.Namespace, sa.Name)
+		return fmt.Errorf("%w: service account %s", datastore.ErrAlreadyExists, sa.Name)
 	}
 	if err := txn.Insert("service_account", cloneServiceAccount(sa)); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: insert service account: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedServiceAccount(datastore.ResourceWatchAdded, sa)
 	return nil
 }
 
@@ -1800,10 +2063,10 @@ func (m *memdbDatastore) GetServiceAccountByUID(_ context.Context, uid string) (
 	return cloneServiceAccount(raw.(*datastore.ServiceAccount)), nil
 }
 
-func (m *memdbDatastore) GetServiceAccountBySubject(_ context.Context, namespace, name string) (*datastore.ServiceAccount, error) {
+func (m *memdbDatastore) GetServiceAccountBySubject(_ context.Context, name string) (*datastore.ServiceAccount, error) {
 	txn := m.db.Txn(false)
 	defer txn.Abort()
-	raw, err := txn.First("service_account", "name_namespace", namespace, name)
+	raw, err := txn.First("service_account", "name", name)
 	if err != nil || raw == nil {
 		return nil, notFoundOrErr(err)
 	}
@@ -1825,6 +2088,8 @@ func (m *memdbDatastore) ListServiceAccounts(_ context.Context, page datastore.P
 }
 
 func (m *memdbDatastore) UpdateServiceAccountKeys(_ context.Context, uid string, add []datastore.ServiceAccountPublicKey, removeKeyIDs []string, expectedResourceVersion string) (*datastore.ServiceAccount, error) {
+	m.serviceAccountMutationMu.Lock()
+	defer m.serviceAccountMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("service_account", "id", uid)
 	if raw == nil {
@@ -1841,10 +2106,13 @@ func (m *memdbDatastore) UpdateServiceAccountKeys(_ context.Context, uid string,
 		return nil, fmt.Errorf("memdb: update service account keys: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedServiceAccount(datastore.ResourceWatchModified, updated)
 	return cloneServiceAccount(updated), nil
 }
 
 func (m *memdbDatastore) SetServiceAccountDisabled(_ context.Context, uid string, disabled bool) error {
+	m.serviceAccountMutationMu.Lock()
+	defer m.serviceAccountMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("service_account", "id", uid)
 	if raw == nil {
@@ -1860,10 +2128,13 @@ func (m *memdbDatastore) SetServiceAccountDisabled(_ context.Context, uid string
 		return fmt.Errorf("memdb: set service account disabled: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedServiceAccount(datastore.ResourceWatchModified, updated)
 	return nil
 }
 
 func (m *memdbDatastore) DeleteServiceAccount(_ context.Context, uid string) error {
+	m.serviceAccountMutationMu.Lock()
+	defer m.serviceAccountMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("service_account", "id", uid)
 	if raw == nil {
@@ -1875,6 +2146,7 @@ func (m *memdbDatastore) DeleteServiceAccount(_ context.Context, uid string) err
 		return fmt.Errorf("memdb: delete service account: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedServiceAccount(datastore.ResourceWatchDeleted, raw.(*datastore.ServiceAccount))
 	return nil
 }
 

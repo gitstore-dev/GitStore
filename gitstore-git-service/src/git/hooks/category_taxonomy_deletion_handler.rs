@@ -12,12 +12,7 @@ use super::{
 };
 use crate::git::tree_diff::get_tree_id;
 
-pub mod catalog_proto {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/gen/gitstore/catalog/v1/gitstore.catalog.v1.rs"
-    ));
-}
+pub use super::validation_handler::catalog_proto;
 
 use catalog_proto::catalog_service_client::CatalogServiceClient;
 use catalog_proto::{ResourceValidationTree, ValidateResourceDeletionsRequest};
@@ -29,6 +24,7 @@ const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 /// an atomic deletion or reparenting against the proposed state rather than
 /// stale admitted relationships.
 pub struct ResourceDeletionHandler {
+    service_token: String,
     client: CatalogServiceClient<tonic::transport::Channel>,
     timeout: Duration,
     repository_id: String,
@@ -41,10 +37,16 @@ impl ResourceDeletionHandler {
         repository_id: String,
     ) -> Self {
         Self {
+            service_token: String::new(),
             client,
             timeout,
             repository_id,
         }
+    }
+
+    pub fn with_service_token(mut self, secret: &str) -> Self {
+        self.service_token = secret.to_string();
+        self
     }
 
     pub async fn connect(
@@ -73,10 +75,17 @@ impl ResourceDeletionHandler {
         let tree_count = trees.len();
         let start = std::time::Instant::now();
         let mut client = self.client.clone();
-        let mut request = tonic::Request::new(ValidateResourceDeletionsRequest {
-            repository_id,
-            trees,
-        });
+        let mut request = crate::auth::interceptor::callback_request(
+            ValidateResourceDeletionsRequest {
+                repository_id,
+                authorization: Some(hook_ctx.callback_authorization(
+                    trees.iter().filter_map(|tree| tree.r#ref.clone()).collect(),
+                )),
+                trees,
+            },
+            &self.service_token,
+            "/gitstore.catalog.v1.CatalogService/ValidateResourceDeletions",
+        )?;
         request.set_timeout(self.timeout);
         let result =
             tokio::time::timeout(self.timeout, client.validate_resource_deletions(request)).await;
@@ -203,15 +212,19 @@ fn collect_resource_deletion_trees(
         let proposed_blobs = if let Some(new_tree) = proposed_tree {
             let mut blobs = Vec::new();
             collect_blobs_from_tree(repo, new_tree, "", &mut blobs);
+            blobs.retain(|blob| !super::is_rbac_resource_path(&blob.path));
             blobs
         } else {
             Vec::new()
         };
         let mut old_blobs = Vec::new();
         collect_blobs_from_tree(repo, old_tree, "", &mut old_blobs);
+        old_blobs.retain(|blob| !super::is_rbac_resource_path(&blob.path));
         trees.push(ResourceValidationTree {
             old_blobs: old_blobs.into_iter().map(to_proto_blob).collect(),
             proposed_blobs: proposed_blobs.into_iter().map(to_proto_blob).collect(),
+            r#ref: Some(update.into()),
+            rbac_tree: None,
         });
     }
     Ok(trees)
@@ -223,15 +236,16 @@ fn removes_resource(
     proposed_tree: Option<gix::ObjectId>,
 ) -> bool {
     let Some(proposed_tree) = proposed_tree else {
-        return tree_contains_resource(repo, old_tree);
+        return tree_contains_resource(repo, old_tree, "");
     };
-    resource_removed_from_trees(repo, old_tree, proposed_tree)
+    resource_removed_from_trees(repo, old_tree, proposed_tree, "")
 }
 
 fn resource_removed_from_trees(
     repo: &gix::Repository,
     old_tree: gix::ObjectId,
     proposed_tree: gix::ObjectId,
+    prefix: &str,
 ) -> bool {
     let old_entries = crate::git::tree_diff::decode_tree(repo, old_tree);
     let proposed_entries = crate::git::tree_diff::decode_tree(repo, proposed_tree);
@@ -240,6 +254,10 @@ fn resource_removed_from_trees(
         .map(|entry| (entry.filename.to_string(), entry))
         .collect();
     for old in old_entries {
+        let path = crate::git::tree_diff::make_path(prefix, &old.filename.to_string());
+        if super::is_rbac_resource_path(&path) {
+            continue;
+        }
         let proposed = proposed_by_name.get(&old.filename.to_string());
         match (
             old.mode.kind(),
@@ -249,15 +267,19 @@ fn resource_removed_from_trees(
                 gix::object::tree::EntryKind::Tree,
                 Some((new_id, gix::object::tree::EntryKind::Tree)),
             ) if old.oid != new_id => {
-                if resource_removed_from_trees(repo, old.oid, new_id) {
+                if resource_removed_from_trees(repo, old.oid, new_id, &path) {
                     return true;
                 }
             }
             (gix::object::tree::EntryKind::Tree, Some((_, gix::object::tree::EntryKind::Tree))) => {
             }
-            (gix::object::tree::EntryKind::Tree, _) if tree_contains_resource(repo, old.oid) => {
+            (gix::object::tree::EntryKind::Tree, _)
+                if tree_contains_resource(repo, old.oid, &path) =>
+            {
                 return true
             }
+            (kind, Some((new_id, new_kind)))
+                if is_blob(kind) && is_blob(new_kind) && old.oid == new_id => {}
             (kind, Some((new_id, new_kind)))
                 if is_blob(kind) && is_blob(new_kind) && old.oid != new_id =>
             {
@@ -273,13 +295,21 @@ fn resource_removed_from_trees(
     false
 }
 
-fn tree_contains_resource(repo: &gix::Repository, tree: gix::ObjectId) -> bool {
+fn tree_contains_resource(repo: &gix::Repository, tree: gix::ObjectId, prefix: &str) -> bool {
     crate::git::tree_diff::decode_tree(repo, tree)
         .into_iter()
-        .any(|entry| match entry.mode.kind() {
-            gix::object::tree::EntryKind::Tree => tree_contains_resource(repo, entry.oid),
-            kind if is_blob(kind) => is_resource_blob(repo, entry.oid),
-            _ => false,
+        .any(|entry| {
+            let path = crate::git::tree_diff::make_path(prefix, &entry.filename.to_string());
+            if super::is_rbac_resource_path(&path) {
+                return false;
+            }
+            match entry.mode.kind() {
+                gix::object::tree::EntryKind::Tree => {
+                    tree_contains_resource(repo, entry.oid, &path)
+                }
+                kind if is_blob(kind) => is_resource_blob(repo, entry.oid),
+                _ => false,
+            }
         })
 }
 
@@ -311,6 +341,53 @@ fn to_proto_blob(blob: ResourceBlob) -> catalog_proto::ResourceBlob {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn catalog_deletions_do_not_package_rbac_resources() {
+        use crate::git::hooks::tests::{commit_files, make_repo_with_files};
+        let dir = tempfile::tempdir().unwrap();
+        let role = b"apiVersion: rbac.authorization.gitstore.dev/v1beta1\nkind: Role\n";
+        let product = b"---\nkind: Product\nmetadata: {name: widget}\n---\n";
+        let (repo, old) = make_repo_with_files(
+            dir.path(),
+            &[
+                ("rbac/roles/reader.yaml", role),
+                ("products/widget.md", product),
+            ],
+        );
+        let product_deleted = commit_files(&repo, &[("rbac/roles/reader.yaml", role)], Some(old));
+        let trees = collect_resource_deletion_trees(
+            &repo,
+            &[crate::git::hooks::RefUpdate {
+                ref_name: "refs/heads/main".into(),
+                old_oid: old.to_string(),
+                new_oid: product_deleted.to_string(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(trees.len(), 1);
+        assert_eq!(trees[0].old_blobs.len(), 1);
+        assert_eq!(trees[0].old_blobs[0].path, "products/widget.md");
+        assert!(trees[0].proposed_blobs.is_empty());
+        let role_deleted = commit_files(
+            &repo,
+            &[("products/widget.md", product)],
+            Some(product_deleted),
+        );
+        let trees = collect_resource_deletion_trees(
+            &repo,
+            &[crate::git::hooks::RefUpdate {
+                ref_name: "refs/heads/main".into(),
+                old_oid: old.to_string(),
+                new_oid: role_deleted.to_string(),
+            }],
+        )
+        .unwrap();
+        assert!(
+            trees.is_empty(),
+            "RBAC deletion belongs only to whole-candidate admission"
+        );
+    }
+
     use std::path::{Path, PathBuf};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -333,6 +410,13 @@ mod tests {
 
     #[tonic::async_trait]
     impl CatalogService for MockCatalogService {
+        async fn validate_rbac_receive(
+            &self,
+            _req: Request<catalog_proto::ValidateRbacReceiveRequest>,
+        ) -> Result<Response<catalog_proto::ValidateRbacReceiveResponse>, Status> {
+            Err(Status::unimplemented("RBAC receives are unavailable"))
+        }
+
         async fn validate_resources(
             &self,
             _request: Request<ValidateResourcesRequest>,
@@ -461,6 +545,59 @@ mod tests {
             .to_string()
     }
 
+    #[test]
+    fn adding_a_file_does_not_remove_an_unchanged_resource_sibling() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = make_bare_repo(directory.path());
+        let old = make_commit(
+            &path,
+            "---\nkind: CategoryTaxonomy\nmetadata:\n  name: preserved\n---\n",
+        );
+        let repo = gix::open(&path).unwrap();
+        let previous = repo.head_commit().unwrap();
+        let blob = repo
+            .write_blob(b"---\nkind: CategoryTaxonomy\nmetadata:\n  name: added\n---\n")
+            .unwrap()
+            .detach();
+        let tree = repo
+            .edit_tree(previous.tree_id().unwrap())
+            .unwrap()
+            .upsert("added.md", gix::object::tree::EntryKind::Blob, blob)
+            .unwrap()
+            .write()
+            .unwrap()
+            .detach();
+        let signature = gix::actor::SignatureRef {
+            name: "Test".into(),
+            email: "test@example.com".into(),
+            time: "0 +0000",
+        };
+        let new = repo
+            .commit_as(
+                signature,
+                signature,
+                "HEAD",
+                "add resource",
+                tree,
+                [previous.id().detach()],
+            )
+            .unwrap()
+            .detach();
+        let trees = collect_resource_deletion_trees(
+            &repo,
+            &[RefUpdate {
+                ref_name: "refs/heads/main".to_owned(),
+                old_oid: old,
+                new_oid: new.to_string(),
+            }],
+        )
+        .unwrap();
+        assert!(
+            trees.is_empty(),
+            "unchanged resources cannot turn an addition into a deletion validation"
+        );
+    }
+
     #[tokio::test]
     async fn creates_and_non_deletion_updates_skip_validation() {
         let directory = tempfile::TempDir::new().unwrap();
@@ -475,7 +612,8 @@ mod tests {
             "repo-1".to_string(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .with_service_token("fixture-key");
 
         let create = handler
             .validate_receive(
@@ -526,7 +664,8 @@ mod tests {
             "repo-1".to_string(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .with_service_token("fixture-key");
 
         let decision = handler
             .validate_receive(
@@ -564,7 +703,8 @@ mod tests {
             "repo-1".to_string(),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .with_service_token("fixture-key");
 
         let decision = handler
             .validate_receive(

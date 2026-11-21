@@ -8,6 +8,11 @@
 > action model of [037](037-custom-commerce-workflows.md). All API versions below are
 > `v1alpha1` until the first feature spec graduates them.
 
+> **Proposed amendment (2026-11-01).** App composition and the three end-to-end
+> examples are in [ADR 0019](../ADRs/0019-app-installation-and-platform-capabilities.md).
+> Sections 11–13 below extend the proposed registration contracts; none of the
+> new declarations is evidence of a shipped endpoint or runtime target.
+
 ## 1. Registration resources
 
 | Kind                               | Group                    | Storage group                       | Author                      | Tier                                      |
@@ -75,7 +80,7 @@ spec:
   validationActions: [Deny]            # Deny | Warn | Audit
   matchResources:
     refs: [refs/heads/main]            # optional; defaults to the admission branch
-  mode: Sync                           # Sync (Lane A) | Async (Lane B)
+  mode: Sync                           # Git: pre-receive; Async: post-receive
 ```
 
 CEL environment variables:
@@ -89,7 +94,8 @@ CEL environment variables:
 No network, clock or random functions are available. Every expression has an estimated-cost
 ceiling that is checked at policy admission, and a runtime cost ceiling per evaluation. Both
 values are set in the feature spec from benchmarks. `Warn` produces a `remote: warning` line
-(Lane A) or a `warning` annotation (Lane B). `Audit` only records a result.
+(pre-receive) or a `warning` annotation (post-receive).
+`Audit` only records a result.
 
 ### 1.2 `AdmissionHookConfiguration` (cluster-scoped, T0/T1)
 
@@ -115,7 +121,7 @@ spec:
   matchConditions:
   - name: taxable
     expression: "object.spec.taxable == true"
-  mode: Sync                         # Sync (Lane A) | Async (Lane B)
+  mode: Sync                         # Git: pre-receive; Async: post-receive
   timeoutMs: 1500                    # ≤ admission.limits.max_hook_timeout_ms
   failurePolicy: Fail                # Fail | Ignore
   onLargePush: Defer                 # Defer | Reject
@@ -170,20 +176,25 @@ spec:
     allOf:
     - requiredFields: [spec.title, spec.media]
     - approval:
-        role: merchandiser
+        policyRef: { name: independent-merchandising-review }
         count: 1
     - externalAttestation:
         issuer: compliance-scanner
         predicateType: https://gitstore.dev/attestations/compliance/v1
 ```
 
-- The gate digest is the SHA-256 of the canonical JSON of `materialInputs`, together with the
-  subject UID and generation.
+- The gate digest covers canonical material inputs, subject UID/generation,
+  definition and gate revisions, dependency revisions and evidence policy/trust
+  revisions (§11). Missing paths fail closed; status conditions written by the
+  gate itself must not feed its material digest.
 - An approval is a datastore-only `ApprovalCertificate` holding `(gate, subject UID, digest,
   principal, time, signature)`, created through `approvalCertificate.create`. An attestation is a
   signed statement verified against the issuer's registered key.
 - The controller patches the condition `Gate/<name>`. For `Delete` transitions it adds the
-  finalizer `lifecycle.gitstore.dev/<name>`.
+  finalizer `lifecycle.gitstore.dev/<name>` before deletion can begin. Gate
+  installation on an already terminating subject is rejected or deferred; it
+  cannot retroactively guarantee cleanup. The API checks current evidence at
+  the command boundary rather than trusting that cached condition.
 
 ### 1.4 `EventSubscription`
 
@@ -232,7 +243,31 @@ spec:
 
 ## 2. Admission request and response envelope
 
-Lane A and Lane B webhooks receive the same batched envelope:
+Pre-receive and post-receive webhooks receive the same batched envelope:
+
+`request.phase` identifies the actual execution boundary, independently of the
+registration's requested execution mode:
+
+| Phase value | Meaning | Denial effect |
+| --- | --- | --- |
+| `PreReceive` | Git push validation before refs move | Rejects the push |
+| `PostReceive` | Git admission after refs have moved | Records a report and retains the last accepted read model |
+| `InlineAdmission` | Synchronous admission inside an API operation | Rejects the operation before its work becomes accepted state |
+
+These are execution-boundary names, separate from the admission Chain's
+mutating/validating policy/webhook steps. The host sets `phase`; it is not an
+author-supplied override. Git `mode: Sync` selects pre-receive unless
+the configured deferral policy moves that invocation to post-receive.
+Git `mode: Async` selects post-receive. Datastore-only writes use
+`mode: Sync` and `phase: InlineAdmission`; asynchronous admission after persistence
+is not allowed for them. API writes to Git-backed resources also use
+`InlineAdmission` when admission runs within the API operation rather than a Git
+receive hook; storage-group mutation restrictions remain unchanged.
+
+The field and enum names below are proposed contracts, not an implemented
+protocol migration. Only `phase` is specified; no single-letter aliases are
+accepted. Inline writes omit unavailable Git-specific context instead of
+inventing ref, commit or pusher facts.
 
 ```json
 {
@@ -241,7 +276,7 @@ Lane A and Lane B webhooks receive the same batched envelope:
   "request": {
     "uid": "0c5c…",
     "hook": { "name": "tax-classifier", "version": "2026-09-01" },
-    "lane": "A",
+    "phase": "PreReceive",
     "repository": { "namespace": "acme-store", "name": "catalog" },
     "ref": "refs/heads/main",
     "oldCommit": "9f2e…",
@@ -292,7 +327,7 @@ Envelope rules:
   all of them. This is what lets the decision cache (§3) key on exactly what the hook saw.
 - Request bodies are capped (default 4 MiB). Above the cap, `onLargePush` applies.
 
-## 3. Lane A execution
+## 3. Pre-receive execution
 
 ```mermaid
 sequenceDiagram
@@ -308,16 +343,18 @@ sequenceDiagram
     A->>H: AdmissionReview (batched, deadline)
     H-->>A: results
   end
-  A-->>G: verdict + diagnostics + unresolved Lane B summary
+  A-->>G: verdict + diagnostics + unresolved post-receive summary
   G-->>C: remote lines#59; then accept or reject all refs
 ```
 
 - `admission.limits.push_deadline_ms` is the push-wide budget (default 5000). Hook timeouts are
   individually ≤ the remaining budget. After the deadline every pending hook is treated as timed
   out.
-- **Decision cache.** The key is `(hook name, hook version, policy digest, params digest,
+- **Decision cache.** The key is `(hook name, hook version, phase, policy digest, params digest,
   context digest)`. The context digest is the SHA-256 of the canonical JSON of exactly the fields
   sent to the hook for that object.
+  - `phase` is always sent and always keyed, independently of `contextFields`.
+    A pre-receive decision cannot be reused for post-receive or inline admission.
   - The fields are selected by the hook's `contextFields` from: `object` (by blob OID),
     `oldObject` (by blob OID), `operation`, `repository`, `ref`, `path`, `pusher` and
     `pushOptions`.
@@ -347,7 +384,7 @@ spec:
   commit: abc1f00…
   ref: refs/heads/main
   hook: { kind: AdmissionHookConfiguration, name: tax-classifier, version: 2026-09-01 }
-  lane: B
+  phase: PostReceive
 status:
   status: completed                   # queued | in_progress | completed
   conclusion: failure                 # success | failure | neutral | skipped | timed_out
@@ -367,6 +404,9 @@ status:
 
 - **Identity.** The report is unique on `(repository, commit, ref, hook)`. Re-running a report
   replaces its annotations and increments `status.attempt`.
+- **Phase.** These Git post-receive reports use `spec.phase: PostReceive`.
+  Pre-receive rejection and inline-write failure are returned through their
+  corresponding request paths; they are not mislabeled as post-receive reports.
 - **Bounds.** At most 1,000 annotations per report and 64 KiB per message; the rest are counted
   in `status.truncated`. Retention is 90 days, or until the ref no longer contains the commit and
   30 days have passed.
@@ -401,12 +441,13 @@ For datastore-only subjects, the four-phase `Chain` runs inside the write:
 
 After that, the row and its journal entry are written in one transaction. Mutating webhooks are
 re-invoked at most once if a later mutation changed a field they matched. The GraphQL mutation
-deadline bounds the whole chain (default 2 s, matching commercetools' default).
+deadline bounds the whole chain (proposed initial default 2 s).
 
 ## 6. Event delivery
 
-- Each subscription has a cursor per subscription key (`subscription/<uid>`), advanced only after
-  a 2xx response. Cursor advances carry the `subscription/<uid>` lease's fencing token, and the API
+- Each subscription has a cursor per subscription key (`subscription/<uid>`), advanced after
+  a 2xx response or a durably recorded exhausted-delivery/dead-letter outcome.
+  Cursor advances carry the `subscription/<uid>` lease's fencing token, and the API
   rejects a stale one ([ADR 0018](../ADRs/0018-controller-ownership-concurrency-and-fencing.md)
   §3–§4).
 - Headers:
@@ -419,6 +460,24 @@ deadline bounds the whole chain (default 2 s, matching commercetools' default).
   `gitctl events replay --subscription <name> --from <seq>`.
 - A journal gap (retention exceeded) sets `EventSubscription` `Degraded=True` with reason
   `JournalGap`, and emits a `dev.gitstore.events.gap.v1` event so consumers know to resync.
+
+Subscription installation requires authority for the selected source scope and
+an approved sink/egress capability. Capture the allowed source kinds/namespace
+in the activation revision; recheck revocation before delivery. A delivery worker
+must not use its broad service identity to export data the app is not approved
+to receive. Data envelopes remain bounded references; fetching resource/payload
+bodies requires the consumer's own current authorization. Delivery signing
+material uses resource secret references; it is not a workload identity key.
+
+Consumers deduplicate `(source, id)` and use subject UID plus material revision
+for logical external work. No global ordering across sources is promised.
+An old update cannot overwrite a newer accepted generation. A sink returning
+2xx acknowledges receipt, not a successful scan/review/payment. The consumer
+reports results through separately authenticated and authorized operations.
+Conditions-only updates can wake consumers; filter/deduplicate them to avoid
+status feedback loops. Retention-gap recovery uses paginated list plus watch
+resume and reconciliation of authoritative state. Never infer deletion from
+an incomplete page or a missed event.
 
 ## 7. Function host
 
@@ -461,10 +520,10 @@ admitted from. Remote webhooks additionally require `admissionHookConfiguration.
 
 ## 9. Rollout
 
-1. **R1: CEL validating policies (Lane A only).** Wire policies into the existing Git-backed
+1. **R1: CEL validating policies (pre-receive only).** Wire policies into the existing Git-backed
    `Chain` phase 3, and remove mutating registration for Git-backed kinds. Add YAML node-position
    diagnostics.
-2. **R2: `AdmissionReport` and Lane B.** Add `mode: Async`, the report store, GraphQL and
+2. **R2: `AdmissionReport` and post-receive.** Add `mode: Async`, the report store, GraphQL and
    `gitctl`, and the next-push echo.
 3. **R3: T0/T1 webhooks**, with batching, the decision cache, deadlines, circuit breakers and
    `onLargePush`.
@@ -475,16 +534,20 @@ admitted from. Remote webhooks additionally require `admissionHookConfiguration.
 7. **R7: Notes projection** (optional).
 
 Each phase is gated per namespace by a feature flag. Every phase deploys readers before writers,
-so a rolling upgrade that mixes replicas with and without a phase never rejects a push that the
-older replicas would accept. New policies default to `validationActions: [Warn]` for one release.
+and activates a phase only after all serving replicas support its descriptor,
+registry and policy revisions. An incompatible replica fails closed for an
+activated registration; ignoring an unknown required gate/policy is unsafe.
+An explicit operator can stage non-security policies with `Warn`; required
+safety gates and deny policies must not silently become advisory during rollout.
 
 ## 10. Test strategy
 
 - **Multi-replica.** Two API replicas share the decision cache and reports, and a report keyed on
-  `(repository, commit, ref, hook)` is written once under concurrent Lane B runs. Two controllers
+  `(repository, commit, ref, hook)` is written once under concurrent post-receive runs. Two controllers
   deliver a subscription with no gaps and only detectable duplicates across a lease handover.
-- **Rolling upgrade.** A mixed-version API fleet gives stable verdicts for the same push. Old
-  replicas ignore unknown registration kinds without failing admission.
+- **Rolling upgrade.** A compatible mixed-version API fleet gives stable verdicts
+  for the same revision. Unsupported replicas cannot dispatch activated new
+  registrations or bypass unknown required gates. Activation waits for readers.
 - **AuthN/AuthZ.** A namespace admin can't bind a policy outside their namespace. T2/T3 can't
   obtain a synchronous slot. `hookSuspension.create` is enforced. Webhook secrets never appear in logs,
   reports or envelopes.
@@ -502,4 +565,240 @@ older replicas would accept. New policies default to `validationActions: [Warn]`
   PROFILE=lifecycle`) with 10 policies and 2 webhooks bound. The p95 push-admission overhead is
   recorded, and the decision-cache hit ratio is measured on re-pushes.
 - **Determinism.** The same Function input gives the same output across replicas and
-  architectures. CEL policies give identical verdicts in Lane A and Lane B.
+  architectures. CEL policies give identical verdicts in pre-receive
+  and post-receive for identical declared inputs. Cache tests verify
+  that decisions cannot cross execution phases.
+
+## 11. Transition and evidence contracts
+
+### 11.1 Declaration and enforcement
+
+A CRD declares `spec.lifecycle.transitions` under
+[ADR 0016 §8](../ADRs/0016-custom-resource-definitions.md#8-declared-custom-transitions).
+The initial custom executor is `Workflow`, implemented by the API command
+handler using a pinned `WorkflowDefinition` with `CUSTOM_RESOURCE` scope.
+The definition must match subject GVK, command and bounded input schema; an
+unknown command/target or unsupported executor fails admission. CRD declaration
+alone cannot register executable code. Core transitions retain their own
+enforcers: release preparation, resource readiness and finalizer completion.
+
+The proposed generic transition operation has this logical request contract;
+GraphQL field names and transport schema are future implementation work and
+must be advertised through discovery before clients call it:
+
+| Input | Requirement |
+| --- | --- |
+| Subject | Explicit GVK, namespace, name and immutable UID |
+| Transition | Exact declared command and executor contract version |
+| Preconditions | Expected subject resourceVersion, material digest, and execution version where present |
+| Idempotency | Caller-supplied bounded key, scoped to principal/subject/command; key reuse with different input is rejected |
+| Input | Bounded payload validated against pinned command schema; no author-supplied status or trusted actor claims |
+
+The server resolves authoritative scope/owner facts and pins registry/catalog,
+definition and execution revisions. It calls the configured authorizer with
+the registered action, checks the current source state and every applicable
+required gate, materializes allowed function inputs, validates pure output and
+conditionally commits the runtime transition. Git-backed subject spec is never
+patched by a function or transition executor.
+
+The response identifies subject UID, command, execution/version, committed
+outcome, resulting resourceVersion, material/definition/registry digests and
+causal event ID. A valid retry returns the recorded logical result, with current
+read authority checked before disclosure. Outcomes distinguish authorization
+denial/concealment, unsupported transition, precondition conflict, pending gate,
+invalid evidence, function failure and successful commitment. Pending gates
+never produce a successful transition receipt.
+
+Transition, idempotency result and durable journal/outbox fact must share one
+defined atomic commit boundary. Subject, gate-policy and evidence revisions
+must be guarded there against concurrent change/revocation. A pre-read followed
+by an unrelated write is insufficient. Implementations must document the
+backend-neutral conditional/commit-intent protocol for memdb and Scylla before
+enabling this contract; this document does not claim arbitrary cross-table ACID
+transactions. If a guarded snapshot is invalidated, retry from authoritative
+facts and reauthorize. An uncertain commit is resolved by idempotency lookup,
+never by issuing a second external operation.
+
+External calls run after the durable transition through the subscription/work
+path. Results carry an attempt ID, subject UID, execution version, input digest
+and fencing epoch where applicable. Reject stale/duplicate conflicting results;
+a lease alone is not correctness. State transition events cannot be constructed
+by an external controller writing the datastore directly.
+
+### 11.2 Material digest and gate composition
+
+Use one documented canonical JSON encoding and SHA-256 across implementations.
+The material snapshot contains:
+
+- subject UID, authored/admitted generation and operation/transition identity;
+- selected bounded field paths, body digest and required immutable payload facts;
+- definition/schema/conversion and gate UID/generation digests;
+- selected reference UID/generation/content digests, never only mutable names;
+- approval-policy revision, issuer trust/key-set revision and predicate version;
+- applicable installed registration revision, without unrelated App health/status.
+
+The gate controller's own condition, timestamps and resourceVersion-only status
+patches are excluded, avoiding self-invalidating feedback. Unknown/missing
+required material makes the gate `Unknown`/pending. A self-referential `Ready`
+condition gate on the same subject is rejected. Reference/gate dependency
+cycles are rejected, not treated as ready. Fields that can change independently
+of spec (such as verified payload digest or issuer trust) explicitly invalidate
+the cached digest and trigger bounded reconciliation.
+
+All required matching gates must be satisfied. Inside each gate `allOf`, `anyOf`
+and `noneOf` retain explicit semantics; `Unknown` is never permission to advance.
+Removing a registration cannot silently remove a required safety obligation
+from retained subjects/executions. Authorized policy replacement records the
+new requirement and activation revision before retiring the old evaluator.
+
+### 11.3 Approval policies, issuers and evidence
+
+`approval.policyRef` resolves an admitted, versioned approval policy containing
+principal eligibility, minimum distinct approvers, separation of duties,
+validity, revocation and material scope. Approval eligibility is evaluated by
+the configured provider using authoritative principal/subject facts; role names
+in token claims are not authority. The examples replace the earlier `role`
+shorthand. The concrete policy resource/API and its finite catalog entries must
+be specified in the implementing feature; an unresolved reference fails closed.
+
+The referenced policy has the following required logical fields. Transport and
+resource naming can reuse an existing compatible policy resource; it must not
+weaken these semantics:
+
+| Field | Constraint |
+| --- | --- |
+| Identity/revision | Immutable UID, admitted generation and content digest |
+| Subject scope | Explicit namespaces/kinds and permitted transitions |
+| Eligibility | Registered approval action evaluated by AuthZ with authoritative subject/owner facts |
+| Distinct approvers | Positive bounded minimum; repeated certificates from one principal count once |
+| Separation of duties | Explicit author/submitter exclusion and any required independent groups, enforced from trusted facts |
+| Validity | Bounded maximum age/expiry, current revocation state and material digest binding |
+| Conflict behavior | Self-approval, out-of-scope subject and conflicting evidence produce typed denial |
+
+`approval.count` may request more approvers than the referenced policy requires;
+it cannot reduce its minimum. A policy change starts a new digest and requires
+fresh evaluation. Approval author identity comes from immutable creation/change
+provenance, not an author-supplied name in the certificate. A later change of
+resource owner cannot turn the original author into an independent approver.
+
+`externalAttestation.issuer` resolves a separately authorized trust registration:
+issuer identity, allowed predicate types/versions, algorithm/key IDs, namespace
+and subject-kind restrictions, validity bounds, key rotation/revocation and
+binding to the submitting ServiceAccount or approved verification path. Package
+content may request an issuer registration but cannot self-approve its trust.
+Public verification keys are enrollment data; private issuer keys stay outside
+GitStore manifests under the credential boundary. Unknown algorithms/keys and
+cross-namespace evidence are rejected. The trust-registration API/actions are
+an implementation prerequisite, not currently shipped resources.
+
+A predicate type identifies a versioned, bounded schema and a host-approved
+success interpretation. Signature validity alone never means a positive verdict.
+For example, the payload-clean predicate requires result `Clean`, the exact
+payload digest, scan-policy revision and valid signature-database revision;
+`Infected`, `Error` or an unknown result cannot satisfy the gate. A compliance
+predicate likewise distinguishes approval, rejection and incomplete review.
+Negative verdicts remain auditable without counting as successful evidence.
+Predicate schemas cannot execute remote code or perform network validation.
+
+Trust activation covers registration UID/revision, public keys/algorithms,
+allowed predicate schemas, namespace/kind scope, submission identity, lifetime
+ceilings and an explicit approval receipt from an authorized trust administrator.
+A publicly readable key or a key packaged by the app is not that receipt.
+Private issuer signing material and workload token-signing material are distinct
+credentials with independent rotation. Revoking one key does not silently replace
+it with an unapproved package key.
+
+Persisted evidence includes gate/subject UID, material digest, transition,
+predicate/policy version, issuer or approving principal, issued/expiry times,
+signature and revocation metadata. Validate authenticated submission, submitter
+authority, signature, subject scope, freshness, input binding and replay before
+recording it. Bound serialized size and lifetime by operator configuration.
+Evidence ingestion is idempotent by immutable evidence ID and digest; changing
+bytes under an existing ID is rejected. Never accept an arbitrary status patch
+as an approval or attestation.
+
+Evidence issuance time is part of verification, not a nondeterministic WASM
+import. Verification uses the platform clock and current trust outside pure
+computation. Key rotation supports explicitly bounded overlap; revocation
+invalidates pending satisfaction and cached receipts within the documented
+ceiling. Before commitment, recheck validity and the guarded trust/evidence
+revision. After commitment, retain the historic receipt and apply the domain's
+suppression/review policy; do not erase audit evidence or silently rewrite a
+published snapshot.
+
+## 12. Function target selection and App activation
+
+A platform target descriptor must define the following before advertisement:
+
+| Contract | Required definition |
+| --- | --- |
+| Identity | Exact versioned target ID, WIT ABI and input/output schemas |
+| Invocation | Host operation and phase; no arbitrary new hook from a binding |
+| Selection | Namespace, subject/surface/target key and allowed selectors |
+| Authority | Caller/service context, allowed input fields and capability/RBAC checks |
+| Composition | Exactly one binding, or an explicit ordered pipeline with maximum length |
+| Bounds | Module/fuel/memory/deadline/query/input/output/cache limits |
+| Validation | Allowed output shape, invariant checks and downstream eligibility checks |
+| Failure | Typed error or specific safe default; permitted `UseDefault`/`Fail` values |
+| Evolution | Compatibility range, retirement and retained execution behavior |
+
+Extend `FunctionBinding.spec` with an optional `selection` object whose schema
+is fixed by its target descriptor. For example, a recommendation rank target
+can select a `surfaceRef`; a conversion target can select a CRD/version pair.
+The namespace comes from the binding. Arbitrary cross-namespace selectors and
+unknown selector fields fail admission. Explicit pipeline descriptors additionally
+allow bounded integer `order`; equal order on an overlapping selection is a
+conflict. A single-binding target rejects overlapping selection even if one
+binding has higher installation priority. There is no implicit registration
+order or app-name tiebreaker. Standalone bindings and App bindings share this
+conflict domain.
+
+Prepare modules and input queries before activation. Validate GraphQL selection
+against host-provided input schema/mapping and complexity limits, not an
+unrestricted administrator query. A module does not inherit the installer's
+identity. Cache keys include target, module/configuration, selection and input
+digests plus authorization/publication context where output can differ. Never
+reuse results across tenant, snapshot or caller boundaries accidentally.
+
+`gitstore:search/query-rewrite@1` and `gitstore:recommendation/rank@1` in ADR 0019
+are candidate contracts, not implemented target names. Index/provider I/O runs
+outside pure WASM. A function cannot perform payment capture, scan remote
+payloads, mutate an index or issue arbitrary HTTP requests.
+
+App-owned registrations prepare under one immutable inactive revision covering
+package, grants, inventory, policy/catalog and target descriptors. Dispatch
+checks that revision's active pointer and current suspension state. All serving
+replicas must support the revision before activation. An incompatible or stale
+replica returns a typed unavailable/denied result, never a partial registry.
+Control-plane refresh ceilings, dispatch caches and revocation invalidation
+must be defined and tested; restart is not a revocation mechanism.
+
+Durable external work already emitted when disablement occurs can complete,
+but reporting still needs current authority and causal input validation.
+Required gates stay pending until replacement evidence/evaluation exists.
+No request-time artifact fetch, uncontrolled compilation, package installer
+script or automatic arbitrary controller hosting is introduced.
+
+## 13. End-to-end implementation acceptance
+
+[ADR 0019 §§7–9](../ADRs/0019-app-installation-and-platform-capabilities.md#7-use-case-search-and-recommendation)
+contains complete proposed Search/Recommendation, antivirus and combined
+approval/attestation examples. Their implementation suites must demonstrate:
+
+| Scenario | Required positive and negative evidence |
+| --- | --- |
+| Search configuration | Merchant CRUD/default installation drives accepted-generation reconciliation; secondary changes do not rewrite config; denied mutation has no backend effect |
+| Public serving | Snapshot-target isolation, no unpublished hits/snippets/facets/count leakage, suppression during stale-index/cache serving, explicit unavailable fallback |
+| Recommendation functions | Deterministic bounded candidate ranking, explicit selection, conflicting binding rejection, no host I/O or unauthorized behavioral data |
+| Antivirus | No synchronous payload scan at admission, exact payload/policy digest binding, infected/expired/untrusted verdict blocks Ready/download, disabled scanner does not bypass gate |
+| Approval and attestation | Both required for the same material; separation of duties; old-generation, revoked, wrong-issuer and replayed evidence rejected |
+| Custom transitions | Adapter/source-state validation, expected-version conflict, idempotent retry/uncertain-commit recovery, stale worker/result fencing |
+| App lifecycle | No partial activation, unauthorized identity reuse rejected, additional grants reapproved, required-gate-safe disable/uninstall, retained pinned contracts |
+
+Run each affected path with pluggable authorization, two APIs/two controllers,
+rolling replacement, restart/replay and sustained push/reconciliation load under
+documented resource limits. Inject provider outage, slow calls, journal gaps,
+queue exhaustion and evidence revocation at commitment. Verify bounded memory,
+disk, retries, telemetry label cardinality and sanitized diagnostics. These
+contracts require future feature specifications and tests; they do not claim
+the above scenarios have passed or replace the full default PR readiness suite.

@@ -61,6 +61,9 @@ var serviceAccountClusterKeys = clusterKeys{TimestampCol: "creation_timestamp", 
 
 const namespaceBucketLayout = "2006-01"
 
+const projectionListQueryBudget = 256
+const projectionListLookupBudget = 4096
+
 var namespaceListingEpoch = time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 func namespaceBucket(timestamp time.Time) string {

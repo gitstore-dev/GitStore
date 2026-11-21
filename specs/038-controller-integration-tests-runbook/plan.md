@@ -7,7 +7,7 @@
 
 ## Summary
 
-Close the gap between the controller manager runtime shipped in specs 025 (runtime), 026 (reconcile handler), and 036 (list-then-watch/checkpointing) and its operational readiness: add integration-level Go tests that drive the real `manager.Manager` + `listwatch.Runner` + `checkpoint.Store` wiring through reconcile/retry/resume, status-conflict, disconnect/reconnect/replay, replay-window-exceeded, and poison-item scenarios end-to-end (as opposed to the existing per-package contract tests, which exercise each component in isolation); then author three markdown runbooks (`docs/runbooks/controller-lag.md`, `controller-replay-window-exceeded.md`, `controller-poisoned-item.md`) that map each failure mode to the Prometheus metrics already defined in `internal/health/metrics.go` and the poison-item HTTP API already exposed in `cmd/controller/main.go`, and verify every signal a runbook references is actually emitted by an existing or new test.
+Close the gap between the controller manager runtime shipped in specs 025 (runtime), 026 (reconcile handler), and 036 (list-then-watch/checkpointing) and its operational readiness: add integration-level Go tests that drive the real `manager.Manager` + `listwatch.Runner` + `checkpoint.Store` wiring through reconcile/retry/resume, status-conflict, disconnect/reconnect/replay, replay-window-exceeded, and poison-item scenarios end-to-end (as opposed to the existing per-package contract tests, which exercise each component in isolation); then author three markdown runbooks (`docs/runbooks/controller-recovery.md`, `controller-recovery.md`, `controller-recovery.md`) that map each failure mode to the Prometheus metrics already defined in `internal/health/metrics.go` and the poison-item HTTP API already exposed in `cmd/controller/main.go`, and verify every signal a runbook references is actually emitted by an existing or new test.
 
 ## Technical Context
 
@@ -72,9 +72,9 @@ gitstore-controller-manager/
 
 docs/
 └── runbooks/                     # NEW directory
-    ├── controller-lag.md                    # FR-008
-    ├── controller-replay-window-exceeded.md  # FR-009
-    └── controller-poisoned-item.md           # FR-010
+    ├── controller-recovery.md                    # FR-008
+    ├── controller-recovery.md  # FR-009
+    └── controller-recovery.md           # FR-010
 ```
 
 **Structure Decision**: Single Go module (`gitstore-controller-manager`), consistent with specs 025/026/036. New integration tests live in a new `tests/integration/` package sitting alongside the existing `tests/contract/` and `tests/checkpoint/` packages, following the same `_test` package convention already used there (e.g. `contract_test`). Runbooks are plain markdown under a new `docs/runbooks/` directory, matching how `docs/` already hosts feature/operational documentation (`docs/configuration.md`, `docs/developer-guide.md`) referenced from the controller-manager sections of `docs/developer-guide.md`.

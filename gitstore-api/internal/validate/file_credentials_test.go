@@ -21,8 +21,8 @@ metadata:
   namespace: shop
 spec:
   contentType: image/jpeg
+  provider: s3
   source:
-    type: s3
     uri: s3://bucket/hero
     credentialsRef: %s
 ---

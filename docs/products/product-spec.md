@@ -14,7 +14,7 @@ A Product resource is a Markdown file with YAML frontmatter pushed to a GitStore
 | `apiVersion` | string | yes           | Must be `catalog.gitstore.dev/v1beta1`     |
 | `kind`       | string | yes           | Must be `Product` (case-sensitive)         |
 | `metadata`   | object | yes           | See Metadata Fields                        |
-| `spec`       | object | yes           | May be empty (`spec: {}`); see Spec Fields |
+| `spec`       | object | yes           | Must include `title`; see Spec Fields      |
 | `status`     | —      | **forbidden** | System-managed; presence causes rejection  |
 
 ---
@@ -24,7 +24,7 @@ A Product resource is a Markdown file with YAML frontmatter pushed to a GitStore
 | Field                  | Type              | Required | Constraint                                                                                                  |
 |------------------------|-------------------|----------|-------------------------------------------------------------------------------------------------------------|
 | `metadata.name`        | string            | yes      | DNS subdomain format                                                                                        |
-| `metadata.namespace`   | string            | no       | Optional. Inferred from the repository's owning namespace at push time; raw repository UUID is never stored |
+| `metadata.namespace`   | string            | yes      | Must match the repository's owning namespace; raw repository UUID is never stored                             |
 | `metadata.labels`      | map[string]string | no       | Key prefix ≤ 253 chars; key name ≤ 63 chars; value ≤ 63 chars                                               |
 | `metadata.annotations` | map[string]string | no       |                                                                                                             |
 
@@ -45,6 +45,24 @@ The same Product can be updated through GraphQL after Git push: its stored
 repository and original source path are retained as provenance and determine
 where the commit is written.
 
+### Mutation admission
+
+`createProduct` and `updateProduct` render the same manifest checks used by a
+Git push before writing a commit. A pre-receive rejection returns the shared
+`ADMISSION_REJECTED` error with `phase: PRE_RECEIVE` and does not move the
+ref. After a Product commit, the synchronous committed-admission result is
+authoritative: a denial or materialization failure returns
+`ADMISSION_REJECTED` with `phase: POST_RECEIVE` and the commit SHA; a
+concurrent replacement returns `CONFLICT`/`SUPERSEDED`. Retrying byte-identical
+content re-admits the existing tip without making another commit.
+
+`deleteProduct` has the same post-receive contract. If deleting the committed
+manifest is denied or fails admission, it does not report deletion success or
+start termination. For a rejected Product update, the previously accepted
+specification remains served and `status.conditions` records
+`AdmissionAccepted=False` with reason `AdmissionReportFailed`; a subsequent
+accepted admission clears that condition.
+
 ---
 
 ## Spec Fields
@@ -58,7 +76,7 @@ where the commit is written.
 | `spec.tags`            | []string                  | No per-tag length constraint                                                                                 |
 | `spec.media`           | []MediaDefinition         | Each entry: `fileRef.name` and `fileRef.kind` required                                                       |
 | `spec.options`         | []ProductOptionDefinition | Each entry: `name` required and unique within the list                                                       |
-| `spec.lifecycle.state` | `ACTIVE` or `RETIRED`     | Defaults to `ACTIVE`; `RETIRED` remains private desired state and is excluded from future release candidates |
+| `spec.lifecycle.state` | `Active` or `Retired`     | Defaults to `Active`; records private desired state. GraphQL uses `ACTIVE`/`RETIRED`. Publication and release eligibility are not implemented. |
 
 ### MediaDefinition
 

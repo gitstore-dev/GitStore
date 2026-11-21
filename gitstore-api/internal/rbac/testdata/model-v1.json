@@ -1,0 +1,190 @@
+{
+  "modelVersion": "v1",
+  "providerNeutralFixture": "tests/fixtures/authorization/decision-table.json",
+  "namespace": {
+    "name": "acme",
+    "uid": "11111111-1111-4111-8111-111111111111"
+  },
+  "resources": [
+    {
+      "apiVersion": "rbac.authorization.gitstore.dev/v1beta1",
+      "kind": "Role",
+      "metadata": {
+        "name": "tenant-editor",
+        "namespace": "acme",
+        "uid": "22222222-2222-4222-8222-222222222222",
+        "generation": 1,
+        "resourceVersion": "1"
+      },
+      "spec": {
+        "rules": [
+          {"resources": ["product"], "verbs": ["read", "list"]},
+          {"resources": ["product"], "verbs": ["update"], "when": ["owner"]},
+          {
+            "resources": ["product"],
+            "verbs": ["delete"],
+            "resourceNames": ["sample"],
+            "when": [
+              {"attr": "namespace", "op": "eq", "value": "acme"},
+              {"attr": "visibility", "op": "in", "values": ["private", "public"]}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "rbac.authorization.gitstore.dev/v1beta1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "tenant-editors",
+        "namespace": "acme",
+        "uid": "33333333-3333-4333-8333-333333333333",
+        "generation": 1,
+        "resourceVersion": "1"
+      },
+      "spec": {
+        "roleRef": {"kind": "Role", "name": "tenant-editor"},
+        "subjects": [
+          {"kind": "User", "name": "idp|alice"},
+          {"kind": "Group", "name": "editors"}
+        ]
+      }
+    },
+    {
+      "apiVersion": "rbac.authorization.gitstore.dev/v1beta1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "repository-observer",
+        "uid": "44444444-4444-4444-8444-444444444444",
+        "generation": 1,
+        "resourceVersion": "1"
+      },
+      "spec": {
+        "rules": [
+          {"resources": ["repository"], "verbs": ["read", "list", "watch"]}
+        ]
+      }
+    },
+    {
+      "apiVersion": "rbac.authorization.gitstore.dev/v1beta1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "repository-observers",
+        "uid": "55555555-5555-4555-8555-555555555555",
+        "generation": 1,
+        "resourceVersion": "1"
+      },
+      "spec": {
+        "roleRef": {"kind": "ClusterRole", "name": "repository-observer"},
+        "subjects": [{"kind": "ServiceAccount", "name": "observer"}]
+      }
+    },
+    {
+      "apiVersion": "rbac.authorization.gitstore.dev/v1beta1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "pending-role",
+        "namespace": "acme",
+        "uid": "66666666-6666-4666-8666-666666666666",
+        "generation": 1,
+        "resourceVersion": "1"
+      },
+      "spec": {
+        "roleRef": {"kind": "Role", "name": "not-created"},
+        "subjects": [{"kind": "User", "name": "idp|pending"}]
+      }
+    }
+  ],
+  "resolvedReferences": [
+    {
+      "bindingUID": "33333333-3333-4333-8333-333333333333",
+      "roleUID": "22222222-2222-4222-8222-222222222222",
+      "observedGeneration": 1
+    },
+    {
+      "bindingUID": "55555555-5555-4555-8555-555555555555",
+      "roleUID": "44444444-4444-4444-8444-444444444444",
+      "observedGeneration": 1
+    }
+  ],
+  "namespaceRecreation": {
+    "previousUID": "11111111-1111-4111-8111-111111111111",
+    "replacementUID": "77777777-7777-4777-8777-777777777777",
+    "expectedPreviousBindingsActive": false
+  },
+  "roleRecreation": {
+    "previousUID": "22222222-2222-4222-8222-222222222222",
+    "replacementUID": "88888888-8888-4888-8888-888888888888",
+    "expectedPreviousBindingResolved": false
+  },
+  "cases": [
+    {
+      "id": "user-subject-not-username",
+      "subject": "idp|alice",
+      "groups": [],
+      "action": "product.read",
+      "namespace": "acme",
+      "expected": "allow"
+    },
+    {
+      "id": "group-membership",
+      "subject": "idp|bob",
+      "groups": ["editors"],
+      "action": "product.read",
+      "namespace": "acme",
+      "expected": "allow"
+    },
+    {
+      "id": "namespace-isolation",
+      "subject": "idp|alice",
+      "groups": ["editors"],
+      "action": "product.read",
+      "namespace": "other",
+      "expected": "deny"
+    },
+    {
+      "id": "conditional-owner-match",
+      "subject": "idp|alice",
+      "groups": [],
+      "action": "product.update",
+      "namespace": "acme",
+      "ownerSub": "idp|alice",
+      "expected": "allow"
+    },
+    {
+      "id": "conditional-owner-mismatch",
+      "subject": "idp|alice",
+      "groups": [],
+      "action": "product.update",
+      "namespace": "acme",
+      "ownerSub": "idp|bob",
+      "expected": "deny"
+    },
+    {
+      "id": "unresolved-role-no-grant",
+      "subject": "idp|pending",
+      "groups": [],
+      "action": "product.read",
+      "namespace": "acme",
+      "expected": "deny"
+    },
+    {
+      "id": "serviceaccount-uid-required",
+      "subject": "system:serviceaccount:observer",
+      "groups": ["system:serviceaccounts"],
+      "action": "repository.read",
+      "namespace": "other",
+      "expected": "deny"
+    },
+    {
+      "id": "serviceaccount-verified-identity",
+      "subject": "system:serviceaccount:observer",
+      "groups": ["system:authenticated", "system:serviceaccounts"],
+      "authMethod": "serviceaccount-jwt",
+      "serviceAccountUID": "99999999-9999-4999-8999-999999999999",
+      "action": "repository.read",
+      "namespace": "other",
+      "expected": "allow"
+    }
+  ]
+}

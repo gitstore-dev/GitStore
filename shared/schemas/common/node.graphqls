@@ -1,0 +1,9 @@
+"""
+An object with a globally unique ID
+"""
+interface Node {
+  """
+  Opaque identifier encoding a resource kind and stable resource UID.
+  """
+  id: ID!
+}

@@ -29,3 +29,33 @@ func TestRegistryCancelAllCancelsActiveConnections(t *testing.T) {
 	registry.Unregister(registered)
 	newCancel()
 }
+
+func TestCloseCancelsAndRejectsRegistrations(t *testing.T) {
+	r := New()
+	ctx, cancel := context.WithCancel(context.Background())
+	r.Register(ctx, "user", cancel)
+	r.Close()
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+	ctx, cancel = context.WithCancel(context.Background())
+	r.Register(ctx, "later", cancel)
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+	assert.Empty(t, r.connections)
+}
+
+func TestDirectoryInvalidationCancelsAndRejectsStaleAdmissions(t *testing.T) {
+	r := New()
+	generation := r.Generation()
+	ctx, cancel := context.WithCancel(t.Context())
+	r.RegisterGeneration(ctx, "principal:alice", cancel, generation)
+	r.Invalidate()
+	assert.ErrorIs(t, ctx.Err(), context.Canceled)
+	assert.Zero(t, r.Count())
+
+	stale, staleCancel := context.WithCancel(t.Context())
+	r.RegisterGeneration(stale, "principal:alice", staleCancel, generation)
+	assert.ErrorIs(t, stale.Err(), context.Canceled)
+	fresh, freshCancel := context.WithCancel(t.Context())
+	defer freshCancel()
+	r.RegisterGeneration(fresh, "principal:alice", freshCancel, r.Generation())
+	assert.NoError(t, fresh.Err())
+}

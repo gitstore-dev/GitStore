@@ -4,25 +4,22 @@
 package secret
 
 import (
+	"context"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/gitstore-dev/gitstore/secretmaterial"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/zap"
 )
 
 var (
-	resolutionTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "gitstore_secret_resolution_total", Help: "Bootstrap acquisition outcomes by fixed category.",
-	}, []string{"consumer", "purpose", "tier", "provider", "reason"})
-	resolutionDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
-		Name: "gitstore_secret_resolution_duration_seconds", Help: "Bootstrap acquisition duration.",
-		Buckets: []float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2},
-	}, []string{"consumer", "purpose", "tier", "provider"})
-	resolutionInflight = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "gitstore_secret_resolution_inflight", Help: "Active bounded bootstrap provider calls.",
-	}, []string{"consumer", "purpose", "tier", "provider"})
+	resolutionTotal    = observability.MustInstrument(otel.Meter("gitstore/secret").Float64Counter("gitstore_secret_resolution_total", metric.WithDescription("Bootstrap acquisition outcomes by fixed category.")))
+	resolutionDuration = observability.MustInstrument(otel.Meter("gitstore/secret").Float64Histogram("gitstore_secret_resolution_duration_seconds", metric.WithDescription("Bootstrap acquisition duration."), metric.WithUnit("s"), metric.WithExplicitBucketBoundaries(0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2)))
+	resolutionInflight = observability.MustInstrument(otel.Meter("gitstore/secret").Float64UpDownCounter("gitstore_secret_resolution_inflight", metric.WithDescription("Active bounded bootstrap provider calls.")))
 )
 
 type resolutionObserver struct{ log *zap.Logger }
@@ -46,7 +43,7 @@ func observationLabels(observation secretmaterial.Observation) []string {
 }
 
 func (o resolutionObserver) Inflight(observation secretmaterial.Observation, delta int) {
-	resolutionInflight.WithLabelValues(observationLabels(observation)...).Add(float64(delta))
+	resolutionInflight.Add(context.Background(), float64(delta), metric.WithAttributes(attribute.String("consumer", (observationLabels(observation))[0]), attribute.String("purpose", (observationLabels(observation))[1]), attribute.String("tier", (observationLabels(observation))[2]), attribute.String("provider", (observationLabels(observation))[3])))
 }
 
 func (o resolutionObserver) Observe(observation secretmaterial.Observation, reason string, duration time.Duration) {
@@ -57,8 +54,8 @@ func (o resolutionObserver) Observe(observation secretmaterial.Observation, reas
 		reason = "ProviderUnavailable"
 	}
 	labels := observationLabels(observation)
-	resolutionDuration.WithLabelValues(labels...).Observe(duration.Seconds())
-	resolutionTotal.WithLabelValues(append(labels, reason)...).Inc()
+	resolutionDuration.Record(context.Background(), duration.Seconds(), metric.WithAttributes(attribute.String("consumer", (labels)[0]), attribute.String("purpose", (labels)[1]), attribute.String("tier", (labels)[2]), attribute.String("provider", (labels)[3])))
+	resolutionTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("consumer", (append(labels, reason))[0]), attribute.String("purpose", (append(labels, reason))[1]), attribute.String("tier", (append(labels, reason))[2]), attribute.String("provider", (append(labels, reason))[3]), attribute.String("reason", (append(labels, reason))[4])))
 	if reason != "success" {
 		o.log.Warn("bootstrap secret acquisition failed", zap.String("provider", labels[3]), zap.String("reason", reason))
 	}

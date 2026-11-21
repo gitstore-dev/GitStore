@@ -26,7 +26,7 @@ func (s *Server) ValidateManifest(ctx context.Context, req admission.ManifestVal
 	if req.NewContent != nil {
 		tree.ProposedBlobs = []*catalogv1.ResourceBlob{{Path: req.Path, Content: req.NewContent}}
 	}
-	response, err := s.ValidateResources(ctx, &catalogv1.ValidateResourcesRequest{
+	response, err := s.validateResources(ctx, &catalogv1.ValidateResourcesRequest{
 		RepositoryId: req.RepositoryID,
 		Trees:        []*catalogv1.ResourceValidationTree{tree},
 	})

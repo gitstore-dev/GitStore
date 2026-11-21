@@ -190,10 +190,12 @@ func assertBoundedPage(t *testing.T, session *gocql.Session, cfg capacityConfig)
 		"SELECT creation_timestamp,uid FROM repositories_by_bucket WHERE bucket=? LIMIT ?",
 		cfg.Bucket, cfg.PageSize,
 	), cfg.PageSize, "repositories_by_bucket")
-	assertQueryBound(t, session.Query(
-		"SELECT creation_timestamp,uid FROM products_by_namespace WHERE namespace=? LIMIT ?",
-		cfg.Namespace, cfg.PageSize,
-	), cfg.PageSize, "products_by_namespace")
+	for shard := range 64 {
+		assertQueryBound(t, session.Query(
+			"SELECT creation_timestamp,uid FROM products_by_namespace_shard WHERE namespace=? AND shard=? LIMIT ?",
+			cfg.Namespace, int8(shard), cfg.PageSize,
+		), cfg.PageSize, "products_by_namespace_shard")
+	}
 }
 
 func assertQueryBound(t *testing.T, query *gocql.Query, limit int, table string) {

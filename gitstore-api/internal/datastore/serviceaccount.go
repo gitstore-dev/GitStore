@@ -9,11 +9,9 @@ import (
 	"time"
 )
 
-// ServiceAccountSubject derives the canonical subject string for a
-// ServiceAccount, "serviceaccount:<namespace>:<name>". This is derived on
-// demand and never stored redundantly on the record itself.
-func ServiceAccountSubject(namespace, name string) string {
-	return fmt.Sprintf("serviceaccount:%s:%s", namespace, name)
+// ServiceAccountSubject derives the canonical cluster-scoped subject.
+func ServiceAccountSubject(name string) string {
+	return "system:serviceaccount:" + name
 }
 
 // ParseServiceAccountSubject is the inverse of ServiceAccountSubject: it
@@ -23,21 +21,12 @@ func ServiceAccountSubject(namespace, name string) string {
 // serviceaccount-jwt/serviceaccount-assertion AuthN providers) must treat a
 // false ok as "not a ServiceAccount subject," never as an empty-but-valid
 // namespace/name.
-func ParseServiceAccountSubject(subject string) (namespace, name string, ok bool) {
-	const prefix = "serviceaccount:"
-	if !strings.HasPrefix(subject, prefix) {
-		return "", "", false
+func ParseServiceAccountSubject(subject string) (name string, ok bool) {
+	name, ok = strings.CutPrefix(subject, "system:serviceaccount:")
+	if !ok || name == "" || strings.ContainsAny(name, ":/") || len(subject) > 256 {
+		return "", false
 	}
-	rest := strings.TrimPrefix(subject, prefix)
-	idx := strings.IndexByte(rest, ':')
-	if idx < 0 {
-		return "", "", false
-	}
-	namespace, name = rest[:idx], rest[idx+1:]
-	if namespace == "" || name == "" || strings.ContainsRune(name, ':') {
-		return "", "", false
-	}
-	return namespace, name, true
+	return name, true
 }
 
 // ApplyServiceAccountKeyUpdate adds/removes public keys on sa in place,
@@ -68,12 +57,12 @@ func ApplyServiceAccountKeyUpdate(sa *ServiceAccount, add []ServiceAccountPublic
 	kept = append(kept, add...)
 
 	if len(kept) == 0 {
-		return fmt.Errorf("%w: service account %s/%s would have zero enrolled keys", ErrInvalidArgument, sa.Namespace, sa.Name)
+		return fmt.Errorf("%w: service account %s would have zero enrolled keys", ErrInvalidArgument, sa.Name)
 	}
 	keyIDs := make(map[string]struct{}, len(kept))
 	for _, key := range kept {
 		if _, exists := keyIDs[key.KeyID]; exists {
-			return fmt.Errorf("%w: service account %s/%s has duplicate key ID %q", ErrInvalidArgument, sa.Namespace, sa.Name, key.KeyID)
+			return fmt.Errorf("%w: service account %s has duplicate key ID %q", ErrInvalidArgument, sa.Name, key.KeyID)
 		}
 		keyIDs[key.KeyID] = struct{}{}
 	}

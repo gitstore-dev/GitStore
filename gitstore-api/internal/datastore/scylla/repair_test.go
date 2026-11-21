@@ -6,35 +6,362 @@ package scylla
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 )
+
+func TestReadRBACWriteResourcesOverlapsReadsAndPreservesAbsence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	write := rbac.TierWrite{TierID: rbac.ClusterTierID, Changes: make([]rbac.Change, 129)}
+	for index := range write.Changes {
+		write.Changes[index].Resource = &rbac.Resource{Kind: rbac.ClusterRole,
+			Metadata: rbac.Metadata{Name: "role-" + strconv.Itoa(index)}}
+	}
+	entered, release := make(chan struct{}, len(write.Changes)), make(chan struct{})
+	defer close(release)
+	done := make(chan error, 1)
+	var current map[rbac.ResourceKey]*rbac.Resource
+	go func() {
+		var err error
+		current, err = readRBACWriteResources(ctx, write, func(ctx context.Context, keys []rbac.ResourceKey) (map[rbac.ResourceKey]*rbac.Resource, error) {
+			if len(keys) == 0 || len(keys) > 32 {
+				t.Errorf("unbounded candidate batch: %d", len(keys))
+			}
+			entered <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			resources := make(map[rbac.ResourceKey]*rbac.Resource)
+			for _, key := range keys {
+				if key.Name != "role-0" {
+					resources[key] = &rbac.Resource{Kind: key.Kind, Metadata: rbac.Metadata{Name: key.Name}}
+				}
+			}
+			return resources, nil
+		})
+		done <- err
+	}()
+	for range 4 {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("independent candidate reads did not overlap")
+		}
+	}
+	select {
+	case <-entered:
+		t.Fatal("more than four candidate batches overlapped")
+	default:
+	}
+	for range 5 {
+		release <- struct{}{}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	for index, change := range write.Changes {
+		key := rbac.ResourceKey{TierID: write.TierID, Kind: change.Resource.Kind, Name: change.Resource.Metadata.Name}
+		resource, found := current[key]
+		if !found || (index == 0) != (resource == nil) {
+			t.Fatalf("candidate read lost presence/absence for %s", key.Name)
+		}
+		if resource != nil && resource.Metadata.Name != key.Name {
+			t.Fatalf("candidate read substituted another resource for %s", key.Name)
+		}
+	}
+}
+
+func TestReadRBACWriteResourcesFailureCannotReturnPartialCandidate(t *testing.T) {
+	want := errors.New("candidate lookup failed")
+	write := rbac.TierWrite{TierID: rbac.ClusterTierID, Changes: []rbac.Change{
+		{Resource: &rbac.Resource{Kind: rbac.ClusterRole, Metadata: rbac.Metadata{Name: "first"}}},
+		{Resource: &rbac.Resource{Kind: rbac.ClusterRole, Metadata: rbac.Metadata{Name: "second"}}},
+	}}
+	current, err := readRBACWriteResources(t.Context(), write, func(context.Context, []rbac.ResourceKey) (map[rbac.ResourceKey]*rbac.Resource, error) {
+		return nil, want
+	})
+	if !errors.Is(err, want) || current != nil {
+		t.Fatalf("candidate lookup failure returned a partial model: current=%v err=%v", current, err)
+	}
+	write.Changes[1].Resource = nil
+	current, err = readRBACWriteResources(t.Context(), write, func(context.Context, []rbac.ResourceKey) (map[rbac.ResourceKey]*rbac.Resource, error) {
+		t.Error("malformed candidate initiated source I/O")
+		return nil, nil
+	})
+	if !errors.Is(err, rbac.ErrInvalid) || current != nil {
+		t.Fatalf("malformed candidate was not rejected before I/O: current=%v err=%v", current, err)
+	}
+}
+
+func TestReadRBACWriteResourcesRejectsUnrelatedBatchRows(t *testing.T) {
+	for _, name := range []string{"other", "requested"} {
+		t.Run(name, func(t *testing.T) {
+			write := rbac.TierWrite{TierID: rbac.ClusterTierID, Changes: []rbac.Change{
+				{Resource: &rbac.Resource{Kind: rbac.ClusterRole, Metadata: rbac.Metadata{Name: "requested"}}},
+			}}
+			current, err := readRBACWriteResources(t.Context(), write, func(context.Context, []rbac.ResourceKey) (map[rbac.ResourceKey]*rbac.Resource, error) {
+				key := rbac.ResourceKey{TierID: write.TierID, Kind: rbac.ClusterRole, Name: name}
+				return map[rbac.ResourceKey]*rbac.Resource{key: {Kind: key.Kind, Metadata: rbac.Metadata{Name: "other"}}}, nil
+			})
+			if !errors.Is(err, rbac.ErrUnavailable) || current != nil {
+				t.Fatalf("batch substituted an unrelated resource: current=%v err=%v", current, err)
+			}
+		})
+	}
+}
+
+func TestRepairRBACStepsBoundsConcurrentWork(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	steps := make([]rbacRepairStep, 17)
+	for index := range steps {
+		steps[index].UID = strconv.Itoa(index)
+	}
+	entered, release := make(chan struct{}, len(steps)), make(chan struct{})
+	defer close(release)
+	var active, peak, completed atomic.Int64
+	seen := make([]atomic.Int64, len(steps))
+	done := make(chan error, 1)
+	go func() {
+		done <- runRBACSteps(ctx, steps, func(ctx context.Context, step rbacRepairStep) error {
+			current := active.Add(1)
+			for previous := peak.Load(); current > previous; previous = peak.Load() {
+				if peak.CompareAndSwap(previous, current) {
+					break
+				}
+			}
+			defer active.Add(-1)
+			index, err := strconv.Atoi(step.UID)
+			if err != nil {
+				return err
+			}
+			seen[index].Add(1)
+			entered <- struct{}{}
+			select {
+			case <-release:
+				completed.Add(1)
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+	}()
+	for range 4 {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("independent repairs did not overlap")
+		}
+	}
+	select {
+	case <-entered:
+		t.Fatal("more than four repairs started before any completed")
+	case err := <-done:
+		t.Fatalf("repair returned before its workers finished: %v", err)
+	default:
+	}
+	for range len(steps) {
+		release <- struct{}{}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if peak.Load() != 4 || active.Load() != 0 || completed.Load() != int64(len(steps)) {
+		t.Fatalf("unbounded or unfinished repairs: peak=%d active=%d completed=%d", peak.Load(), active.Load(), completed.Load())
+	}
+	for index := range seen {
+		if seen[index].Load() != 1 {
+			t.Fatalf("resource %d repaired %d times", index, seen[index].Load())
+		}
+	}
+}
+
+func TestRepairRBACStepsFailureCancelsAndJoinsWorkers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	steps := make([]rbacRepairStep, 17)
+	for index := range steps {
+		steps[index].UID = strconv.Itoa(index)
+	}
+	entered, fail := make(chan struct{}, len(steps)), make(chan struct{})
+	var active, calls atomic.Int64
+	want := errors.New("conditional lookup failed")
+	done := make(chan error, 1)
+	go func() {
+		done <- runRBACSteps(ctx, steps, func(ctx context.Context, step rbacRepairStep) error {
+			active.Add(1)
+			calls.Add(1)
+			defer active.Add(-1)
+			entered <- struct{}{}
+			if step.UID == "0" {
+				select {
+				case <-fail:
+					return want
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+	for range 4 {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("repair workers did not start")
+		}
+	}
+	close(fail)
+	if err := <-done; !errors.Is(err, want) {
+		t.Fatalf("lost repair failure: %v", err)
+	}
+	if active.Load() != 0 || calls.Load() != 4 {
+		t.Fatalf("failed repair leaked or continued work: active=%d calls=%d", active.Load(), calls.Load())
+	}
+}
+
+func TestRBACRepairCompletionRecognizesConcurrentCompletedRepair(t *testing.T) {
+	before := rbac.TierState{TierID: rbac.ClusterTierID, Revision: 7, ProjectionPending: true,
+		Projection: rbac.ProjectionIdentity{RepositoryID: "repository", GitRef: "refs/heads/main",
+			GitRevision: "main@sha1:" + strings.Repeat("a", 40), TreeDigest: strings.Repeat("b", 64)}}
+	for _, test := range []struct {
+		name   string
+		change func(*rbac.TierState)
+		wantOK bool
+	}{
+		{"peer-completed-before-status-update", func(*rbac.TierState) {}, true},
+		{"unchanged-revision", func(state *rbac.TierState) { state.Revision = before.Revision }, false},
+		{"older-revision", func(state *rbac.TierState) { state.Revision = before.Revision - 1 }, false},
+		{"repair-still-pending", func(state *rbac.TierState) { state.ProjectionPending = true }, false},
+		{"new-canonical-origin", func(state *rbac.TierState) {
+			state.Projection.GitRevision = "main@sha1:" + strings.Repeat("c", 40)
+		}, false},
+		{"namespace-retired", func(state *rbac.TierState) { state.NamespaceRetired = true }, false},
+		{"different-tier", func(state *rbac.TierState) { state.TierID = "different" }, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			current := before
+			current.Revision++
+			current.ProjectionPending = false
+			test.change(&current)
+			reads := 0
+			err := confirmRBACRepair(t.Context(), before, func(context.Context) (rbac.TierState, error) {
+				reads++
+				return current, nil
+			})
+			if test.wantOK {
+				if err != nil {
+					t.Fatalf("completed identical-origin repair was reported as failed: %v", err)
+				}
+			} else if !errors.Is(err, rbac.ErrConflict) {
+				t.Fatalf("unconfirmed or superseded repair lost its conflict: %v", err)
+			}
+			if reads != 1 {
+				t.Fatalf("repair completion used %d live confirmation reads, want one", reads)
+			}
+		})
+	}
+	want := errors.New("repair confirmation unavailable")
+	err := confirmRBACRepair(t.Context(), before, func(context.Context) (rbac.TierState, error) {
+		return rbac.TierState{}, want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("repair confirmation suppressed its source failure: %v", err)
+	}
+}
+
+func TestProductListingReservationIsNotDeletedBeforeAuthorityAppears(t *testing.T) {
+	projection := ProjectionRecord{
+		Table: productsByNamespaceShard, UID: "11111111-1111-1111-1111-111111111111",
+		Namespace: "shop", CreationTimestamp: time.Now().UTC(), Shard: 1,
+	}
+	plan, err := BuildRepairPlan(ProjectionSnapshot{Projections: []ProjectionRecord{projection}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 0 || len(plan.Findings) != 1 || plan.Findings[0].Repairable {
+		t.Fatalf("an in-flight pre-authoritative listing reservation must be retained: %+v", plan)
+	}
+}
+
+func TestRepositoryCatalogProjectionIsIncludedInRepair(t *testing.T) {
+	for _, kind := range []string{"Product", "ProductVariant", "CategoryTaxonomy", "Collection", "File"} {
+		t.Run(kind, func(t *testing.T) {
+			resource := AuthoritativeResource{Kind: kind, UID: "11111111-1111-1111-1111-111111111111",
+				RepositoryID: "22222222-2222-2222-2222-222222222222", Namespace: "shop", Name: "product",
+				ResourceVersion: "1", CreationTimestamp: time.Now().UTC()}
+			projections := expectedProjections(resource)
+			expected := 3
+			if kind == "Product" {
+				expected++
+			}
+			if len(projections) != expected {
+				t.Fatalf("got %d projections, want %d", len(projections), expected)
+			}
+			index := projections[len(projections)-1]
+			if index.Table != repositoryResourcesTable || index.Kind != resource.Kind || index.RepositoryID != resource.RepositoryID || index.Shard != categoryProductShard(resource.UID) {
+				t.Fatalf("unexpected repository index: %+v", index)
+			}
+			if !index.Equal(index) || index.Key() == "" {
+				t.Fatal("repository index must be comparable and addressable")
+			}
+			plan, err := BuildRepairPlan(ProjectionSnapshot{Authoritative: []AuthoritativeResource{resource}, Projections: projections[:len(projections)-1]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(plan.Actions) != 1 || actionTable(plan.Actions[0]) != repositoryResourcesTable {
+				t.Fatalf("missing repository index not repaired: %+v", plan)
+			}
+			other := index
+			other.Kind = "FutureResource"
+			if other.Key() == index.Key() || index.Equal(other) || other.resourceKind() != "FutureResource" {
+				t.Fatal("membership identity must include the kind without adding a table")
+			}
+			requirePlanErr := ValidateRepairPlan(plan)
+			if requirePlanErr != nil {
+				t.Fatal(requirePlanErr)
+			}
+		})
+	}
+}
 
 func TestProjectionTableKinds(t *testing.T) {
 	t.Parallel()
 	tests := map[string]string{
-		"namespaces_by_name":               "Namespace",
-		"namespaces_by_bucket":             "Namespace",
-		"repositories_by_namespace":        "Repository",
-		"repositories_by_bucket":           "Repository",
-		"namespace_mappings":               "Repository",
-		"namespace_mappings_by_repository": "Repository",
-		"products_by_name":                 "Product",
-		"products_by_uid":                  "Product",
-		"category_products_by_category":    "Product",
-		"category_products_by_product":     "Product",
-		"category_taxonomies_by_name":      "CategoryTaxonomy",
-		"category_taxonomies_by_uid":       "CategoryTaxonomy",
-		"category_ancestor_index":          "CategoryTaxonomy",
-		"collections_by_name":              "Collection",
-		"collections_by_uid":               "Collection",
-		"product_variants_by_name":         "ProductVariant",
-		"product_variants_by_uid":          "ProductVariant",
-		"product_variants_by_sku":          "ProductVariant",
-		"product_variants_by_product_ref":  "ProductVariant",
+		"service_accounts_by_cluster_uid":    "ServiceAccount",
+		"service_accounts_by_cluster_bucket": "ServiceAccount",
+		"files_by_name":                      "File",
+		"files_by_uid":                       "File",
+		"namespaces_by_name":                 "Namespace",
+		"namespaces_by_bucket":               "Namespace",
+		"repositories_by_namespace":          "Repository",
+		"repositories_by_bucket":             "Repository",
+		"namespace_mappings":                 "Repository",
+		"namespace_mappings_by_repository":   "Repository",
+		"products_by_identity":               "Product",
+		"products_by_uid":                    "Product",
+		productsByNamespaceShard:             "Product",
+		"category_products_by_category":      "Product",
+		"category_products_by_product":       "Product",
+		"category_taxonomies_by_name":        "CategoryTaxonomy",
+		"category_taxonomies_by_uid":         "CategoryTaxonomy",
+		"category_ancestor_index":            "CategoryTaxonomy",
+		"collections_by_name":                "Collection",
+		"collections_by_uid":                 "Collection",
+		"product_variants_by_name":           "ProductVariant",
+		"product_variants_by_uid":            "ProductVariant",
+		"product_variants_by_sku":            "ProductVariant",
+		"product_variants_by_product_ref":    "ProductVariant",
 	}
 	if len(tests) != len(projectionTableKinds) {
 		t.Fatalf("projection table test coverage = %d tables, registry = %d", len(tests), len(projectionTableKinds))
@@ -57,6 +384,38 @@ func TestProjectionTableKinds(t *testing.T) {
 	}
 	if knownProjectionTable(unknown) {
 		t.Errorf("knownProjectionTable(%q) = true, want false", unknown)
+	}
+}
+
+func TestServiceAccountRepairUsesGlobalAuthority(t *testing.T) {
+	account := AuthoritativeResource{Kind: "ServiceAccount", UID: "11111111-1111-1111-1111-111111111111", Name: "controller", ResourceVersion: "1", CreationTimestamp: time.Unix(100, 0).UTC()}
+	plan, err := BuildRepairPlan(ProjectionSnapshot{Authoritative: []AuthoritativeResource{account}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 2 {
+		t.Fatalf("missing reservation and listing repairs: %+v", plan)
+	}
+	for _, action := range plan.Actions {
+		if action.UID != account.UID || action.After.Name != account.Name || action.ExpectedResourceVersion != "1" {
+			t.Fatalf("repair lost identity guard: %+v", action)
+		}
+	}
+	if err := ValidateRepairPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+	projections := expectedProjections(account)
+	plan, err = BuildRepairPlan(ProjectionSnapshot{Projections: projections})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Actions) != 2 {
+		t.Fatalf("interrupted deletion not repaired: %+v", plan)
+	}
+	for _, action := range plan.Actions {
+		if !action.RequireAbsentResource || action.Type != RepairDelete {
+			t.Fatalf("unguarded deletion: %+v", action)
+		}
 	}
 }
 
@@ -208,6 +567,40 @@ func TestProjectionRepairServiceClearsRetainedRepositoryFence(t *testing.T) {
 	}
 }
 
+func TestCatalogFenceRepairValidation(t *testing.T) {
+	snapshot := missingNamespaceBucketSnapshot()
+	snapshot.Projections = expectedProjections(snapshot.Authoritative[0])
+	fence := NamespaceRepositoryFenceRepair{
+		Namespace: snapshot.Authoritative[0].Name, UID: snapshot.Authoritative[0].UID,
+		RepositoryCreationEpoch: 7, PendingRepositoryCreations: 1,
+	}
+	snapshot.NamespaceRepositoryFences = []NamespaceRepositoryFenceRepair{fence, fence}
+	snapshot.NamespaceRepositoryFences[1].Catalog = true
+	plan, err := BuildRepairPlan(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateRepairPlan(plan); err != nil {
+		t.Fatalf("independent Repository and catalog fences must coexist: %v", err)
+	}
+	plan.NamespaceRepositoryFences[1].PendingRepositoryCreations = 2
+	if err := ValidateRepairPlan(plan); err == nil {
+		t.Fatal("an exclusive catalog fence cannot have two holders")
+	}
+	plan.NamespaceRepositoryFences[1] = plan.NamespaceRepositoryFences[0]
+	if err := ValidateRepairPlan(plan); err == nil {
+		t.Fatal("duplicate fences of the same type must be rejected")
+	}
+	fence.Catalog = true
+	plan, err = BuildRepairPlan(ProjectionSnapshot{NamespaceRepositoryFences: []NamespaceRepositoryFenceRepair{fence}})
+	if err != nil {
+		t.Fatalf("a held fence must remain repairable after Namespace deletion: %v", err)
+	}
+	if err := ValidateRepairPlan(plan); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProjectionRepairServiceRetainsFenceWhenClearFails(t *testing.T) {
 	t.Parallel()
 	fence := NamespaceRepositoryFenceRepair{
@@ -348,7 +741,7 @@ func TestBuildRepairPlanDoesNotOverwriteValidCompetingOwner(t *testing.T) {
 func TestBuildRepairPlanDoesNotDeleteWriteReservation(t *testing.T) {
 	t.Parallel()
 	reservation := ProjectionRecord{
-		Table:             "products_by_name",
+		Table:             "products_by_identity",
 		UID:               "99999999-9999-9999-9999-999999999999",
 		Namespace:         "shop",
 		Name:              "pending-product",
@@ -380,7 +773,7 @@ func TestValidateRepairPlanRejectsReservationProjectionDelete(t *testing.T) {
 		UID:                   "11111111-1111-1111-1111-111111111111",
 		RequireAbsentResource: true,
 		Before: &ProjectionRecord{
-			Table: "products_by_name", UID: "11111111-1111-1111-1111-111111111111", Namespace: "shop", Name: "name",
+			Table: "products_by_identity", UID: "11111111-1111-1111-1111-111111111111", Namespace: "shop", Name: "name",
 		},
 	}}})
 	if err == nil || !strings.Contains(err.Error(), "reservation projection") {

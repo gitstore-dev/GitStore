@@ -18,9 +18,42 @@ timeout = "10s"
 branch_pattern = "^refs/heads/main$"
 
 [api]
-port = 4000
+roles = ["smart-http", "catalog", "admin"]
+graphql_layout = "dedicated"
+admin_port = 4000
+storefront_port = 4001
 git_port = 9000
 grpc_port = 6000
+
+# These are bind policies, never client advertisements. Each process can select
+# any role subset through GITSTORE_API__ROLES or api serve --roles=...
+[api.smart_http]
+bind_host = ""
+in_flight = 32
+deadline = "2m"
+
+[api.catalog]
+bind_host = ""
+in_flight = 32
+deadline = "30s"
+
+# Deployment-level full client URLs may name roles hosted by other processes.
+# Never advertise internal catalog or Git RPC targets.
+[api.advertised.admin]
+uri = ""
+disclose = false
+
+[api.advertised.storefront]
+uri = ""
+disclose = false
+
+[api.advertised.git_http]
+uri = ""
+disclose = false
+
+[api.profiling]
+uri = ""
+# Set token through GITSTORE_API__PROFILING__TOKEN before enabling a loopback URI.
 
 [api.rate_limit]
 per_second = 50
@@ -35,7 +68,7 @@ backend = "memdb"
 [api.auth.static_users]
 users_file = "/etc/gitstore/users.yaml"
 
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "local-development-jwt-secret-at-least-32-characters"
 ttl = "24h"
 issuer = "gitstore"
@@ -56,6 +89,26 @@ provider = "rbac-local"
 [api.auth.userdir]
 provider = "static-users"
 
+# Production directories are independent of the AuthN chain. Use "kratos" above;
+# inject GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN privately only when the Admin
+# gateway requires it. Never use the development static-users or none directory
+# as a production directory.
+# [api.auth.kratos]
+# admin_uri = "http://kratos:4434"
+# webhook_uri = "http://127.0.0.1:8085"
+# timeout = "2s"
+# max_concurrent = 16
+# max_response_size = "1MiB"
+# cache_entries = 4096
+# cache_ttl = "5m"
+# customer_groups = []
+# [[api.auth.kratos.mappings]]
+# provider = "oidc-jwt"
+# issuer = "http://localhost:4444/"
+# mode = "uid"
+# Additional mappings must explicitly qualify their AuthN provider and issuer.
+# No email matching, consumer checkpoints or restart repair are configured.
+
 # Optional OIDC Relying Party. Uncomment and chain "oidc-jwt" into
 # api.auth.authn.chain to verify bearer tokens against any standards-compliant
 # OIDC issuer — e.g. the optional reference stack (make compose IDENTITY=oidc).
@@ -70,9 +123,24 @@ provider = "static-users"
 [api.auth.rbac_local]
 policy_file = "/etc/gitstore/policy.yaml"
 
+[api.auth.opa]
+writes_enabled = false
+initial_admin_subject = ""
+max_staleness = "5s"
+validation_timeout = "30s"
+rebuild_workers = 4
+dirty_queue_capacity = 1024 # Maximum distinct dirty-tier entries, not bytes.
+snapshot_retries = 3
+snapshot_memory_size = "512MiB"
+rebuild_memory_size = "64MiB"
+
 [controller]
 port = 5001
-api_uri = "http://api:4000/graphql"
+api_uri = "http://api:4000/admin/graphql"
+
+[controller.profiling]
+uri = ""
+# Set token through GITSTORE_CONTROLLER__PROFILING__TOKEN before enabling a loopback URI.
 
 [controller.api_client.rate_limit]
 # Shared across all reconciliation kinds; leave room under the API's IP budget
@@ -82,7 +150,6 @@ burst = 10
 
 # The UID is provisioned by the Compose enrollment job into a controller-only mount.
 [controller.serviceaccount]
-namespace = "controllers"
 name = "gitstore-controller-manager"
 key_ref = { kind = "SecretRef", name = "gitstore-controller-manager-signing-key" }
 assertion_audience = "gitstore-api/serviceaccount-token"
@@ -105,11 +172,18 @@ max_backoff = "30s"
 resync_interval = "10m"
 
 [grpc_auth]
+# Signs single-use, expiring RPC requests in both directions; never sent as a
+# bearer token. Retain Git's .rpc-replay-v1 directory on process replacement.
 hmac_secret = "local-development-grpc-hmac-secret"
 
 [push_limits]
 max_pack_size = "512MiB"
 max_file_size = "100MiB"
+
+[observability.otlp]
+# Empty disables telemetry export; all enabled signals go to this collector.
+uri = ""
+trace_sample_ratio = 0.05
 
 [log]
 level = "info"

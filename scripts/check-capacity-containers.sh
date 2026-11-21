@@ -47,7 +47,7 @@ snapshot() {
         echo "cannot inspect Scylla membership through ${target}" >&2
         exit 1
       }
-      live_nodes="$(awk '$1 == "UN" { count++ } END { print count + 0 }' <<<"${membership}")"
+      live_nodes="$(printf '%s\n' "${membership}" | awk '$1 == "UN" { count++ } END { print count + 0 }')"
       jq --arg name "${target}" --argjson live_nodes "${live_nodes}" \
         'map(if .name == $name then . + {scyllaLiveNodes:$live_nodes} else . end)' \
         "${output_file}" >"${output_file}.tmp"

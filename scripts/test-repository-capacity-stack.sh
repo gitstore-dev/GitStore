@@ -5,33 +5,64 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-test_dir="$(mktemp -d)"
-trap 'rm -rf "${test_dir}"' EXIT
-mkdir -p "${test_dir}/bin"
+source "${repo_root}/scripts/test-fixtures/shell.sh"
+shell_test_setup repository-capacity-stack
 
-cat >"${test_dir}/bin/docker" <<'EOF'
+write_mock "${test_dir}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${REPOSITORY_CAPACITY_DOCKER_LOG}"
+if [[ -n "${REPOSITORY_CAPACITY_TTL_LOG:-}" ]]; then
+  printf '%s %s\n' "${CAPACITY_SERVICEACCOUNT_DEFAULT_TTL:-}" "${CAPACITY_SERVICEACCOUNT_MAX_TTL:-}" >"${REPOSITORY_CAPACITY_TTL_LOG}"
+fi
 EOF
-chmod +x "${test_dir}/bin/docker"
 
-cat >"${test_dir}/bin/curl" <<'EOF'
+write_mock "${test_dir}/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 case "${*: -1}" in
-  */health) printf '%s\n' '{"credentialReady":true,"kinds":{"Repository":{"registered":true}}}' ;;
+  */health)
+    if [[ -n "${TEST_CAPACITY_HEALTH_DIR:-}" ]]; then
+      port="${*: -1}"
+      port="${port##*:}"
+      port="${port%%/*}"
+      phase=before
+      [[ ! -f "${TEST_CAPACITY_HEALTH_DIR}/after" ]] || phase=after
+      if [[ "${phase}" == before && -f "${TEST_CAPACITY_HEALTH_DIR}/recover-${port}" &&
+            ! -f "${TEST_CAPACITY_HEALTH_DIR}/seen-${port}" ]]; then
+        touch "${TEST_CAPACITY_HEALTH_DIR}/seen-${port}"
+        printf '%s\n' '{"ready":false,"credentialReady":true,"kinds":{"Repository":{"registered":true}}}'
+        exit 0
+      fi
+      cat "${TEST_CAPACITY_HEALTH_DIR}/${phase}-${port}.json"
+      [[ ! -f "${TEST_CAPACITY_HEALTH_DIR}/http-error-${phase}-${port}" ]] || exit 22
+      exit 0
+    fi
+    printf '%s\n' '{"ready":true,"credentialReady":true,"kinds":{"Repository":{"registered":true}}}'
+    ;;
+  */metrics)
+    port="${*: -1}"
+    port="${port##*:}"
+    port="${port%%/*}"
+    if [[ -n "${TEST_CAPACITY_HEALTH_DIR:-}" ]]; then
+      [[ ! -f "${TEST_CAPACITY_HEALTH_DIR}/identity-missing-after-${port}" ]] || exit 0
+      if [[ -f "${TEST_CAPACITY_HEALTH_DIR}/identity-same-after-${port}" ]]; then
+        printf 'gitstore_controller_process_instance_info{instance_id="shared-controller"} 1\n'
+        exit 0
+      fi
+    fi
+    printf 'gitstore_controller_process_instance_info{instance_id="controller-%s"} 1\n' "${port}"
+    [[ -z "${TEST_CAPACITY_HEALTH_DIR:-}" ||
+       ! -f "${TEST_CAPACITY_HEALTH_DIR}/metrics-error-after-${port}" ]] || exit 22
+    ;;
   *) printf '\n' ;;
 esac
 EOF
-chmod +x "${test_dir}/bin/curl"
 
 export REPOSITORY_CAPACITY_DOCKER_LOG="${test_dir}/docker.log"
 : >"${REPOSITORY_CAPACITY_DOCKER_LOG}"
 for flag in 1 true 2 -1; do
-  if PATH="${test_dir}/bin:${PATH}" CHAOS_CONFIRM=0 REPOSITORY_CAPACITY_SECRET_SCENARIO="${flag}" \
-    "${repo_root}/scripts/repository-capacity-stack.sh" local-alpha >"${test_dir}/secret-preflight.log" 2>&1; then
-    echo "managed stack accepted unavailable or invalid secret scenario" >&2
-    exit 1
-  fi
+  assert_rejected "managed stack accepted unavailable or invalid secret scenario" "${test_dir}/secret-preflight.log" \
+    env PATH="${test_dir}/bin:${PATH}" CHAOS_CONFIRM=0 REPOSITORY_CAPACITY_SECRET_SCENARIO="${flag}" \
+    "${repo_root}/scripts/repository-capacity-stack.sh" local-alpha
 done
 [[ ! -s "${REPOSITORY_CAPACITY_DOCKER_LOG}" ]] || {
   echo "secret scenario guard ran Docker before rejecting the request" >&2
@@ -45,6 +76,12 @@ PATH="${test_dir}/bin:${PATH}" \
 
 grep -q -- '-p capacity-test --profile capacity-stack' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 grep -q -- 'compose.capacity.yml config' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
+
+PATH="${test_dir}/bin:${PATH}" CHAOS_CONFIRM=1 REPOSITORY_CAPACITY_SECRET_SCENARIO=1 \
+  REPOSITORY_CAPACITY_STATE_DIR="${test_dir}/state" \
+  REPOSITORY_CAPACITY_TTL_LOG="${test_dir}/ttl.log" \
+  "${repo_root}/scripts/repository-capacity-stack.sh" config
+[[ "$(cat "${test_dir}/ttl.log")" == "60s 60s" ]]
 
 : >"${REPOSITORY_CAPACITY_DOCKER_LOG}"
 touch "${test_dir}/replace"
@@ -84,6 +121,10 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
       -f "${repo_root}/compose.capacity.yml" config --format json >"${rendered}"
   jq -e '
     .services["scylla-1"].container_name == "gitstore-capacity-scylla-1" and
+    any(.services["api-a"].ports[]; .target==4000 and .published=="4000") and
+    any(.services["api-a"].ports[]; .target==4001 and .published=="4100") and
+    any(.services["api-b"].ports[]; .target==4000 and .published=="4001") and
+    any(.services["api-b"].ports[]; .target==4001 and .published=="4101") and
     .services["scylla-2"].container_name == "gitstore-capacity-scylla-2" and
     .services["scylla-3"].container_name == "gitstore-capacity-scylla-3" and
     ((.services["scylla-1"].ports // []) | length) == 0 and
@@ -91,6 +132,10 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     .services["api-b"].depends_on["capacity-credential-bootstrap"].condition == "service_completed_successfully" and
     .services["api-b"].depends_on["scylla-init"].condition == "service_completed_successfully" and
     .services["api-b"].depends_on["capacity-git-service"].condition == "service_started" and
+    .services["api-a"].command[0] == "/app/api" and
+    .services["api-a"].healthcheck.test == ["CMD", "/app/api", "gitctl", "healthcheck"] and
+    .services["capacity-credential-bootstrap"].build.target == "debug" and
+    .services["capacity-serviceaccount-enrollment"].command[:2] == ["/app/api", "gitctl"] and
     .services["capacity-git-service"].environment.GITSTORE_GIT_SERVICE__CATALOG__URI == "dns:///api-a:6000" and
     ((.services["capacity-credential-bootstrap"].ports // []) | length) == 0 and
     ((.services["capacity-serviceaccount-enrollment"].ports // []) | length) == 0 and
@@ -99,6 +144,8 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
 
   secret_rendered="${test_dir}/compose-secret.json"
   REPOSITORY_CAPACITY_SECRET_SCENARIO=1 \
+    CAPACITY_SERVICEACCOUNT_DEFAULT_TTL=60s \
+    CAPACITY_SERVICEACCOUNT_MAX_TTL=60s \
     CAPACITY_API_IMAGE="localhost/api@sha256:$(printf '%064d' 1)" \
     CAPACITY_CONTROLLER_IMAGE="localhost/controller@sha256:$(printf '%064d' 2)" \
     CAPACITY_GIT_SERVICE_IMAGE="localhost/git@sha256:$(printf '%064d' 3)" \
@@ -118,7 +165,9 @@ if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; 
     (.services["capacity-git-service"].image | startswith("localhost/git@sha256:")) and
     (.services["api-a"].environment.REPOSITORY_CAPACITY_SECRET_SCENARIO == "1") and
     (.services["api-b"].environment.REPOSITORY_CAPACITY_SECRET_SCENARIO == "1") and
-    (.services["api-a"].command[-1] | contains("GITSTORE_API__AUTH__SERVICEACCOUNT__MAX_TTL=60s")) and
+    (.services["api-a"].environment.GITSTORE_API__AUTH__SERVICEACCOUNT__DEFAULT_TTL == "60s") and
+    (.services["api-a"].environment.GITSTORE_API__AUTH__SERVICEACCOUNT__MAX_TTL == "60s") and
+    (.services["api-b"].environment.GITSTORE_API__AUTH__SERVICEACCOUNT__MAX_TTL == "60s") and
     (.services["capacity-git-service"].environment.GITSTORE_GIT_SERVICE__CATALOG__URI == "dns:///api-a:6000") and
     ([.services["controller-manager-a"], .services["controller-manager-b"]] |
       all((.volumes | length) == 4 and
@@ -136,20 +185,18 @@ fi
 
 # A verifier failure before the replacement trigger must reap the watcher and
 # must not reference a function-local PID after run_alpha returns.
-cat >"${test_dir}/bin/capacity-runner" <<'EOF'
+write_mock "${test_dir}/bin/capacity-runner" <<'EOF'
 #!/usr/bin/env bash
 until [[ -r "${REPOSITORY_CAPACITY_WATCHER_READY_FILE}" ]]; do sleep 0.01; done
 exit 17
 EOF
-chmod +x "${test_dir}/bin/capacity-runner"
-cat >"${test_dir}/bin/replacement-watcher" <<'EOF'
+write_mock "${test_dir}/bin/replacement-watcher" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$$" >"${REPOSITORY_CAPACITY_WATCHER_PID_FILE}"
 trap 'printf "%s\n" stopped >"${REPOSITORY_CAPACITY_WATCHER_STOP_FILE}"; exit 0' TERM INT
 printf '%s\n' ready >"${REPOSITORY_CAPACITY_WATCHER_READY_FILE}"
 while :; do sleep 1; done
 EOF
-chmod +x "${test_dir}/bin/replacement-watcher"
 mkdir -p "${test_dir}/failed-state"
 printf 'token\n' >"${test_dir}/failed-state/token"
 : >"${REPOSITORY_CAPACITY_DOCKER_LOG}"
@@ -180,6 +227,99 @@ grep -q -- 'logs --no-color$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 grep -q -- 'down -v --remove-orphans$' "${REPOSITORY_CAPACITY_DOCKER_LOG}"
 [[ -f "${test_dir}/failed-state/compose-failure-ps.log" ]]
 [[ -f "${test_dir}/failed-state/compose-failure.log" ]]
+
+write_mock "${test_dir}/bin/healthy-capacity-runner" <<'EOF'
+#!/usr/bin/env bash
+until [[ -r "${REPOSITORY_CAPACITY_WATCHER_READY_FILE}" ]]; do sleep 0.01; done
+metadata_dir="${CAPACITY_EVIDENCE_DIR}/repository/lifecycle/alpha/${CAPACITY_RUN_ID}"
+mkdir -p "${metadata_dir}"
+printf '%s\n' '{"passed":true,"fixture":"preserved"}' >"${metadata_dir}/metadata.json"
+touch "${TEST_CAPACITY_HEALTH_DIR}/after"
+EOF
+mkdir -p "${test_dir}/watcher-state"
+printf 'token\n' >"${test_dir}/watcher-state/token"
+healthy='{"ready":true,"credentialReady":true,"kinds":{"Repository":{"registered":true}}}'
+prepare_controller_health() {
+  local controller_port
+  mkdir -p "${health_dir}"
+  for controller_port in 5001 5002; do
+    printf '%s\n' "${healthy}" >"${health_dir}/before-${controller_port}.json"
+    printf '%s\n' "${healthy}" >"${health_dir}/after-${controller_port}.json"
+  done
+}
+
+run_managed_stack() (
+  local action="$1"
+  shift
+  env PATH="${test_dir}/bin:${PATH}" CAPACITY_RUN_ID=owned-run \
+    CAPACITY_GIT_REVISION=0123456789abcdef0123456789abcdef01234567 \
+    REPOSITORY_CAPACITY_HOST_MEMORY_BYTES=17179869184 REPOSITORY_CAPACITY_WAIT_SECONDS=0 \
+    REPOSITORY_CAPACITY_STATE_DIR="${test_dir}/watcher-state" REPOSITORY_CAPACITY_PROJECT=capacity-test \
+    REPOSITORY_CAPACITY_RUNNER="${test_dir}/bin/healthy-capacity-runner" \
+    REPOSITORY_CAPACITY_REPLACEMENT_WATCHER="${test_dir}/bin/replacement-watcher" \
+    REPOSITORY_CAPACITY_WATCHER_PID_FILE="${health_dir}/watcher.pid" \
+    REPOSITORY_CAPACITY_WATCHER_READY_FILE="${health_dir}/watcher.ready" \
+    REPOSITORY_CAPACITY_WATCHER_STOP_FILE="${health_dir}/watcher.stopped" \
+    CAPACITY_EVIDENCE_DIR="${health_dir}/evidence" TEST_CAPACITY_HEALTH_DIR="${health_dir}" \
+    "$@" "${repo_root}/scripts/repository-capacity-stack.sh" "${action}"
+)
+
+for port in 5001 5002; do
+  for readiness in false missing string credential registration malformed empty http-error metrics-error identity-missing identity-same; do
+    case "${readiness}" in
+      false) unhealthy='{"ready":false,"credentialReady":true,"kinds":{"Repository":{"registered":true}}}' ;;
+      missing) unhealthy='{"credentialReady":true,"kinds":{"Repository":{"registered":true}}}' ;;
+      string) unhealthy='{"ready":"true","credentialReady":true,"kinds":{"Repository":{"registered":true}}}' ;;
+      credential) unhealthy='{"ready":true,"credentialReady":false,"kinds":{"Repository":{"registered":true}}}' ;;
+      registration) unhealthy='{"ready":true,"credentialReady":true,"kinds":{"Repository":{"registered":false}}}' ;;
+      malformed) unhealthy='{' ;;
+      empty) unhealthy='' ;;
+      http-error|metrics-error|identity-missing|identity-same) unhealthy="${healthy}" ;;
+    esac
+    for phase in before after; do
+      case "${readiness}/${phase}" in
+        metrics-error/before|identity-missing/before|identity-same/before) continue ;;
+      esac
+      health_dir="${test_dir}/health-${port}-${readiness}-${phase}"
+      prepare_controller_health
+      printf '%s\n' "${unhealthy}" >"${health_dir}/${phase}-${port}.json"
+      [[ "${readiness}" != http-error ]] || touch "${health_dir}/http-error-${phase}-${port}"
+      case "${readiness}" in
+        metrics-error|identity-missing) touch "${health_dir}/${readiness}-${phase}-${port}" ;;
+        identity-same)
+          touch "${health_dir}/identity-same-after-5001" "${health_dir}/identity-same-after-5002"
+          ;;
+      esac
+      action=wait
+      [[ "${phase}" != after ]] || action=alpha
+      if run_managed_stack "${action}" >"${health_dir}/result.log" 2>&1; then
+        echo "managed stack accepted ${readiness} readiness on controller port ${port} ${phase} load" >&2
+        exit 1
+      fi
+      if [[ "${phase}" == after ]]; then
+        jq -e '.passed == false and .fixture == "preserved"' \
+          "${health_dir}/evidence/repository/lifecycle/alpha/owned-run/metadata.json" >/dev/null || {
+          echo "post-run readiness failure left successful or damaged metadata on controller port ${port}" >&2
+          exit 1
+        }
+        [[ -f "${health_dir}/watcher.stopped" ]]
+      else
+        [[ ! -e "${health_dir}/after" && ! -e "${health_dir}/watcher.pid" ]]
+      fi
+    done
+  done
+done
+
+health_dir="${test_dir}/health-recovered"
+prepare_controller_health
+for controller_port in 5001 5002; do
+  touch "${health_dir}/recover-${controller_port}"
+done
+run_managed_stack alpha REPOSITORY_CAPACITY_WAIT_SECONDS=5 >"${health_dir}/result.log" 2>&1
+[[ -f "${health_dir}/seen-5001" && -f "${health_dir}/seen-5002" &&
+   -f "${health_dir}/after" && -f "${health_dir}/watcher.stopped" ]]
+jq -e '.passed == true and .fixture == "preserved"' \
+  "${health_dir}/evidence/repository/lifecycle/alpha/owned-run/metadata.json" >/dev/null
 
 alpha_recipe="$(make --no-print-directory -C "${repo_root}" -n capacity TARGET=repository PROFILE=lifecycle MODE=alpha)"
 grep -q 'repository-capacity-stack.sh local-alpha' <<<"${alpha_recipe}"

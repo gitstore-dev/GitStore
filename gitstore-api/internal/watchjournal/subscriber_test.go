@@ -11,7 +11,41 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 )
+
+func TestInternalTierProgressDeliversOnlyAnOpaqueBookmark(t *testing.T) {
+	epoch := uuid.NewString()
+	journal := &subscriberJournal{
+		bounds: datastore.ResourceWatchBounds{Epoch: epoch, Oldest: 1, HighWater: 2},
+		events: []datastore.ResourceWatchEvent{
+			{Epoch: epoch, Sequence: 1, Type: datastore.ResourceWatchProgress, Kind: "RBACTier", Payload: []byte(`{"tierID":"private","revision":17}`)},
+			{Epoch: epoch, Sequence: 2, Type: datastore.ResourceWatchAdded, Kind: "Role", Namespace: "shop", Name: "reader"},
+		},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stream, err := NewSubscriber(journal, SubscriberConfig{}).Subscribe(ctx, EncodeCursor(epoch, 0))
+	require.NoError(t, err)
+	select {
+	case event := <-stream.Events:
+		require.Equal(t, datastore.ResourceWatchBookmark, event.Type)
+		require.EqualValues(t, 1, event.Sequence)
+		require.Empty(t, event.Kind)
+		require.Empty(t, event.Namespace)
+		require.Empty(t, event.Name)
+		require.Empty(t, event.Payload)
+	case <-time.After(time.Second):
+		t.Fatal("progress cursor was not delivered")
+	}
+	select {
+	case event := <-stream.Events:
+		require.EqualValues(t, 2, event.Sequence)
+		require.Equal(t, "Role", event.Kind)
+	case <-time.After(time.Second):
+		t.Fatal("resource following progress was not delivered")
+	}
+}
 
 type subscriberJournal struct {
 	mu     sync.Mutex

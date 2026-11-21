@@ -49,6 +49,7 @@ func TestGraphQLNamespaceStatusClient_SendsUpdateNamespaceStatusMutation(t *test
 	client := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
 	sc := status.NewGraphQLNamespaceStatusClient(client)
 	patch := namespaceTestPatch()
+	patch.UID = "observed-namespace-uid"
 
 	if err := sc.Apply(context.Background(), namespaceTestKey(), patch); err != nil {
 		t.Fatalf("Apply failed: %v", err)
@@ -75,6 +76,9 @@ func TestGraphQLNamespaceStatusClient_SendsUpdateNamespaceStatusMutation(t *test
 	}
 	if input["resourceVersion"] != "1" {
 		t.Errorf("input resourceVersion = %v, want %q", input["resourceVersion"], "1")
+	}
+	if input["uid"] != "observed-namespace-uid" {
+		t.Errorf("input uid = %v, want observed namespace incarnation", input["uid"])
 	}
 
 	conds, ok := input["conditions"].([]any)

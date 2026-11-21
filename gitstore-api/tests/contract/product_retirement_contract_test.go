@@ -7,9 +7,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/generated"
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/resolver"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/generated"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"

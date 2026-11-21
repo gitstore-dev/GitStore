@@ -6,14 +6,129 @@ Catalogue reads are GraphQL-first. Catalogue writes are Git-driven today: author
 
 ## Endpoint
 
+This page describes Admin. Storefront has an isolated schema at
+`http://localhost:4001/storefront/graphql` and a playground at
+`http://localhost:4001/storefront/playground`. Until publication and target
+binding are implemented, every accepted Storefront request returns HTTP 503
+with `STOREFRONT_UNAVAILABLE`, no data and `Cache-Control: no-store`.
+Admin/root operational paths are independent of that unavailability.
+These are native listener defaults; Compose publishes Storefront on host 4100.
+
 | Item         | Value                              |
 |--------------|------------------------------------|
-| GraphQL URL  | `http://localhost:4000/graphql`    |
-| Playground   | `http://localhost:4000/playground` |
+| GraphQL URL  | `http://localhost:4000/admin/graphql`    |
+| Playground   | `http://localhost:4000/admin/playground` |
 | Method       | `POST`                             |
 | Content type | `application/json`                 |
 
+### Internal identity mail
+
+When the development notification provider is enabled, the Admin listener
+accepts `POST /internal/notifications/mail` with `Content-Type: application/json`
+and the privately injected `GitStore-Mail-Key` header. This is an internal
+HTTP courier adapter, not a GraphQL mutation or a Storefront endpoint.
+
+The JSON message contains `recipient`, `subject`, `body`, optional `html_body`,
+`template_type` and optional `message_type` (`email`). Optional native template
+data/request headers are discarded. Delivery is bounded by configured body,
+concurrency and deadline limits.
+
+| Status | Meaning |
+|---|---|
+| `204` | Development catcher accepted the message |
+| `400` / `413` / `415` | Invalid message / oversized body / unsupported content type |
+| `401` / `405` | Invalid mail credential / unsupported method |
+| `503` | Provider failure, timeout or saturation; native courier may retry |
+| `404` | Adapter disabled, or request sent to Storefront |
+
+Responses never include message content or setup/verification secrets.
+Duplicate delivery is possible; acceptance is not an exactly-once guarantee.
+See [Identity mail configuration](configuration.md#identity-mail) for private
+routing, the development TLS boundary and upstream logging limitations.
+
+Directory contact facts are resolved by immutable subject, not recipient
+email. A previous verified address is retained while a replacement remains
+unverified; an old-address bounce does not suppress a newly verified
+replacement. Initial deliverability defaults to false without a trusted
+observation. Consent changes are server-timestamped, and bounce/timestamp-only
+updates do not advance generation. Contact writes retain the external
+provider's best-effort concurrency and privileged-Admin bypass limitations.
+This contact capability does not add a public mail or contact HTTP endpoint.
+
+## Type and input conventions
+
+GraphQL names describe their role; not every object is a persisted resource.
+Use the schema's defaults and field types rather than adding an envelope to
+every input or response.
+
+| Contract family | Naming and shape | Intentional distinctions |
+|---|---|---|
+| Resource representations | Concrete kinds such as `Repository`, `Namespace`, `Product`, `Category`, `Collection`, `ProductVariant`, `File`, and RBAC resources expose `apiVersion`, `kind`, `metadata`, `spec` and `status`, plus opaque `id` where supported. | GraphQL type names need not equal manifest discriminators: `Category.kind` is `CategoryTaxonomy`. An envelope does not imply a supported GraphQL write operation. |
+| Identity representations | `Staff`, `Customer` and `ServiceAccount` expose `id`, `apiVersion`, `kind`, `metadata` and identity fields. | No synthetic `spec` or `status`. `Actor` is the shared identity interface; `User` adds human fields. Customer creation remains owned by the external identity provider. |
+| Resource-oriented writes | `Create<Kind>Input` and resource-replacement `Update<Kind>Input` carry defaulted, non-null `apiVersion`/`kind`, required `metadata`, and the writable content for that resource. | Catalog/infrastructure/RBAC inputs use `spec`; `CreateStaffInput` keeps `fullName`, `primaryEmail`, `groups` alongside metadata; `CreateServiceAccountInput` keeps `publicKeys` there. Output-only fields do not become writable. |
+| Targeted operations | `<Action>Input` contains the target and only the arguments needed by the operation. | `UpdateUserInput` is a human-field patch, not a resource replacement. Its opaque `id` selects Staff or Customer; omitted fields stay unchanged. Delete/lookup by ID, lifecycle, group, status, finalizer, publication and invitation operations do not need a full resource envelope. |
+| Transient requests/results | `TokenRequest` and `SubjectAccessReview` use versioned request/result envelopes with `spec` and `status`. | They are not persisted resources and gain no resource lifecycle or CRUD API. OAuth/OIDC `TokenResponse`, login and refresh inputs retain their protocol-oriented fields without an envelope. |
+| Transport and helpers | `<Action>Payload`, `<Kind>Connection`, `<Kind>Edge`, `PageInfo`, selectors such as `ActorBy`, and watch-event wrappers carry operation/pagination/selection/event data. | Payloads wrap results, not duplicate resource envelopes. Nested specs, statuses, references, keys, lifecycle/contact values and scalars are values, not independent resources. Watch events wrap a resource or tombstone and cursor rather than becoming resources themselves. |
+
+ServiceAccount rotation/deletion retain their existing name-based metadata
+envelopes; rotation's `add`/`removeKids` fields describe a key operation, not a
+replacement identity. Token issuance also uses metadata to match the
+authenticated assertion's account. Every ServiceAccount operation rejects
+any non-null namespace. By contrast, access reviews deliberately have no
+metadata: they evaluate a request and do not allocate a resource identity.
+
+`CreateStaffInput` defaults to
+`apiVersion: "authentication.gitstore.dev/v1beta1"` and `kind: "Staff"`;
+explicit unsupported values fail with `BAD_USER_INPUT` before directory writes.
+`metadata.name` is the username, not an email alias. Human scope remains
+cluster-wide; a nonempty `metadata.namespace` is rejected. Shared metadata
+fields do not imply that every identity provider can edit or persist them.
+
+Human mutation payloads deliberately retain the common `actor` result key,
+except invitation/create payloads that return `staff`. Group operations can
+return a workload actor; human-field patches and lifecycle/contact operations
+cannot. Keep concrete human selections under `... on User` or concrete-kind
+fragments rather than assuming every `Actor` has contact fields.
+
+### Client coordination
+
+Staff creation now accepts explicit version/kind discriminators. Existing
+GraphQL documents and variable objects that omit them continue to use schema
+defaults; there are no renamed operations, moved fields or deprecated aliases.
+Regenerate typed clients from the updated Admin SDL when adopting those fields,
+and deploy the server schema before sending explicit discriminators: an older
+server rejects unknown input fields. Direct Go model/resolver callers must set
+both fields because GraphQL defaults are applied only during GraphQL coercion.
+Only the supported explicit discriminators are accepted.
+
+ServiceAccount create, rotate, delete and token-issuance inputs now validate
+their discriminators instead of silently ignoring them. Migrate explicit
+`gitstore.dev/v1alpha1` or `gitstore.dev/v1beta1` values to
+`authentication.gitstore.dev/v1beta1`, or omit the discriminator fields to use
+schema defaults. Use `kind: "ServiceAccount"` for account operations and
+`kind: "TokenRequest"` for token issuance. Update clients before rolling out
+this validation; the corrected values and omitted form also work with the
+previous server. Unsupported values return `BAD_USER_INPUT` without issuing
+tokens or creating, rotating or deleting an account.
+
+The in-repository invitation example sends the explicit envelope; integration
+Staff callers omitting it exercise the defaulted form. The shipped
+`gitctl enroll-serviceaccount` operation, ServiceAccount integration callers
+and direct resolver tests use the corrected version. Controller token
+requests already use that version. No commerce-admin client operations are
+shipped in this source tree. Independently delivered clients
+should regenerate their Admin types and coordinate schema rollout, without
+inventing legacy wrappers. No datastore migration is needed. Other resource,
+patch, OAuth/OIDC and payload contracts are unchanged. During mixed-server
+rollouts, keep omitting the new fields until all serving replicas support them.
+These Admin conventions do not add catalog capabilities to Storefront.
+
 ## Authentication
+
+Admin introspection requires an authenticated principal. The endpoint selector
+in either playground clears headers and closes subscriptions when changing
+endpoints; enter credentials again for the selected Admin URL. Cross-origin
+playground use requires the endpoint's configured CORS allow-list.
 
 Public read access depends on resolver and deployment policy. Protected mutations require a JWT bearer token:
 
@@ -80,6 +195,9 @@ mutation Logout {
 |--------------------------------------------|-----------------------------------------|
 | `node(id: ID!)`                            | Fetch one Relay node by global ID       |
 | `nodes(ids: [ID!]!)`                       | Fetch multiple Relay nodes by global ID |
+| `actor(by: ActorBy!)`                      | Fetch a Staff, Customer or ServiceAccount |
+| `actors(...)`                             | List the configured identity directory |
+| `serviceAccounts(...)`                    | List authoritative ServiceAccounts independently of UserDir |
 | `namespace(by: NamespaceBy!)`              | Fetch one namespace                     |
 | `namespaces(...)`                          | List namespaces                         |
 | `repository(by: RepositoryBy!)`            | Fetch one repository                    |
@@ -104,6 +222,10 @@ mutation Logout {
 | `deleteNamespace(input: DeleteNamespaceInput!)`               | Delete an empty namespace                                                                                                                                                            |
 | `createRepository(input: CreateRepositoryInput!)`             | Create a repository in a namespace                                                                                                                                                   |
 | `deleteRepository(input: DeleteRepositoryInput!)`             | Delete a repository and its storage                                                                                                                                                  |
+| `createProduct(input: CreateProductInput!)`                   | Commit a new Product manifest to the namespace's `gitstore-system` repository |
+| `updateProduct(input: UpdateProductInput!)`                   | Commit a Product update at its admitted source repository/path |
+| `deleteProduct(input: DeleteProductInput!)`                   | Start guarded foreground Product termination |
+| `completeProductDeletion(input: CompleteProductDeletionInput!)` | Controller-only completion of Product termination |
 | `createCategory(input: CreateCategoryInput!)`                 | Create a category by committing its manifest to the namespace's `gitstore-system` repository                                                                                         |
 | `updateCategory(input: UpdateCategoryInput!)`                 | Update a category by committing to the repository and path it was admitted from                                                                                                      |
 | `deleteCategory(input: DeleteCategoryInput!)`                 | Start foreground deletion of a category by removing its manifest from Git                                                                                                            |
@@ -112,14 +234,18 @@ mutation Logout {
 | `updateNamespaceStatus(input: UpdateNamespaceStatusInput!)`   | Controller-only partial-merge write to a Namespace's `.status` sub-resource                                                                                                          |
 | `updateProductStatus(input: UpdateProductStatusInput!)`       | Controller-only partial-merge write to a Product's `.status` sub-resource, including `resolved.category` (`{name, uid}`) and its declarative `CategoryTaxonomy` owner-reference sync |
 | `updateRepositoryStatus(input: UpdateRepositoryStatusInput!)` | Controller-only partial-merge write to a Repository's `.status` sub-resource                                                                                                         |
-| `updateResourceStatus(input: UpdateResourceStatusInput!)`     | Generic, kind-parameterized counterpart of the per-kind status mutations for CRD-defined kinds                                                                                       |
+| `updateResourceStatus(input: UpdateResourceStatusInput!)`     | Generic status write for registered supported kinds; not a dynamic custom-resource runtime |
 
 ### Subscriptions
 
 | Operation                                                                                                 | Purpose                                                                            |
 |-----------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------|
 | `watchCategories(namespace: String, selector: LabelSelectorInput, resourceVersion: String)`               | List-then-watch stream of `CategoryTaxonomy` changes                               |
-| `watchResources(kind: String!, namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Generic, kind-parameterized counterpart of `watchCategories` for CRD-defined kinds |
+| `watchNamespaces(resourceVersion: String, selector: LabelSelectorInput)` | Cluster-scoped durable Namespace watch |
+| `watchRepositories(namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Durable Repository watch |
+| `watchProducts(namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Durable Product watch |
+| `watchFiles(namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Durable File watch |
+| `watchResources(kind: String!, namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Generic durable watch for registered kinds; unsupported kinds fail closed |
 
 ## Relay IDs
 
@@ -166,8 +292,29 @@ query GetNode($id: ID!) {
 
 File IDs returned by `file` also resolve through `node` and `nodes`, with the
 same `file.read` authorization. Batch results retain input order, including
-duplicate IDs and null entries for missing resources. File datastore failures
-are reported as GraphQL errors, not successful missing-resource responses.
+duplicate IDs. A missing resource produces a null entry and a `NOT_FOUND`
+error whose `path` identifies that array index; malformed IDs produce a null
+entry and `BAD_USER_INPUT`. These errors do not discard other authorized
+results. An alias is retained in the error path, for example `["selected", 2]`
+for `selected: nodes(...)`.
+The same error envelope applies to every supported Node kind and to typed
+lookups such as `category`, `product`, and `namespace`, including missing
+Repository owner namespaces. Infrastructure failures and cancellation remain
+errors, never `NOT_FOUND`; they fail the batch rather than returning a
+success-shaped partial result. Error messages do not expose underlying
+datastore details. Staff, Customer and ServiceAccount implement both Actor and
+Node. Staff and Customer also implement the human-only User interface.
+Human IDs use directory UIDs; ServiceAccount IDs use GitStore source UIDs,
+not mirror IDs. Human reads require `user.read`; workload reads require
+`serviceAccount.read`.
+Batch hydration uses at most eight concurrent resource reads per request.
+Cancellation stops scheduling new reads and cancels in-flight File lookups.
+File authorization checks use the record loaded by UID, including its owner,
+instead of fetching it again by name; every policy decision completes before
+the batch resolver is allowed to return protected data. The resolver returns
+those exact authorized File records without a second lookup. These snapshots,
+including missing results, apply only to that root field, never another field
+or request; a later request performs fresh authorization and storage reads.
 
 ```graphql
 query GetNodes($ids: [ID!]!) {
@@ -318,6 +465,12 @@ query ListRepositories($namespace: String!) {
 ### product
 
 `Product` is the non-sellable parent descriptor. SKU, pricing, and inventory are on `ProductVariant`.
+
+Product and ProductVariant reads and lists accept either the ordinary or the
+corresponding management capability; neither requires both. With Git-backed
+authorization, these alternative checks use one captured serving model for the
+authorization operation. A policy publication between them cannot change that
+operation's verdict; a later request captures the current model.
 
 ```graphql
 query GetProduct {
@@ -660,6 +813,66 @@ query ListCollections {
 
 ## Mutation Operations
 
+### Identity administration
+
+`actor(by:)` accepts exactly one of `id`, canonical human `username` or
+`serviceAccountName`. A human and a workload may share a name; selectors do not
+merge them. Concrete human envelopes expose `metadata`, `fullName`, `identities`,
+`groups`, `lifecycle` and trusted contact facts, never credentials or setup links.
+Staff and Customer share the `User` interface for fragments over these common
+fields. ServiceAccount remains an `Actor`, not a `User`; group mutation payloads
+remain `Actor` so they can return humans or workloads.
+
+`actors` requires both `user.list` and `serviceAccount.list` before enumeration.
+Kratos supports bounded `first`/`after` pages (1-500), with opaque edge cursors and
+`pageInfo`; `last`/`before` return `UNSUPPORTED_PAGINATION`. Directory cursors are
+provider-bound. Workload mirrors are hydrated by source UID, not name; orphaned
+mirrors are skipped. A nonterminal page containing only orphans returns
+`ACTOR_PAGE_HAS_NO_VISIBLE_EDGES`, rather than scanning ahead or returning a
+cursor that cannot advance. Unified workload coverage is not guaranteed.
+
+`serviceAccounts` requires `serviceAccount.list`, supports both pagination
+directions and remains usable without UserDir. Its opaque cursors belong only
+to that connection. Neither connection exposes total counts or public filters.
+`ServiceAccount.groups: [String!]!` resolves directory memberships lazily by
+immutable GitStore source UID, never name or mirror UID. Linked Kratos profiles
+return ordinary `system:group:<name>` memberships and `system:serviceaccounts`.
+Missing mirrors or a directory without workload-group support return `[]`;
+lookup failures return `SERVICE_UNAVAILABLE`. Reads that do not select `groups`
+perform no membership lookup and remain independent of directory availability.
+Healthy internal delivery maintains credentialless UID-linked mirrors while
+preserving directory groups. Delivery retries three times, then discards; buffer
+overflow also discards events. Restart/reload starts at the current journal
+boundary without replay or automatic repair. Missing, stale or orphaned mirrors
+can therefore persist indefinitely. See
+[workload directory mirrors](configuration.md#workload-directory-mirrors).
+
+Human operations use action-specific `input` and payload wrappers:
+`createStaff` and `resendStaffInvitation` wrap `staff`; `updateUser`,
+`deactivateUser`, `reactivateUser`, `suspendUser`, `deleteUser`,
+`assignUserGroup`, `removeUserGroup` and `setUserEmailDeliverability` wrap `actor`.
+Creation requires `user.create`; deletion requires `user.delete`; group changes
+require `user.group.update`; other changes require `user.update`.
+Only `cluster-admin` receives these actions by default.
+
+Staff creation invites rather than setting a password. Setup and verification
+govern activation. `updateUser` accepts only full name, pending primary email and
+transactional/marketing consent; it cannot change username, type, groups or
+lifecycle. Authorized safe self-updates are permitted, but administrative
+self-edits are rejected. Human contact/lifecycle/delete operations reject
+workloads; workload group changes alter only protected directory membership.
+Group inputs are bare ordinary names, never `system:*` names.
+
+Customer groups are mandatory memberships configured for all Customers.
+Assigning a configured group is a no-op; individual removal and assignment
+outside that configuration are rejected.
+
+Staff revisions are best-effort and Customer counters are unsupported
+(-1/"-1"); neither provides native compare-and-swap. Directory state and session
+revocation, and invitation creation and delivery, are separate operations.
+Successful writes invalidate local profile/connection snapshots; other replicas
+retain their bounded freshness leases. See [identity configuration limitations](configuration.md#reference-identity-schemas-and-metadata).
+
 ### login
 
 See [Authentication](#authentication).
@@ -713,7 +926,11 @@ Input fields:
 
 ### deleteNamespace
 
-Deletes an empty namespace. Deletion is blocked if repositories remain.
+Starts foreground deletion by removing the Namespace manifest from
+`gitstore-system/gitstore-system`. Ordinary repositories, including terminating
+ones, and catalog resources in the namespace's system repository block deletion.
+An empty system repository alone does not block it; controller completion removes
+that repository before releasing the Namespace name.
 
 ```graphql
 mutation DeleteNamespace($id: ID!) {
@@ -763,7 +980,10 @@ mutation CreateRepository($namespace: String!) {
 
 ### deleteRepository
 
-Deletes repository metadata and storage.
+Starts foreground deletion by removing `repositories/<name>.md` from the
+namespace's `gitstore-system` repository. Catalog resources block deletion.
+Backing Git storage and the name reservation remain until controller completion.
+Direct deletion of the system repository is rejected.
 
 ```graphql
 mutation DeleteRepository($id: ID!) {
@@ -829,11 +1049,26 @@ mutation DeleteCategory($input: DeleteCategoryInput!) {
 }
 ```
 
-`outcome` is `TERMINATION_STARTED`, or `ALREADY_TERMINATING` for a repeat request, which creates no commit. See the [deletion runbook](runbooks/categorytaxonomy-deletion.md).
+`outcome` is `TERMINATION_STARTED`, or `ALREADY_TERMINATING` for a repeat request, which creates no commit. See the [deletion runbook](runbooks/catalog-lifecycle.md#categorytaxonomy-deletion).
 
 ### completeCategoryDeletion
 
 Controller-only. Finishes foreground deletion of a terminating category once its children are gone and its products are decoupled. Requires `categoryTaxonomy.purge`. `resourceVersion` must equal the category's current value, otherwise the request fails with `CONFLICT` (`RESOURCE_VERSION_CONFLICT`). Fails with `FAILED_PRECONDITION` (`CATEGORY_NOT_TERMINATING`, `CHILD_CATEGORIES_PRESENT` or `PRODUCT_DECOUPLING_INCOMPLETE`) when the category is not ready to be removed. Returns `{ id }` of the removed category.
+
+### Completion identity
+
+`completeNamespaceDeletion`, `completeRepositoryDeletion`, `completeProductDeletion`,
+and `completeCategoryDeletion` all require `input.id: ID!`: the resource's opaque
+Relay Node `id`, also exposed as `metadata.uid`. Raw datastore UIDs and IDs of a
+different Node type are rejected. CategoryTaxonomy uses the GraphQL `Category`
+Node type. The input field is `id`, not `uid`; output `metadata.uid` is unchanged.
+
+Supply the observed `name` and `resourceVersion`, plus `namespace` for namespaced
+resources. Completion checks that the ID, route, and version identify the same
+incarnation before finalizing it. A stale request cannot finalize a same-name
+replacement, even if its version matches. Controller authorization, dependent
+checks, and finalizer safeguards still apply. Other resource kinds do not expose
+a separate deletion-completion mutation.
 
 ### updateCategoryStatus
 
@@ -863,7 +1098,11 @@ A resource that no longer exists returns a GraphQL error with `extensions.code =
 
 ### updateResourceStatus
 
-Generic, kind-parameterized counterpart of `updateCategoryStatus` for CRD-defined kinds that have no compile-time-known `resolved` shape. Same partial-merge/precondition/authorization semantics; the resource payload and `resolved` field are JSON-boxed instead of strongly typed.
+Generic, kind-parameterized status mutation for supported registered kinds.
+The resource payload and `resolved` field are JSON-boxed instead of strongly
+typed. This endpoint does not provide a custom-resource definition runtime;
+unsupported kinds fail closed. Dedicated per-kind mutations retain their
+typed partial-merge, precondition and authorization contracts.
 
 ```graphql
 mutation UpdateResourceStatus($input: UpdateResourceStatusInput!) {
@@ -904,7 +1143,10 @@ subscription WatchCategories($namespace: String, $resourceVersion: String) {
 
 ### watchResources
 
-Generic, kind-parameterized counterpart of `watchCategories` for CRD-defined kinds. Same list-then-watch/resume/expiry semantics; the resource payload is JSON-boxed via `object`.
+Generic durable watch for supported registered kinds, with list/watch,
+resume and expiry semantics. The resource payload is JSON-boxed via `object`;
+a kind without a durable source returns `UNSUPPORTED_KIND`. This is not
+runtime discovery or implementation of custom-resource definitions.
 
 ```graphql
 subscription WatchResources($kind: String!, $resourceVersion: String) {
@@ -928,11 +1170,240 @@ git commit -m "Update catalogue"
 git push origin main
 ```
 
-The API reference intentionally omits catalogue CRUD mutation docs. Some schema fields may remain for compatibility or transitional UI work, but they are not the supported write path for catalogue resources.
+Product and CategoryTaxonomy also have supported Git-backed GraphQL mutations.
+These are not compatibility-only schema stubs: they commit canonical manifests
+and await the same admission path as Git pushes. ProductVariant, Collection and
+File do not expose equivalent catalogue CRUD mutations.
 
-Git-backed catalogue resources are projected into GraphQL after post-receive admission. Resource identity is `apiVersion`, `kind`, namespace, and `metadata.name`; the source file path is provenance only. File moves preserve `metadata.uid`. Spec or Markdown body edits increment `metadata.generation` and `metadata.resourceVersion`; path-only moves and metadata-only edits preserve `generation` and increment `resourceVersion`. Admission deletes Product, Collection, ProductVariant, and File records only when the persisted `resourceVersion` still matches the version observed during ownership validation; a concurrent update rejects the push instead of deleting the newer record. Deleted files disappear from GraphQL reads after admission deletes the stored identity. A later delete/re-add receives a new UID and starts again at `generation=1`.
+### Product mutations
+
+`createProduct` writes into the namespace's implicit `gitstore-system`
+repository. `updateProduct` writes at the admitted Product's stored provenance;
+omitting `body` preserves the current body. Both accept the versioned resource
+envelope with `metadata` and `spec`:
+
+```graphql
+mutation CreateProduct {
+  createProduct(input: {
+    metadata: { name: "winter-coat", namespace: "gitstore-test" }
+    spec: { title: "Winter Coat" }
+  }) {
+    product {
+      id
+      metadata { name uid generation resourceVersion }
+      spec { title }
+    }
+  }
+}
+```
+
+`deleteProduct(input: { id })` requires the opaque Product node ID and returns
+the current Product plus a termination outcome. Blocking ProductVariant
+references prevent termination; controller-only `completeProductDeletion`
+finishes removal. See the [Product contract](products/product-spec.md#mutation-admission)
+for admission errors, retry semantics and lifecycle guards, and
+[Category mutations](#createcategory) for the equivalent category write path.
+
+Git-backed catalogue resources are projected into GraphQL after post-receive
+admission. Identity is `apiVersion`, `kind`, namespace, and `metadata.name`;
+the file path is provenance only. Path-only moves preserve UID and generation
+while incrementing resource version. Spec/body edits increment both generation
+and resource version.
+
+Product and CategoryTaxonomy manifest removal starts guarded foreground
+termination rather than immediate disappearance. Collection, ProductVariant
+and File removal deletes the stored identity only with matching ownership and
+resource-version preconditions. A concurrent update prevents stale deletion;
+a post-receive conflict does not retroactively reject the accepted Git push.
+Recreation after completed removal receives a new UID and starts at generation 1.
 
 Post-receive admission is asynchronous and cannot reject an already accepted Git push. DB-backed conflicts such as duplicate variant SKUs leave the existing stored resource unchanged and skip the conflicting incoming resource.
+
+## RBAC resources and access reviews
+
+**Availability:** these Admin schema contracts are present, but dynamic RBAC
+production activation remains gated. Selecting `opa` currently refuses
+production startup; keep the supported provider configured. They are not
+Storefront operations.
+
+`Role`, `ClusterRole`, `RoleBinding` and `ClusterRoleBinding` use
+`rbac.authorization.gitstore.dev/v1beta1` envelopes with Node identity,
+`metadata`, `spec` and controller-owned `status`. Roles and bindings are
+namespaced; their Cluster counterparts omit the namespace. Each kind has a
+single lookup, bounded Relay list, typed watch and action-specific
+create/update/delete/complete-deletion mutations. Updates require the returned
+version in `metadata.resourceVersion`; omit it on creates. Delete and completion
+inputs keep their top-level `resourceVersion` precondition. Other resource
+mutations do not accept this metadata precondition. Final removal additionally
+requires purge authority and completed finalizers.
+
+Each RBAC delete payload includes `outcome: ResourceDeletionOutcome!`:
+`TERMINATION_STARTED` when this request starts termination, or
+`ALREADY_TERMINATING` when it observes an existing termination without authoring
+another Git commit. Neither outcome means foreground deletion has finished.
+
+GraphQL role-reference kinds are `ROLE` and `CLUSTER_ROLE`; subject kinds are
+`USER`, `GROUP` and `SERVICE_ACCOUNT`. Git manifests and static policy files
+retain `Role`/`ClusterRole` and `User`/`Group`/`ServiceAccount`; the API converts
+these values at the GraphQL boundary.
+
+RBAC manifests have fixed paths under `rbac/roles`, `rbac/clusterroles`,
+`rbac/rolebindings` or `rbac/clusterrolebindings`, with `<name>.yaml` filenames,
+in the authoritative system repository. Git pre-receive and GraphQL writes
+share admission and conservative delegation checks. Reverts are new writes,
+not an authorization bypass. A successful write identifies its Git revision;
+it does not promise every API has already consumed it. A committed write with
+projection failure returns partial-outcome diagnostics rather than pretending
+to roll Git back.
+
+Annotation metadata counts toward manifest and snapshot limits even when
+unchanged root-manifest validation is reused. Validation reuse never caches
+authorization decisions or bypasses current source identity, lifecycle,
+controller status or publication-revision checks.
+
+Binding resolution uses the controller's local Role projection. When independent
+kind watches deliver a binding before its Role, the controller confirms the
+missing reference with a single scoped API lookup instead of waiting for the
+Role watch to catch up. Lookup failures remain retryable; a resolved binding
+never switches to a recreated Role with the same name.
+Role UID and termination-state changes schedule durable reconciliation of
+dependent bindings. Status-only Role updates do not trigger this fan-out.
+
+### SubjectAccessReview
+
+`accessReview(review:)` is an Admin Query returning `SubjectAccessReview`
+directly, without a mutation payload wrapper. Its default input version and kind
+are `authorization.gitstore.dev/v1beta1` and `SubjectAccessReview`.
+
+```graphql
+query {
+  accessReview(review: {
+    spec: {
+      principal: {subject: "user-123"}
+      action: "product.read"
+      resourceRef: {id: "<product-node-id>"}
+    }
+  }) {
+    apiVersion
+    kind
+    status {
+      allowed
+      reason
+      hypothetical
+      revisions { tierID namespaceUID gitRevision tierRevision capturedAt }
+      catalogDigest
+      builtinDigest
+    }
+  }
+}
+```
+
+Replace the placeholder with an existing Admin Node ID. The response echoes
+accepted parameters in `spec`; the server resolves resource facts itself.
+The authenticated reviewer needs `role.access-review.create` in the target
+Namespace or `clusterRole.access-review.create` for cluster scope. Targeting
+oneself does not waive this requirement. Omitted groups require complete
+trusted directory membership; explicit groups, including `[]`, or proposed
+context mark the result hypothetical. They never authenticate as the target.
+
+Reviews are transient: no name, UID, persistence, Node, list, watch or
+SelfSubjectAccessReview operation is added. A policy denial returns
+`allowed: false`; unavailable authoritative state returns retryable
+`AUTHORIZATION_UNAVAILABLE`, not a guessed denial. Results identify the exact
+evaluated revision vector and match enforcement only at the same input and
+revision.
+
+### Source provenance
+
+RBAC resource objects contain only `id`, `apiVersion`, `kind`, `metadata`,
+`spec` and `status`. Send `GitStore-Provenance-Include: true` to request
+optional `extensions.provenance` diagnostics; no `source` field is added to
+the resource schema. Each array entry identifies an authorized returned
+resource by Node `id` and response `path`, including aliases and connection
+indices:
+
+```json
+{
+  "extensions": {
+    "provenance": [{
+      "path": ["roles", "edges", 0, "node"],
+      "id": "<returned Node ID>",
+      "repositoryRef": "shop/gitstore-system",
+      "ref": "refs/heads/main",
+      "file": "rbac/roles/reader.yaml",
+      "commit": "sha1:<admitted snapshot>",
+      "changeCommit": "sha1:<last path-blob change>",
+      "author": "<Git author name>",
+      "authoredAt": "2026-01-01T00:00:00Z"
+    }]
+  }
+}
+```
+
+`metadata.revision` identifies the admitted snapshot; `changeCommit` identifies
+the last first-parent commit changing the file's blob at that snapshot.
+Merges introducing changed blobs and reverts are attributed to their own
+commits. Git author metadata is not authenticated identity; no email is
+returned. Virtual built-ins instead report `builtinName` and `builtinDigest`,
+without repository/history fields.
+
+History lookup independently requires the resource read permission. It is
+limited to 256 commits, a five-second API deadline and four concurrent reads.
+At most 64 resources are inspected per response; a final
+`{"error":"PROVENANCE_LIMIT_EXCEEDED"}` entry reports truncation. Missing
+history, exhausted depth, busy workers, unavailable Git or incompatible peers
+produce a resource-associated `{"error":"PROVENANCE_UNAVAILABLE"}` entry
+without changing ordinary resource data. Entries for denied or null resource
+objects are omitted. Requests without the header and authorization decisions
+never traverse history; publication actors are never substituted for Git
+authors. This optional extension currently covers the four RBAC kinds.
+
+Authenticated GitStore operation audit is separate: canonical RBAC rows retain
+server-controlled creation/update actors and timestamps. Creation facts remain
+immutable, replay does not restamp them, and unknown legacy creators remain
+unknown. Recovery writes identify the recovery service, not a guessed original
+human author. These fields are not added to the typed GraphQL metadata schema;
+Git author/committer identities and dates remain in Git commit objects, not
+dedicated audit columns.
+
+## Resource metadata and namespace scope
+
+All resource envelopes use `ObjectMeta` and authoring inputs use `ObjectMetaInput`.
+Their `namespace` field is nullable (`String`), with no input default. Namespace
+and ServiceAccount responses return `metadata.namespace: null`; namespaced
+resources return their owning namespace.
+
+Namespaced metadata requires a nonblank namespace. Omitted, null, empty, and
+whitespace-only values return the same error before namespace-dependent
+authorization lookups or writes:
+
+```json
+{"errors":[{"message":"Product requires a nonblank metadata.namespace. Supply the owning namespace","extensions":{"code":"BAD_USER_INPUT","diagnostics":[{"reason":"NAMESPACE_REQUIRED","field":"metadata.namespace","level":"FAILURE","message":"Product requires a nonblank metadata.namespace. Supply the owning namespace"}]}}]}
+```
+
+Cluster-scoped metadata accepts omission or null. Every non-null value, including
+an empty string, returns `BAD_USER_INPUT` with reason `NAMESPACE_FORBIDDEN` and
+field `metadata.namespace`. Error paths retain mutation aliases. Git admission
+uses the same reasons through its existing validation/admission reports. Git
+manifests for namespaced kinds must explicitly supply the owning namespace;
+repository context does not supply a missing value.
+
+### Client migration and rolling upgrades
+
+Replace fragments on the removed `NamespaceMetadata` type with selections on
+shared `ObjectMeta`. The dedicated `NamespaceMetadataInput` type is also removed.
+Before upgrading, add explicit namespaces to namespaced Git manifests that
+previously relied on repository inference. During a rolling upgrade, keep Namespace metadata selections inline and omit
+`metadata.namespace` from Namespace inputs so requests remain valid on both
+schemas. Defer queries of Namespace's new namespace field and fragments on its
+new metadata type until all API replicas are upgraded. Clients must handle a
+null namespace for cluster-scoped responses.
+
+Older replicas retain their previous schema, empty-string output, and validation
+behavior. Deploy all replicas before relying on the new diagnostic reasons or
+stricter namespace presence checks; routing through mixed versions cannot
+provide those guarantees. Storage formats and persisted resource identities do
+not change.
 
 ## Types
 
@@ -943,14 +1414,14 @@ type Namespace implements Node {
   id: ID!
   apiVersion: String!
   kind: String!
-  metadata: NamespaceMetadata!
+  metadata: ObjectMeta!
   spec: NamespaceSpec!
   status: NamespaceStatus!
 }
 ```
 
-`NamespaceMetadata` intentionally omits `namespace` because Namespace is a
-top-level resource. Existing datastore rows hydrate with
+Namespace uses shared `ObjectMeta`; `metadata.namespace` is `null` because it is
+cluster-scoped. Existing datastore rows hydrate with
 `resourceVersion: "1"`, `generation: 1`, and an initial non-null status of
 `observedGeneration: 0`, `lastAppliedRevision: null`, and `conditions: []`.
 See [Namespace Resource Contract](namespace/namespace-spec.md).
@@ -996,7 +1467,8 @@ type ResolvedRepositoryDefinition {
 
 `apiVersion` is always `gitstore.dev/v1beta1`; `kind` is always `Repository`.
 Legacy rows normalize to generation/resourceVersion `1` and an initial non-null
-status. `spec.visibility` currently projects `PRIVATE`; extended push-policy
+status. `spec.visibility` reflects the stored admitted value and defaults to
+`PRIVATE` when omitted; it does not publish a Storefront catalogue. Extended push-policy
 groups project null until Repository write/persistence semantics are added.
 Existing maximum-size fields, including explicit zero values, project through
 `spec.pushPolicy`. See
@@ -1110,7 +1582,14 @@ GraphQL errors use the standard response shape:
       "message": "repository not found",
       "path": ["repository"],
       "extensions": {
-        "code": "NOT_FOUND"
+        "code": "NOT_FOUND",
+        "diagnostics": [
+          {
+            "reason": "REPOSITORY_NOT_FOUND",
+            "message": "repository not found",
+            "level": "FAILURE"
+          }
+        ]
       }
     }
   ],
@@ -1120,11 +1599,23 @@ GraphQL errors use the standard response shape:
 }
 ```
 
-Single-resource queries return `null` when the resource is not found.
+Single-resource queries return a null field **and an error**, not silent
+absence. Typed selectors (by ID or namespace/name) and `node(id:)` use the
+same domain error envelope as mutations. Missing resources use `NOT_FOUND`
+with a resource-specific diagnostic reason: `NAMESPACE_NOT_FOUND`,
+`PRODUCT_NOT_FOUND`, `CATEGORY_NOT_FOUND`, `REPOSITORY_NOT_FOUND`,
+`COLLECTION_NOT_FOUND`, `PRODUCT_VARIANT_NOT_FOUND`, or `FILE_NOT_FOUND`.
+If a referenced namespace is missing, the reason is `NAMESPACE_NOT_FOUND`.
+Malformed global IDs use `BAD_USER_INPUT` with `INVALID_GLOBAL_ID`.
+Clients should branch on `code` and `diagnostics[].reason`, not message text.
+Authorization denials retain `FORBIDDEN` without diagnostics or resource
+details. Do not interpret other GraphQL errors as permission to create a
+resource or as proof of deletion.
 
-### Mutation error envelope
+### Domain error envelope
 
-Git-backed mutations (`createCategory`, `updateCategory`, `deleteCategory`, `completeCategoryDeletion`, and the Namespace mutations) and status writes return errors with at most four `extensions` keys:
+Resource lookup domain errors, Git-backed mutation domain errors, and status
+conflicts share at most four domain `extensions` keys:
 
 | Key           | Present when                                                          | Value |
 |---------------|-----------------------------------------------------------------------|-------|
