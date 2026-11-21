@@ -774,13 +774,15 @@ func rbacResourceToGraphQL(resource *rbac.Resource) (model.Node, error) {
 	status := &model.RBACStatus{Conditions: []*model.Condition{}}
 	if len(resource.Status) > 0 {
 		var stored struct {
-			ObservedGeneration int32          `json:"observedGeneration"`
-			Conditions         []rawCondition `json:"conditions"`
+			ObservedGeneration  int32          `json:"observedGeneration"`
+			LastAppliedRevision *string        `json:"lastAppliedRevision"`
+			Conditions          []rawCondition `json:"conditions"`
 		}
 		if err := json.Unmarshal(resource.Status, &stored); err != nil {
 			return nil, err
 		}
 		status.ObservedGeneration = stored.ObservedGeneration
+		status.LastAppliedRevision = stored.LastAppliedRevision
 		for _, condition := range stored.Conditions {
 			status.Conditions = append(status.Conditions, conditionFromRaw(condition))
 		}

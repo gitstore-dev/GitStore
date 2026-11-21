@@ -296,7 +296,7 @@ func (r *mutationResolver) updateRBACStatusGeneric(ctx context.Context, input mo
 	if err != nil {
 		return nil, err
 	}
-	if input.LastAppliedRevision != nil || input.ObservedGeneration != nil &&
+	if input.LastAppliedRevision != nil && *input.LastAppliedRevision != before.Metadata.Revision || input.ObservedGeneration != nil &&
 		(*input.ObservedGeneration < 0 || int64(*input.ObservedGeneration) > before.Metadata.Generation) ||
 		kind.IsRole() && input.Resolved != nil {
 		return nil, rbacLifecycleError(rbac.ErrInvalid)
@@ -332,6 +332,9 @@ func (r *mutationResolver) updateRBACStatusGeneric(ctx context.Context, input mo
 	}
 	if input.ObservedGeneration != nil {
 		status["observedGeneration"], _ = json.Marshal(*input.ObservedGeneration)
+	}
+	if input.LastAppliedRevision != nil {
+		status["lastAppliedRevision"], _ = json.Marshal(*input.LastAppliedRevision)
 	}
 	if input.Conditions != nil {
 		status["conditions"], _ = json.Marshal(toConditions(input.Conditions))

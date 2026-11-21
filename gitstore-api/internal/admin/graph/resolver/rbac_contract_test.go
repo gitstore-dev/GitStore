@@ -614,6 +614,17 @@ func TestRBACLifecycleRequiresSeparateAuthorityAndUIDVersion(t *testing.T) {
 			require.Len(t, errors, 1)
 			require.Equal(t, "FORBIDDEN", errors[0].Extensions["code"])
 			root.registry.AuthZ().(*rbacResourceProvider).allowLifecycle.Store(true)
+			revision := node["metadata"].(map[string]any)["revision"].(string)
+			observation := map[string]any{"kind": string(kind), "name": "lifecycle", "namespace": namespace,
+				"resourceVersion": version, "observedGeneration": 1, "lastAppliedRevision": "main@sha1:" + strings.Repeat("f", 40)}
+			_, errors = rbacGraphQLRequest(t, root, statusQuery, observation)
+			require.Len(t, errors, 1, "a status writer cannot acknowledge an unrelated revision")
+			observation["lastAppliedRevision"] = revision
+			observed, errors := rbacGraphQLRequest(t, root, statusQuery, observation)
+			require.Empty(t, errors)
+			object := observed["updateResourceStatus"]["object"].(map[string]any)
+			require.Equal(t, revision, object["status"].(map[string]any)["lastAppliedRevision"])
+			version = object["metadata"].(map[string]any)["resourceVersion"].(string)
 			purge := func(currentVersion string) error {
 				return root.completeRBACDeletion(ctx, kind, id, namespace, "lifecycle", currentVersion)
 			}
@@ -627,6 +638,8 @@ func TestRBACLifecycleRequiresSeparateAuthorityAndUIDVersion(t *testing.T) {
 			data, errors := rbacGraphQLRequest(t, root, statusQuery, input)
 			require.Empty(t, errors)
 			updated := data["updateResourceStatus"]["object"].(map[string]any)
+			require.Equal(t, revision, updated["status"].(map[string]any)["lastAppliedRevision"],
+				"finalizer-only writes preserve the last reconciled revision")
 			nextVersion := updated["metadata"].(map[string]any)["resourceVersion"].(string)
 			require.NotEqual(t, version, nextVersion)
 			_, errors = rbacGraphQLRequest(t, root, statusQuery, input)

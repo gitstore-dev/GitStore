@@ -6,6 +6,7 @@ package rbac
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -60,6 +61,9 @@ func (f *lifecycleFixture) UpdateStatus(_ context.Context, resource Resource, up
 	f.writes = append(f.writes, update)
 	resource.Metadata.ResourceVersion += "-next"
 	resource.Status.ObservedGeneration = resource.Metadata.Generation
+	if update.LastAppliedRevision != "" {
+		resource.Status.LastAppliedRevision = update.LastAppliedRevision
+	}
 	resource.Status.Resolved = update.Resolved
 	resource.Status.Conditions = update.Conditions
 	if update.Finalizers != nil {
@@ -123,6 +127,41 @@ func TestReconcilerWaitsForResolutionAndClearsOnlyItsFinalizer(t *testing.T) {
 	fixture.resources[binding.Key()] = binding
 	reconciler.Reconcile(t.Context(), binding.Key())
 	require.Equal(t, []string{"binding-uid"}, fixture.completed)
+}
+
+func TestReconcilerAcknowledgesGenerationAndRevisionWithoutRepeatedWrites(t *testing.T) {
+	for _, kind := range Kinds {
+		t.Run(kind, func(t *testing.T) {
+			role := Resource{Kind: kind, Metadata: Metadata{
+				UID: "role-uid", Name: "reader", Generation: 2, ResourceVersion: "2",
+				Revision:   "main@sha1:1111111111111111111111111111111111111111",
+				Finalizers: []string{LifecycleFinalizer},
+			}}
+			if namespaced(kind) {
+				role.Metadata.Namespace = "shop"
+			}
+			if strings.HasSuffix(kind, "Binding") {
+				role.Spec.RoleRef = &RoleRef{Kind: "ClusterRole", Name: "missing"}
+			}
+			role.Status.ObservedGeneration = 1
+			fixture := &lifecycleFixture{resources: map[types.WorkItemKey]Resource{role.Key(): role}}
+			for range 2 {
+				reconciler := NewReconciler(fixture.lookup, fixture)
+				require.IsType(t, types.Success{}, reconciler.Reconcile(t.Context(), role.Key()))
+			}
+			require.Len(t, fixture.writes, 1)
+			current := fixture.resources[role.Key()]
+			require.EqualValues(t, 2, current.Status.ObservedGeneration)
+			require.EqualValues(t, 2, current.Status.Conditions[0].ObservedGeneration)
+			require.Equal(t, role.Metadata.Revision, current.Status.LastAppliedRevision)
+			current.Metadata.Revision = "main@sha1:2222222222222222222222222222222222222222"
+			fixture.resources[role.Key()] = current
+			require.IsType(t, types.Success{}, NewReconciler(fixture.lookup, fixture).Reconcile(t.Context(), role.Key()))
+			require.Len(t, fixture.writes, 2, "same-generation authored revisions still require acknowledgement")
+			require.Equal(t, current.Metadata.Revision, fixture.resources[role.Key()].Status.LastAppliedRevision)
+			require.Empty(t, fixture.completed)
+		})
+	}
 }
 
 func TestReconcilerConcurrentReplicasRetryCASAndOldUIDWorkCannotPublish(t *testing.T) {

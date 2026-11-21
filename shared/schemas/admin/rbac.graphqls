@@ -116,6 +116,7 @@ Controller-owned observation. A missing resolved link grants no authority.
 """
 type RBACStatus {
   observedGeneration: Int!
+  lastAppliedRevision: String
   conditions: [Condition!]!
   resolved: RBACResolvedRole
 }

@@ -813,9 +813,10 @@ type ComplexityRoot struct {
 	}
 
 	RBACStatus struct {
-		Conditions         func(childComplexity int) int
-		ObservedGeneration func(childComplexity int) int
-		Resolved           func(childComplexity int) int
+		Conditions          func(childComplexity int) int
+		LastAppliedRevision func(childComplexity int) int
+		ObservedGeneration  func(childComplexity int) int
+		Resolved            func(childComplexity int) int
 	}
 
 	RBACSubject struct {
@@ -4682,6 +4683,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.RBACStatus.Conditions(childComplexity), true
+
+	case "RBACStatus.lastAppliedRevision":
+		if e.ComplexityRoot.RBACStatus.LastAppliedRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACStatus.LastAppliedRevision(childComplexity), true
 
 	case "RBACStatus.observedGeneration":
 		if e.ComplexityRoot.RBACStatus.ObservedGeneration == nil {
@@ -8628,6 +8636,7 @@ Controller-owned observation. A missing resolved link grants no authority.
 """
 type RBACStatus {
   observedGeneration: Int!
+  lastAppliedRevision: String
   conditions: [Condition!]!
   resolved: RBACResolvedRole
 }
@@ -11504,6 +11513,8 @@ func (ec *executionContext) childFields_RBACStatus(ctx context.Context, field gr
 	switch field.Name {
 	case "observedGeneration":
 		return ec.fieldContext_RBACStatus_observedGeneration(ctx, field)
+	case "lastAppliedRevision":
+		return ec.fieldContext_RBACStatus_lastAppliedRevision(ctx, field)
 	case "conditions":
 		return ec.fieldContext_RBACStatus_conditions(ctx, field)
 	case "resolved":
