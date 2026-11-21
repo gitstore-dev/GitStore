@@ -402,7 +402,7 @@ func registerDiskControllersWithRBAC(ctx context.Context, runners *sync.WaitGrou
 				return rbaccontroller.Resource{}, false, checkpoint.ErrSnapshotInProgress
 			}
 			return runner.Lookup(ctx, key)
-		}, rbacClient)
+		}, rbacClient).WithRoleLookup(rbacClient.Get)
 		for _, kind := range rbaccontroller.Kinds {
 			if err := registerDiskRunner(ctx, runners, mgr, rbacRunners[kind], reconciler, cfg, related); err != nil {
 				return nil, errors.Join(err, closeStores())

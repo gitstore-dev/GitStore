@@ -266,6 +266,10 @@ func rbacJournalEvents(plan rbac.TierPlan) ([]datastore.ResourceWatchEvent, erro
 			events = append(events, event)
 		}
 	}
+	if plan.RolePolicyUnchanged {
+		// Resource events and CAS revisions still advance; authority does not.
+		return events, nil
+	}
 	progress, _ := watchjournal.ClassifyResource(watchjournal.Change{
 		DeduplicationKey: fmt.Sprintf("memdb:rbac:%s:%d", plan.State.TierID, plan.State.Revision),
 		TierProgress:     &datastore.RBACTierProgress{TierID: plan.State.TierID, Revision: plan.State.Revision},

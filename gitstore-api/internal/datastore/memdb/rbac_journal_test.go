@@ -87,13 +87,19 @@ func TestRBACJournalCommittedWritesReplayAndDeletion(t *testing.T) {
 			require.NoError(t, err)
 			events, err := journal.ReadAfter(t.Context(), datastore.ResourceWatchCursor{}, 32)
 			require.NoError(t, err)
-			require.Len(t, events, 8)
+			expected := 8
+			if kind.IsRole() {
+				expected -= 2
+			}
+			require.Len(t, events, expected)
+			position := 0
 			for index := range 4 {
-				event, progress := events[index*2], events[index*2+1]
+				event := events[position]
+				position++
 				require.Equal(t, string(kind), event.Kind)
 				require.Equal(t, resource.Metadata.Namespace, event.Namespace)
 				require.Equal(t, resource.Metadata.Name, event.Name)
-				require.EqualValues(t, index*2+1, event.Sequence)
+				require.EqualValues(t, position, event.Sequence)
 				var observed rbac.Resource
 				require.NoError(t, json.Unmarshal(event.Payload, &observed))
 				require.Equal(t, resource.Metadata.UID, observed.Metadata.UID)
@@ -104,6 +110,11 @@ func TestRBACJournalCommittedWritesReplayAndDeletion(t *testing.T) {
 					require.Equal(t, fmt.Sprint(index+1), observed.Metadata.ResourceVersion)
 					require.Equal(t, "catalog", event.SelectorLabels["team"])
 				}
+				if kind.IsRole() && (index == 1 || index == 3) {
+					continue
+				}
+				progress := events[position]
+				position++
 				require.Equal(t, datastore.ResourceWatchProgress, progress.Type)
 				var tierProgress datastore.RBACTierProgress
 				require.NoError(t, json.Unmarshal(progress.Payload, &tierProgress))

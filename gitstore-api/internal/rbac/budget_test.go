@@ -19,6 +19,7 @@ func TestMemoryBudgetReservesReplacementAndPinnedReaders(t *testing.T) {
 	_, err = budget.Reserve(60)
 	require.ErrorIs(t, err, rbac.ErrUnavailable)
 	require.EqualValues(t, 60, budget.Used())
+	require.EqualValues(t, 60, budget.Usage().PeakReserved, "refused reservations must not inflate the high-water mark")
 	replacement, err := budget.Reserve(40)
 	require.NoError(t, err)
 	require.ErrorIs(t, replacement.Grow(1), rbac.ErrUnavailable)
@@ -30,6 +31,8 @@ func TestMemoryBudgetReservesReplacementAndPinnedReaders(t *testing.T) {
 	require.ErrorIs(t, old.Grow(1), rbac.ErrUnavailable)
 	replacement.Close()
 	require.Zero(t, budget.Used())
+	require.Equal(t, rbac.MemoryBudgetUsage{Reserved: 0, PeakReserved: 100, Limit: 100}, budget.Usage(),
+		"releasing both pinned and replacement publications must retain their simultaneous peak")
 }
 
 func TestMemoryBudgetConcurrentReservationsStayWithinBound(t *testing.T) {
@@ -54,4 +57,8 @@ func TestMemoryBudgetConcurrentReservationsStayWithinBound(t *testing.T) {
 	_, err := budget.Reserve(-1)
 	require.ErrorIs(t, err, rbac.ErrUnavailable)
 	require.Zero(t, budget.Used())
+	usage := budget.Usage()
+	require.Zero(t, usage.Reserved)
+	require.GreaterOrEqual(t, usage.PeakReserved, int64(1))
+	require.LessOrEqual(t, usage.PeakReserved, usage.Limit)
 }

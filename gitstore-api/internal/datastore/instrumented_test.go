@@ -30,6 +30,41 @@ func TestInstrumentedDatastoreForwardsRepositoryCompletion(t *testing.T) {
 	require.ErrorIs(t, completion.CompleteRepositoryDeletion(context.Background(), "00000000-0000-0000-0000-000000000299", "1"), datastore.ErrNotFound)
 }
 
+type originFactsDatastore struct {
+	datastore.Datastore
+	read datastore.RBACOriginFactsReader
+}
+
+func (s *originFactsDatastore) RBACOriginFactsReader() datastore.RBACOriginFactsReader {
+	return s.read
+}
+
+func TestInstrumentedDatastoreForwardsOptionalLiveOriginReads(t *testing.T) {
+	ctx := t.Context()
+	lookups := []datastore.RBACOriginLookup{{NamespaceUID: "namespace", Namespace: "shop", RepositoryID: "repository"}}
+	expected := []datastore.RBACOriginFacts{{Namespace: &datastore.Namespace{UID: "namespace"}}}
+	store := &originFactsDatastore{}
+	wrap := func(next datastore.Datastore) datastore.RBACOriginFactsCapable {
+		return datastore.NewInstrumentedDatastoreWithMeter(next, "test", zap.NewNop(),
+			observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/datastore")).(datastore.RBACOriginFactsCapable)
+	}
+	require.Nil(t, wrap(&stubDatastore{}).RBACOriginFactsReader())
+	require.Nil(t, wrap(store).RBACOriginFactsReader())
+	calls := 0
+	store.read = func(actual context.Context, keys []datastore.RBACOriginLookup) ([]datastore.RBACOriginFacts, error) {
+		calls++
+		require.Equal(t, ctx, actual)
+		require.Equal(t, lookups, keys)
+		return expected, datastore.ErrRBACUnavailable
+	}
+	read := wrap(store).RBACOriginFactsReader()
+	require.NotNil(t, read)
+	result, err := read(ctx, lookups)
+	require.ErrorIs(t, err, datastore.ErrRBACUnavailable)
+	require.Equal(t, expected, result)
+	require.Equal(t, 1, calls, "the decorator must not retry or replace the live reader")
+}
+
 func TestInstrumentedDatastoreForwardsCategoryCompletionIdentity(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)

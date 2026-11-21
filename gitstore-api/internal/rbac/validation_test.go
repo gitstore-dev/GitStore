@@ -6,6 +6,8 @@ package rbac_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,15 @@ import (
 )
 
 type validationProvider struct{ *opa.Engine }
+
+type failingValidationProvider struct {
+	*validationProvider
+	failure error
+}
+
+func (p *failingValidationProvider) PinAuthorization(context.Context, auth.AuthorizationModel) (auth.PinnedAuthorization, error) {
+	return nil, p.failure
+}
 
 func (*validationProvider) Name() string { return "opa" }
 func (*validationProvider) Authorize(context.Context, *auth.Principal, string, auth.ResourceContext) (auth.Decision, error) {
@@ -84,6 +95,37 @@ func TestValidationCaptureBypassesOrdinaryCacheAndPinsActorAndIdentity(t *testin
 	validation.Close()
 	_, err = validation.Authorize(t.Context(), "product.read", resource)
 	require.ErrorIs(t, err, rbac.ErrUnavailable)
+}
+
+func TestValidationCaptureFailureStagePreservesCauseAndReleasesScratch(t *testing.T) {
+	for _, stage := range []string{"cluster-snapshot", "namespace-snapshot", "authorization-pin"} {
+		t.Run(stage, func(t *testing.T) {
+			capture, origin, _ := validationFixture(t)
+			capture.Scratch = rbac.NewMemoryBudget(2 * rbac.RebuildScratchLimit)
+			cause := errors.New("private backend details must not become a diagnostic stage")
+			if stage == "authorization-pin" {
+				provider := &failingValidationProvider{
+					validationProvider: capture.Registry.AuthZ().(*validationProvider), failure: cause,
+				}
+				capture.Registry = auth.NewProviderRegistry(nil, provider, nil)
+			} else {
+				readOrigin := capture.Reader.ReadOrigin
+				capture.Reader.ReadOrigin = func(ctx context.Context, tier string) (rbac.SnapshotOrigin, error) {
+					if (tier == rbac.ClusterTierID) == (stage == "cluster-snapshot") {
+						return rbac.SnapshotOrigin{}, cause
+					}
+					return readOrigin(ctx, tier)
+				}
+			}
+			validation, err := capture.Begin(t.Context(), &auth.Principal{Subject: "alice", AuthMethod: "static-users"}, origin.NamespaceUID)
+			require.Nil(t, validation)
+			require.ErrorIs(t, err, rbac.ErrUnavailable)
+			require.ErrorIs(t, err, cause)
+			require.Equal(t, stage, rbac.ValidationFailureStage(fmt.Errorf("outer: %w", err)))
+			require.Zero(t, capture.Scratch.Used())
+		})
+	}
+	require.Equal(t, "validation", rbac.ValidationFailureStage(errors.New("untrusted diagnostic stage")))
 }
 
 func TestValidationReviewCannotReplaceCapturedActor(t *testing.T) {

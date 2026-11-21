@@ -26,7 +26,8 @@ const (
 	namespaceWatchClockStream        = "__clock__"
 	namespaceWatchRetentionScanLimit = 32
 	namespaceWatchBatchMaxStatements = 32
-	namespaceWatchBatchMaxBytes      = 32 * 1024
+	namespaceWatchBatchMaxBytes      = 512 * 1024
+	namespaceCDCProgressBatchBytes   = 32 * 1024
 	namespaceCDCProgressTTLSeconds   = 14 * 24 * 60 * 60
 )
 
@@ -814,7 +815,7 @@ func (s *scyllaDatastore) saveCDCProgressBatch(ctx context.Context, lease datast
 				key = source + ":" + key
 			}
 			entryBytes := len(key) + 128
-			if size+entryBytes > namespaceWatchBatchMaxBytes {
+			if size+entryBytes > namespaceCDCProgressBatchBytes {
 				break
 			}
 			point := progress[keys[count]]

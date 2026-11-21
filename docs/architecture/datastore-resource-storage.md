@@ -45,6 +45,9 @@ Product envelopes reside in `products_by_key`, with the complete
 `products_by_uid` locates an envelope.
 
 `products_by_namespace_shard` contains listing keys across 64 stable shards.
+The initial ordered window from every shard is fetched in one non-paged CQL
+request with a per-partition limit, rather than 64 separate requests. Shard-local
+refills retain their own bounded cursors; this does not scan all Product rows.
 Forward and backward pages merge ordered shards and hydrate a window of at
 most 16 rows, with budgets of at most 256 projection queries and 4096 envelope
 lookups. Missing or mismatched rows are skipped within those budgets. Errors

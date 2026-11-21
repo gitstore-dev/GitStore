@@ -5,8 +5,8 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -52,7 +52,9 @@ func TestRBACNativeProcess(t *testing.T) {
 	cfg, err := config.LoadFrom(path)
 	require.NoError(t, err)
 	require.Equal(t, "scylla", cfg.Api.Datastore.Backend)
-	require.Equal(t, "opa", cfg.Api.Auth.AuthZ.Provider)
+	allowRBAC, err := rbacNativeProcessAllowsRBAC(cfg.Api.Auth.AuthZ.Provider,
+		os.Getenv("GITSTORE_RBAC_NATIVE_TEST_STATIC"))
+	require.NoError(t, err)
 	if os.Getenv("GITSTORE_RBAC_NATIVE_TEST_SCYLLA_NAT") == "1" {
 		require.Len(t, cfg.Api.Datastore.Scylla.Hosts, 1)
 		host, portText, err := net.SplitHostPort(cfg.Api.Datastore.Scylla.Hosts[0])
@@ -74,6 +76,13 @@ func TestRBACNativeProcess(t *testing.T) {
 	log, err := logConfig.Build()
 	require.NoError(t, err)
 	defer func() { _ = log.Sync() }()
+	log, shutdownTelemetry, err := InitTelemetry(ctx, cfg.Observability.OTLP, log)
+	require.NoError(t, err)
+	defer func() {
+		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		require.NoError(t, shutdownTelemetry(shutdown))
+	}()
 	stopProfiler, err := observability.StartCapacityProfiler(cfg.Api.Profiling, log)
 	require.NoError(t, err)
 	defer func() {
@@ -83,12 +92,12 @@ func TestRBACNativeProcess(t *testing.T) {
 	}()
 	var option rbacRuntimeOptions
 	if path := os.Getenv("GITSTORE_RBAC_NATIVE_TEST_MODELS_FILE"); path != "" {
-		capture, err := newNativeRBACSourceCapture(path)
+		capture, err := newRBACSourceCapture(path)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, capture.close()) })
 		option.observeSnapshot = capture.observe
 	}
-	server, err := newServer(cfg, log, true, option)
+	server, err := newServer(cfg, log, allowRBAC, option)
 	require.NoError(t, err)
 	defer server.Close()
 	server.Start()
@@ -98,111 +107,65 @@ func TestRBACNativeProcess(t *testing.T) {
 	server.Shutdown(shutdown)
 }
 
-type nativeRBACSourceCapture struct {
-	file      *os.File
-	remaining int64
-	lock      chan struct{}
-	err       error
-}
-
-func newNativeRBACSourceCapture(path string) (*nativeRBACSourceCapture, error) {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return nil, errors.New("source capture requires a clean absolute private file")
-	}
-	parent, err := os.Lstat(filepath.Dir(path))
-	if err != nil {
-		return nil, err
-	}
-	if !parent.IsDir() || parent.Mode().Perm()&0077 != 0 {
-		return nil, errors.New("source capture requires a private non-symlink parent")
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	if err != nil {
-		return nil, err
-	}
-	return &nativeRBACSourceCapture{file: file, remaining: 1 << 30, lock: make(chan struct{}, 1)}, nil
-}
-
-func (c *nativeRBACSourceCapture) Write(data []byte) (int, error) {
-	if c.err != nil {
-		return 0, c.err
-	}
-	if int64(len(data)) > c.remaining {
-		c.err = errors.New("native source capture exceeds its one-GiB evidence bound")
-		return 0, c.err
-	}
-	n, err := c.file.Write(data)
-	c.remaining -= int64(n)
-	c.err = err
-	return n, err
-}
-
-func (c *nativeRBACSourceCapture) observe(ctx context.Context, snapshot rbac.Snapshot) error {
-	select {
-	case c.lock <- struct{}{}:
-		defer func() { <-c.lock }()
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	resources := snapshot.Resources
-	snapshot.Resources = nil
-	encoder := json.NewEncoder(c)
-	if err := encoder.Encode(struct {
-		Type          string        `json:"type"`
-		Snapshot      rbac.Snapshot `json:"snapshot"`
-		ResourceCount int           `json:"resourceCount"`
-		ObservedAt    time.Time     `json:"observedAt"`
-	}{"begin", snapshot, len(resources), time.Now().UTC()}); err != nil {
-		return err
-	}
-	for _, resource := range resources {
-		if err := ctx.Err(); err != nil {
-			c.err = err
-			return err
+func rbacNativeProcessAllowsRBAC(provider, staticFlag string) (bool, error) {
+	switch staticFlag {
+	case "":
+		if provider != "opa" {
+			return false, fmt.Errorf("default native process requires opa provider")
 		}
-		if err := encoder.Encode(struct {
-			Type     string         `json:"type"`
-			Resource *rbac.Resource `json:"resource"`
-		}{"resource", resource}); err != nil {
-			return err
+		return true, nil
+	case "1":
+		if provider != "rbac-local" {
+			return false, fmt.Errorf("explicit native static mode requires rbac-local provider")
 		}
+		return false, nil
+	default:
+		return false, fmt.Errorf("native static mode requires explicit GITSTORE_RBAC_NATIVE_TEST_STATIC=1 or an unset flag")
 	}
-	if err := ctx.Err(); err != nil {
-		c.err = err
-		return err
-	}
-	if err := encoder.Encode(struct {
-		Type   string `json:"type"`
-		Digest string `json:"digest"`
-	}{"end", snapshot.ContentDigest}); err != nil {
-		return err
-	}
-	return ctx.Err()
 }
 
-func (c *nativeRBACSourceCapture) close() error {
-	return errors.Join(c.err, c.file.Sync(), c.file.Close())
+func TestRBACNativeProcessProviderSelectionPreservesProductionGate(t *testing.T) {
+	for _, test := range []struct {
+		name, provider, flag string
+		allowRBAC            bool
+		wantError            string
+	}{
+		{name: "default-opa", provider: "opa", allowRBAC: true},
+		{name: "explicit-static", provider: "rbac-local", flag: "1"},
+		{name: "unselected-static", provider: "rbac-local", wantError: "requires opa"},
+		{name: "static-cannot-enable-opa", provider: "opa", flag: "1", wantError: "requires rbac-local"},
+		{name: "static-cannot-select-allow-all", provider: "allow-all", flag: "1", wantError: "requires rbac-local"},
+		{name: "unknown-selection", provider: "opa", flag: "true", wantError: "explicit"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			allowRBAC, err := rbacNativeProcessAllowsRBAC(test.provider, test.flag)
+			if test.wantError != "" {
+				require.ErrorContains(t, err, test.wantError)
+				require.False(t, allowRBAC)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.allowRBAC, allowRBAC)
+		})
+	}
 }
 
 func TestRBACNativeSourceCaptureRequiresPrivateExclusiveBoundedEvidence(t *testing.T) {
 	directory := t.TempDir()
 	require.NoError(t, os.Chmod(directory, 0700))
 	path := filepath.Join(directory, "source-models.jsonl")
-	capture, err := newNativeRBACSourceCapture(path)
+	capture, err := newRBACSourceCapture(path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = capture.close() })
-	_, err = newNativeRBACSourceCapture(path)
+	_, err = newRBACSourceCapture(path)
 	require.ErrorIs(t, err, os.ErrExist)
 	public := filepath.Join(directory, "public")
 	require.NoError(t, os.Mkdir(public, 0755))
-	_, err = newNativeRBACSourceCapture(filepath.Join(public, "models"))
+	_, err = newRBACSourceCapture(filepath.Join(public, "models"))
 	require.ErrorContains(t, err, "private non-symlink")
 	link := filepath.Join(directory, "link")
 	require.NoError(t, os.Symlink(directory, link))
-	_, err = newNativeRBACSourceCapture(filepath.Join(link, "models"))
+	_, err = newRBACSourceCapture(filepath.Join(link, "models"))
 	require.ErrorContains(t, err, "private non-symlink")
 	source := rbac.Snapshot{ContentDigest: strings.Repeat("a", 64),
 		Resources: []*rbac.Resource{{Kind: rbac.Role, Metadata: rbac.Metadata{Name: "source-role"}}}}
@@ -257,6 +220,19 @@ func (s *bootstrapRPCServer) CreateRepository(_ context.Context, request *gitv1.
 	return &gitv1.CreateRepositoryResponse{RepositoryId: request.RepositoryId, StoragePath: "/owned-fixture/" + request.RepositoryId}, nil
 }
 
+func (s *bootstrapRPCServer) ResolveRefs(ctx context.Context, request *gitv1.ResolveRefsRequest) (*gitv1.ResolveRefsResponse, error) {
+	response := &gitv1.ResolveRefsResponse{}
+	for _, query := range request.Refs {
+		proof := &gitv1.RepositoryRefProof{RepositoryId: query.RepositoryId, Ref: query.Ref}
+		git, err := s.repository(query.RepositoryId)
+		if err == nil {
+			proof.CommitSha, _ = git.ResolveRef(ctx, query.RepositoryId, query.Ref)
+		}
+		response.Proofs = append(response.Proofs, proof)
+	}
+	return response, nil
+}
+
 func (s *bootstrapRPCServer) ListFiles(ctx context.Context, request *gitv1.ListFilesRequest) (*gitv1.ListFilesResponse, error) {
 	git, err := s.repository(request.RepositoryId)
 	if err != nil {
@@ -286,6 +262,21 @@ func (s *bootstrapRPCServer) ListFiles(ctx context.Context, request *gitv1.ListF
 	return response, nil
 }
 
+func (s *bootstrapRPCServer) GetFiles(ctx context.Context, request *gitv1.GetFilesRequest) (*gitv1.GetFilesResponse, error) {
+	response := &gitv1.GetFilesResponse{CommitSha: request.CommitSha}
+	for _, path := range request.Paths {
+		file, err := s.GetFile(ctx, &gitv1.GetFileRequest{
+			RepositoryId: request.RepositoryId, Path: path, Ref: request.CommitSha, Authorization: request.Authorization,
+		})
+		if err != nil {
+			return nil, err
+		}
+		file.Path, file.BlobSha, file.SizeBytes = path, strings.Repeat("b", 40), uint64(len(file.Content))
+		response.Files = append(response.Files, file)
+	}
+	return response, nil
+}
+
 func (s *bootstrapRPCServer) GetFile(ctx context.Context, request *gitv1.GetFileRequest) (*gitv1.GetFileResponse, error) {
 	git, err := s.repository(request.RepositoryId)
 	if err != nil {
@@ -310,6 +301,33 @@ func (s *bootstrapRPCServer) CommitFileAtRevision(ctx context.Context, request *
 		RetainReceipt: request.RetainReceipt, ReceiptOnly: request.ReceiptOnly,
 	})
 	return &gitv1.CommitFileAtRevisionResponse{CommitSha: commit}, err
+}
+
+func TestRBACProviderReloadRefusesHotEntryIntoOPA(t *testing.T) {
+	for _, provider := range []string{"rbac-local", "allow-all"} {
+		t.Run(provider, func(t *testing.T) {
+			cfg := &config.Config{}
+			cfg.Api.Auth.AuthN.Chain = []string{"anonymous"}
+			cfg.Api.Auth.AuthZ.Provider, cfg.Api.Auth.UserDir.Provider = provider, "none"
+			cfg.Api.Auth.RBACLocal.PolicyFile = filepath.Join("..", "..", "..", "config", "policy.yaml")
+			registry, shutdowns, err := constructProviderRegistryWithOPA(cfg, nil, zap.NewNop(), nil, nil)
+			require.NoError(t, err)
+			runtime := &providerRegistryRuntime{cfg: cfg, registry: registry, shutdowns: shutdowns, log: zap.NewNop()}
+			t.Cleanup(runtime.Shutdown)
+			prepared, policy := registry.AuthZ(), registry.Diagnostics().Policy
+			principal := &auth.Principal{Subject: "ordinary", AuthMethod: "static-users"}
+			resource := auth.ResourceContext{Kind: "namespace"}
+			before, err := prepared.Authorize(t.Context(), principal, "namespace.create", resource)
+			require.NoError(t, err)
+			cfg.Api.Auth.AuthZ.Provider = "opa"
+			require.ErrorContains(t, runtime.Reload(), "controlled restart with write freeze and traffic drain")
+			require.Same(t, prepared, registry.AuthZ())
+			require.Equal(t, policy, registry.Diagnostics().Policy)
+			after, err := registry.AuthZ().Authorize(t.Context(), principal, "namespace.create", resource)
+			require.NoError(t, err)
+			require.Equal(t, before.Outcome, after.Outcome, "rejected entry must preserve the live provider's decisions")
+		})
+	}
 }
 
 func TestRBACServerCompositionRecoversBeforeOpeningTrafficAndReusesProviderOnReload(t *testing.T) {
@@ -364,12 +382,22 @@ func TestRBACServerCompositionRecoversBeforeOpeningTrafficAndReusesProviderOnRel
 		Read:         config.ReadWatchConfig{BatchSize: 128, MaxReplayEvents: 1000},
 		Poll:         config.PollWatchConfig{Min: 5 * time.Millisecond, Max: 20 * time.Millisecond},
 		Subscriber:   config.SubscriberWatchConfig{Buffer: 16, Backpressure: time.Second}}
+	evidenceDirectory := t.TempDir()
+	require.NoError(t, os.Chmod(evidenceDirectory, 0700))
+	cfg.Api.Auth.OPA.EvidenceDirectory = evidenceDirectory
 	_, err = NewServer(cfg, zap.NewNop())
 	require.ErrorContains(t, err, "production acceptance is pending")
+	entries, err := os.ReadDir(evidenceDirectory)
+	require.NoError(t, err)
+	require.Empty(t, entries, "evidence selection must not open the production activation gate")
 	server, err := newServer(cfg, zap.NewNop(), true)
 	require.NoError(t, err)
 	t.Cleanup(server.Close)
+	require.NotNil(t, server.rbacEvidence)
 	runtime := server.providerShutdown[0].(*rbacRuntime)
+	cfg.Api.Auth.OPA.EvidenceDirectory = filepath.Join(evidenceDirectory, "different")
+	require.ErrorContains(t, server.authReloader.Reload(), "evidence capture requires a controlled restart")
+	cfg.Api.Auth.OPA.EvidenceDirectory = evidenceDirectory
 	registry := server.gitClient.Registry
 	principal := &auth.Principal{Subject: "fixture-master", AuthMethod: "static-users", Groups: []string{"system:masters"}}
 	_, err = registry.AuthZ().Authorize(t.Context(), principal, "namespace.read", auth.ResourceContext{Kind: "namespace"})
@@ -465,6 +493,22 @@ func TestRBACServerCompositionRecoversBeforeOpeningTrafficAndReusesProviderOnRel
 	require.NotNil(t, after)
 	require.Equal(t, before, after, "same-provider reload must preserve the prepared engine and live publication")
 	require.NoError(t, runtime.Ready(t.Context()))
+	prepared := registry.AuthZ()
+	for _, provider := range []string{"rbac-local", "allow-all"} {
+		t.Run("refuse-hot-switch-to-"+provider, func(t *testing.T) {
+			cfg.Api.Auth.AuthZ.Provider = provider
+			defer func() { cfg.Api.Auth.AuthZ.Provider = "opa" }()
+			require.ErrorContains(t, server.authReloader.Reload(),
+				"controlled restart with write freeze and traffic drain")
+			require.Same(t, prepared, registry.AuthZ(), "rejected cutover must not swap the live provider")
+			require.Equal(t, before, registry.Diagnostics().Policy)
+			require.NoError(t, runtime.Ready(t.Context()))
+			decision, err := registry.AuthZ().Authorize(t.Context(), &auth.Principal{Subject: "ordinary", AuthMethod: "static-users"},
+				"namespace.create", auth.ResourceContext{Kind: "namespace"})
+			require.NoError(t, err)
+			require.Equal(t, auth.OutcomeDeny, decision.Outcome, "a refused static-policy rollback must not open authority")
+		})
+	}
 	runtime.Shutdown()
 	require.Equal(t, http.StatusServiceUnavailable, status("admin", "/ready"))
 }
