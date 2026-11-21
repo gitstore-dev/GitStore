@@ -1,0 +1,63 @@
+# Proposed Admin-only overlay, not the complete cross-API contract.
+# Storefront owns different published types/visibility and does not mount this SDL.
+# Admin does not enable the recommendation-serving directive.
+# Not a standalone or append-only schema.
+# Replace matching canonical fields; add new Search types. All other owning
+# types, resource envelopes, watch events and mutations remain canonical.
+
+extend type Query {
+  products(namespace: String!, first: Int, after: String, last: Int, before: String, query: String): ProductConnection!
+  productVariants(namespace: String!, first: Int, after: String, last: Int, before: String, query: String): ProductVariantConnection!
+  categories(namespace: String!, first: Int, after: String, last: Int, before: String, query: String): CategoryConnection!
+  collections(namespace: String!, first: Int, after: String, last: Int, before: String, query: String): CollectionConnection!
+  repositories(namespace: String!, first: Int, after: String, last: Int, before: String, query: String): RepositoryConnection!
+  namespaces(first: Int, after: String, last: Int, before: String, query: String): NamespaceConnection!
+  serviceAccounts(first: Int, after: String, last: Int, before: String, query: String): ServiceAccountConnection!
+  actors(first: Int, after: String, last: Int, before: String, query: String): ActorConnection!
+  roles(namespace: String!, first: Int, after: String, last: Int, before: String, query: String): RoleConnection!
+  roleBindings(namespace: String!, first: Int, after: String, last: Int, before: String, query: String): RoleBindingConnection!
+  clusterRoles(first: Int, after: String, last: Int, before: String, query: String): ClusterRoleConnection!
+  clusterRoleBindings(first: Int, after: String, last: Int, before: String, query: String): ClusterRoleBindingConnection!
+
+  """Search supported resource kinds in one Relay connection."""
+  search(namespace: String!, first: Int, after: String, last: Int, before: String, query: String): SearchItemConnection!
+}
+
+extend type Category {
+  products(first: Int, after: String, last: Int, before: String, query: String): ProductConnection!
+}
+extend type Collection {
+  products(first: Int, after: String, last: Int, before: String, query: String): ProductConnection!
+}
+extend type Product {
+  productVariants(first: Int, after: String, last: Int, before: String, query: String): ProductVariantConnection!
+}
+
+extend type Subscription {
+  watchResources(kind: String!, namespace: String, resourceVersion: String, query: String): WatchEvent!
+  watchNamespaces(resourceVersion: String, query: String): NamespaceWatchEvent!
+  watchRepositories(namespace: String, resourceVersion: String, query: String): RepositoryWatchEvent!
+  watchCategories(namespace: String, resourceVersion: String, query: String): CategoryWatchEvent!
+  watchProducts(namespace: String, resourceVersion: String, query: String): ProductWatchEvent!
+  watchFiles(namespace: String, resourceVersion: String, query: String): FileWatchEvent!
+  watchRoles(namespace: String, resourceVersion: String, query: String): RoleWatchEvent!
+  watchClusterRoles(resourceVersion: String, query: String): ClusterRoleWatchEvent!
+  watchRoleBindings(namespace: String, resourceVersion: String, query: String): RoleBindingWatchEvent!
+  watchClusterRoleBindings(resourceVersion: String, query: String): ClusterRoleBindingWatchEvent!
+}
+
+# Containers are not resource objects: reuse canonical PageInfo and nodes;
+# do not add apiVersion/kind/metadata to connections or new resource wrappers.
+# Static union membership is schema-known; runtime discovery advertises only
+# enabled complete kind/operation plans. More members require schema generation.
+union SearchItem = Product | Category | ProductVariant
+
+type SearchItemEdge {
+  cursor: String!
+  node: SearchItem!
+}
+
+type SearchItemConnection {
+  edges: [SearchItemEdge!]!
+  pageInfo: PageInfo!
+}
