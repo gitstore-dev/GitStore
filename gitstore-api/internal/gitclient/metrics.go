@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/observability"
 	"go.opentelemetry.io/otel/attribute"
@@ -21,7 +22,10 @@ import (
 // SDK counters record actual successful message transfers and at most one
 // observed terminal result, including client-streaming success without a
 // second RecvMsg.
-type rpcMetrics struct{ started, handled, received, sent metric.Int64Counter }
+type rpcMetrics struct {
+	started, handled, received, sent metric.Int64Counter
+	duration                         metric.Float64Histogram
+}
 
 func newRPCMetrics(meter metric.Meter) *rpcMetrics {
 	return &rpcMetrics{
@@ -29,6 +33,8 @@ func newRPCMetrics(meter metric.Meter) *rpcMetrics {
 		handled:  observability.MustInstrument(meter.Int64Counter("grpc_client_handled_total")),
 		received: observability.MustInstrument(meter.Int64Counter("grpc_client_msg_received_total")),
 		sent:     observability.MustInstrument(meter.Int64Counter("grpc_client_msg_sent_total")),
+		duration: observability.MustInstrument(meter.Float64Histogram("grpc_client_handling_seconds", metric.WithUnit("s"),
+			metric.WithExplicitBucketBoundaries(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30))),
 	}
 }
 
@@ -38,7 +44,7 @@ func rpcAttributes(method, kind string) []attribute.KeyValue {
 	const prefix = "/gitstore.git.v1.GitService/"
 	if strings.HasPrefix(method, prefix) {
 		switch candidate := strings.TrimPrefix(method, prefix); candidate {
-		case "CreateRepository", "DeleteRepository", "GetFile", "GetFileStream", "ListFiles", "CommitFile", "DeleteFile", "CreateTag", "ListTags", "GetLatestTag", "InfoRefs", "ReceivePack", "UploadPack":
+		case "CreateRepository", "DeleteRepository", "GetFile", "GetFiles", "GetFileStream", "ListFiles", "ResolveRefs", "CommitFile", "DeleteFile", "CreateTag", "ListTags", "GetLatestTag", "InfoRefs", "ReceivePack", "UploadPack":
 			name = candidate
 			service = "gitstore.git.v1.GitService"
 		}
@@ -60,11 +66,14 @@ func (m *rpcMetrics) unary(ctx context.Context, method string, request, reply an
 	m.started.Add(ctx, 1, labels)
 	m.received.Add(ctx, 0, labels)
 	m.sent.Add(ctx, 1, labels)
+	started := time.Now()
 	err := invoke(ctx, method, request, reply, connection, options...)
 	if err == nil {
 		m.received.Add(ctx, 1, labels)
 	}
-	m.handled.Add(ctx, 1, metric.WithAttributes(append(attrs, attribute.String("grpc_code", rpcStatus(err).String()))...))
+	result := metric.WithAttributes(append(attrs, attribute.String("grpc_code", rpcStatus(err).String()))...)
+	m.handled.Add(ctx, 1, result)
+	m.duration.Record(ctx, time.Since(started).Seconds(), result)
 	return err
 }
 
@@ -80,12 +89,26 @@ func (m *rpcMetrics) stream(ctx context.Context, desc *grpc.StreamDesc, connecti
 	m.started.Add(ctx, 1, labels)
 	m.sent.Add(ctx, 0, labels)
 	m.received.Add(ctx, 0, labels)
+	started := time.Now()
+	var finished sync.Once
+	finish := func(err error) {
+		finished.Do(func() {
+			code := rpcStatus(err)
+			if err == io.EOF {
+				code = codes.OK
+			}
+			result := metric.WithAttributes(append(attrs, attribute.String("grpc_code", code.String()))...)
+			m.handled.Add(ctx, 1, result)
+			m.duration.Record(ctx, time.Since(started).Seconds(), result)
+		})
+	}
+	options = append([]grpc.CallOption{grpc.OnFinish(finish)}, options...)
 	stream, err := streamer(ctx, desc, connection, method, options...)
 	if err != nil {
-		m.handled.Add(ctx, 1, metric.WithAttributes(append(attrs, attribute.String("grpc_code", rpcStatus(err).String()))...))
+		finish(err)
 		return nil, err
 	}
-	return &rpcMetricStream{ClientStream: stream, metrics: m, ctx: ctx, attrs: attrs, serverStreams: desc.ServerStreams}, nil
+	return &rpcMetricStream{ClientStream: stream, metrics: m, ctx: ctx, attrs: attrs, finish: finish, serverStreams: desc.ServerStreams}, nil
 }
 
 type rpcMetricStream struct {
@@ -93,7 +116,7 @@ type rpcMetricStream struct {
 	metrics       *rpcMetrics
 	ctx           context.Context
 	attrs         []attribute.KeyValue
-	finished      sync.Once
+	finish        func(error)
 	serverStreams bool
 }
 
@@ -111,13 +134,7 @@ func (s *rpcMetricStream) RecvMsg(message any) error {
 		s.metrics.received.Add(s.ctx, 1, metric.WithAttributes(s.attrs...))
 	}
 	if err != nil || !s.serverStreams {
-		s.finished.Do(func() {
-			code := rpcStatus(err)
-			if err == io.EOF {
-				code = codes.OK
-			}
-			s.metrics.handled.Add(s.ctx, 1, metric.WithAttributes(append(s.attrs, attribute.String("grpc_code", code.String()))...))
-		})
+		s.finish(err)
 	}
 	return err
 }
