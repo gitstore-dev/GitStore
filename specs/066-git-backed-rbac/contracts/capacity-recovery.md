@@ -36,6 +36,46 @@ recovery PR carries its own main-based proofs and leaves main's remaining
 integration closeout pending. No production activation, readiness, sustained
 capacity or unrelated ADR/issue completion is claimed.
 
+## Main-reconciled executable verification (2026-11-21)
+
+Executable source `74862cb6` preserves main's composable runtime roles and
+identity-query conventions alongside the completed RBAC implementation.
+Fresh native builds record clean source, binary hashes and independent
+API/controller baseline identities; earlier receipts retain their original
+source attribution. Full default `make pr-ready`, separately serialized
+`make check TARGET=all` and the AST refresh pass after the acceptance-helper
+repair. Subsequent evidence-only documentation does not change those
+executables.
+
+`TestRBACNativeJournalRecovery` passes in 9.19 seconds, with 561.014 ms domain
+recovery after physical CQL restoration. It exercises below/above-bound
+interruptions, cursor expiry, complete-source resync, surviving-peer
+revocation and a physical revoked-grant API restart under the unchanged
+five-second freshness and thirty-second recovery bounds.
+
+The diagnostic rolling/cutover matrix passes in 51.50 seconds from implemented
+baseline `67a9220d` to `74862cb6`, using distinct API and controller binaries.
+It verifies seeded canonical parity, write freeze/drain, snapshot-ready
+traffic admission, owner catch-up, compatible physical replacements and
+off-traffic refusal of stale static-policy rollback. Owner authorization
+recovers on both APIs in 25.062 seconds after controller replacement.
+Both successful matrices stop normally, close every owned listener and
+preserve the database process, foundation services and retained datasets.
+
+This is implemented-version diagnostic compatibility, not certification of
+an OPA upgrade from production main. A separate attempt from gated main
+`57459dc5` fails the healthy-peer requirement with HTTP 503 during replacement;
+its failure evidence is retained and is not counted as a pass. Production
+OPA remains disabled, and the historical feature-disabled release/migration
+proof is separate from this native diagnostic matrix.
+
+The rolling rerun also verifies a repaired acceptance helper: canonical
+author YAML intentionally has no datastore-owned UID, so pending-creation
+readback is joined to its exact committed Git revision instead. No
+freshness, recovery, parity or healthy-peer assertion was relaxed.
+T096/T098 and sustained fault-load acceptance remain pending in #451.
+Publishing these layers is not equivalent to their integration into main.
+
 ## Native directory-lease boundary acceptance (2026-11-21)
 
 The remaining native proof for #588 passes on its independent exact source

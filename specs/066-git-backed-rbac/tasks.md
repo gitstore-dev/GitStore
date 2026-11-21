@@ -492,6 +492,12 @@ to #451 and one retired task. Independent main-based PRs must preserve their
 actual implementation/task state rather than importing unchecked acceptance
 work as completed. Production OPA remains gated.
 
+Main-reconciled executable source `74862cb6` additionally passes fresh native
+journal recovery and the distinct implemented-version rolling/cutover matrix;
+the exact sources, bounds and separate failed gated-main diagnostic are
+recorded in [capacity/recovery](contracts/capacity-recovery.md#main-reconciled-executable-verification-2026-11-21).
+These receipts do not imply that an open delivery PR has merged.
+
 T092 is complete as runner integration, independently of sustained acceptance.
 The implementation includes strict healthy-alpha dispatch for both
 existing families, source/artifact build receipts, actual SDK resource captures,
