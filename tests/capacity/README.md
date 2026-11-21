@@ -220,6 +220,10 @@ bind artifact hashes to tracked component/shared source inputs and the fixed
 repository build recipe. Matching artifacts can be reused after source-identical
 test/documentation revisions; changed source or artifact bytes fail verification.
 The builder neither adopts unreceipted executables nor overwrites existing ones.
+Live checks also match the hashed file to the process's running executable:
+Linux requires `/proc/<pid>/exe`; macOS requires `lsof` text-mapping device/inode
+identity. Missing identity evidence or an atomically replaced pathname fails
+verification, even if its replacement has a valid build receipt.
 Do not run profilers concurrently; live alpha preflight also refuses Go test
 CPU/heap/block/mutex/trace profile flags.
 

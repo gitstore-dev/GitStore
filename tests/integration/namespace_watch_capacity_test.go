@@ -6773,9 +6773,16 @@ func (v rbacCapacityTopology) verifyLive(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			if err := verifyRBACCapacityRunningExecutable(attempt, id, file); err != nil {
+				return errors.Join(err, file.Close())
+			}
 			hash := sha256.New()
 			read, readErr := io.Copy(hash, io.LimitReader(file, 256<<20+1))
+			identityErr := verifyRBACCapacityRunningExecutable(attempt, id, file)
 			closeErr := file.Close()
+			if identityErr != nil {
+				return errors.Join(identityErr, closeErr)
+			}
 			if readErr != nil || closeErr != nil || read <= 0 || read > 256<<20 ||
 				hex.EncodeToString(hash.Sum(nil)) != process.ExecutableDigest {
 				return errors.New("RBAC native executable source identity changed")

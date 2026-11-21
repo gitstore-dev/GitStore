@@ -4,7 +4,9 @@
 package integration
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,11 +14,14 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -127,6 +132,12 @@ func sealRBACCapacityProvenance(t *testing.T, config rbacCapacityNativeSeedConfi
 		require.NoError(t, err, "%s", output)
 		content, err := readRBACCapacityPrivateFixture(process.BuildReceipt)
 		require.NoError(t, err)
+		var receipt struct {
+			ArtifactSHA256 string `json:"artifactSha256"`
+		}
+		require.NoError(t, json.Unmarshal(content, &receipt))
+		require.Equal(t, process.ExecutableDigest, receipt.ArtifactSHA256,
+			"the source build receipt must attest the verified running executable")
 		receipts[process.ID] = content
 	}
 	content, err := readRBACCapacityPrivateFixture(os.Getenv("CAPACITY_RBAC_SEED_FILE"))
@@ -460,6 +471,76 @@ func makeRBACCapacityAlphaMetrics(instance string) string {
 	}
 	body.WriteString("# TYPE gitstore_authz_rbac_unavailable_total counter\ngitstore_authz_rbac_unavailable_total{reason=\"tier\"} 0\n")
 	return body.String()
+}
+
+func TestRBACCapacityNativeExecutableChild(t *testing.T) {
+	if os.Getenv("GITSTORE_CAPACITY_EXECUTABLE_TEST_CHILD") != "1" {
+		return
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	fmt.Fprintln(os.Stdout, listener.Addr().String())
+	for {
+		connection, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		connection.Close()
+	}
+}
+
+func TestRBACCapacityNativeExecutableTracksRunningImage(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("native executable provenance supports Linux and macOS")
+	}
+	original, err := os.Executable()
+	require.NoError(t, err)
+	content, err := os.ReadFile(original)
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "native-service")
+	require.NoError(t, os.Chmod(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, content, 0o700))
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	child := exec.CommandContext(ctx, path, "-test.run=^TestRBACCapacityNativeExecutableChild$", "-test.timeout=30s")
+	child.Env = append(os.Environ(), "GITSTORE_CAPACITY_EXECUTABLE_TEST_CHILD=1")
+	output, err := child.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, child.Start())
+	t.Cleanup(func() {
+		_ = child.Process.Kill()
+		_ = child.Wait()
+	})
+	address, err := bufio.NewReader(output).ReadString('\n')
+	require.NoError(t, err)
+	id := strconv.Itoa(child.Process.Pid)
+	epoch := func() string {
+		command := exec.CommandContext(ctx, "ps", "-p", id, "-o", "lstart=")
+		command.Env = append(os.Environ(), "LC_ALL=C")
+		output, err := command.Output()
+		require.NoError(t, err)
+		return strings.TrimSpace(string(output))
+	}
+	digest := sha256.Sum256(content)
+	topology := rbacCapacityTopology{Processes: []rbacCapacityProcess{{
+		ID: "native:" + id, Role: "git", Epoch: epoch(), Executable: path,
+		ExecutableDigest: hex.EncodeToString(digest[:]), Endpoint: strings.TrimSpace(address),
+	}}}
+	require.NoError(t, topology.verifyLive(ctx), "the actual unchanged executable must pass")
+
+	replacement := append(content, '\n')
+	require.NoError(t, os.WriteFile(path+".replacement", replacement, 0o700))
+	require.NoError(t, os.Rename(path+".replacement", path))
+	require.Equal(t, topology.Processes[0].Epoch, epoch(), "atomic replacement does not restart the old process")
+	connection, err := net.DialTimeout("tcp", topology.Processes[0].Endpoint, time.Second)
+	require.NoError(t, err, "the old executable is still running")
+	require.NoError(t, connection.Close())
+	replacementDigest := sha256.Sum256(replacement)
+	topology.Processes[0].ExecutableDigest = hex.EncodeToString(replacementDigest[:])
+	require.Error(t, topology.verifyLive(ctx), "the replacement file cannot attest the still-running old image")
+	topology.Processes[0].ExecutableDigest = hex.EncodeToString(digest[:])
+	require.Error(t, topology.verifyLive(ctx), "the old digest cannot attest the replacement pathname either")
 }
 
 func TestRBACCapacityAlphaRequiresActualSDKBoundsNotDeclaredAllocations(t *testing.T) {
