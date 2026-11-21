@@ -6,15 +6,20 @@ package gitclient
 import (
 	"context"
 	"io"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestSDKUnaryMetricsCountActualResponsesAndBoundMethods(t *testing.T) {
@@ -90,4 +95,72 @@ func TestSDKStreamRecordsOneCompletionIncludingClientStreamSuccess(t *testing.T)
 			require.Equal(t, float64(1), observabilitytest.Value(t, registry, "grpc_client_msg_sent_total", labels))
 		})
 	}
+}
+
+func TestSDKStreamRecordsTransportCompletionWithoutAnotherReceive(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics := newRPCMetrics(observabilitytest.Meter(t, registry, "gitstore/grpc-client"))
+	listener := bufconn.Listen(1 << 20)
+	server := grpc.NewServer()
+	server.RegisterService(&grpc.ServiceDesc{
+		ServiceName: "gitstore.git.v1.GitService",
+		HandlerType: (*interface{})(nil),
+		Streams: []grpc.StreamDesc{{
+			StreamName:    "UploadPack",
+			ServerStreams: true,
+			Handler: func(_ any, stream grpc.ServerStream) error {
+				if err := stream.RecvMsg(&emptypb.Empty{}); err != nil {
+					return err
+				}
+				if err := stream.SendMsg(&emptypb.Empty{}); err != nil {
+					return err
+				}
+				<-stream.Context().Done()
+				return status.Error(codes.Canceled, "stream canceled")
+			},
+		}},
+	}, nil)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Stop()
+		require.NoError(t, listener.Close())
+	})
+	connection, err := grpc.NewClient("passthrough:///rpc-metrics",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return listener.DialContext(ctx) }),
+		grpc.WithStreamInterceptor(metrics.stream))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, connection.Close()) })
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	stream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true},
+		"/gitstore.git.v1.GitService/UploadPack")
+	require.NoError(t, err)
+	require.NoError(t, stream.SendMsg(&emptypb.Empty{}))
+	require.NoError(t, stream.CloseSend())
+	require.NoError(t, stream.RecvMsg(&emptypb.Empty{}))
+	cancel()
+	labels := map[string]string{
+		"grpc_type": "server_stream", "grpc_service": "gitstore.git.v1.GitService",
+		"grpc_method": "UploadPack", "grpc_code": "Canceled",
+	}
+	require.Eventually(t, func() bool {
+		return observabilitytest.Value(t, registry, "grpc_client_handled_total", labels) == 1
+	}, 5*time.Second, 10*time.Millisecond, "transport completion must not require another application receive")
+	require.Error(t, stream.RecvMsg(&emptypb.Empty{}))
+	require.Equal(t, float64(1), observabilitytest.Value(t, registry, "grpc_client_handled_total", labels),
+		"transport callback and terminal receive must share one completion")
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	found := false
+	for _, family := range families {
+		if family.GetName() == "grpc_client_handling_seconds" {
+			require.Len(t, family.Metric, 1)
+			require.Equal(t, uint64(1), family.Metric[0].GetHistogram().GetSampleCount(),
+				"transport callback and terminal receive must share one duration sample")
+			require.Positive(t, family.Metric[0].GetHistogram().GetSampleSum())
+			found = true
+		}
+	}
+	require.True(t, found)
 }

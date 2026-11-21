@@ -365,6 +365,12 @@ until observed. A same-generation authored revision still needs acknowledgement;
 unchanged observations remain no-ops. Status writes retain UID/resourceVersion
 checks and reject acknowledgements for another revision.
 
+Canonical ref proofs retain the receiver-bound signature and per-repository
+authorization for every entry. Each batch of at most 32 refs runs in one
+blocking task, preserving response order and independent missing/busy results.
+Repository read locks remain non-blocking; a busy repository cannot hold up
+unrelated proofs in the same batch.
+
 Writes and reviews capture authoritative snapshots current at validation
 start, within bounded retries/deadlines. The tier vector is not globally
 atomic. An authorized write may finish after a concurrent cross-repository

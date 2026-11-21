@@ -43,6 +43,7 @@ const DELETE_RECEIPT_PREFIX: &str = "refs/gitstore/deletions/";
 const DELETE_RECEIPT_HISTORY_LIMIT: usize = 4096;
 const FILE_PROVENANCE_HISTORY_LIMIT: usize = 256;
 static FILE_PROVENANCE_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+static FILE_BATCH_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
 
 /// T047: Convert a proto PushContext into a HookContext for the pipeline.
 impl From<&PushContext> for HookContext {
@@ -1136,6 +1137,93 @@ impl GitService for GitServiceImpl {
         .map_err(|e| Status::internal(format!("task join error: {}", e)))?
     }
 
+    async fn get_files(
+        &self,
+        request: Request<GetFilesRequest>,
+    ) -> Result<Response<GetFilesResponse>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/GetFiles",
+                request.get_ref(),
+            )
+            .await?;
+        let req = request.into_inner();
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            &["repository.contents.read"],
+        )?;
+        if req.paths.is_empty()
+            || req.paths.len() > 32
+            || req.commit_sha.len() != 40
+            || !req
+                .commit_sha
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(Status::invalid_argument(
+                "one exact commit and 1..32 paths required",
+            ));
+        }
+        let mut seen = std::collections::HashSet::with_capacity(req.paths.len());
+        for path in &req.paths {
+            validate_file_path(path)?;
+            if path.len() > 1024
+                || path.split('/').any(|part| part.is_empty() || part == ".")
+                || path.chars().any(char::is_control)
+                || !seen.insert(path)
+            {
+                return Err(Status::invalid_argument("distinct bounded paths required"));
+            }
+        }
+        let commit = gix::ObjectId::from_hex(req.commit_sha.as_bytes())
+            .map_err(|_| Status::invalid_argument("invalid commit"))?;
+        let permit = FILE_BATCH_SLOTS
+            .try_acquire()
+            .map_err(|_| Status::resource_exhausted("file batch capacity unavailable"))?;
+        let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)
+            .map_err(file_read_target_error)?;
+        let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
+        let guard = tokio::time::timeout(std::time::Duration::from_secs(5), lock.read_owned())
+            .await
+            .map_err(|_| Status::deadline_exceeded("repository lock unavailable"))?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _guard = guard;
+            let repo = crate::git::repo::open_repository(&repo_path)
+                .map_err(|_| Status::unavailable("repository unavailable"))?;
+            let commit = repo
+                .find_commit(commit)
+                .map_err(|_| Status::failed_precondition("commit unavailable"))?;
+            let tree = commit
+                .tree_id()
+                .map_err(|_| Status::failed_precondition("commit tree unavailable"))?
+                .detach();
+            let mut files = Vec::with_capacity(req.paths.len());
+            for path in req.paths {
+                let id = find_blob_in_tree(&repo, tree, &path)?;
+                let size_bytes = crate::git::hooks::validation_handler::rbac_blob_size(&repo, id)
+                    .map_err(|_| Status::resource_exhausted("file exceeds 64 KiB"))?;
+                let blob = repo
+                    .find_blob(id)
+                    .map_err(|_| Status::unavailable("file unavailable"))?;
+                files.push(GetFileResponse {
+                    path,
+                    content: blob.data.clone(),
+                    blob_sha: id.to_string(),
+                    size_bytes,
+                });
+            }
+            Ok(Response::new(GetFilesResponse {
+                commit_sha: req.commit_sha,
+                files,
+            }))
+        })
+        .await
+        .map_err(|_| Status::internal("file batch task failed"))?
+    }
+
     async fn get_file_provenance(
         &self,
         request: Request<GetFileProvenanceRequest>,
@@ -1318,6 +1406,91 @@ impl GitService for GitServiceImpl {
         Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
             rx,
         )))
+    }
+
+    async fn resolve_refs(
+        &self,
+        request: Request<ResolveRefsRequest>,
+    ) -> Result<Response<ResolveRefsResponse>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/ResolveRefs",
+                request.get_ref(),
+            )
+            .await?;
+        let req = request.into_inner();
+        if req.refs.is_empty() || req.refs.len() > 32 {
+            return Err(Status::invalid_argument("expected 1..32 repository refs"));
+        }
+        for query in &req.refs {
+            validate_request_authorization(
+                query.authorization.as_ref(),
+                &query.repository_id,
+                &["repository.contents.read"],
+            )?;
+            if !query.r#ref.starts_with("refs/heads/") || query.r#ref.len() > 1024 {
+                return Err(Status::invalid_argument("expected a bounded branch ref"));
+            }
+            let _: gix::refs::FullName = query
+                .r#ref
+                .as_str()
+                .try_into()
+                .map_err(|e: gix::refs::name::Error| Status::invalid_argument(e.to_string()))?;
+        }
+        let data_root = Arc::clone(&self.data_root);
+        let repo_locks = Arc::clone(&self.repo_locks);
+        let proofs = tokio::task::spawn_blocking(move || {
+            let mut proofs = Vec::with_capacity(req.refs.len());
+            for query in req.refs {
+                let mut busy = false;
+                let commit_sha =
+                    if let Ok(path) = resolve_repo_path(&data_root, &query.repository_id) {
+                        let lock = get_or_insert_lock(&repo_locks, &query.repository_id);
+                        // A busy repository cannot hold unrelated freshness proofs.
+                        // Returning no proof must never bypass the repository lock.
+                        let guard = lock.try_read();
+                        match guard {
+                            Ok(_guard) => crate::git::repo::open_repository(&path)
+                                .ok()
+                                .and_then(|repo| {
+                                    let mut reference =
+                                        repo.find_reference(query.r#ref.as_str()).ok()?;
+                                    if reference.name().as_bstr()
+                                        != gix::bstr::BStr::new(query.r#ref.as_bytes())
+                                    {
+                                        return None;
+                                    }
+                                    reference
+                                        .follow_to_object()
+                                        .ok()?
+                                        .object()
+                                        .ok()?
+                                        .try_into_commit()
+                                        .ok()
+                                        .map(|commit| commit.id.to_string())
+                                })
+                                .unwrap_or_default(),
+                            Err(_) => {
+                                busy = true;
+                                String::new()
+                            }
+                        }
+                    } else {
+                        String::new()
+                    };
+                proofs.push(RepositoryRefProof {
+                    repository_id: query.repository_id,
+                    r#ref: query.r#ref,
+                    commit_sha,
+                    busy,
+                });
+            }
+            proofs
+        })
+        .await
+        .map_err(|_| Status::unavailable("ref proof task failed"))?;
+        Ok(Response::new(ResolveRefsResponse { proofs }))
     }
 
     async fn list_files(
@@ -2888,6 +3061,214 @@ mod tests {
         request
     }
 
+    #[tokio::test]
+    async fn resolve_refs_rejects_revision_expressions_and_malformed_branch_refs() {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_A);
+        let service = make_test_service(dir.path());
+        for name in [
+            "refs/heads/main~1",
+            "refs/heads/main~1000000000",
+            "refs/heads/main^0",
+            "refs/heads/main^{commit}",
+            "refs/heads/main:products/p1.md",
+            "refs/heads/main@{0}",
+            "refs/heads/main..other",
+            "refs/heads/main.lock",
+            "refs/heads/release//main",
+            "refs/heads/",
+            "refs/tags/v1.0.0",
+            "HEAD",
+        ] {
+            let request = ResolveRefsRequest {
+                refs: vec![RepositoryRef {
+                    repository_id: TEST_REPO_A.into(),
+                    r#ref: name.into(),
+                    authorization: test_authorization(TEST_REPO_A, "repository.contents.read"),
+                }],
+            };
+            assert_eq!(
+                service
+                    .resolve_refs(signed_test_request(request))
+                    .await
+                    .expect_err(name)
+                    .code(),
+                tonic::Code::InvalidArgument,
+                "{name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_refs_returns_only_exact_branch_commit_tips() {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_A);
+        let repo =
+            crate::git::repo::open_repository(&fanout_path(dir.path(), TEST_REPO_A).unwrap())
+                .unwrap();
+        let parent = repo.head_commit().unwrap();
+        let original = parent.id.to_string();
+        let tip = repo
+            .commit_as(
+                parent.author().unwrap(),
+                parent.committer().unwrap(),
+                "refs/heads/main",
+                "advance main",
+                parent.tree_id().unwrap().detach(),
+                [parent.id],
+            )
+            .unwrap()
+            .detach();
+        for (name, id) in [
+            ("refs/heads/release/v1.0", parent.id),
+            ("refs/tags/refs/heads/missing", tip),
+            (
+                "refs/heads/not-a-commit",
+                repo.write_blob(b"not a commit").unwrap().detach(),
+            ),
+        ] {
+            repo.reference(
+                name,
+                id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "fixture",
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            repo.path().join("refs/heads/alias"),
+            "ref: refs/heads/release/v1.0\n",
+        )
+        .unwrap();
+        let names = [
+            "refs/heads/main",
+            "refs/heads/release/v1.0",
+            "refs/heads/alias",
+            "refs/heads/missing",
+            "refs/heads/not-a-commit",
+        ];
+        let refs = names
+            .iter()
+            .map(|name| RepositoryRef {
+                repository_id: TEST_REPO_A.into(),
+                r#ref: (*name).into(),
+                authorization: test_authorization(TEST_REPO_A, "repository.contents.read"),
+            })
+            .collect();
+        let response = make_test_service(dir.path())
+            .resolve_refs(signed_test_request(ResolveRefsRequest { refs }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.proofs.len(), names.len());
+        for ((proof, name), expected) in response.proofs.iter().zip(names).zip([
+            tip.to_string(),
+            original.clone(),
+            original,
+            String::new(),
+            String::new(),
+        ]) {
+            assert_eq!(proof.r#ref, name);
+            assert_eq!(proof.commit_sha, expected, "{name}");
+            assert!(!proof.busy);
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_refs_binds_every_repository_and_preserves_independent_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_A);
+        let service = make_test_service(dir.path());
+        let query = |id: &str| RepositoryRef {
+            repository_id: id.into(),
+            r#ref: "refs/heads/main".into(),
+            authorization: test_authorization(id, "repository.contents.read"),
+        };
+        let request = ResolveRefsRequest {
+            refs: vec![query(TEST_REPO_A), query(TEST_REPO_D)],
+        };
+        let signed = signed_test_request(request.clone());
+        let mut replay = Request::new(request.clone());
+        *replay.metadata_mut() = signed.metadata().clone();
+        let proofs = service
+            .resolve_refs(signed)
+            .await
+            .unwrap()
+            .into_inner()
+            .proofs;
+        assert_eq!(proofs.len(), 2);
+        assert_eq!(proofs[0].repository_id, TEST_REPO_A);
+        assert_eq!(proofs[0].r#ref, "refs/heads/main");
+        assert_eq!(proofs[0].commit_sha.len(), 40);
+        assert!(proofs[1].commit_sha.is_empty());
+        assert!(!proofs[1].busy);
+        assert_eq!(
+            service.resolve_refs(replay).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+
+        let mut substituted = request.clone();
+        substituted.refs[1].authorization =
+            test_authorization(TEST_REPO_A, "repository.contents.read");
+        assert_eq!(
+            service
+                .resolve_refs(signed_test_request(substituted))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        );
+        let mut tampered = signed_test_request(request.clone());
+        tampered.get_mut().refs[0].r#ref = "refs/heads/another".into();
+        assert_eq!(
+            service.resolve_refs(tampered).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+        for refs in [vec![], vec![query(TEST_REPO_A); 33]] {
+            assert_eq!(
+                service
+                    .resolve_refs(signed_test_request(ResolveRefsRequest { refs }))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::InvalidArgument
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_refs_does_not_block_independent_proofs_on_a_busy_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_A);
+        repo_with_commit(dir.path(), TEST_REPO_D);
+        let service = make_test_service(dir.path());
+        let lock = get_or_insert_lock(&service.repo_locks, TEST_REPO_A);
+        let _writer = lock.write().await;
+        let refs = [TEST_REPO_A, TEST_REPO_D]
+            .into_iter()
+            .map(|id| RepositoryRef {
+                repository_id: id.into(),
+                r#ref: "refs/heads/main".into(),
+                authorization: test_authorization(id, "repository.contents.read"),
+            })
+            .collect();
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            service.resolve_refs(signed_test_request(ResolveRefsRequest { refs })),
+        )
+        .await
+        .expect("one busy repository must not consume unrelated freshness deadlines")
+        .unwrap()
+        .into_inner();
+        assert_eq!(response.proofs.len(), 2);
+        assert_eq!(response.proofs[0].repository_id, TEST_REPO_A);
+        assert!(response.proofs[0].commit_sha.is_empty());
+        assert!(response.proofs[0].busy);
+        assert_eq!(response.proofs[1].repository_id, TEST_REPO_D);
+        assert_eq!(response.proofs[1].commit_sha.len(), 40);
+        assert!(!response.proofs[1].busy);
+    }
+
     fn make_test_service(data_root: &std::path::Path) -> GitServiceImpl {
         GitServiceImpl::new(
             data_root.to_path_buf(),
@@ -3670,6 +4051,155 @@ mod tests {
         });
         let resp = svc.get_file(req).await.unwrap();
         assert_eq!(resp.into_inner().content, b"---\nid: p1\n---\nhello");
+    }
+
+    #[tokio::test]
+    async fn get_files_pins_commit_and_enforces_signed_bounds() {
+        let dir = TempDir::new().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_D);
+        let repo =
+            crate::git::repo::open_repository(&fanout_path(dir.path(), TEST_REPO_D).unwrap())
+                .unwrap();
+        let original = resolve_ref_to_commit_id(&repo, "HEAD").unwrap();
+        let mut tree = repo
+            .edit_tree(
+                repo.find_commit(original)
+                    .unwrap()
+                    .tree_id()
+                    .unwrap()
+                    .detach(),
+            )
+            .unwrap();
+        let small = repo.write_blob(b"manifest").unwrap().detach();
+        let large = repo.write_blob(vec![b'x'; 65_537]).unwrap().detach();
+        for index in 0..32 {
+            tree.upsert(
+                format!("manifest-{index:02}.yaml"),
+                gix::object::tree::EntryKind::Blob,
+                small,
+            )
+            .unwrap();
+        }
+        tree.upsert("large.yaml", gix::object::tree::EntryKind::Blob, large)
+            .unwrap();
+        tree.upsert("link.yaml", gix::object::tree::EntryKind::Link, small)
+            .unwrap();
+        let tree = tree.write().unwrap().detach();
+        let signature = gix::actor::Signature {
+            name: "test".into(),
+            email: "test@example.com".into(),
+            time: gix::date::Time::now_local_or_utc(),
+        };
+        let mut time_buf = gix::date::parse::TimeBuf::default();
+        let signature = signature.to_ref(&mut time_buf);
+        let commit = repo
+            .commit_as(
+                signature,
+                signature,
+                "HEAD",
+                "bounded files",
+                tree,
+                [original],
+            )
+            .unwrap()
+            .detach()
+            .to_string();
+        let service = make_test_service(dir.path());
+        let request = GetFilesRequest {
+            repository_id: TEST_REPO_D.into(),
+            authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+            commit_sha: commit.clone(),
+            paths: (0..32)
+                .map(|index| format!("manifest-{index:02}.yaml"))
+                .collect(),
+        };
+        let signed = signed_test_request(request.clone());
+        let mut replay = Request::new(request.clone());
+        *replay.metadata_mut() = signed.metadata().clone();
+        let response = service.get_files(signed).await.unwrap().into_inner();
+        assert_eq!(response.commit_sha, commit);
+        assert_eq!(response.files.len(), 32);
+        for (index, file) in response.files.iter().enumerate() {
+            assert_eq!(file.path, request.paths[index]);
+            assert_eq!(file.content, b"manifest");
+            assert_eq!(file.blob_sha, small.to_string());
+            assert_eq!(file.size_bytes, 8);
+        }
+        assert_eq!(
+            service.get_files(replay).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+        let mut pinned = request.clone();
+        pinned.commit_sha = original.to_string();
+        pinned.paths = vec!["products/p1.md".into()];
+        assert_eq!(
+            service
+                .get_files(signed_test_request(pinned))
+                .await
+                .unwrap()
+                .into_inner()
+                .files[0]
+                .content,
+            b"---\nid: p1\n---\nhello"
+        );
+        let mut tampered = signed_test_request(request.clone());
+        tampered.get_mut().paths.reverse();
+        assert_eq!(
+            service.get_files(tampered).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+        let mut foreign = request.clone();
+        foreign.authorization = test_authorization(TEST_REPO_A, "repository.contents.read");
+        assert_eq!(
+            service
+                .get_files(signed_test_request(foreign))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        );
+        for (paths, code) in [
+            (vec![], tonic::Code::InvalidArgument),
+            (
+                vec!["products/p1.md".into(); 33],
+                tonic::Code::InvalidArgument,
+            ),
+            (
+                vec!["products/p1.md".into(); 2],
+                tonic::Code::InvalidArgument,
+            ),
+            (
+                vec!["../products/p1.md".into()],
+                tonic::Code::InvalidArgument,
+            ),
+            (vec!["large.yaml".into()], tonic::Code::ResourceExhausted),
+            (vec!["link.yaml".into()], tonic::Code::FailedPrecondition),
+            (
+                vec!["products/p1.md".into(), "missing.yaml".into()],
+                tonic::Code::NotFound,
+            ),
+        ] {
+            let mut invalid = request.clone();
+            invalid.paths = paths;
+            assert_eq!(
+                service
+                    .get_files(signed_test_request(invalid))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                code
+            );
+        }
+        let mut mutable = request;
+        mutable.commit_sha = "HEAD".into();
+        assert_eq!(
+            service
+                .get_files(signed_test_request(mutable))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[tokio::test]

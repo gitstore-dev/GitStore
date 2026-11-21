@@ -151,6 +151,18 @@ pub(crate) mod test_observer {
                             }
                         }
                     }
+                    if let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data()
+                    {
+                        for point in histogram.data_points() {
+                            if labels.iter().all(|(key, value)| {
+                                point.attributes().any(|kv| {
+                                    kv.key.as_str() == *key && kv.value.as_str() == *value
+                                })
+                            }) {
+                                return point.count();
+                            }
+                        }
+                    }
                 }
             }
         }
