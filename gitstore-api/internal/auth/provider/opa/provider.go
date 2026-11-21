@@ -287,6 +287,7 @@ func (p *Provider) Authorize(ctx context.Context, principal *auth.Principal, act
 		return capture.Authorize(ctx, p, principal, action, resource, func() (auth.PinnedAuthorization, error) {
 			evaluation, err := p.pinServing(ctx, proofScope)
 			if err != nil {
+				p.requestNamespace(proofScope)
 				return nil, err
 			}
 			return evaluation, nil
@@ -295,17 +296,21 @@ func (p *Provider) Authorize(ctx context.Context, principal *auth.Principal, act
 	pinned, err := p.pinServing(ctx, proofScope)
 	if err != nil {
 		auth.ObserveRBACUnavailable(ctx, "tier", proofScope.Attrs["namespace"] == nil || proofScope.Attrs["namespace"] == "")
-		name, _ := proofScope.Attrs["namespace"].(string)
-		p.mu.Lock()
-		loader := p.namespaceLoader
-		p.mu.Unlock()
-		if loader != nil && name != "" {
-			loader(name)
-		}
+		p.requestNamespace(proofScope)
 		return auth.Deny("opa", "tier unavailable"), err
 	}
 	defer pinned.Close()
 	return pinned.Authorize(ctx, principal, action, resource)
+}
+
+func (p *Provider) requestNamespace(resource auth.ResourceContext) {
+	name, _ := resource.Attrs["namespace"].(string)
+	p.mu.Lock()
+	loader := p.namespaceLoader
+	p.mu.Unlock()
+	if loader != nil && name != "" {
+		loader(name)
+	}
 }
 
 // Retired namespace grants stay suppressed while verified storage cleanup uses

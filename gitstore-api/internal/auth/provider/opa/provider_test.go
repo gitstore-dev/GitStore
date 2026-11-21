@@ -149,6 +149,35 @@ func TestProviderReadinessPrecedesTrustedFastPathsAndNamespaceReuse(t *testing.T
 	require.ErrorIs(t, err, ErrUnavailable, "terminating namespace data never becomes a grant")
 }
 
+func TestProviderMissingNamespaceRequestsLoadWithAndWithoutCapture(t *testing.T) {
+	for _, captured := range []bool{false, true} {
+		t.Run(fmt.Sprint(captured), func(t *testing.T) {
+			provider, err := NewProvider(t.Context())
+			require.NoError(t, err)
+			t.Cleanup(provider.Close)
+			require.NoError(t, provider.PublishTier(t.Context(), servingTier(t, rbac.ClusterTierID, "", 1, false)))
+			var requested []string
+			provider.SetNamespaceLoader(func(name string) { requested = append(requested, name) })
+			ctx := t.Context()
+			if captured {
+				var closeCapture func()
+				ctx, closeCapture = auth.ContextWithServingAuthorizationCapture(ctx)
+				defer closeCapture()
+			}
+			actor := &auth.Principal{Subject: "alice", AuthMethod: "static-users"}
+			resource := auth.ResourceContext{Kind: "product", Name: "widget", Attrs: map[string]any{"namespace": "shop"}}
+			decision, err := provider.Authorize(ctx, actor, "product.read", resource)
+			require.ErrorIs(t, err, ErrUnavailable)
+			require.Equal(t, auth.OutcomeDeny, decision.Outcome)
+			require.Equal(t, []string{"shop"}, requested, "missing snapshots must be scheduled even for request-scoped captures")
+			require.NoError(t, provider.PublishTier(t.Context(), servingTier(t, testUID("shop"), "shop", 1, true)))
+			decision, err = provider.Authorize(ctx, actor, "product.read", resource)
+			require.NoError(t, err)
+			require.Equal(t, auth.OutcomeAllow, decision.Outcome)
+		})
+	}
+}
+
 func TestMutationCaptureFinishesWithoutGrantingNewRequestsOrScopes(t *testing.T) {
 	provider, err := NewProvider(t.Context())
 	require.NoError(t, err)

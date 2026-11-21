@@ -128,6 +128,29 @@ independent committed-revision expectations, private fixtures, topology
 constraints and process-epoch counters. These checks do not certify native
 dataset counts, replica propagation, fault recovery or sustained acceptance.
 
+`TestRBACNativeJournalRecovery` is an opt-in functional test, not a capacity
+selector or sustained-load pass. Set `RBAC_TEST_JOURNAL_RECOVERY_RUN=1` only
+with an explicitly owned native fixture, two healthy APIs, two native
+controllers and singleton Git. Its additional fault-target API requires
+four distinct unused listener ports, a fresh disposable RF1 keyspace with
+four-second journal retention and the unchanged five-second OPA freshness
+bound. Never shorten a retained fixture's retention.
+
+Alongside the existing private actor/admin credentials and controller endpoints,
+set `RBAC_TEST_API_BINARY`, `RBAC_TEST_JOURNAL_CONFIG`, `RBAC_TEST_JOURNAL_API`,
+`RBAC_TEST_JOURNAL_SCYLLA_ADDRESS`, `RBAC_TEST_JOURNAL_OWNERSHIP` and
+`RBAC_TEST_PROCESS_LOG_DIR`. The receipt must identify a freshly created
+`gitstore_rbac_owner_` keyspace with `freshDatabaseNotRestoredOldFixture=true`;
+logs and sealed source models require a private directory. Use
+`GITSTORE_RBAC_NATIVE_TEST_SCYLLA_NAT=1` with one explicit loopback Scylla address
+so discovered topology cannot bypass the bounded fault proxy.
+
+Success requires healthy-peer grant/revocation correctness, trusted-admin
+fail-closed behavior, actual expired-cursor rejection, complete post-restoration
+source models, denial at independently read canonical revisions, recovery within
+30 seconds and a physical API restart that cannot restore the revoked grant.
+The test preserves logs and never replaces an existing API or the Git service.
+
 Source-evidence readers treat an unfinished JSON record at the unterminated
 end of an appended stream as pending, not malformed committed evidence.
 Unfinished tails register no source model; malformed complete or interior

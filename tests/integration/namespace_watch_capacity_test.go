@@ -496,6 +496,13 @@ type rbacCapacitySourceHeader struct {
 }
 
 func walkRBACCapacitySourceModels(reader io.Reader, visit func(rbacCapacitySourceHeader, []json.RawMessage) error) error {
+	return walkRBACCapacitySourceModelsWithClock(reader,
+		func(header rbacCapacitySourceHeader, resources []json.RawMessage, _ time.Time) error {
+			return visit(header, resources)
+		})
+}
+
+func walkRBACCapacitySourceModelsWithClock(reader io.Reader, visit func(rbacCapacitySourceHeader, []json.RawMessage, time.Time) error) error {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	var unterminatedLine bool
@@ -505,6 +512,7 @@ func walkRBACCapacitySourceModels(reader io.Reader, visit func(rbacCapacitySourc
 		return advance, line, err
 	})
 	var header *rbacCapacitySourceHeader
+	var observedAt time.Time
 	var resources []json.RawMessage
 	var remaining, modelBytes, total int
 	for scanner.Scan() {
@@ -518,6 +526,7 @@ func walkRBACCapacitySourceModels(reader io.Reader, visit func(rbacCapacitySourc
 			Resource      json.RawMessage
 			ResourceCount int
 			Digest        string
+			ObservedAt    time.Time
 		}
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
 			if unterminatedLine {
@@ -536,6 +545,7 @@ func walkRBACCapacitySourceModels(reader io.Reader, visit func(rbacCapacitySourc
 				return errors.New("RBAC source model has an invalid or overlapping header")
 			}
 			header, remaining, modelBytes = record.Snapshot, record.ResourceCount, len(scanner.Bytes())
+			observedAt = record.ObservedAt
 			resources = nil
 		case "resource":
 			if header == nil || remaining == 0 || len(record.Resource) == 0 {
@@ -570,7 +580,7 @@ func walkRBACCapacitySourceModels(reader io.Reader, visit func(rbacCapacitySourc
 			if !bytes.Equal(hash.Sum(nil), digest) {
 				return errors.New("RBAC source model content does not match its digest")
 			}
-			if err := visit(*header, resources); err != nil {
+			if err := visit(*header, resources, observedAt); err != nil {
 				return err
 			}
 			header, resources = nil, nil
