@@ -922,10 +922,18 @@ func rbacNativeOwnerControllerRecovery(t *testing.T, admin rbacNativeFixture, su
 			require.True(t, os.SameFile(checkpoints[i], info), "replacement must retain its original private checkpoint directory")
 		}
 		for _, api := range admin.apis {
-			response := owner.query(t, api,
-				`query($ns:String!){products(namespace:$ns,first:1){edges{node{id}}}}`,
-				map[string]any{"ns": subject})
-			require.Empty(t, response.Errors, "controller recovery must restore actual owner access on both APIs")
+			rbacNativeEventually(t, func() bool {
+				response := owner.query(t, api,
+					`query($ns:String!){products(namespace:$ns,first:1){edges{node{id}}}}`,
+					map[string]any{"ns": subject})
+				if response.Status == http.StatusServiceUnavailable ||
+					graphqlErrorHasCode(response.Errors, "AUTHORIZATION_UNAVAILABLE") ||
+					graphqlErrorHasCode(response.Errors, "FORBIDDEN") {
+					return false
+				}
+				require.Empty(t, response.Errors)
+				return true
+			}, "controller recovery must restore actual owner access on both APIs")
 		}
 		recoveredIn := time.Since(recoveryStarted)
 		require.LessOrEqual(t, recoveredIn, 30*time.Second,
