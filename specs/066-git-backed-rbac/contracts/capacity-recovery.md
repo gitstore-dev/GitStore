@@ -56,6 +56,13 @@ domain recovery bound, retains original checkpoint directories and preserves
 UID/isolation and duplicate-binding assertions. All three core binary hashes
 match the journal run; only test code changes between these two sources.
 
+The full default `make pr-ready` and separately serialized
+`make check TARGET=all` pass on source `170fdeb4`, including all default
+lint/build/test, license, credential, configuration/Compose and generated-drift
+checks. Focused API auth/OPA and integration proxy race suites also pass;
+the AST graph is refreshed. This completes T101 for this source, not future
+unpublished implementation changes.
+
 Every successful run closes its owned listeners without forced stops and
 preserves the database process, foundation services and retained datasets.
 Earlier failed attempts remain failed. No sustained fault load, throughput,
