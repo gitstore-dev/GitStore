@@ -16,32 +16,10 @@ metadata:
     gitstore.dev/owner: platform
 spec:
   title: Acme Store
-  tier: ORGANIZATION
+  tier: Organization
   repositoryDefaults:
-    visibility: PRIVATE
+    visibility: Private
     defaultBranch: main
-  pushPolicyDefaults:
-    maxPackSizeBytes: 52428800
-    maxFileSizeBytes: 10485760
-    receivePackHooks:
-      preReceive:
-        enabled: true
-      update:
-        enabled: false
-      postReceive:
-        enabled: true
-      procReceive:
-        enabled: false
-      postUpdate:
-        enabled: false
-      referenceTransaction:
-        enabled: false
-    schemaValidation:
-      phase: pre-receive
-      timeoutSeconds: 10
-    admissionControl:
-      phase: post-receive
-      branchPattern: ^refs/heads/main$
 ---
 ```
 
@@ -57,19 +35,18 @@ metadata:
     gitstore.dev/owner: commerce-platform
 spec:
   title: Acme Commerce
-  tier: ORGANIZATION
+  tier: Organization
   repositoryDefaults:
-    visibility: INTERNAL
+    visibility: Internal
     defaultBranch: trunk
-  pushPolicyDefaults:
-    maxPackSizeBytes: 41943040
-    admissionControl:
-      phase: post-receive
-      branchPattern: ^refs/heads/trunk$
 ---
 ```
 
-Omitted nested defaults mean that the Namespace supplies no override. Authors must omit `metadata.uid`, `metadata.resourceVersion`, `metadata.generation`,
+Namespace stores authored default fields, but their presence is not proof of
+implemented Repository override merging. In particular, stored hook/phase
+fields do not disable mandatory pre-receive validation or post-receive
+admission. Configure actual service limits through the
+[configuration reference](../configuration.md). Authors must omit `metadata.uid`, `metadata.resourceVersion`, `metadata.generation`,
 `metadata.creationTimestamp`, `metadata.revision`, `metadata.ownerReferences`,
 `metadata.finalizers`, and `status`. Status is controller/system-owned and is
 written only through the status path.
@@ -87,14 +64,26 @@ written only through the status path.
 | `status`                                     | System   | Status-write path only   |
 
 Accepted writes persist the complete authored envelope, labels, annotations,
-full `spec`, and Markdown body. Any authored change advances both `generation`
-and `resourceVersion`. A Git path, commit, ref, or revision change with
-otherwise identical authored content advances only `resourceVersion`.
+full `spec`, and Markdown body. `generation` tracks desired state only: a
+`spec` or Markdown-body change advances both counters. Labels, annotations,
+owner-reference projections, and Git provenance (path, commit, ref, or
+revision) advance only `resourceVersion`. Exact re-admission advances neither.
+Admission refreshes its accepted revision and `AdmissionAccepted` condition
+without discarding controller-owned status observations or conditions.
 
-Validation, immutable-field enforcement, policy ceilings, phase validation, and
-admission are defined by GH#173. Watch and resume behavior is defined by
-GH#174. Repository override merging and effective policy resolution are
-defined by GH#249.
+Validation and admission enforce the current resource contract and immutable
+identity. Watch and resume behavior is documented in the
+[Namespace watch contract](namespace-watch.md). Repository override merging
+and effective-policy resolution are separate work; do not treat persisted
+default fields as an operational policy engine.
+
+## Generation-semantics rollout
+
+For this change, pause external GraphQL authoring and Git pushes, drain
+in-flight admissions, replace every API replica, then resume authoring. Use
+the same pause and drain before rollback; an older replica must not write using
+the former generation semantics. Controller status traffic may continue because
+it changes only `resourceVersion`.
 
 ## Hydrated API representation
 
@@ -115,9 +104,9 @@ metadata:
   finalizers: []
 spec:
   title: Acme Store
-  tier: ORGANIZATION
+  tier: Organization
   repositoryDefaults:
-    visibility: PRIVATE
+    visibility: Private
     defaultBranch: main
   pushPolicyDefaults: null
 status:
@@ -132,10 +121,9 @@ status:
     message: Namespace manifest admitted successfully.
 ```
 
-Existing flat Namespace GraphQL fields remain available with deprecation
-reasons during the additive migration. New consumers should use
-`metadata.name`, `spec.title`, `spec.tier`, and `status`. Deprecated fields may
-be removed only in a future major GraphQL API release.
+Use `metadata.name`, `spec.title`, `spec.tier`, and `status`. The old flat
+Namespace GraphQL fields are not in the current schema and are not
+compatibility aliases.
 
 ## Condition vocabulary
 
@@ -152,6 +140,19 @@ admitted generation, and records the admitted Git revision in
 `lastAppliedRevision`. Reconciliation preserves that revision, advances only
 `resourceVersion`, and sets `SystemRepoReady` and `Ready`. Accepted deletion
 sets the deletion timestamp/finalizer and exposes `Terminating`.
+
+Deletion removes the authored manifest before termination is admitted, for both
+Git pushes and GraphQL mutations. `DeletionPending=True` identifies an authorized
+mutation whose Git/admission work must be recovered; it is system-owned and
+survives controller status patches. The Namespace name remains reserved through
+finalization. Ordinary repositories and catalog resources block deletion; the
+verified empty system repository is cleaned up during completion.
+
+`completeNamespaceDeletion` requires the observed Relay Node `id`, `name`, and
+`resourceVersion`. Its input identity field is `id`, not `uid`; output
+`metadata.uid` is unchanged. Completion verifies the exact namespace incarnation
+before cleanup, rejecting a stale request for a same-name replacement even when
+the resource version matches.
 
 ## Admission and deletion phase matrix
 
@@ -223,3 +224,11 @@ replicas. Repository creation against a terminating Namespace is rejected.
 
 Controller status updates merge their owned conditions with existing status and
 must preserve `AdmissionAccepted` and the admission revision.
+
+### Shared GraphQL metadata
+
+Namespace uses `ObjectMeta` and `ObjectMetaInput`, shared with other resources.
+Its output `metadata.namespace` is null. For GraphQL inputs and Git manifests,
+omit namespace or set it to null; any non-null value, including an empty string,
+is rejected with `NAMESPACE_FORBIDDEN`. See the
+[metadata contract and client migration guidance](../api-reference.md#resource-metadata-and-namespace-scope).

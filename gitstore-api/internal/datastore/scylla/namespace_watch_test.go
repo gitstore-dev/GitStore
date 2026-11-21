@@ -74,6 +74,30 @@ func TestNamespaceWatchBatchCountStopsAtBucketBoundary(t *testing.T) {
 	require.Equal(t, 1, namespaceWatchBatchCount(events, 3, 3))
 }
 
+func TestNamespaceWatchBatchAmortizesMaximumRBACAdmission(t *testing.T) {
+	events := make([]datastore.NamespaceWatchEvent, 256)
+	for index := range events {
+		events[index] = datastore.NamespaceWatchEvent{
+			Kind: "ClusterRole", Name: "root-role", Payload: make([]byte, 17<<10),
+		}
+	}
+	batches := 0
+	for first := int64(1); len(events) > 0; batches++ {
+		count := namespaceWatchBatchCount(events, first, 4096)
+		require.GreaterOrEqual(t, count, min(24, len(events)),
+			"padded root resources must amortize conditional appends across most of the statement allowance")
+		require.LessOrEqual(t, count, namespaceWatchBatchMaxStatements)
+		size := 0
+		for _, event := range events[:count] {
+			size += namespaceWatchEventEncodedBytes(event)
+		}
+		require.LessOrEqual(t, size, namespaceWatchBatchMaxBytes)
+		first += int64(count)
+		events = events[count:]
+	}
+	require.LessOrEqual(t, batches, 12)
+}
+
 func TestResolveAmbiguousNamespaceLeaseRenewal(t *testing.T) {
 	previousExpiry := time.Now().UTC().Add(30 * time.Second)
 	expires := previousExpiry.Add(30 * time.Second)

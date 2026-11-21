@@ -5,14 +5,28 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
-	"slices"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
 
 // ErrNotSupported is returned by providers for operations they do not implement.
 var ErrNotSupported = errors.New("auth: operation not supported by this provider")
+var ErrAuthorizationUnavailable = errors.New("auth: authorization snapshot unavailable")
+
+var ErrProfileNotFound = errors.New("auth: directory profile not found")
+var ErrDirectoryUnavailable = errors.New("auth: directory unavailable")
+var ErrDirectoryConflict = errors.New("auth: directory conflict")
+var ErrDirectoryInvalidInput = errors.New("auth: invalid directory input")
 
 // ErrTokenTooOld is returned when a token has exceeded the refresh grace window.
 var ErrTokenTooOld = errors.New("auth: token too old to refresh")
@@ -22,6 +36,99 @@ var ErrTokenRevoked = errors.New("auth: token has been revoked")
 
 // ErrInvalidToken is returned when a refresh token cannot be parsed or validated.
 var ErrInvalidToken = errors.New("auth: invalid token")
+
+const MaxPrincipalGroups = 256
+
+// VisibilityFromSpec exposes only an existing, typed visibility fact. Missing,
+// null, malformed or wrong-type values remain absent, never implicitly public.
+// Repository manifests already permit upper/lower-case enum spellings.
+func VisibilityFromSpec(spec json.RawMessage) (string, bool) {
+	var fields struct {
+		Visibility *string `json:"visibility"`
+	}
+	if json.Unmarshal(spec, &fields) != nil || fields.Visibility == nil {
+		return "", false
+	}
+	return strings.ToLower(*fields.Visibility), true
+}
+
+// ValidTrustedPrincipal checks a sanitized identity snapshot after its transport
+// has been authenticated. It does not authenticate user-supplied claims.
+func ValidTrustedPrincipal(p *Principal) bool {
+	text := func(s string) bool {
+		return s != "" && len(s) <= 256 && utf8.ValidString(s) && strings.IndexFunc(s, unicode.IsControl) < 0
+	}
+	if p == nil || !text(p.Subject) || !text(p.AuthMethod) || len(p.Groups) > MaxPrincipalGroups {
+		return false
+	}
+	for _, group := range p.Groups {
+		if !text(group) {
+			return false
+		}
+	}
+	if p.Subject == "system:api" {
+		return p.AuthMethod == "internal" && p.ServiceAccountUID == ""
+	}
+	if name, ok := strings.CutPrefix(p.Subject, "system:serviceaccount:"); ok {
+		return text(name) && !strings.ContainsAny(name, ":/") && text(p.ServiceAccountUID) && (p.AuthMethod == "serviceaccount-jwt" || p.AuthMethod == "serviceaccount-assertion")
+	}
+	if p.Subject == "anon" {
+		return p.AuthMethod == "none" && p.ServiceAccountUID == ""
+	}
+	return ValidExternalUsername(p.Subject) && p.ServiceAccountUID == "" && p.AuthMethod != "internal" && p.AuthMethod != "none" && !strings.HasPrefix(p.AuthMethod, "serviceaccount-")
+}
+
+// ValidExternalUsername excludes identities that only trusted in-process work
+// or verified ServiceAccount providers may construct.
+func ValidExternalUsername(subject string) bool {
+	return subject != "" && subject != "anon" && len(subject) <= 256 && utf8.ValidString(subject) &&
+		!strings.HasPrefix(subject, "system:") && !strings.HasPrefix(subject, "serviceaccount:")
+}
+
+// normalizeAuthenticatedPrincipal runs once at the successful AuthN boundary.
+// It does not interpret token claims as group membership or authorization.
+func normalizeAuthenticatedPrincipal(provider string, principal *Principal) (*Principal, bool) {
+	if principal == nil || len(principal.Groups) > MaxPrincipalGroups {
+		return nil, false
+	}
+	normalized := *principal
+	normalized.Groups = nil
+	normalized.Username = ""
+	normalized.ProfileKind = ""
+	anonymous := provider == "anonymous" && principal.Subject == "anon" && principal.AuthMethod == "none" && principal.ServiceAccountUID == ""
+	saProvider := provider == "serviceaccount-jwt" || provider == "serviceaccount-assertion"
+	if anonymous {
+		normalized.Groups = []string{"system:unauthenticated"}
+		return &normalized, true
+	}
+	if saProvider {
+		name, ok := strings.CutPrefix(principal.Subject, "system:serviceaccount:")
+		if !ok || name == "" || strings.ContainsAny(name, ":/") || len(principal.Subject) > 256 || !utf8.ValidString(name) || principal.ServiceAccountUID == "" || principal.AuthMethod != provider {
+			return nil, false
+		}
+	} else if !ValidExternalUsername(principal.Subject) || principal.ServiceAccountUID != "" || principal.AuthMethod == "none" || principal.AuthMethod == "internal" || strings.HasPrefix(principal.AuthMethod, "serviceaccount-") {
+		return nil, false
+	}
+	seen := make(map[string]bool, len(principal.Groups)+2)
+	for _, group := range principal.Groups {
+		if group == "" || len(group) > 256 || !utf8.ValidString(group) {
+			return nil, false
+		}
+		if group == "system:authenticated" || group == "system:unauthenticated" || group == "system:serviceaccounts" || seen[group] {
+			continue
+		}
+		seen[group] = true
+		normalized.Groups = append(normalized.Groups, group)
+	}
+	normalized.Groups = append(normalized.Groups, "system:authenticated")
+	if saProvider {
+		normalized.Groups = append(normalized.Groups, "system:serviceaccounts")
+	}
+	if !ValidTrustedPrincipal(&normalized) {
+		return nil, false
+	}
+	return &normalized, true
+}
 
 // Outcome is the result of an auth decision.
 type Outcome uint8
@@ -39,6 +146,9 @@ type Decision struct {
 	RequestID string    `json:"request_id"`
 	At        time.Time `json:"at"`
 	Provider  string    `json:"provider"`
+	// PolicyDigest identifies the immutable policy used, not a later snapshot.
+	PolicyDigest          string                 `json:"policy_digest,omitempty"`
+	AuthorizationSnapshot *AuthorizationSnapshot `json:"authorization_snapshot,omitempty"`
 }
 
 func Allow(provider, reason string) Decision {
@@ -60,23 +170,17 @@ type Principal struct {
 	Tenant     string         `json:"tenant,omitempty"`
 	Namespace  string         `json:"namespace,omitempty"`
 	Groups     []string       `json:"groups,omitempty"`
-	Roles      []string       `json:"roles,omitempty"`
 	Scopes     []string       `json:"scopes,omitempty"`
 	Claims     map[string]any `json:"claims,omitempty"`
 	AuthMethod string         `json:"auth_method"`
 	ExpiresAt  time.Time      `json:"exp,omitempty"`
 	// TokenID is the JWT jti claim — unique per-token identifier used for revocation.
 	// Empty for Basic Auth sessions and anonymous principals.
-	TokenID           string `json:"jti,omitempty"`
-	ServiceAccountUID string `json:"service_account_uid,omitempty"`
-}
-
-// IsAdmin reports whether AuthZ assigned the built-in "admin" role.
-// Authentication providers establish identity only; they must not grant roles.
-// In particular, static-users principals are role-free until rbac-local (or
-// another AuthZ provider) resolves their bindings.
-func (p *Principal) IsAdmin() bool {
-	return slices.Contains(p.Roles, "admin")
+	TokenID           string      `json:"jti,omitempty"`
+	ServiceAccountUID string      `json:"service_account_uid,omitempty"`
+	Username          string      `json:"username,omitempty"`
+	ProfileKind       ProfileKind `json:"profile_kind,omitempty"`
+	ProfileExpiresAt  time.Time   `json:"-"`
 }
 
 // Anonymous returns a Principal with no identity.
@@ -128,17 +232,293 @@ type ResourceContext struct {
 // AuthZProvider makes access-control decisions for a given (principal, action, resource).
 type AuthZProvider interface {
 	Name() string
-	// Authorize returns Allow or Deny. action follows dot-notation: "namespace.delete.any".
+	// Authorize returns Allow or Deny for a registered action, e.g. "namespace.delete".
 	Authorize(ctx context.Context, p *Principal, action string, res ResourceContext) (Decision, error)
+}
+
+// AuthorizationModel contains authoritative validation-start data, never an
+// ordinary serving-cache hint. Providers must validate and privately own the
+// selected data before returning an evaluation.
+type AuthorizationModel struct {
+	ModelVersion string
+	Cluster      AuthorizationTier
+	Namespace    *AuthorizationTier
+}
+
+type AuthorizationTier struct {
+	Namespace        string
+	NamespaceVersion string
+	Active           bool
+	State            datastore.RBACTierState
+	CatalogDigest    string
+	BuiltinDigest    string
+	ContentDigest    string
+	Resources        []*datastore.RBACResource
+}
+
+// PinnedAuthorization cannot switch models or perform source I/O. Close is
+// idempotent and releases the evaluation's accounted model memory.
+type PinnedAuthorization interface {
+	AuthZProvider
+	AuthorizationSnapshotProvider
+	Close()
+}
+
+type AuthorizationPinProvider interface {
+	PinAuthorization(context.Context, AuthorizationModel) (PinnedAuthorization, error)
+}
+
+type servingCaptureKey struct{}
+
+// ServingAuthorizationCapture retains one field's first complete serving model,
+// not an authoritative validation model or authority for another namespace.
+type ServingAuthorizationCapture struct {
+	mu         sync.Mutex
+	provider   AuthZProvider
+	evaluation PinnedAuthorization
+	namespace  string
+	closed     bool
+}
+
+func ContextWithServingAuthorizationCapture(ctx context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	capture := &ServingAuthorizationCapture{}
+	return context.WithValue(ctx, servingCaptureKey{}, capture), func() {
+		cancel()
+		capture.mu.Lock()
+		defer capture.mu.Unlock()
+		capture.closed = true
+		if capture.evaluation != nil {
+			capture.evaluation.Close()
+		}
+	}
+}
+
+func ServingAuthorizationCaptureFromContext(ctx context.Context) *ServingAuthorizationCapture {
+	capture, _ := ctx.Value(servingCaptureKey{}).(*ServingAuthorizationCapture)
+	return capture
+}
+
+func (c *ServingAuthorizationCapture) Authorize(ctx context.Context, provider AuthZProvider,
+	principal *Principal, action string, resource ResourceContext,
+	pin func() (PinnedAuthorization, error)) (Decision, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return Decision{}, err
+	}
+	namespace, _ := resource.Attrs["namespace"].(string)
+	if namespace == "gitstore-system" {
+		namespace = ""
+	}
+	if c.closed || c.evaluation != nil && (c.provider != provider || namespace != "" && namespace != c.namespace) {
+		return Deny(provider.Name(), "captured scope unavailable"), ErrAuthorizationUnavailable
+	}
+	if c.evaluation == nil {
+		evaluation, err := pin()
+		if err != nil {
+			if evaluation != nil {
+				evaluation.Close()
+			}
+			return Deny(provider.Name(), "capture unavailable"), err
+		}
+		if evaluation == nil {
+			return Deny(provider.Name(), "capture unavailable"), ErrAuthorizationUnavailable
+		}
+		c.provider, c.evaluation, c.namespace = provider, evaluation, namespace
+	}
+	return c.evaluation.Authorize(ctx, principal, action, resource)
+}
+
+// An empty namespace UID requests cluster-wide proof. Named-resource sets
+// must be supersets for every finite action; conditional caller grants are
+// not evidence of another subject's complete authority.
+type AuthorizationCoverageRequest struct {
+	NamespaceUID string
+	Namespace    string
+	Permissions  []AuthorizationPermission
+}
+
+type AuthorizationPermission struct {
+	Action        string
+	ResourceNames []string
+}
+
+type AuthorizationCoverage struct {
+	Covered      bool
+	Reason       string
+	PolicyDigest string
+}
+
+type AuthorizationCoverageProvider interface {
+	Covers(context.Context, *Principal, AuthorizationCoverageRequest) (AuthorizationCoverage, error)
+}
+
+type AuthorizationReadiness struct {
+	Ready  bool   `json:"ready"`
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// AuthorizationReadinessProvider reports bounded metadata without source I/O.
+type AuthorizationReadinessProvider interface {
+	AuthorizationReadiness(tierID string) (AuthorizationReadiness, bool)
 }
 
 // UserProfile is a provider-agnostic user record.
 type UserProfile struct {
-	Subject     string
-	DisplayName string
-	Email       string
-	Groups      []string
-	Active      bool
+	Subject           string
+	Username          string
+	DisplayName       string
+	Email             string
+	Groups            []string
+	Active            bool
+	Kind              ProfileKind
+	Lifecycle         ActorLifecycleState
+	Metadata          *DirectoryMetadata
+	Identities        []string
+	EmailVerified     bool
+	EmailDeliverable  bool
+	DeliverableEmail  string `json:"-"`
+	ContactConsent    ContactConsent
+	ServiceAccountUID string
+	FreshUntil        time.Time `json:"-"`
+}
+
+type ProfileKind string
+
+const (
+	ProfileStaff          ProfileKind = "staff"
+	ProfileCustomer       ProfileKind = "customer"
+	ProfileServiceAccount ProfileKind = "serviceAccount"
+)
+
+type ActorLifecycleState string
+
+const (
+	ActorActive              ActorLifecycleState = "ACTIVE"
+	ActorInactive            ActorLifecycleState = "INACTIVE"
+	ActorSuspended           ActorLifecycleState = "SUSPENDED"
+	ActorInvited             ActorLifecycleState = "INVITED"
+	ActorPendingVerification ActorLifecycleState = "PENDING_VERIFICATION"
+)
+
+type ContactConsent struct {
+	Transactional bool      `json:"transactional"`
+	Marketing     bool      `json:"marketing"`
+	ChangedAt     time.Time `json:"changed_at,omitempty"`
+}
+
+type DirectoryContact struct {
+	Subject          string
+	PrimaryEmail     string
+	DeliverableEmail string
+	EmailVerified    bool
+	EmailDeliverable bool
+	ContactConsent   ContactConsent
+}
+
+type ContactDirectory interface {
+	ResolveContact(context.Context, string) (*DirectoryContact, error)
+}
+
+// DirectoryMetadata is provider-owned; advancing a copy is not a remote CAS.
+type DirectoryMetadata struct {
+	UID               string            `json:"uid"`
+	Name              string            `json:"name"`
+	OwnerSub          string            `json:"-"`
+	CreationActor     string            `json:"-"`
+	UpdateActor       string            `json:"-"`
+	Generation        int64             `json:"generation"`
+	ResourceVersion   string            `json:"resource_version"`
+	CreationTimestamp time.Time         `json:"creation_timestamp"`
+	Labels            map[string]string `json:"labels,omitempty"`
+	Annotations       map[string]string `json:"annotations,omitempty"`
+}
+
+func NewDirectoryMetadata(initiator *Principal, uid, name string, created time.Time) (*DirectoryMetadata, error) {
+	if !ValidTrustedPrincipal(initiator) {
+		return nil, errors.New("auth: directory metadata requires a trusted initiating principal")
+	}
+	if uid == "" || len(uid) > 256 || strings.TrimSpace(uid) != uid || strings.IndexFunc(uid, unicode.IsControl) >= 0 ||
+		!ValidExternalUsername(name) || strings.TrimSpace(name) != name || strings.IndexFunc(name, unicode.IsControl) >= 0 || created.IsZero() {
+		return nil, errors.New("auth: invalid directory identity metadata")
+	}
+	return &DirectoryMetadata{
+		UID: uid, Name: name, OwnerSub: initiator.Subject,
+		CreationActor: initiator.Subject, UpdateActor: initiator.Subject,
+		Generation: 1, ResourceVersion: "1", CreationTimestamp: created.UTC(),
+	}, nil
+}
+
+func (m *DirectoryMetadata) Advance(authorOwnedChange bool) error {
+	if m == nil || m.Generation < 1 || m.Generation > math.MaxInt32 || (authorOwnedChange && m.Generation >= math.MaxInt32) {
+		return errors.New("auth: directory metadata counter exhausted")
+	}
+	version, err := strconv.ParseUint(m.ResourceVersion, 10, 64)
+	if err != nil || version == 0 || version == math.MaxUint64 {
+		return errors.New("auth: directory metadata counter exhausted")
+	}
+	if authorOwnedChange {
+		m.Generation++
+	}
+	m.ResourceVersion = strconv.FormatUint(version+1, 10)
+	return nil
+}
+
+type ActorPageRequest struct {
+	First  *int
+	After  *string
+	Last   *int
+	Before *string
+}
+
+func (r ActorPageRequest) ValidateForward() error {
+	if r.Last != nil || r.Before != nil {
+		return ErrNotSupported
+	}
+	if r.First != nil && (*r.First < 1 || *r.First > 500) {
+		return ErrDirectoryInvalidInput
+	}
+	return nil
+}
+
+type ActorEdge struct {
+	Cursor  string
+	Profile *UserProfile
+}
+
+type ActorPage struct {
+	Edges           []ActorEdge
+	StartCursor     *string
+	EndCursor       *string
+	HasNextPage     bool
+	HasPreviousPage bool
+}
+
+// ActorDirectory extends the legacy boundary without requiring local providers
+// to manufacture externally managed identities or advertise public capabilities.
+type ActorDirectory interface {
+	UserDirProvider
+	ResolvePrincipal(context.Context, *Principal) (*UserProfile, error)
+	ListActors(context.Context, ActorPageRequest) (*ActorPage, error)
+}
+
+type HumanDirectory interface {
+	UserDirProvider
+	CreateStaff(context.Context, *UserProfile) error
+	ResendInvitation(context.Context, string) (*UserProfile, error)
+	SetHumanLifecycle(context.Context, string, ActorLifecycleState) (*UserProfile, error)
+	DeleteHuman(context.Context, string) (*UserProfile, error)
+}
+
+type GroupDirectory interface {
+	SetActorGroup(context.Context, ProfileKind, string, string, bool) (*UserProfile, error)
+}
+
+// ServiceAccountGroupDirectory resolves memberships by source UID, not mirror identity UID.
+type ServiceAccountGroupDirectory interface {
+	ListServiceAccountGroups(context.Context, string) ([]string, error)
 }
 
 // UserDirProvider provides user-directory operations.

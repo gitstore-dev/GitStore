@@ -15,6 +15,37 @@ import (
 
 const fullImageCDC = "cdc = {'enabled': 'true', 'preimage': 'full', 'postimage': 'true', 'ttl': '1209600'}"
 
+func TestServiceAccountFreshSchemaIsClusterScoped(t *testing.T) {
+	const file = "009_service_account.cql"
+	name := strings.Join(strings.Fields(createStatement(t, file, "service_accounts_by_cluster_name")), " ")
+	assert.Contains(t, name, "primary key ((name))")
+	assert.Contains(t, name, "enrollment_complete boolean")
+	uid := strings.Join(strings.Fields(createStatement(t, file, "service_accounts_by_cluster_uid")), " ")
+	assert.Contains(t, uid, "primary key ((uid))")
+	assert.Contains(t, uid, "name text")
+	bucket := strings.Join(strings.Fields(createStatement(t, file, "service_accounts_by_cluster_bucket")), " ")
+	assert.Contains(t, bucket, "primary key ((bucket), creation_timestamp, uid)")
+	assert.Contains(t, bucket, "name text")
+	raw, err := migrations.Files.ReadFile(file)
+	require.NoError(t, err)
+	for _, legacy := range []string{"namespace", "service_accounts_by_name", "service_accounts_by_uid", "service_accounts_by_bucket"} {
+		assert.NotContains(t, string(raw), legacy)
+	}
+	assert.Contains(t, string(raw), "service_account_assertion_replays")
+}
+
+func TestServiceAccountCDCIsAnIncrementalAuthoritativeOnlyMigration(t *testing.T) {
+	raw, err := migrations.Files.ReadFile("013_service_account_cdc.cql")
+	require.NoError(t, err)
+	cql := strings.ToLower(string(raw))
+	require.Contains(t, cql, "alter table service_accounts_by_cluster_name with "+fullImageCDC)
+	require.Equal(t, 1, strings.Count(cql, "cdc = {"))
+	require.NotContains(t, cql, "create table")
+	require.NotContains(t, cql, "drop ")
+	require.NotContains(t, cql, "truncate")
+	require.NotContains(t, createStatement(t, "009_service_account.cql", "service_accounts_by_cluster_name"), "cdc")
+}
+
 // createStatement returns the CREATE TABLE statement for table, up to its
 // terminating semicolon.
 func createStatement(t *testing.T, file, table string) string {
@@ -34,8 +65,9 @@ func TestWatchedKindsEnableAuthoritativeFullImageCDC(t *testing.T) {
 		{"002_namespace.cql", "namespaces_by_uid"},
 		{"003_repository.cql", "repositories_by_uid"},
 		{"004_category_taxonomy.cql", "category_taxonomies_by_namespace"},
-		{"005_product.cql", "products_by_namespace"},
+		{"005_product.cql", "products_by_key"},
 		{"008_file.cql", "files_by_namespace"},
+		{"014_rbac.cql", "rbac_resources_by_scope"},
 	} {
 		assert.Containsf(t, createStatement(t, tc.file, tc.table), fullImageCDC, "%s CDC", tc.table)
 	}
@@ -50,7 +82,47 @@ func TestOnlyWatchedAuthoritativeTablesEnableCDC(t *testing.T) {
 		require.NoError(t, err)
 		count += strings.Count(strings.ToLower(string(raw)), "cdc = {")
 	}
-	assert.Equal(t, 5, count, "every CDC-enabled table must be a registered watch source")
+	assert.Equal(t, 7, count, "only authoritative watched tables and the internal ServiceAccount source enable CDC")
+}
+
+func TestRBACMigrationKeepsTransactionsWithinOnePartition(t *testing.T) {
+	authority := strings.Join(strings.Fields(createStatement(t, "014_rbac.cql", "rbac_resources_by_scope")), " ")
+	assert.Contains(t, authority, "primary key ((tier), entry)")
+	assert.Contains(t, authority, "namespace_retired boolean")
+	for _, column := range []string{"creation_timestamp timestamp", "creation_actor text", "update_timestamp timestamp", "update_actor text"} {
+		assert.Contains(t, authority, column)
+	}
+	cleanup := createStatement(t, "014_rbac.cql", "rbac_namespace_cleanups_by_bucket")
+	assert.Contains(t, strings.Join(strings.Fields(cleanup), " "), "primary key ((bucket), namespace_uid)")
+	assert.NotContains(t, cleanup, "cdc")
+	guard := strings.Join(strings.Fields(createStatement(t, "014_rbac.cql", "rbac_role_guards_by_id")), " ")
+	assert.Contains(t, guard, "primary key ((role_uid), entry)")
+	for _, table := range []string{"rbac_resources_by_id", "rbac_bindings_by_role", "rbac_role_guards_by_id"} {
+		assert.NotContains(t, createStatement(t, "014_rbac.cql", table), "cdc")
+	}
+}
+
+func TestProductPartitionsSeparateEnvelopesNamesAndListings(t *testing.T) {
+	const file = "005_product.cql"
+	authority := strings.Join(strings.Fields(createStatement(t, file, "products_by_key")), " ")
+	assert.Contains(t, authority, "primary key ((namespace, creation_timestamp, uid))")
+	name := strings.Join(strings.Fields(createStatement(t, file, "products_by_identity")), " ")
+	assert.Contains(t, name, "primary key ((namespace, name))")
+	listing := strings.Join(strings.Fields(createStatement(t, file, "products_by_namespace_shard")), " ")
+	assert.Contains(t, listing, "primary key ((namespace, shard), creation_timestamp, uid)")
+	assert.Contains(t, listing, "shard tinyint")
+	assert.NotContains(t, listing, "status")
+	assert.NotContains(t, listing, "spec")
+	assert.NotContains(t, listing, "cdc")
+}
+
+func TestNamespaceCatalogFenceIsNotAWatchedResource(t *testing.T) {
+	statement := strings.Join(strings.Fields(createStatement(t, "002_namespace.cql", "namespace_catalog_fences_by_uid")), " ")
+	assert.Contains(t, statement, "uid uuid primary key")
+	assert.Contains(t, statement, "epoch bigint")
+	assert.Contains(t, statement, "pending bigint")
+	assert.NotContains(t, statement, "cdc")
+	assert.NotContains(t, statement, "default_time_to_live")
 }
 
 func TestResourceWatchJournalIsSharedAcrossKinds(t *testing.T) {

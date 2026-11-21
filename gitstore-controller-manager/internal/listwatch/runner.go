@@ -11,6 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/cenkalti/backoff/v5"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
@@ -754,11 +757,11 @@ func (r *Runner[T]) finalFlush(ctx context.Context) {
 		return
 	}
 	if err := r.Store.Save(context.WithoutCancel(ctx), rec); err != nil {
-		health.CheckpointWriteFailuresTotal.WithLabelValues(r.Kind).Inc()
+		health.CheckpointWriteFailuresTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", r.Kind)))
 		r.log().Warn("final checkpoint flush on shutdown failed", zap.String("kind", r.Kind), zap.Error(err))
 		return
 	}
-	health.CheckpointLastWriteTimestamp.WithLabelValues(r.Kind).Set(float64(time.Now().Unix()))
+	health.CheckpointLastWriteTimestamp.Record(context.Background(), float64(time.Now().Unix()), metric.WithAttributes(attribute.String("kind", r.Kind)))
 	r.eventsSinceFlush = 0
 	r.clearCheckpointDirty(version)
 }
@@ -784,13 +787,13 @@ func (r *Runner[T]) flushWithBackoff(ctx context.Context) error {
 		}
 		err = r.Store.Save(ctx, rec)
 		if err == nil {
-			health.CheckpointLastWriteTimestamp.WithLabelValues(r.Kind).Set(float64(time.Now().Unix()))
+			health.CheckpointLastWriteTimestamp.Record(context.Background(), float64(time.Now().Unix()), metric.WithAttributes(attribute.String("kind", r.Kind)))
 			r.eventsSinceFlush = 0
 			r.clearCheckpointDirty(version)
 			return nil
 		}
 
-		health.CheckpointWriteFailuresTotal.WithLabelValues(r.Kind).Inc()
+		health.CheckpointWriteFailuresTotal.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", r.Kind)))
 		d := b.NextBackOff()
 		r.log().Warn("checkpoint write failed; pausing watch consumption",
 			zap.String("kind", r.Kind),

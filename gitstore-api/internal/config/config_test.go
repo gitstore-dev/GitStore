@@ -11,18 +11,24 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
-// clearEnv unsets every GITSTORE_ env var touched by this file (new-schema
-// and legacy) and returns a restore function, so a developer's shell or a
+// clearEnv unsets every GITSTORE_ env var touched by this file
+// and returns a restore function, so a developer's shell or a
 // prior test's os.Setenv call never leaks into the next test.
 func clearEnv(t *testing.T) func() {
 	t.Helper()
 	keys := []string{
 		// Current schema.
-		"GITSTORE_API__PORT",
+		"GITSTORE_API__ROLES",
+		"GITSTORE_API__GRAPHQL_LAYOUT",
+		"GITSTORE_API__ADMIN_PORT",
+		"GITSTORE_API__STOREFRONT_PORT",
 		"GITSTORE_API__GIT_PORT",
 		"GITSTORE_API__GRPC_PORT",
+		"GITSTORE_API__PROFILING__URI",
+		"GITSTORE_API__PROFILING__TOKEN",
 		"GITSTORE_API__RATE_LIMIT__PER_SECOND",
 		"GITSTORE_API__RATE_LIMIT__BURST",
 		"GITSTORE_API__GIT_SERVICE__URI",
@@ -32,13 +38,39 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_PUSH_LIMITS__MAX_PACK_SIZE",
 		"GITSTORE_PUSH_LIMITS__MAX_FILE_SIZE",
 		"GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE",
-		"GITSTORE_API__AUTH__JWT__SECRET",
-		"GITSTORE_API__AUTH__JWT__TTL",
-		"GITSTORE_API__AUTH__JWT__ISSUER",
-		"GITSTORE_API__AUTH__JWT__REFRESH_GRACE",
+		"GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET",
+		"GITSTORE_API__AUTH__STATIC_USERS__JWT__TTL",
+		"GITSTORE_API__AUTH__STATIC_USERS__JWT__ISSUER",
+		"GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE",
 		"GITSTORE_API__AUTH__AUTHN__CHAIN",
 		"GITSTORE_API__AUTH__AUTHZ__PROVIDER",
+		"GITSTORE_API__AUTH__OPA__WRITES_ENABLED",
+		"GITSTORE_API__AUTH__OPA__INITIAL_ADMIN_SUBJECT",
+		"GITSTORE_API__AUTH__OPA__MAX_STALENESS",
+		"GITSTORE_API__AUTH__OPA__VALIDATION_TIMEOUT",
+		"GITSTORE_API__AUTH__OPA__REBUILD_WORKERS",
+		"GITSTORE_API__AUTH__OPA__DIRTY_QUEUE_CAPACITY",
+		"GITSTORE_API__AUTH__OPA__SNAPSHOT_RETRIES",
+		"GITSTORE_API__AUTH__OPA__SNAPSHOT_MEMORY_SIZE",
+		"GITSTORE_API__AUTH__OPA__REBUILD_MEMORY_SIZE",
 		"GITSTORE_API__AUTH__USERDIR__PROVIDER",
+		"GITSTORE_API__NOTIFICATION__PROVIDER",
+		"GITSTORE_API__NOTIFICATION__API_KEY",
+		"GITSTORE_API__NOTIFICATION__TIMEOUT",
+		"GITSTORE_API__NOTIFICATION__MAX_CONCURRENT",
+		"GITSTORE_API__NOTIFICATION__MAX_BODY_SIZE",
+		"GITSTORE_API__NOTIFICATION__DEVELOPMENT__SMTP_URI",
+		"GITSTORE_API__NOTIFICATION__DEVELOPMENT__SENDER",
+		"GITSTORE_API__AUTH__KRATOS__ADMIN_URI",
+		"GITSTORE_API__AUTH__KRATOS__WEBHOOK_URI",
+		"GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN",
+		"GITSTORE_API__AUTH__KRATOS__TIMEOUT",
+		"GITSTORE_API__AUTH__KRATOS__MAX_CONCURRENT",
+		"GITSTORE_API__AUTH__KRATOS__MAX_RESPONSE_SIZE",
+		"GITSTORE_API__AUTH__KRATOS__CACHE_ENTRIES",
+		"GITSTORE_API__AUTH__KRATOS__CACHE_TTL",
+		"GITSTORE_API__AUTH__KRATOS__MAPPINGS",
+		"GITSTORE_API__AUTH__KRATOS__CUSTOMER_GROUPS",
 		"GITSTORE_API__AUTH__RBAC_LOCAL__POLICY_FILE",
 		"GITSTORE_API__AUTH__SERVICEACCOUNT__ISSUER",
 		"GITSTORE_API__AUTH__SERVICEACCOUNT__AUDIENCE",
@@ -73,18 +105,6 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__LEASE_TTL",
 		"GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__LEASE_RENEW_INTERVAL",
 		"GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__MAX_LAG",
-		// Legacy keys exercised by rejection tests.
-		"GITSTORE_API__RATE_LIMIT_PER_SECOND",
-		"GITSTORE_API__RATE_LIMIT_BURST",
-		"GITSTORE_GIT__GRPC__URI",
-		"GITSTORE_DATASTORE__BACKEND",
-		"GITSTORE_AUTH__STATICUSERS__USERS_FILE",
-		"GITSTORE_AUTH__GRPC__HMAC_SECRET",
-		"GITSTORE_AUTH__JWT__DURATION",
-		"GITSTORE_WATCH__NAMESPACE__READERS_ENABLED",
-		"GITSTORE_WATCH__NAMESPACE__MATERIALIZER_ENABLED",
-		"GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE",
-		"GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE",
 	}
 	saved := make(map[string]string, len(keys))
 	for _, k := range keys {
@@ -102,12 +122,409 @@ func clearEnv(t *testing.T) func() {
 	}
 }
 
+func TestDynamicRBACRolloutConfiguration(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "rbac-local", cfg.Api.Auth.AuthZ.Provider)
+	require.Equal(t, []string{"static-users", "anonymous"}, cfg.Api.Auth.AuthN.Chain)
+	require.Equal(t, "none", cfg.Api.Auth.UserDir.Provider)
+	require.False(t, cfg.Api.Auth.OPA.WritesEnabled)
+
+	t.Setenv("GITSTORE_API__AUTH__OPA__WRITES_ENABLED", "true")
+	_, err = Load()
+	require.ErrorContains(t, err, "api.auth.opa.writes_enabled requires the opa authz provider")
+
+	t.Setenv("GITSTORE_API__AUTH__AUTHZ__PROVIDER", "allow-all")
+	_, err = Load()
+	require.ErrorContains(t, err, "api.auth.opa.writes_enabled requires the opa authz provider")
+
+	t.Setenv("GITSTORE_API__AUTH__AUTHZ__PROVIDER", "opa")
+	cfg, err = Load()
+	require.NoError(t, err)
+	require.Equal(t, "opa", cfg.Api.Auth.AuthZ.Provider)
+	require.Equal(t, []string{"static-users", "anonymous"}, cfg.Api.Auth.AuthN.Chain)
+	require.Equal(t, "none", cfg.Api.Auth.UserDir.Provider)
+	require.True(t, cfg.Api.Auth.OPA.WritesEnabled)
+	require.Equal(t, int64(512<<20), cfg.Api.Auth.OPA.SnapshotMemoryBytes)
+	require.Equal(t, int64(64<<20), cfg.Api.Auth.OPA.RebuildMemoryBytes)
+}
+
+func TestDynamicRBACBoundedOverrides(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_API__AUTH__OPA__MAX_STALENESS", "3s")
+	t.Setenv("GITSTORE_API__AUTH__OPA__VALIDATION_TIMEOUT", "10s")
+	t.Setenv("GITSTORE_API__AUTH__OPA__REBUILD_WORKERS", "2")
+	t.Setenv("GITSTORE_API__AUTH__OPA__DIRTY_QUEUE_CAPACITY", "128")
+	t.Setenv("GITSTORE_API__AUTH__OPA__SNAPSHOT_RETRIES", "2")
+	t.Setenv("GITSTORE_API__AUTH__OPA__SNAPSHOT_MEMORY_SIZE", "128MiB")
+	t.Setenv("GITSTORE_API__AUTH__OPA__REBUILD_MEMORY_SIZE", "32MiB")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 3*time.Second, cfg.Api.Auth.OPA.MaxStaleness)
+	require.Equal(t, 10*time.Second, cfg.Api.Auth.OPA.ValidationTimeout)
+	require.Equal(t, 2, cfg.Api.Auth.OPA.RebuildWorkers)
+	require.Equal(t, 128, cfg.Api.Auth.OPA.DirtyQueueCapacity)
+	require.Equal(t, 2, cfg.Api.Auth.OPA.SnapshotRetries)
+	require.Equal(t, int64(128<<20), cfg.Api.Auth.OPA.SnapshotMemoryBytes)
+	require.Equal(t, int64(32<<20), cfg.Api.Auth.OPA.RebuildMemoryBytes)
+	require.False(t, cfg.Api.Auth.OPA.WritesEnabled)
+}
+
+func TestRBACPrivateEvidenceConfigurationIsExplicit(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Empty(t, cfg.Api.Auth.OPA.EvidenceDirectory)
+	directory := t.TempDir()
+	t.Setenv("GITSTORE_API__AUTH__OPA__EVIDENCE_DIRECTORY", directory)
+	_, err = Load()
+	require.ErrorContains(t, err, "evidence_directory requires the opa")
+	t.Setenv("GITSTORE_API__AUTH__AUTHZ__PROVIDER", "opa")
+	cfg, err = Load()
+	require.NoError(t, err)
+	require.Equal(t, directory, cfg.Api.Auth.OPA.EvidenceDirectory)
+	for _, invalid := range []string{"relative", directory + "/../alias"} {
+		t.Setenv("GITSTORE_API__AUTH__OPA__EVIDENCE_DIRECTORY", invalid)
+		_, err = Load()
+		require.ErrorContains(t, err, "clean absolute private directory")
+	}
+}
+
+func TestOPAConfigurationFileUsesProviderNamespaceAndEntryCount(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte("[api.auth.opa]\ndirty_queue_capacity = 7\nmax_staleness = \"2s\"\n"), 0600))
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	require.Equal(t, 7, cfg.Api.Auth.OPA.DirtyQueueCapacity)
+	require.Equal(t, 2*time.Second, cfg.Api.Auth.OPA.MaxStaleness)
+	require.Equal(t, []string{"static-users", "anonymous"}, cfg.Api.Auth.AuthN.Chain)
+	require.Equal(t, "none", cfg.Api.Auth.UserDir.Provider)
+}
+
+func TestDynamicRBACInitialAdministratorRequiresAnExternalUserAndOPA(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_API__AUTH__OPA__INITIAL_ADMIN_SUBJECT", "initial-admin-subject")
+	_, err := Load()
+	require.ErrorContains(t, err, "initial_admin_subject requires the opa")
+	t.Setenv("GITSTORE_API__AUTH__AUTHZ__PROVIDER", "opa")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "initial-admin-subject", cfg.Api.Auth.OPA.InitialAdminSubject)
+	for _, invalid := range []string{"system:api", "system:serviceaccount:controller", "anon", "invalid\nsubject"} {
+		t.Setenv("GITSTORE_API__AUTH__OPA__INITIAL_ADMIN_SUBJECT", invalid)
+		_, err := Load()
+		require.ErrorContains(t, err, "non-reserved authenticated User subject")
+	}
+}
+
+func TestDynamicRBACRejectsInvalidLimits(t *testing.T) {
+	for _, test := range []struct {
+		key, value string
+	}{
+		{"MAX_STALENESS", "0s"},
+		{"MAX_STALENESS", "6s"},
+		{"VALIDATION_TIMEOUT", "0s"},
+		{"VALIDATION_TIMEOUT", "31s"},
+		{"REBUILD_WORKERS", "0"},
+		{"REBUILD_WORKERS", "5"},
+		{"DIRTY_QUEUE_CAPACITY", "0"},
+		{"DIRTY_QUEUE_CAPACITY", "1025"},
+		{"DIRTY_QUEUE_CAPACITY", "1MiB"},
+		{"SNAPSHOT_RETRIES", "0"},
+		{"SNAPSHOT_RETRIES", "4"},
+		{"SNAPSHOT_MEMORY_SIZE", "0B"},
+		{"SNAPSHOT_MEMORY_SIZE", "513MiB"},
+		{"SNAPSHOT_MEMORY_SIZE", "512MB"},
+		{"REBUILD_MEMORY_SIZE", "0B"},
+		{"REBUILD_MEMORY_SIZE", "65MiB"},
+	} {
+		t.Run(test.key+"/"+test.value, func(t *testing.T) {
+			defer clearEnv(t)()
+			setRequiredAuth(t)
+			t.Setenv("GITSTORE_API__AUTH__OPA__"+test.key, test.value)
+			_, err := Load()
+			require.ErrorContains(t, err, "api.auth.opa.")
+		})
+	}
+	t.Run("scratch exceeds aggregate budget", func(t *testing.T) {
+		defer clearEnv(t)()
+		setRequiredAuth(t)
+		t.Setenv("GITSTORE_API__AUTH__OPA__SNAPSHOT_MEMORY_SIZE", "32MiB")
+		t.Setenv("GITSTORE_API__AUTH__OPA__REBUILD_MEMORY_SIZE", "64MiB")
+		_, err := Load()
+		require.ErrorContains(t, err, "api.auth.opa.rebuild_memory_size")
+	})
+}
+
+func TestProfilingConfigurationRequiresLoopbackAndToken(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_API__PROFILING__URI", "http://127.0.0.1:6060")
+	_, err := Load()
+	require.ErrorContains(t, err, "api.profiling.token")
+	t.Setenv("GITSTORE_API__PROFILING__TOKEN", "profiling-test-token-at-least-32-bytes")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "http://127.0.0.1:6060", cfg.Api.Profiling.URI)
+	t.Setenv("GITSTORE_API__PROFILING__URI", "http://0.0.0.0:6060")
+	_, err = Load()
+	require.ErrorContains(t, err, "api.profiling.uri")
+	require.NotContains(t, err.Error(), cfg.Api.Profiling.Token)
+}
+
+func TestNotificationConfigurationRequiresBoundedProviderAndRedactsKey(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_API__NOTIFICATION__PROVIDER", "development")
+	t.Setenv("GITSTORE_API__NOTIFICATION__DEVELOPMENT__SMTP_URI", "smtp://mailslurper:1025/")
+	t.Setenv("GITSTORE_API__NOTIFICATION__DEVELOPMENT__SENDER", "noreply@example.test")
+	_, err := Load()
+	require.ErrorContains(t, err, "api.notification.api_key")
+	const key = "notification-test-key-at-least-32-characters"
+	t.Setenv("GITSTORE_API__NOTIFICATION__API_KEY", key)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 2*time.Second, cfg.Api.Notification.Timeout)
+	encoder := zapcore.NewMapObjectEncoder()
+	require.NoError(t, cfg.MarshalLogObject(encoder))
+	require.Equal(t, "<redacted>", encoder.Fields["api.notification.api_key"])
+	t.Setenv("GITSTORE_API__NOTIFICATION__MAX_CONCURRENT", "129")
+	_, err = Load()
+	require.ErrorContains(t, err, "api.notification")
+	require.NotContains(t, err.Error(), key)
+	t.Setenv("GITSTORE_API__NOTIFICATION__MAX_CONCURRENT", "16")
+	t.Setenv("GITSTORE_API__NOTIFICATION__PROVIDER", "production")
+	_, err = Load()
+	require.ErrorContains(t, err, "api.notification.provider")
+}
+
 // setRequiredAuth sets the required auth env vars including the gRPC HMAC secret.
 func setRequiredAuth(t *testing.T) {
 	t.Helper()
 	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE", "config/users.yaml")
-	os.Setenv("GITSTORE_API__AUTH__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
+	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
 	os.Setenv("GITSTORE_GRPC_AUTH__HMAC_SECRET", "ci-test-grpc-hmac-secret")
+}
+
+func TestNotificationBodySizeRequiresBoundedIECUnits(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		raw   string
+		bytes int64
+	}{
+		{"bytes", `"65536B"`, 64 << 10},
+		{"binary kilobytes", `"64KiB"`, 64 << 10},
+		{"maximum", `"1MiB"`, 1 << 20},
+		{"raw integer", `65536`, 0},
+		{"bare string", `"65536"`, 0},
+		{"decimal units", `"64KB"`, 0},
+		{"zero", `"0B"`, 0},
+		{"over maximum", `"1048577B"`, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer clearEnv(t)()
+			setRequiredAuth(t)
+			path := filepath.Join(t.TempDir(), "config.toml")
+			require.NoError(t, os.WriteFile(path, []byte(
+				"[api.notification]\nmax_body_size = "+test.raw+"\n",
+			), 0600))
+			cfg, err := LoadFrom(path)
+			if test.bytes == 0 {
+				require.ErrorContains(t, err, "api.notification.max_body_size")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.bytes, cfg.Api.Notification.MaxBodyBytes)
+		})
+	}
+	t.Run("environment override", func(t *testing.T) {
+		defer clearEnv(t)()
+		setRequiredAuth(t)
+		t.Setenv("GITSTORE_API__NOTIFICATION__MAX_BODY_SIZE", "128KiB")
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, int64(128<<10), cfg.Api.Notification.MaxBodyBytes)
+	})
+}
+
+func TestKratosUserDirConfiguration(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	t.Setenv("GITSTORE_API__AUTH__USERDIR__PROVIDER", "kratos")
+	t.Setenv("GITSTORE_API__AUTH__KRATOS__ADMIN_URI", "http://kratos:4434")
+	t.Setenv("GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN", "private-directory-token")
+	t.Setenv("GITSTORE_API__AUTH__KRATOS__WEBHOOK_URI", "http://127.0.0.1:8085")
+	cfg, err := LoadFrom(kratosMappingConfig(t))
+	require.NoError(t, err)
+	require.Equal(t, "http://kratos:4434", cfg.Api.Auth.Kratos.AdminURI)
+	require.Equal(t, "private-directory-token", cfg.Api.Auth.Kratos.AdminToken)
+	require.Equal(t, "http://127.0.0.1:8085", cfg.Api.Auth.Kratos.WebhookURI)
+	require.Equal(t, 2*time.Second, cfg.Api.Auth.Kratos.Timeout)
+	require.Equal(t, 5*time.Minute, cfg.Api.Auth.Kratos.CacheTTL)
+	require.Positive(t, cfg.Api.Auth.Kratos.CacheEntries)
+	require.Positive(t, cfg.Api.Auth.Kratos.MaxConcurrent)
+	require.Equal(t, "kratos", cfg.Api.Auth.UserDir.Provider)
+	require.Contains(t, cfg.Api.Auth.AuthN.Chain, "static-users")
+	t.Setenv("GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN", "")
+	_, err = LoadFrom(kratosMappingConfig(t))
+	require.NoError(t, err, "a private self-hosted endpoint does not require an invented Admin gateway")
+}
+
+func kratosMappingConfig(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+[[api.auth.kratos.mappings]]
+provider = "static-users"
+issuer = "gitstore/static-users"
+mode = "username"
+`), 0600))
+	return path
+}
+
+func TestKratosProviderSettingsLoadFromAuthTable(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	path := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+[api.auth.userdir]
+provider = "kratos"
+[api.auth.kratos]
+admin_uri = "http://kratos:4434"
+webhook_uri = "http://0.0.0.0:8085"
+timeout = "1s"
+[[api.auth.kratos.mappings]]
+provider = "static-users"
+issuer = "gitstore/static-users"
+mode = "username"
+`), 0600))
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	require.Equal(t, "kratos", cfg.Api.Auth.UserDir.Provider)
+	require.Equal(t, "http://kratos:4434", cfg.Api.Auth.Kratos.AdminURI)
+	require.Equal(t, time.Second, cfg.Api.Auth.Kratos.Timeout)
+	require.Equal(t, "http://0.0.0.0:8085", cfg.Api.Auth.Kratos.WebhookURI)
+	require.Equal(t, "username", cfg.Api.Auth.Kratos.Mappings[0].Mode)
+}
+
+func TestKratosUserDirRejectsUnsafeOrUnboundedConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{"missing endpoint", "ADMIN_URI", ""},
+		{"endpoint credentials", "ADMIN_URI", "http://secret@kratos:4434"},
+		{"endpoint query", "ADMIN_URI", "http://kratos:4434?token=secret"},
+		{"unsupported scheme", "ADMIN_URI", "file:///tmp/kratos"},
+		{"invalid token header", "ADMIN_TOKEN", "secret\r\nInjected: value"},
+		{"public webhook listener", "WEBHOOK_URI", "http://8.8.8.8:8085"},
+		{"webhook listener credentials", "WEBHOOK_URI", "http://secret@127.0.0.1:8085"},
+		{"webhook listener path", "WEBHOOK_URI", "http://127.0.0.1:8085/public"},
+		{"webhook listener without port", "WEBHOOK_URI", "http://127.0.0.1"},
+		{"long timeout", "TIMEOUT", "3s"},
+		{"no timeout", "TIMEOUT", "0s"},
+		{"long cache lease", "CACHE_TTL", "6m"},
+		{"no cache bound", "CACHE_ENTRIES", "0"},
+		{"no concurrency bound", "MAX_CONCURRENT", "0"},
+		{"oversized response bound", "MAX_RESPONSE_SIZE", "4194305B"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer clearEnv(t)()
+			setRequiredAuth(t)
+			t.Setenv("GITSTORE_API__AUTH__USERDIR__PROVIDER", "kratos")
+			t.Setenv("GITSTORE_API__AUTH__KRATOS__ADMIN_URI", "http://kratos:4434")
+			t.Setenv("GITSTORE_API__AUTH__KRATOS__ADMIN_TOKEN", "private-directory-token")
+			t.Setenv("GITSTORE_API__AUTH__KRATOS__"+test.key, test.value)
+			_, err := LoadFrom(kratosMappingConfig(t))
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), "private-directory-token")
+			require.NotContains(t, err.Error(), "secret@")
+		})
+	}
+}
+
+func TestKratosResponseSizeRequiresBoundedIECUnits(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		raw   string
+		bytes int64
+	}{
+		{"bytes", `"1048576B"`, 1 << 20},
+		{"binary kilobytes", `"512KiB"`, 512 << 10},
+		{"maximum", `"4MiB"`, 4 << 20},
+		{"raw integer", `1048576`, 0},
+		{"bare string", `"1048576"`, 0},
+		{"decimal units", `"1MB"`, 0},
+		{"zero", `"0B"`, 0},
+		{"over maximum", `"4194305B"`, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			defer clearEnv(t)()
+			setRequiredAuth(t)
+			path := filepath.Join(t.TempDir(), "config.toml")
+			require.NoError(t, os.WriteFile(path, []byte(
+				"[api.auth.kratos]\nmax_response_size = "+test.raw+"\n",
+			), 0600))
+			cfg, err := LoadFrom(path)
+			if test.bytes == 0 {
+				require.ErrorContains(t, err, "api.auth.kratos.max_response_size")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.bytes, cfg.Api.Auth.Kratos.MaxResponseBytes)
+		})
+	}
+	t.Run("environment override", func(t *testing.T) {
+		defer clearEnv(t)()
+		setRequiredAuth(t)
+		t.Setenv("GITSTORE_API__AUTH__KRATOS__MAX_RESPONSE_SIZE", "2MiB")
+		cfg, err := LoadFrom(kratosMappingConfig(t))
+		require.NoError(t, err)
+		require.Equal(t, int64(2<<20), cfg.Api.Auth.Kratos.MaxResponseBytes)
+	})
+}
+
+func TestKratosConfigurationLogsRedactDirectoryToken(t *testing.T) {
+	cfg := &Config{}
+	cfg.Api.Auth.UserDir.Provider = "kratos"
+	cfg.Api.Auth.Kratos.AdminToken = "private-directory-token"
+	encoder := zapcore.NewMapObjectEncoder()
+	require.NoError(t, cfg.MarshalLogObject(encoder))
+	require.NotContains(t, encoder.Fields, "private-directory-token")
+	require.Contains(t, encoder.Fields, "api.auth.kratos.admin_token")
+	require.NotEqual(t, "private-directory-token", encoder.Fields["api.auth.kratos.admin_token"])
+}
+
+func TestKratosSubjectMappingsRequireProviderAndIssuerQualification(t *testing.T) {
+	valid := SubjectMapping{Provider: "oidc-jwt", Issuer: "https://issuer.example", Mode: "uid"}
+	for _, test := range []struct {
+		name     string
+		mappings []SubjectMapping
+	}{
+		{"missing mappings", nil},
+		{"missing provider", []SubjectMapping{{Issuer: valid.Issuer, Mode: "uid"}}},
+		{"missing issuer", []SubjectMapping{{Provider: valid.Provider, Mode: "uid"}}},
+		{"unsupported mapping", []SubjectMapping{{Provider: valid.Provider, Issuer: valid.Issuer, Mode: "email"}}},
+		{"duplicate qualification", []SubjectMapping{valid, valid}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := KratosUserDirConfig{
+				AdminURI: "http://kratos:4434", AdminToken: "private-directory-token",
+				Timeout: 2 * time.Second, CacheTTL: 5 * time.Minute,
+				CacheEntries: 128, MaxConcurrent: 16, MaxResponseBytes: 1 << 20,
+				Mappings: test.mappings,
+			}
+			require.Error(t, cfg.Validate())
+		})
+	}
 }
 
 // T005: layered loading tests
@@ -120,8 +537,9 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
+	assert.Equal(t, "none", cfg.Api.Auth.UserDir.Provider)
 
-	assert.Equal(t, 4000, cfg.Api.Port)
+	assert.Equal(t, 4000, cfg.Api.AdminPort)
 	assert.Equal(t, 9000, cfg.Api.GitPort)
 	assert.Equal(t, 6000, cfg.Api.GrpcPort)
 	assert.Equal(t, float64(50), cfg.Api.RateLimit.PerSecond)
@@ -130,9 +548,9 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.Equal(t, "json", cfg.Log.Format)
 
-	assert.Equal(t, 24*time.Hour, cfg.Api.Auth.JWT.TTL)
-	assert.Equal(t, "gitstore", cfg.Api.Auth.JWT.Issuer)
-	assert.Equal(t, 60*time.Second, cfg.Api.Auth.JWT.RefreshGrace)
+	assert.Equal(t, 24*time.Hour, cfg.Api.Auth.StaticUsers.JWT.TTL)
+	assert.Equal(t, "gitstore", cfg.Api.Auth.StaticUsers.JWT.Issuer)
+	assert.Equal(t, 60*time.Second, cfg.Api.Auth.StaticUsers.JWT.RefreshGrace)
 
 	assert.Equal(t, "gitstore", cfg.Api.Auth.ServiceAccount.Issuer)
 	assert.Equal(t, "gitstore-api", cfg.Api.Auth.ServiceAccount.Audience)
@@ -311,23 +729,23 @@ func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	os.Setenv("GITSTORE_API__PORT", "8888")
+	os.Setenv("GITSTORE_API__ADMIN_PORT", "8888")
 	os.Setenv("GITSTORE_API__RATE_LIMIT__PER_SECOND", "5")
 	os.Setenv("GITSTORE_API__RATE_LIMIT__BURST", "15")
 	os.Setenv("GITSTORE_LOG__LEVEL", "debug")
 	os.Setenv("GITSTORE_LOG__FORMAT", "text")
-	os.Setenv("GITSTORE_API__AUTH__JWT__REFRESH_GRACE", "30s")
+	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE", "30s")
 
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
-	assert.Equal(t, 8888, cfg.Api.Port)
+	assert.Equal(t, 8888, cfg.Api.AdminPort)
 	assert.Equal(t, float64(5), cfg.Api.RateLimit.PerSecond)
 	assert.Equal(t, 15, cfg.Api.RateLimit.Burst)
 	assert.Equal(t, "debug", cfg.Log.Level)
 	assert.Equal(t, "text", cfg.Log.Format)
-	assert.Equal(t, 30*time.Second, cfg.Api.Auth.JWT.RefreshGrace)
+	assert.Equal(t, 30*time.Second, cfg.Api.Auth.StaticUsers.JWT.RefreshGrace)
 }
 
 func TestLoad_ConfigFileValueAppliedWhenNoEnvVar(t *testing.T) {
@@ -341,9 +759,9 @@ level = "warn"
 format = "text"
 
 [api]
-port = 7777
+admin_port = 7777
 
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 refresh_grace = "45s"
 `
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0600))
@@ -357,10 +775,62 @@ refresh_grace = "45s"
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
-	assert.Equal(t, 7777, cfg.Api.Port)
+	assert.Equal(t, 7777, cfg.Api.AdminPort)
 	assert.Equal(t, "warn", cfg.Log.Level)
 	assert.Equal(t, "text", cfg.Log.Format)
-	assert.Equal(t, 45*time.Second, cfg.Api.Auth.JWT.RefreshGrace)
+	assert.Equal(t, 45*time.Second, cfg.Api.Auth.StaticUsers.JWT.RefreshGrace)
+}
+
+func TestLoad_StaticUsersJWTSettings(t *testing.T) {
+	for _, source := range []string{"file", "environment"} {
+		t.Run(source, func(t *testing.T) {
+			restore := clearEnv(t)
+			defer restore()
+			path := filepath.Join(t.TempDir(), "config.toml")
+			require.NoError(t, os.WriteFile(path, []byte(`
+[grpc_auth]
+hmac_secret = "fixture-hmac"
+[api.auth.static_users]
+users_file = "fixture-users.yaml"
+[api.auth.static_users.jwt]
+secret = "file-static-users-signing-secret"
+ttl = "15m"
+issuer = "local-users"
+refresh_grace = "90s"
+[api.auth.serviceaccount]
+issuer = "service-accounts"
+default_ttl = "9m"
+[api.auth.oidc_jwt]
+issuer_uri = "https://issuer.example"
+`), 0600))
+			want := JWTConfig{
+				Secret:       "file-static-users-signing-secret",
+				TTL:          15 * time.Minute,
+				Issuer:       "local-users",
+				RefreshGrace: 90 * time.Second,
+			}
+			if source == "environment" {
+				t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET", "environment-static-users-signing-secret")
+				t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__TTL", "30m")
+				t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__ISSUER", "environment-local-users")
+				t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE", "2m")
+				want = JWTConfig{
+					Secret:       "environment-static-users-signing-secret",
+					TTL:          30 * time.Minute,
+					Issuer:       "environment-local-users",
+					RefreshGrace: 2 * time.Minute,
+				}
+			}
+
+			cfg, err := LoadFrom(path)
+			require.NoError(t, err)
+			assert.Equal(t, "fixture-users.yaml", cfg.Api.Auth.StaticUsers.UsersFile)
+			assert.Equal(t, want, cfg.Api.Auth.StaticUsers.JWT)
+			assert.Equal(t, "service-accounts", cfg.Api.Auth.ServiceAccount.Issuer)
+			assert.Equal(t, 9*time.Minute, cfg.Api.Auth.ServiceAccount.DefaultTTL)
+			assert.Equal(t, "https://issuer.example", cfg.Api.Auth.OIDC.IssuerURI)
+		})
+	}
 }
 
 func TestLoad_EnvVarOverridesConfigFile(t *testing.T) {
@@ -369,20 +839,20 @@ func TestLoad_EnvVarOverridesConfigFile(t *testing.T) {
 	setRequiredAuth(t)
 
 	dir := t.TempDir()
-	content := "[api]\nport = 7777\n"
+	content := "[api]\nadmin_port = 7777\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0600))
 
 	orig, _ := os.Getwd()
 	require.NoError(t, os.Chdir(dir))
 	defer os.Chdir(orig)
 
-	os.Setenv("GITSTORE_API__PORT", "9999")
+	os.Setenv("GITSTORE_API__ADMIN_PORT", "9999")
 
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
 
-	assert.Equal(t, 9999, cfg.Api.Port)
+	assert.Equal(t, 9999, cfg.Api.AdminPort)
 }
 
 func TestLoadFrom_ExplicitSharedFileAndEnvPrecedence(t *testing.T) {
@@ -390,26 +860,26 @@ func TestLoadFrom_ExplicitSharedFileAndEnvPrecedence(t *testing.T) {
 	defer restore()
 	path := filepath.Join(t.TempDir(), "shared.toml")
 	content := `[api]
-port = 7111
+admin_port = 7111
 [api.auth.static_users]
 users_file = "users.yaml"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
 [controller]
-port = 5001
+admin_port = 5001
 [grpc]
-port = 50051
+admin_port = 50051
 [hooks.git_receive_pack]
 pre_receive = { enabled = true }
 `
 	require.NoError(t, os.WriteFile(path, []byte(content), 0600))
-	t.Setenv("GITSTORE_API__PORT", "7222")
+	t.Setenv("GITSTORE_API__ADMIN_PORT", "7222")
 
 	cfg, err := LoadFrom(path)
 	require.NoError(t, err)
-	assert.Equal(t, 7222, cfg.Api.Port)
+	assert.Equal(t, 7222, cfg.Api.AdminPort)
 }
 
 func TestLoadFrom_MissingExplicitFileFails(t *testing.T) {
@@ -444,10 +914,10 @@ func TestLoadFromFiles_OverlayMergesOnTopOfBase(t *testing.T) {
 	basePath := filepath.Join(dir, "base.toml")
 	base := `
 [api]
-port = 4000
+admin_port = 4000
 [api.git_service]
 uri = "dns:///localhost:50051"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "base-secret-at-least-32-characters-x"
 [grpc_auth]
 hmac_secret = "base-hmac-secret"
@@ -472,14 +942,14 @@ keyspace = "gitstore"
 	assert.Equal(t, "scylla", cfg.Api.Datastore.Backend)
 	assert.Equal(t, []string{"scylla:9042"}, cfg.Api.Datastore.Scylla.Hosts)
 	// Base-only key is preserved, not wiped by the overlay.
-	assert.Equal(t, 4000, cfg.Api.Port)
+	assert.Equal(t, 4000, cfg.Api.AdminPort)
 	assert.Equal(t, "dns:///localhost:50051", cfg.Api.GitService.Uri)
 }
 
 func TestLoadFromFiles_MissingOverlayFails(t *testing.T) {
 	dir := t.TempDir()
 	basePath := filepath.Join(dir, "base.toml")
-	require.NoError(t, os.WriteFile(basePath, []byte("[api]\nport = 4000\n"), 0600))
+	require.NoError(t, os.WriteFile(basePath, []byte("[api]\nadmin_port = 4000\n"), 0600))
 
 	_, err := LoadFromFiles([]string{basePath, filepath.Join(dir, "missing-overlay.toml")})
 	require.Error(t, err)
@@ -504,7 +974,7 @@ func TestLoad_StartupLogRedactsSensitiveFields(t *testing.T) {
 	// Sensitive fields must not appear in the log representation.
 	// We test via the MarshalLogObject-based redact helper indirectly:
 	// JWT secrets must be redacted; users are loaded from a separate file.
-	assert.Equal(t, "<redacted>", redact(cfg.Api.Auth.JWT.Secret))
+	assert.Equal(t, "<redacted>", redact(cfg.Api.Auth.StaticUsers.JWT.Secret))
 	assert.NotEmpty(t, cfg.Api.Auth.StaticUsers.UsersFile)
 }
 
@@ -516,7 +986,7 @@ func TestLoad_EnvFileLoadsWithoutShellVars(t *testing.T) {
 
 	dir := t.TempDir()
 	envContent := `GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE=users-from-env.yaml
-GITSTORE_API__AUTH__JWT__SECRET=supersecretkey-minimum-32-chars!!
+GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET=supersecretkey-minimum-32-chars!!
 GITSTORE_GRPC_AUTH__HMAC_SECRET=ci-test-grpc-hmac-secret
 GITSTORE_LOG__LEVEL=warn
 `
@@ -568,7 +1038,7 @@ func TestLoad_AbsentEnvFileIsNoOp(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.NotNil(t, cfg)
-	assert.Equal(t, 4000, cfg.Api.Port)
+	assert.Equal(t, 4000, cfg.Api.AdminPort)
 }
 
 // T019: validation tests (US2)
@@ -587,7 +1057,7 @@ func TestLoad_EmptyStringForRequiredKeyIsError(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE", "")
-	os.Setenv("GITSTORE_API__AUTH__JWT__SECRET", "")
+	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET", "")
 
 	_, err := Load()
 	require.Error(t, err)
@@ -597,11 +1067,11 @@ func TestLoad_InvalidPortReturnsError(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	os.Setenv("GITSTORE_API__PORT", "99999")
+	os.Setenv("GITSTORE_API__ADMIN_PORT", "99999")
 
 	_, err := Load()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Port")
+	assert.Contains(t, err.Error(), "admin_port")
 }
 
 func TestLoad_InvalidLogFormatReturnsError(t *testing.T) {
@@ -634,11 +1104,19 @@ func TestLoad_MultipleValidationErrorsReportedTogether(t *testing.T) {
 func TestValidateAuthChainConfig_StaticUsersRequiresJWTSecret(t *testing.T) {
 	err := validateAuthChainConfig(&Config{Api: ApiConfig{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"static-users"}}}}})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "api.auth.jwt.secret")
+	assert.Contains(t, err.Error(), "api.auth.static_users.jwt.secret")
 }
 
-func TestValidateAuthChainConfig_AnonymousDoesNotRequireJWTSecret(t *testing.T) {
-	require.NoError(t, validateAuthChainConfig(&Config{Api: ApiConfig{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"anonymous"}}}}}))
+func TestValidateAuthChainConfig_OtherProvidersDoNotRequireStaticUsersJWTSecret(t *testing.T) {
+	for _, provider := range []string{"anonymous", "serviceaccount-jwt", "serviceaccount-assertion", "oidc-jwt"} {
+		t.Run(provider, func(t *testing.T) {
+			cfg := &Config{Api: ApiConfig{Auth: AuthConfig{
+				AuthN:   AuthNConfig{Chain: []string{provider}},
+				UserDir: UserDirConfig{Provider: "static-users"},
+			}}}
+			require.NoError(t, validateAuthChainConfig(cfg))
+		})
+	}
 }
 
 // T028: missing HMAC secret causes startup failure
@@ -646,7 +1124,7 @@ func TestLoad_MissingGrpcHmacSecretReturnsError(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE", "config/users.yaml")
-	os.Setenv("GITSTORE_API__AUTH__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
+	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
 	// GITSTORE_GRPC_AUTH__HMAC_SECRET intentionally absent
 
 	_, err := Load()
@@ -699,35 +1177,6 @@ func TestLoad_DatastoreBackendDefaultsToMemdb(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	assert.Equal(t, "memdb", cfg.Api.Datastore.Backend)
-}
-
-func TestLoad_RejectsLegacyNamespaceRepositoryFenceEnvVar(t *testing.T) {
-	restore := clearEnv(t)
-	defer restore()
-	setRequiredAuth(t)
-	t.Setenv("GITSTORE_FEATURES__NAMESPACE_REPOSITORY_FENCE", "enabled")
-
-	_, err := Load()
-	require.ErrorContains(t, err, "features.namespace_repository_fence")
-	require.ErrorContains(t, err, "always enabled")
-}
-
-func TestLoad_RejectsLegacyNamespaceRepositoryFenceConfigFile(t *testing.T) {
-	restore := clearEnv(t)
-	defer restore()
-	setRequiredAuth(t)
-
-	dir := t.TempDir()
-	content := "[features]\nnamespace_repository_fence = \"auto\"\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0600))
-
-	orig, _ := os.Getwd()
-	require.NoError(t, os.Chdir(dir))
-	defer os.Chdir(orig)
-
-	_, err := Load()
-	require.ErrorContains(t, err, "features.namespace_repository_fence")
-	require.ErrorContains(t, err, "always enabled")
 }
 
 func TestLoad_DatastoreBackendMemdbIsValid(t *testing.T) {
@@ -813,7 +1262,7 @@ func TestLoad_ServiceAccountSigningKeyRequiredWhenJWTProviderChained(t *testing.
 	path := filepath.Join(t.TempDir(), "gitstore.toml")
 	content := `[api.auth.static_users]
 users_file = "users.yaml"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
@@ -834,7 +1283,7 @@ func TestLoad_ServiceAccountSigningKeyRequiredWhenAssertionProviderChained(t *te
 	path := filepath.Join(t.TempDir(), "gitstore.toml")
 	content := `[api.auth.static_users]
 users_file = "users.yaml"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
@@ -854,7 +1303,7 @@ func TestLoad_ServiceAccountSigningKeySatisfiesRequirementWhenChained(t *testing
 	path := filepath.Join(t.TempDir(), "gitstore.toml")
 	content := `[api.auth.static_users]
 users_file = "users.yaml"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
@@ -901,7 +1350,7 @@ func TestLoadFrom_RefusesServiceAccountSigningKeyFromSharedMountPath(t *testing.
 
 	content := `[api.auth.static_users]
 users_file = "users.yaml"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
@@ -926,7 +1375,7 @@ func TestLoadFrom_AllowsServiceAccountSigningKeyFromEnvVarEvenAtSharedMountPath(
 
 	content := `[api.auth.static_users]
 users_file = "users.yaml"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
@@ -949,7 +1398,7 @@ func TestLoadFromFiles_RefusesServiceAccountSigningKeyFromSharedMountPathEvenWhe
 
 	sharedContent := `[api.auth.static_users]
 users_file = "users.yaml"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
@@ -1059,18 +1508,18 @@ func TestLoad_StrictDurationGrammarAcceptsSingleMagnitude(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	t.Setenv("GITSTORE_API__AUTH__JWT__REFRESH_GRACE", "500ms")
+	t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE", "500ms")
 
 	cfg, err := Load()
 	require.NoError(t, err)
-	assert.Equal(t, 500*time.Millisecond, cfg.Api.Auth.JWT.RefreshGrace)
+	assert.Equal(t, 500*time.Millisecond, cfg.Api.Auth.StaticUsers.JWT.RefreshGrace)
 }
 
 func TestLoad_StrictDurationGrammarRejectsCompoundDuration(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	t.Setenv("GITSTORE_API__AUTH__JWT__REFRESH_GRACE", "1h30m")
+	t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE", "1h30m")
 
 	_, err := Load()
 	require.Error(t, err)
@@ -1081,7 +1530,7 @@ func TestLoad_StrictDurationGrammarRejectsDayUnit(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	t.Setenv("GITSTORE_API__AUTH__JWT__REFRESH_GRACE", "1d")
+	t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE", "1d")
 
 	_, err := Load()
 	require.Error(t, err)
@@ -1092,7 +1541,7 @@ func TestLoad_StrictDurationGrammarRejectsSubMillisecondUnit(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	t.Setenv("GITSTORE_API__AUTH__JWT__REFRESH_GRACE", "500us")
+	t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE", "500us")
 
 	_, err := Load()
 	require.Error(t, err)
@@ -1188,75 +1637,6 @@ func TestLoad_GrpcAuthHmacSecretLoadedAndRedactable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "my-hmac-secret", cfg.GrpcAuth.HmacSecret)
 	assert.Equal(t, "<redacted>", redact(cfg.GrpcAuth.HmacSecret))
-}
-
-// Legacy-key rejection: a representative sample of renamed/removed paths,
-// each confirmed to fail Load() naming its replacement. The full mapping
-// lives in config.go's legacyKeys table; this is not exhaustive.
-
-func TestLoad_RejectsLegacyConfigKeysViaEnv(t *testing.T) {
-	cases := []struct {
-		name            string
-		envVar          string
-		envValue        string
-		wantReplacement string
-	}{
-		{"rate_limit_per_second_renamed", "GITSTORE_API__RATE_LIMIT_PER_SECOND", "10", "api.rate_limit.per_second"},
-		{"git_grpc_uri_renamed", "GITSTORE_GIT__GRPC__URI", "dns:///x:1", "api.git_service.uri"},
-		{"auth_jwt_duration_renamed", "GITSTORE_AUTH__JWT__DURATION", "1h", "api.auth.jwt.ttl"},
-		{"datastore_backend_renamed", "GITSTORE_DATASTORE__BACKEND", "scylla", "api.datastore.backend"},
-		{"auth_grpc_hmac_secret_renamed", "GITSTORE_AUTH__GRPC__HMAC_SECRET", "x", "grpc_auth.hmac_secret"},
-		{"watch_namespace_bucket_size_removed", "GITSTORE_WATCH__NAMESPACE__BUCKET_SIZE", "4096", "fixed at 4096"},
-		{"watch_namespace_readers_enabled_removed", "GITSTORE_WATCH__NAMESPACE__READERS_ENABLED", "false", "always on"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			restore := clearEnv(t)
-			defer restore()
-			setRequiredAuth(t)
-			t.Setenv(tc.envVar, tc.envValue)
-
-			_, err := Load()
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.wantReplacement)
-		})
-	}
-}
-
-func TestLoad_RejectsLegacyGitGrpcUriConfigFile(t *testing.T) {
-	restore := clearEnv(t)
-	defer restore()
-	setRequiredAuth(t)
-
-	dir := t.TempDir()
-	content := "[git.grpc]\nuri = \"dns:///localhost:1\"\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0600))
-
-	orig, _ := os.Getwd()
-	require.NoError(t, os.Chdir(dir))
-	defer os.Chdir(orig)
-
-	_, err := Load()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "api.git_service.uri")
-}
-
-func TestLoad_RejectsLegacyAuthStaticusersConfigFile(t *testing.T) {
-	restore := clearEnv(t)
-	defer restore()
-	setRequiredAuth(t)
-
-	dir := t.TempDir()
-	content := "[auth.staticusers]\nusers_file = \"legacy-users.yaml\"\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0600))
-
-	orig, _ := os.Getwd()
-	require.NoError(t, os.Chdir(dir))
-	defer os.Chdir(orig)
-
-	_, err := Load()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "api.auth.static_users")
 }
 
 func TestLoad_RejectsNonPositiveServiceAccountTokenTTLs(t *testing.T) {

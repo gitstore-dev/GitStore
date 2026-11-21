@@ -64,7 +64,7 @@ func categoryCondition(t *testing.T, c *datastore.CategoryTaxonomy, conditionTyp
 	return nil
 }
 
-func admitCommittedCategory(t *testing.T, srv *cataloggrpc.Server, commit string, content []byte, op admission.Operation) (*admission.CommittedManifestResult, error) {
+func admitCommittedCategory(t *testing.T, srv *catalogTestServer, commit string, content []byte, op admission.Operation) (*admission.CommittedManifestResult, error) {
 	t.Helper()
 	return srv.AdmitCommittedManifest(context.Background(), admission.CommittedManifestRequest{
 		RepositoryID: testRepoID, Namespace: "gitstore", ActorSubject: "alice",

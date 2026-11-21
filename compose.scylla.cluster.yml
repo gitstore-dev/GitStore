@@ -76,6 +76,10 @@ services:
     restart: "no"
 
   api:
+    # Replicated first-boot DDL/CDC schema agreement exceeds the memdb grace.
+    # Successful readiness still releases dependents immediately.
+    healthcheck:
+      start_period: 5m
     depends_on:
       scylla-init:
         condition: service_completed_successfully

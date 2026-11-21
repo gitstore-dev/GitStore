@@ -12,6 +12,7 @@ import (
 	"unicode"
 
 	"github.com/adrg/frontmatter"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	"github.com/go-playground/validator/v10"
@@ -335,11 +336,33 @@ func preParseChecks(fmRaw []byte) error {
 	if raw["kind"] == "File" {
 		spec, _ := raw["spec"].(map[string]any)
 		source, _ := spec["source"].(map[string]any)
+		for field := range source {
+			switch field {
+			case "uri", "checksum", "credentialsRef":
+			default:
+				return fmt.Errorf("validate: unknown spec.source field %q", field)
+			}
+		}
 		if ref, present := source["credentialsRef"]; present {
 			if err := catalog.ValidateFileCredentialsInput(ref); err != nil {
 				return err
 			}
 		}
+	}
+
+	// Check the raw value before string binding discards null/presence.
+	kind, _ := raw["kind"].(string)
+	meta, _ := raw["metadata"].(map[string]any)
+	var namespace *string
+	if value, present := meta["namespace"]; present && value != nil {
+		text, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("validate: metadata.namespace must be a string or null")
+		}
+		namespace = &text
+	}
+	if err := admission.ValidateNamespaceScope(kind, namespace); err != nil {
+		return fmt.Errorf("validate: metadata.namespace %s: %s", err.Reason(), err.Error())
 	}
 
 	// Status is system-managed and written only through the status path; it

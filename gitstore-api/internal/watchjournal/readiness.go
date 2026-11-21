@@ -31,6 +31,12 @@ func (r *Readiness) Update(status MaterializerStatus) {
 	r.mu.Unlock()
 }
 
+func (r *Readiness) LastProgressAt() time.Time {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.status.LastProgressAt
+}
+
 func (r *Readiness) Check(now time.Time) error {
 	r.mu.RLock()
 	status := r.status

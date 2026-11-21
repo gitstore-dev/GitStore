@@ -6,8 +6,10 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dispatcher="${repo_root}/scripts/run-capacity-target.sh"
-test_dir="$(mktemp -d)"
-trap 'rm -rf "${test_dir}"' EXIT
+source "${repo_root}/scripts/test-fixtures/shell.sh"
+source "${repo_root}/scripts/test-fixtures/capacity.sh"
+shell_test_setup capacity-dispatch
+export CAPACITY_TEST_FIXTURES="${repo_root}/scripts/test-fixtures"
 
 assert_dispatch() {
   local target="$1" profile="$2" expected="$3"
@@ -19,6 +21,15 @@ assert_dispatch() {
 }
 
 assert_dispatch api readiness '_capacity-k6'
+assert_dispatch api endpoint-split 'CAPACITY_PROFILE=api-endpoint-split'
+authz_output="$(CAPACITY_DRY_RUN=1 "${dispatcher}" api authorization diagnostic)"
+[[ "$authz_output" == *"_capacity-authorization"* ]]
+for mode in alpha production; do
+  if CAPACITY_DRY_RUN=1 "${dispatcher}" api authorization "$mode" >/dev/null 2>&1; then
+    echo "incomplete authorization evidence was promoted to $mode" >&2
+    exit 1
+  fi
+done
 assert_dispatch namespace admission 'CAPACITY_PROFILE=namespace-admission'
 assert_dispatch namespace validation '_capacity-namespace-admission'
 assert_dispatch namespace watch '_capacity-namespace-watch'
@@ -27,6 +38,386 @@ assert_dispatch repository lifecycle '_capacity-repository-lifecycle'
 assert_dispatch product lifecycle 'CAPACITY_PROFILE=product-lifecycle'
 assert_dispatch category hierarchy 'CAPACITY_PROFILE=category-hierarchy'
 assert_dispatch scylla soak '_capacity-scylla-soak'
+
+rbac_command="$(CAPACITY_RBAC_WORKLOAD=1 make --no-print-directory -n -C "${repo_root}" _capacity-namespace-watch MODE=diagnostic)"
+[[ "${rbac_command}" == *"go test -v -count=1 -timeout=4h -run '^TestNamespaceWatchDeploymentCapacity"* ]] || {
+  echo "RBAC driver must allow bounded full-geometry setup plus the declared workload, not terminate at fifteen minutes" >&2
+  exit 1
+}
+
+for target_profile in 'api readiness' 'namespace watch'; do
+  read -r rbac_target rbac_profile <<<"${target_profile}"
+  for mode in diagnostic alpha; do
+    output="$(CAPACITY_RBAC_WORKLOAD=1 CAPACITY_DRY_RUN=1 "${dispatcher}" "${rbac_target}" "${rbac_profile}" "${mode}")"
+    [[ "${output}" == *"_capacity-namespace-watch"* && "${output}" == *"CAPACITY_RBAC_WORKLOAD=1"* ]]
+  done
+  if CAPACITY_RBAC_WORKLOAD=1 CAPACITY_RBAC_SEED_FILE= CAPACITY_RBAC_TOPOLOGY_FILE= \
+    CAPACITY_EVIDENCE_DIR="${test_dir}/rbac-missing-fixture" \
+    "${dispatcher}" "${rbac_target}" "${rbac_profile}" diagnostic >/dev/null 2>&1; then
+    echo "public RBAC load ran without its owned seed and topology preflight" >&2
+    exit 1
+  fi
+done
+if CAPACITY_RBAC_WORKLOAD=1 CAPACITY_DRY_RUN=1 "${dispatcher}" repository lifecycle diagnostic >/dev/null 2>&1; then
+  echo "unsupported RBAC family fell back to an ordinary driver" >&2
+  exit 1
+fi
+
+for target_profile in 'api readiness' 'namespace watch' 'repository lifecycle'; do
+  read -r rbac_target rbac_profile <<<"${target_profile}"
+  if CAPACITY_RBAC_WORKLOAD=1 CAPACITY_DRY_RUN=1 "${dispatcher}" "${rbac_target}" "${rbac_profile}" production >/dev/null 2>&1; then
+    echo "unsupported production RBAC selection silently dispatched a workload" >&2
+    exit 1
+  fi
+done
+if CAPACITY_RBAC_WORKLOAD=1 CAPACITY_DRY_RUN=1 "${dispatcher}" repository lifecycle alpha >/dev/null 2>&1; then
+  echo "unsupported RBAC alpha family silently dispatched a workload" >&2
+  exit 1
+fi
+if CAPACITY_RBAC_WORKLOAD=invalid CAPACITY_DRY_RUN=1 "${dispatcher}" api readiness alpha >/dev/null 2>&1; then
+  echo "invalid RBAC selector unexpectedly succeeded" >&2
+  exit 1
+fi
+for mode in diagnostic alpha; do
+  if CAPACITY_RBAC_WORKLOAD=1 MODE="${mode}" \
+    "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}" >/dev/null 2>&1; then
+    echo "incomplete or static RBAC evidence unexpectedly certified capacity" >&2
+    exit 1
+  fi
+done
+
+python3 - "${repo_root}/scripts/capacity-build-receipt.py" "${test_dir}" <<'PY'
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("capacity_build_receipt", sys.argv[1])
+receipt = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(receipt)
+root = Path(sys.argv[2]) / "build-source"
+root.mkdir(mode=0o700)
+for directory in ("gitstore-api", "gitstore-controller-manager", "shared", "docs", "owned"):
+    (root / directory).mkdir(mode=0o700)
+(root / "gitstore-api/go.mod").write_text("module fixture\n")
+(root / "gitstore-controller-manager/go.mod").write_text("module controllerfixture\n")
+source = root / "gitstore-api/main.go"
+source.write_text("package main\n")
+(root / "shared/input.go").write_text("package shared\n")
+(root / "docs/readme.md").write_text("initial documentation\n")
+receipt.git(root, "init", "-q")
+def commit():
+    receipt.git(root, "add", "gitstore-api", "gitstore-controller-manager", "shared", "docs")
+    receipt.git(root, "-c", "core.hooksPath=/dev/null", "-c", "user.name=Capacity test",
+                "-c", "user.email=capacity@example.invalid", "commit", "-qm", "test fixture")
+commit()
+artifact = root / "owned/api"
+artifact.write_bytes(b"synthetic artifact, not a compiled service")
+record_path = root / "owned/api.build.json"
+digest, size = receipt.artifact_digest(artifact)
+record = {
+    "schemaVersion": 1, "role": "api", "sourceRevision": receipt.git(root, "rev-parse", "HEAD").decode().strip(),
+    "sourceInputsSha256": receipt.source_digest(root, "api"), "artifactSha256": digest, "artifactBytes": size,
+    "toolchain": "synthetic test fixture", "profiled": False, "buildKind": "repository-release",
+    "command": ["go", "build", "-trimpath", "-o", str(artifact), "./cmd/server"],
+}
+def write_record(value):
+    record_path.write_text(json.dumps(value))
+    record_path.chmod(0o600)
+def rejected(callback):
+    try:
+        callback()
+    except (ValueError, OSError):
+        return
+    raise AssertionError("altered capacity build evidence was accepted")
+write_record(record)
+# Artifact/receipt files are deliberately ignored, as in a real private build directory.
+(root / ".git/info/exclude").write_text("owned/\n")
+receipt.verify(root, "api", artifact, record_path)
+(root / "docs/readme.md").write_text("new unrelated documentation\n")
+commit()
+assert receipt.git(root, "rev-parse", "HEAD").decode().strip() != record["sourceRevision"]
+receipt.verify(root, "api", artifact, record_path)
+# Existing matching artifacts are verified and reused, never rebuilt or overwritten.
+receipt.build(root, "api", artifact, record_path)
+owned = {**record, "buildKind": "repository-owned-rbac",
+         "command": ["go", "test", "-c", "-trimpath", "-o", str(artifact), "./internal/app"]}
+write_record(owned)
+receipt.verify(root, "api", artifact, record_path)
+receipt.build(root, "api", artifact, record_path, "owned-rbac")
+rejected(lambda: receipt.build(root, "api", artifact, record_path, "release"))
+rejected(lambda: receipt.build(root, "controller", artifact, record_path, "owned-rbac"))
+controller_owned = {
+    **owned, "role": "controller", "sourceInputsSha256": receipt.source_digest(root, "controller"),
+    "command": ["go", "test", "-c", "-trimpath", "-o", str(artifact), "./cmd/controller"],
+}
+write_record(controller_owned)
+receipt.verify(root, "controller", artifact, record_path)
+receipt.build(root, "controller", artifact, record_path, "owned-rbac")
+rejected(lambda: receipt.build(root, "controller", artifact, record_path, "release"))
+write_record({**controller_owned, "command": owned["command"]})
+rejected(lambda: receipt.verify(root, "controller", artifact, record_path))
+rejected(lambda: receipt.build(root, "git", artifact, record_path, "owned-rbac"))
+write_record({**owned, "command": ["go", "test", "-c", "-race", "-o", str(artifact), "./internal/app"]})
+rejected(lambda: receipt.verify(root, "api", artifact, record_path))
+write_record(record)
+original = artifact.read_bytes()
+artifact.write_bytes(original + b"drift")
+rejected(lambda: receipt.verify(root, "api", artifact, record_path))
+artifact.write_bytes(original)
+source.write_text("package changed\n")
+commit()
+rejected(lambda: receipt.verify(root, "api", artifact, record_path))
+source.write_text("package main\n")
+commit()
+receipt.verify(root, "api", artifact, record_path)
+write_record({**record, "profiled": True})
+rejected(lambda: receipt.verify(root, "api", artifact, record_path))
+write_record({**record, "command": ["go", "build", "-race"]})
+rejected(lambda: receipt.verify(root, "api", artifact, record_path))
+write_record(record)
+record_path.chmod(0o644)
+rejected(lambda: receipt.verify(root, "api", artifact, record_path))
+record_path.chmod(0o600)
+receipt.verify(root, "api", artifact, record_path)
+
+# Exercise the producer's fixed owned-host recipe without compiling or starting a service.
+real_run, real_output = receipt.subprocess.run, receipt.subprocess.check_output
+def compiler(command, **kwargs):
+    if command[0] != "go":
+        return real_run(command, **kwargs)
+    assert command == ["go", "test", "-c", "-trimpath", "-o", str(compiled), package]
+    assert kwargs["env"]["GOWORK"] == "off" and kwargs["cwd"] == root / module
+    compiled.write_bytes(b"synthetic compiler output, not a service")
+    return subprocess.CompletedProcess(command, 0)
+def version(command, **kwargs):
+    if command == ["go", "version"]:
+        return b"go version synthetic-test-toolchain"
+    return real_output(command, **kwargs)
+for name in ("GOFLAGS", "GOEXPERIMENT", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"):
+    os.environ.pop(name, None)
+for role, module, package in (
+    ("api", "gitstore-api", "./internal/app"),
+    ("controller", "gitstore-controller-manager", "./cmd/controller"),
+):
+    compiled, compiled_receipt = root / ("owned/compiled-" + role), root / ("owned/compiled-" + role + ".json")
+    try:
+        receipt.subprocess.run, receipt.subprocess.check_output = compiler, version
+        receipt.build(root, role, compiled, compiled_receipt, "owned-rbac")
+    finally:
+        receipt.subprocess.run, receipt.subprocess.check_output = real_run, real_output
+    produced = receipt.verify(root, role, compiled, compiled_receipt)
+    assert produced["buildKind"] == "repository-owned-rbac" and not produced["profiled"]
+PY
+
+node - "${repo_root}/tests/capacity/profiles/api-readiness.js" <<'JS'
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const crypto = require('node:crypto');
+const source = fs.readFileSync(process.argv[2], 'utf8')
+  .replace(/^import .*;\r?\n/gm, '')
+  .replace('export const options', 'const options')
+  .replace('export default function ()', 'function runIteration()');
+const cases = Array.from({ length: 10 }, (_, index) => ({
+  subject: `reader-${index}`, namespace: `owned-${index}`,
+  action: index % 2 ? 'role.list' : 'product.list',
+  expected: index < 6 ? 'allow' : index < 9 ? 'deny' : 'isolation',
+  token: 'private-fixture-token',
+}));
+function load(overrides = {}, fixtureCases = cases) {
+  const metrics = {};
+  const requests = [];
+  const failures = [];
+  const receipts = [];
+  const execution = { scenario: { name: 'rbac_0', iterationInTest: 0 } };
+  const fixture = { owner: 'owned-rbac', cases: fixtureCases };
+  let response;
+  const variables = {
+    CAPACITY_BASE_URL: 'http://api-a', CAPACITY_RBAC_WORKLOAD: '1',
+    CAPACITY_API_ENDPOINTS: 'http://api-a,http://api-b',
+    CAPACITY_RBAC_FIXTURE_FILE: 'private-fixture.json',
+    CAPACITY_IDENTITY_FIXTURE_FILE: 'private-identity.json', ...overrides,
+  };
+  const context = {
+    __ENV: variables, execution,
+    crypto: { sha256: (body) => crypto.createHash('sha256').update(body).digest('hex') },
+    console: { error: (message) => receipts.push(JSON.parse(message)) },
+    env: (name) => { assert.ok(variables[name], `missing ${name}`); return variables[name]; },
+    integer: (name, fallback) => variables[name] === undefined ? fallback : Number(variables[name]),
+    open: () => JSON.stringify(fixture),
+    SharedArray: class { constructor(_, create) { return create(); } },
+    Counter: class {
+      constructor(name) { this.name = name; metrics[name] = 0; }
+      add(value) { metrics[this.name] += value; }
+    },
+    check: (_, checks) => {
+      for (const [name, predicate] of Object.entries(checks)) {
+        if (!predicate(_)) failures.push(name);
+      }
+    },
+    http: {
+      post: (url, body, params) => { requests.push({ url, body: JSON.parse(body), params }); return response; },
+      get: (url) => { requests.push({ url }); return { status: 200 }; },
+    },
+  };
+  const profile = vm.runInNewContext(`${source}\n({options, runIteration})`, context);
+  return {
+    ...profile, metrics, requests, failures, execution, receipts,
+    respond(status, body) {
+      response = { status, body: JSON.stringify(body), json: () => body };
+    },
+    rawResponse(value) { response = value; },
+  };
+}
+const workload = load();
+assert.deepEqual(Object.keys(workload.options.scenarios), ['rbac_0', 'rbac_1']);
+for (const scenario of Object.values(workload.options.scenarios)) {
+  assert.equal(scenario.rate, 500);
+  assert.equal(scenario.duration, '30m');
+}
+assert.equal(workload.options.thresholds['rbac_requests{replica:0}'][0], 'count==900000');
+assert.equal(workload.options.thresholds['rbac_completed{replica:1}'][0], 'count==900000');
+for (let replica = 0; replica < 2; replica++) {
+  for (let index = 0; index < cases.length; index++) {
+    const sample = cases[index];
+    const field = sample.action === 'role.list' ? 'roles' : 'products';
+    workload.execution.scenario.name = `rbac_${replica}`;
+    workload.execution.scenario.iterationInTest = index;
+    workload.respond(200, sample.expected === 'allow'
+      ? { data: { [field]: { edges: [] } } }
+      : { data: { [field]: null }, errors: [{ extensions: { code: 'FORBIDDEN' } }] });
+    workload.runIteration();
+    const request = workload.requests.at(-1);
+    assert.equal(request.url, `http://api-${replica ? 'b' : 'a'}/admin/graphql`);
+    assert.equal(request.body.variables.namespace, sample.namespace);
+    assert.equal(request.params.headers.Authorization, `Bearer ${sample.token}`);
+    assert.ok(request.params.headers['X-Request-ID']);
+    assert.equal(request.params.timeout, '5s');
+    assert.equal(request.params.redirects, 0);
+  }
+}
+assert.equal(new Set(workload.requests.map((r) => r.params.headers['X-Request-ID'])).size, 20);
+assert.equal(workload.metrics.rbac_requests, 20);
+assert.equal(workload.metrics.rbac_completed, 20);
+assert.equal(workload.metrics.rbac_allowed, 12);
+assert.equal(workload.metrics.rbac_denied, 6);
+assert.equal(workload.metrics.rbac_isolation, 2);
+const boundary = load({ CAPACITY_DURATION: '6s', CAPACITY_RATE: '30' });
+boundary.respond(200, { errors: [{ extensions: { code: 'FORBIDDEN' } }] });
+boundary.execution.scenario.iterationInTest = 179;
+boundary.runIteration();
+assert.equal(boundary.requests.length, 1);
+boundary.execution.scenario.iterationInTest = 180;
+boundary.runIteration();
+boundary.execution.scenario.iterationInTest = 181;
+boundary.runIteration();
+assert.equal(boundary.requests.length, 1, 'k6 boundary iterations must not introduce undeclared ordinary offers');
+assert.equal(boundary.metrics.rbac_requests, 1);
+assert.equal(boundary.metrics.rbac_completed, 1);
+assert.equal(workload.failures.length, 0);
+assert.equal(workload.receipts.length, 0, 'successful ordinary traffic must not emit response receipts');
+for (const body of [
+  { data: { products: { edges: [] } } },
+  { errors: [{ extensions: { code: 'FORBIDDEN' } }, { extensions: { code: 'AUTHORIZATION_UNAVAILABLE' } }] },
+  { errors: [{ extensions: { code: 'FORBIDDEN' } }], data: { products: { edges: [] } } },
+]) {
+  const denied = load();
+  denied.execution.scenario.iterationInTest = 8;
+  denied.respond(200, body);
+  denied.runIteration();
+  assert.equal(denied.metrics.rbac_wrong, 1);
+  assert.equal(denied.metrics.rbac_denied, 0);
+  assert.equal(denied.failures.length, 1);
+}
+const unavailable = load();
+unavailable.respond(503, {});
+unavailable.runIteration();
+assert.equal(unavailable.metrics.rbac_unavailable, 1);
+assert.equal(unavailable.metrics.rbac_completed, 1);
+assert.equal(unavailable.failures.length, 1);
+assert.equal(unavailable.receipts[0].reason, 'http_status');
+for (const [status, code, reason, classification] of [
+  [200, 'AUTHORIZATION_UNAVAILABLE', 'graphql_authorization_unavailable', 'unavailable'],
+  [200, 'DIRECTORY_UNAVAILABLE', 'graphql_directory_unavailable', 'unavailable'],
+  [200, 'UNAUTHENTICATED', 'graphql_unauthenticated', 'unavailable'],
+  [200, 'INTERNAL_SERVER_ERROR', 'graphql_error', 'wrong'],
+  [200, 'RESOURCE_EXHAUSTED', 'graphql_quota', 'wrong'],
+  [429, 'RATE_LIMITED', 'http_throttled', 'unavailable'],
+]) {
+  const failed = load();
+  failed.execution.scenario.name = 'rbac_1';
+  failed.respond(status, { errors: [{ message: 'Authorization: Bearer private-fixture-token', extensions: { code } }] });
+  failed.runIteration();
+  const receipt = failed.receipts[0];
+  assert.equal(receipt.correlationID, 'owned-rbac-ordinary-1-0');
+  assert.equal(receipt.replica, 1);
+  assert.equal(receipt.action, 'product.list');
+  assert.equal(receipt.namespace, 'owned-0');
+  assert.equal(receipt.reason, reason);
+  assert.equal(receipt.classification, classification);
+  assert.equal(receipt.errorCodes[0], code);
+  assert.match(receipt.responseDigest, /^[0-9a-f]{64}$/);
+  assert.ok(!JSON.stringify(receipt).includes('private-fixture-token'));
+  assert.ok(!JSON.stringify(receipt).includes('Authorization'));
+}
+for (const [response, reason] of [
+  [{ status: 0, body: '', error_code: 1050, error: 'Bearer private-fixture-token',
+    json: () => { throw new Error('transport'); } }, 'transport'],
+  [{ status: 200, body: '{private-fixture-token', json: () => { throw new Error('secret parser detail'); } }, 'invalid_json'],
+  [{ status: 200, body: 'x'.repeat(65537), json: () => { throw new Error('must not parse oversized body'); } }, 'oversized'],
+]) {
+  const failed = load();
+  failed.rawResponse(response);
+  failed.runIteration();
+  assert.equal(failed.receipts[0].reason, reason);
+  assert.ok(!JSON.stringify(failed.receipts[0]).includes('private-fixture-token'));
+  if (reason === 'oversized') assert.equal(failed.receipts[0].responseDigest, null);
+}
+const secretCodes = load();
+secretCodes.respond(200, { errors: Array.from({ length: 20 }, () => ({
+  extensions: { code: 'private-fixture-token' }, message: 'raw private response',
+})) });
+secretCodes.runIteration();
+assert.equal(secretCodes.receipts[0].errorCodes.length, 8);
+assert.ok(secretCodes.receipts[0].errorCodes.every((code) => code === 'UNKNOWN'));
+assert.equal(secretCodes.receipts[0].errorCodesTruncated, true);
+assert.ok(!JSON.stringify(secretCodes.receipts[0]).includes('private-fixture-token'));
+const mixedBeyondCap = load();
+mixedBeyondCap.respond(200, { errors: [
+  ...Array.from({ length: 8 }, () => ({ extensions: { code: 'AUTHORIZATION_UNAVAILABLE' } })),
+  { extensions: { code: 'INTERNAL_SERVER_ERROR' } },
+] });
+mixedBeyondCap.runIteration();
+assert.equal(mixedBeyondCap.receipts[0].classification, 'wrong');
+assert.equal(mixedBeyondCap.receipts[0].reason, 'graphql_error', 'truncated codes must not fabricate a uniform unavailable cause');
+const taintedNamespace = load({}, cases.map((sample) => ({ ...sample, namespace: sample.token })));
+taintedNamespace.respond(503, {});
+taintedNamespace.runIteration();
+assert.equal(taintedNamespace.receipts[0].namespace, '<redacted>');
+assert.ok(JSON.stringify(taintedNamespace.receipts[0]).length < 1400);
+const capped = load();
+capped.respond(503, {});
+for (let index = 0; index < 20; index++) {
+  capped.execution.scenario.iterationInTest = index;
+  capped.runIteration();
+}
+assert.equal(capped.receipts.length, 16);
+assert.equal(capped.metrics.rbac_failure_receipts_suppressed, 4);
+assert.equal(capped.metrics.rbac_unavailable, 20, 'receipt caps must never suppress failed gate accounting');
+assert.throws(() => load({ CAPACITY_IDENTITY_READINESS: '1' }), /RBAC.*identity|identity.*RBAC/i);
+assert.throws(() => load({ CAPACITY_API_ENDPOINTS: 'http://api-a,http://api-a/' }), /distinct/);
+assert.throws(() => load({}, cases.slice(0, 9)), /60\/30\/10|ten|10/);
+assert.throws(() => load({}, cases.map((sample) => ({ ...sample, expected: 'allow' }))), /60\/30\/10/);
+const health = load({ CAPACITY_RBAC_WORKLOAD: '0' });
+health.runIteration();
+assert.deepEqual(health.requests.map((r) => r.url), ['http://api-a/health', 'http://api-a/ready']);
+assert.equal(health.metrics.rbac_requests, 0);
+console.log('RBAC k6 ordinary-request and unchanged health regressions passed');
+JS
 
 secret_output="$(REPOSITORY_CAPACITY_SECRET_SCENARIO=1 CAPACITY_DRY_RUN=1 "${dispatcher}" repository lifecycle production)"
 [[ "${secret_output}" == *"_capacity-repository-lifecycle"* ]]
@@ -41,79 +432,384 @@ for target_profile in 'namespace watch' 'product lifecycle' 'api readiness' 'scy
   fi
 done
 
-if CAPACITY_DRY_RUN=1 "${dispatcher}" namespace unknown alpha >/dev/null 2>&1; then
-  echo "invalid target/profile combination unexpectedly succeeded" >&2
-  exit 1
-fi
-if CAPACITY_DRY_RUN=1 "${dispatcher}" namespace watch gate >/dev/null 2>&1; then
-  echo "legacy gate mode unexpectedly succeeded" >&2
-  exit 1
-fi
+assert_rejected "invalid target/profile combination unexpectedly succeeded" "${test_dir}/output" \
+  env CAPACITY_DRY_RUN=1 "${dispatcher}" namespace unknown alpha
+assert_rejected "legacy gate mode unexpectedly succeeded" "${test_dir}/output" \
+  env CAPACITY_DRY_RUN=1 "${dispatcher}" namespace watch gate
 
 mkdir -p "${test_dir}/bin" "${test_dir}/readiness-valid" "${test_dir}/readiness-missing"
+mkdir -p "${test_dir}/identity-verifier"
+python3 - "${test_dir}/identity-verifier" <<'PY'
+import json
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+documents = {
+    'metadata.json': {'gitDirty': False, 'loadStartedAt': '2026-01-01T00:00:00Z', 'loadCompletedAt': '2026-01-01T00:30:01Z'},
+    'preflight-environment.json': {'passed': True, 'topology': {'apiReplicas': 2}},
+    'identity-preflight.json': {'passed': True, 'counts': {'staff': 1000, 'customers': 100000, 'serviceAccounts': 100}, 'durationSeconds': 1800, 'ratePerReplica': 500},
+    'identity-connected.json': {'events': 90, 'sourceAuthorityPassed': True, 'groupsPassed': True, 'laterDeliveryPassed': True, 'gitProcessUnchanged': True, 'sharedStoragePreserved': True},
+    'summary.json': {'metrics': {'checks': {'values': {'fails': 0}}, 'dropped_iterations': {'values': {'count': 0}}}},
+}
+for index in range(2):
+    for name in ['identity_requests', 'identity_decisions', 'identity_groups']:
+        documents['summary.json']['metrics'][f'{name}{{replica:{index}}}'] = {'values': {'count': 900000}}
+    (root / f'identity-before-{index}.prom').write_text('')
+    (root / f'identity-after-{index}.prom').write_text('''gitstore_userdir_requests_total{outcome="success",method="GET"} 9000
+gitstore_userdir_resolution_duration_seconds_count{cache="hit",outcome="success"} 900000
+gitstore_userdir_resolution_duration_seconds_bucket{cache="hit",outcome="success",le="0.01"} 900000
+gitstore_userdir_resolution_duration_seconds_count{cache="miss",outcome="success"} 9000
+gitstore_userdir_resolution_duration_seconds_bucket{cache="miss",outcome="success",le="0.1"} 9000
+gitstore_userdir_cache_entries_count 909000
+gitstore_userdir_cache_entries_bucket{le="256"} 909000
+gitstore_userdir_serviceaccount_buffer_depth_count 90
+gitstore_userdir_serviceaccount_buffer_depth_bucket{le="64"} 90
+gitstore_userdir_serviceaccount_delivery_total{outcome="applied"} 90
+''')
+for name, value in documents.items():
+    (root / name).write_text(json.dumps(value))
+PY
+CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-verifier"
+jq -e '.passed and (.replicas | length) == 2' "${test_dir}/identity-verifier/identity-verifier.json" >/dev/null
+jq '.metrics |= with_entries(.value = .value.values)' "${test_dir}/identity-verifier/summary.json" >"${test_dir}/identity-verifier/summary.tmp"
+mv "${test_dir}/identity-verifier/summary.tmp" "${test_dir}/identity-verifier/summary.json"
+CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-verifier"
+jq -e '.passed' "${test_dir}/identity-verifier/identity-verifier.json" >/dev/null
+python3 - "${test_dir}" <<'PY'
+import datetime
+import json
+from pathlib import Path
+import shutil
+import sys
+root = Path(sys.argv[1])
+target = root / 'identity-chaos-verifier'
+shutil.copytree(root / 'identity-verifier', target)
+identity = json.loads((target / 'identity-preflight.json').read_text())
+epoch = int(datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc).timestamp() * 1000)
+identity['faultWindows'] = [
+    {'replicas': [0, 1], 'startMillis': epoch + 120000, 'endMillis': epoch + 150000},
+    {'replicas': [0], 'startMillis': epoch + 240000, 'endMillis': epoch + 270000},
+]
+(target / 'identity-preflight.json').write_text(json.dumps(identity))
+companion = json.loads((target / 'identity-connected.json').read_text())
+companion['faults'] = [
+    {'profile': profile, 'injected': True, 'processChanged': True, 'recoveredOnBoth': True,
+     'injectedMillis': window['startMillis'] + 100, 'dependencyReadyMillis': window['startMillis'] + 500,
+     'recoveredMillis': window['startMillis'] + 1000}
+    for profile, window in zip(['identity-restart', 'api-restart'], identity['faultWindows'])
+]
+old_metrics = (target / 'identity-after-0.prom').read_text()
+companion['apiRestartMetrics'] = {
+    'before': old_metrics + 'process_start_time_seconds 1\n',
+    'after': 'process_start_time_seconds 2\n',
+}
+(target / 'identity-before-0.prom').write_text('process_start_time_seconds 1\n')
+(target / 'identity-after-0.prom').write_text(old_metrics + 'process_start_time_seconds 2\n')
+(target / 'identity-connected.json').write_text(json.dumps(companion))
+summary = json.loads((target / 'summary.json').read_text())
+for index, unavailable in enumerate([100, 0]):
+    summary['metrics'][f'identity_unavailable{{replica:{index}}}'] = {'count': unavailable}
+    for name in ['identity_decisions', 'identity_groups']:
+        summary['metrics'][f'{name}{{replica:{index}}}']['count'] -= unavailable
+(target / 'summary.json').write_text(json.dumps(summary))
+for failure in ['receipt', 'reset', 'membership', 'recovery']:
+    invalid = root / f'identity-chaos-{failure}'
+    shutil.copytree(target, invalid)
+    if failure == 'membership':
+        broken = json.loads(json.dumps(summary))
+        broken['metrics']['identity_groups{replica:0}']['count'] -= 1
+        (invalid / 'summary.json').write_text(json.dumps(broken))
+    else:
+        broken = json.loads(json.dumps(companion))
+        if failure == 'receipt':
+            broken['faults'][0]['injected'] = False
+        elif failure == 'reset':
+            broken['apiRestartMetrics']['after'] = 'process_start_time_seconds 1\n'
+        else:
+            broken['faults'][0]['recoveredMillis'] = identity['faultWindows'][0]['endMillis'] + 1
+        (invalid / 'identity-connected.json').write_text(json.dumps(broken))
+PY
+CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-chaos-verifier"
+jq -e '.passed and .chaos and .replicas[0].unavailable == 100' "${test_dir}/identity-chaos-verifier/identity-verifier.json" >/dev/null
+for failure in receipt reset membership recovery; do
+  if CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" \
+    "${test_dir}/identity-chaos-${failure}" >/dev/null 2>&1; then
+    echo "identity chaos verifier accepted invalid ${failure} evidence" >&2
+    exit 1
+  fi
+done
+jq '.metrics["identity_groups{replica:1}"].count -= 1' "${test_dir}/identity-verifier/summary.json" >"${test_dir}/identity-verifier/summary.tmp"
+mv "${test_dir}/identity-verifier/summary.tmp" "${test_dir}/identity-verifier/summary.json"
+if CAPACITY_IDENTITY_READINESS=1 "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}/identity-verifier" >/dev/null 2>&1; then
+  echo "identity verifier accepted a request without matching membership evidence" >&2
+  exit 1
+fi
+jq -e '.passed == false' "${test_dir}/identity-verifier/identity-verifier.json" >/dev/null
+write_mock "${test_dir}/chaos-bin/docker" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  inspect)
+    id=owned-identity
+    source=/private/checkpoints/controller-a
+    owner="${MOCK_CHAOS_OWNER:-owned-test}"
+    running=true
+    paused="${MOCK_CHAOS_PAUSED:-false}"
+    if [[ -e "${MOCK_CHAOS_MARKER}.paused" ]]; then paused=true; fi
+    started=old-epoch
+    if [[ "$2" == *controller-b* ]]; then
+      id=owned-peer
+      source="${MOCK_CHAOS_PEER_CHECKPOINT:-/private/checkpoints/controller-b}"
+      owner="${MOCK_CHAOS_PEER_OWNER:-$owner}"
+      paused="${MOCK_CHAOS_PEER_PAUSED:-$paused}"
+    fi
+    if [[ -n "${MOCK_CHAOS_INJECTOR_ID:-}" && "$2" == "${MOCK_CHAOS_INJECTOR_ID}" ]]; then
+      jq -n --arg id "$2" --arg owner "${owner}" \
+        '[{Id:$id,Config:{Labels:{"dev.gitstore.chaos-owner":$owner,"dev.gitstore.chaos-run":"timeout"}},
+          State:{Running:true,Paused:false,StartedAt:"injector-epoch"}}]'
+      exit
+    fi
+    if [[ -e "${MOCK_CHAOS_MARKER}" ]]; then
+      if [[ "${MOCK_CHAOS_REPLACEMENT:-0}" == 1 ]]; then id=replacement; fi
+      if [[ "${MOCK_CHAOS_FAILURE:-0}" == 1 && ! -e "${MOCK_CHAOS_MARKER}.restored" ]]; then running=false; fi
+      if [[ "${MOCK_CHAOS_RESTART:-0}" == 1 && "$2" != *controller-b* ]]; then started=new-epoch; fi
+      if [[ "${MOCK_CHAOS_PAUSE_FAILURE:-0}" == 1 && ! -e "${MOCK_CHAOS_MARKER}.restored" ]]; then running=true; paused=true; fi
+    fi
+    jq -n --arg id "${id}" --arg owner "${owner}" --arg source "${source}" --arg started "${started}" \
+      --argjson running "${running}" --argjson paused "${paused}" \
+      '[{Id:$id,Config:{Labels:{"com.docker.compose.project":$owner,"dev.gitstore.test_owner":$owner}},
+        State:{Running:$running,Paused:$paused,StartedAt:$started},
+        Mounts:[{Type:"bind",Source:$source,Destination:"/var/lib/gitstore/checkpoints",RW:true}]}]'
+    ;;
+  run)
+    touch "${MOCK_CHAOS_MARKER}"
+    if [[ "${MOCK_CHAOS_HANG:-0}" == 1 ]]; then
+      while [[ "$1" != --cidfile ]]; do shift; done
+      printf '%s' "${MOCK_CHAOS_INJECTOR_ID}" >"$2"
+      touch "${MOCK_CHAOS_MARKER}.paused"
+      exec sleep 3
+    fi
+    if [[ " $* " == *" pause "* && "${MOCK_CHAOS_PAUSE_FAILURE:-0}" != 1 && "${MOCK_CHAOS_NO_PAUSE:-0}" != 1 ]]; then
+      touch "${MOCK_CHAOS_MARKER}.paused"
+      sleep 0.4
+      rm "${MOCK_CHAOS_MARKER}.paused"
+    fi
+    exit "${MOCK_CHAOS_FAILURE:-0}"
+    ;;
+  start)
+    [[ "$2" == owned-identity ]]
+    touch "${MOCK_CHAOS_MARKER}.restored"
+    ;;
+  unpause)
+    [[ "$2" == owned-identity ]]
+    if [[ -e "${MOCK_CHAOS_MARKER}.paused" ]]; then rm "${MOCK_CHAOS_MARKER}.paused"; fi
+    touch "${MOCK_CHAOS_MARKER}.restored"
+    ;;
+  stop)
+    [[ "$2" == --time && "$3" == 1 && "$4" == "${MOCK_CHAOS_INJECTOR_ID}" ]]
+    touch "${MOCK_CHAOS_MARKER}.injector-stopped"
+    ;;
+  *) exit 2 ;;
+esac
+MOCK
+export MOCK_CHAOS_MARKER="${test_dir}/chaos-marker"
+for rejection in confirmation missing-owner owner paused target; do
+  confirm=1; owner=owned-test; paused=false; target=gitstore-userdir-kratos-test
+  case "${rejection}" in
+    confirmation) confirm=0 ;;
+    missing-owner) owner="" ;;
+    owner) owner=someone-else ;;
+    paused) paused=true ;;
+    target) target=gitstore-api-test ;;
+  esac
+  if PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM="${confirm}" CHAOS_OWNER="${owner}" \
+    CHAOS_TARGET="${target}" MOCK_CHAOS_PAUSED="${paused}" \
+    CHAOS_EVIDENCE_DIR="${test_dir}/chaos" "${repo_root}/scripts/run-chaos.sh" identity-restart >/dev/null 2>&1; then
+    echo "identity chaos unexpectedly accepted ${rejection}" >&2
+    exit 1
+  fi
+  [[ ! -e "${MOCK_CHAOS_MARKER}" ]]
+done
+PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM=1 CHAOS_OWNER=owned-test \
+  CHAOS_OWNERSHIP_LABEL=dev.gitstore.test_owner CHAOS_TARGET=gitstore-userdir-kratos-test \
+  CHAOS_RUN_ID=owned CHAOS_EVIDENCE_DIR="${test_dir}/chaos" \
+  "${repo_root}/scripts/run-chaos.sh" identity-restart >/dev/null
+jq -e '.injected and .restorationRequired and .restored and .exitCode == 0' \
+  "${test_dir}/chaos/identity-restart/owned/metadata.json" >/dev/null
+for failure in injector replacement; do
+  injector_failure=0; replacement=0
+  case "${failure}" in injector) injector_failure=1 ;; replacement) replacement=1 ;; esac
+  if PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM=1 CHAOS_OWNER=owned-test \
+    CHAOS_TARGET=gitstore-userdir-kratos-test MOCK_CHAOS_FAILURE="${injector_failure}" \
+    MOCK_CHAOS_MARKER="${test_dir}/chaos-marker-${failure}" \
+    MOCK_CHAOS_REPLACEMENT="${replacement}" CHAOS_RUN_ID="${failure}" \
+    CHAOS_EVIDENCE_DIR="${test_dir}/chaos" "${repo_root}/scripts/run-chaos.sh" identity-restart >/dev/null 2>&1; then
+    echo "identity chaos unexpectedly passed ${failure}" >&2
+    exit 1
+  fi
+done
+jq -e '.restored and (.injected | not) and .exitCode != 0' \
+  "${test_dir}/chaos/identity-restart/injector/metadata.json" >/dev/null
+jq -e '(.restored | not) and .injected and .exitCode != 0' \
+  "${test_dir}/chaos/identity-restart/replacement/metadata.json" >/dev/null
+
+window_start="$(python3 -c 'import time; print(time.time_ns() // 1000000 - 1000)')"
+window_end="$((window_start + 30000))"
+for rejection in missing-owner owner window expired peer shared-checkpoint nested-checkpoint paused-peer singleton-git; do
+  owner=owned-test; peer=gitstore-controller-b; peer_checkpoint=/private/checkpoints/controller-b
+  peer_paused=false
+  start="${window_start}"; end="${window_end}"; profile=api-restart; target=gitstore-api-a
+  case "${rejection}" in
+    missing-owner) owner="" ;;
+    owner) owner=someone-else ;;
+    window) end="$((start + 30001))" ;;
+    expired) start=1; end=2 ;;
+    peer) profile=controller-restart; target=gitstore-controller-a; peer="" ;;
+    shared-checkpoint) profile=controller-restart; target=gitstore-controller-a; peer_checkpoint=/private/checkpoints/controller-a ;;
+    nested-checkpoint) profile=controller-restart; target=gitstore-controller-a; peer_checkpoint=/private/checkpoints/controller-a/nested ;;
+    paused-peer) profile=controller-restart; target=gitstore-controller-a; peer_paused=true ;;
+    singleton-git) target=gitstore-git-service ;;
+  esac
+  marker="${test_dir}/rbac-reject-${rejection}"
+  if PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM=1 CHAOS_RBAC=1 CHAOS_OWNER="${owner}" \
+    CHAOS_TARGET="${target}" CHAOS_PEER_TARGET="${peer}" MOCK_CHAOS_PEER_CHECKPOINT="${peer_checkpoint}" MOCK_CHAOS_PEER_PAUSED="${peer_paused}" \
+    CHAOS_WINDOW_START_MILLIS="${start}" CHAOS_WINDOW_END_MILLIS="${end}" MOCK_CHAOS_MARKER="${marker}" \
+    CHAOS_EVIDENCE_DIR="${test_dir}/chaos" "${repo_root}/scripts/run-chaos.sh" "${profile}" >/dev/null 2>&1; then
+    echo "RBAC chaos accepted invalid ${rejection} preflight" >&2
+    exit 1
+  fi
+  [[ ! -e "${marker}" ]]
+done
+for profile in api-restart controller-restart journal-interruption; do
+  target=gitstore-api-a
+  case "${profile}" in controller-restart) target=gitstore-controller-a ;; journal-interruption) target=gitstore-scylla-source ;; esac
+  restart=1; if [[ "${profile}" == journal-interruption ]]; then restart=0; fi
+  PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM=1 CHAOS_RBAC=1 CHAOS_OWNER=owned-test \
+    CHAOS_TARGET="${target}" CHAOS_PEER_TARGET=gitstore-controller-b \
+    CHAOS_WINDOW_START_MILLIS="${window_start}" CHAOS_WINDOW_END_MILLIS="${window_end}" \
+    MOCK_CHAOS_RESTART="${restart}" MOCK_CHAOS_MARKER="${test_dir}/rbac-${profile}" \
+    CHAOS_RUN_ID=rbac CHAOS_EVIDENCE_DIR="${test_dir}/chaos" \
+    "${repo_root}/scripts/run-chaos.sh" "${profile}" >/dev/null
+  jq -e '.injected and .restored and .exitCode == 0 and .faultWindow.confirmed and
+    (.processEpochs.before | length > 0) and (.processEpochs.after | length > 0) and
+    (.domainRecoveryVerified == false)' "${test_dir}/chaos/${profile}/rbac/metadata.json" >/dev/null
+done
+if PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM=1 CHAOS_RBAC=1 CHAOS_OWNER=owned-test \
+  CHAOS_TARGET=gitstore-scylla-source CHAOS_WINDOW_START_MILLIS="${window_start}" CHAOS_WINDOW_END_MILLIS="${window_end}" \
+  MOCK_CHAOS_FAILURE=1 MOCK_CHAOS_PAUSE_FAILURE=1 MOCK_CHAOS_MARKER="${test_dir}/rbac-pause-failed" \
+  CHAOS_RUN_ID=failed CHAOS_EVIDENCE_DIR="${test_dir}/chaos" \
+  "${repo_root}/scripts/run-chaos.sh" journal-interruption >/dev/null 2>&1; then
+  echo "failed RBAC pause injector unexpectedly passed" >&2
+  exit 1
+fi
+jq -e '.restored and (.injected | not) and .exitCode != 0' \
+  "${test_dir}/chaos/journal-interruption/failed/metadata.json" >/dev/null
+for profile in api-restart journal-interruption; do
+  target=gitstore-api-a
+  if [[ "${profile}" == journal-interruption ]]; then target=gitstore-scylla-source; fi
+  if PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM=1 CHAOS_RBAC=1 CHAOS_OWNER=owned-test \
+    CHAOS_TARGET="${target}" CHAOS_WINDOW_START_MILLIS="${window_start}" CHAOS_WINDOW_END_MILLIS="${window_end}" \
+    MOCK_CHAOS_NO_PAUSE=1 MOCK_CHAOS_MARKER="${test_dir}/rbac-no-effect-${profile}" \
+    CHAOS_RUN_ID=no-effect CHAOS_EVIDENCE_DIR="${test_dir}/chaos" \
+    "${repo_root}/scripts/run-chaos.sh" "${profile}" >/dev/null 2>&1; then
+    echo "RBAC chaos accepted a successful injector without a real ${profile} effect" >&2
+    exit 1
+  fi
+  jq -e '.restored and (.faultObserved | not) and (.injected | not) and .exitCode != 0' \
+    "${test_dir}/chaos/${profile}/no-effect/metadata.json" >/dev/null
+done
+timeout_start="$(python3 -c 'import time; print(time.time_ns() // 1000000)')"
+if PATH="${test_dir}/chaos-bin:${PATH}" CHAOS_CONFIRM=1 CHAOS_RBAC=1 CHAOS_OWNER=owned-test \
+  CHAOS_TARGET=gitstore-scylla-source CHAOS_DURATION=1ms \
+  CHAOS_WINDOW_START_MILLIS="${timeout_start}" CHAOS_WINDOW_END_MILLIS="$((timeout_start + 6500))" \
+  MOCK_CHAOS_HANG=1 MOCK_CHAOS_INJECTOR_ID="$(printf 'b%.0s' {1..64})" MOCK_CHAOS_MARKER="${test_dir}/rbac-timeout" \
+  CHAOS_RUN_ID=timeout CHAOS_EVIDENCE_DIR="${test_dir}/chaos" \
+  "${repo_root}/scripts/run-chaos.sh" journal-interruption >/dev/null 2>&1; then
+  echo "RBAC chaos accepted a timed-out injector" >&2
+  exit 1
+fi
+[[ -e "${test_dir}/rbac-timeout.injector-stopped" && -e "${test_dir}/rbac-timeout.restored" ]]
+jq -e '.restored and .faultObserved and (.faultWindow.confirmed | not) and .exitCode != 0' \
+  "${test_dir}/chaos/journal-interruption/timeout/metadata.json" >/dev/null
+
 source_revision="$(git -C "${repo_root}" rev-parse HEAD)"
 image_digest="$(printf 'a%.0s' {1..64})"
-printf '#!/usr/bin/env bash\nif [[ "${MOCK_BAD_READY:-0}" == 1 && "$*" == *api-b.internal/ready* ]]; then exit 22; fi\ncase "$*" in *api-a*|*api-alias*) if [[ -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" && -e "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}" ]]; then instance=instance-a-replacement; else instance=instance-a; fi; printf "process_start_time_seconds 100\\ngitstore_api_process_instance_info{instance_id=\\"%%s\\"} 1\\n" "$instance" ;; *api-b*) if [[ "${MOCK_SAME_START:-0}" == 1 ]]; then start=100; else start=200; fi; if [[ "${MOCK_REPLACE_ALL:-0}" == 1 && -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" && -e "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}" ]]; then instance=instance-b-replacement; else instance=instance-b; fi; printf "process_start_time_seconds %%s\\ngitstore_api_process_instance_info{instance_id=\\"%%s\\"} 1\\n" "$start" "$instance" ;; *) exit 1 ;; esac\n' >"${test_dir}/bin/curl"
-chmod +x "${test_dir}/bin/curl"
-jq -n --arg revision "${source_revision}" --arg digest "${image_digest}" '[
-  {Id:"api-id-1",Name:"/api-1",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
-  {Id:"api-id-2",Name:"/api-2",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}}
-]' >"${test_dir}/readiness-containers.json"
+write_mock "${test_dir}/readiness-bin/curl" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+source "${CAPACITY_TEST_FIXTURES}/capacity.sh"
+if [[ "${MOCK_BAD_READY:-0}" == 1 && "$*" == *api-b.internal/ready* ]]; then exit 22; fi
+if [[ "${MOCK_AGGREGATE_NOT_READY:-0}" == 1 && "${*: -1}" == */ready ]]; then exit 22; fi
+case "$*" in
+  *api-a*|*api-alias*) mock_api_metrics a ;;
+  *api-b*) mock_api_metrics b ;;
+  *) exit 1 ;;
+esac
+MOCK
+capacity_service_containers "${source_revision}" "${image_digest}" >"${test_dir}/base-service-containers.json"
+jq 'map(select(.Name != "/git-1"))' "${test_dir}/base-service-containers.json" >"${test_dir}/readiness-containers.json"
+jq '.[0].Path = "/bin/sh"' "${test_dir}/readiness-containers.json" >"${test_dir}/shell-readiness-containers.json"
+jq '.[].Config.Image = ("sha256:" + ("a" * 64))' "${test_dir}/readiness-containers.json" >"${test_dir}/local-digest-readiness-containers.json"
 jq '.[0].Config.Image = "ghcr.io/gitstore-dev/api:latest"' "${test_dir}/readiness-containers.json" >"${test_dir}/unverified-readiness-containers.json"
-printf '#!/usr/bin/env bash\nif [[ "$1" == exec ]]; then case "$2" in api-1) if [[ -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" && -e "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}" ]]; then instance=instance-a-replacement; else instance=instance-a; fi; printf "process_start_time_seconds 100\\ngitstore_api_process_instance_info{instance_id=\\"%%s\\"} 1\\n" "$instance" ;; api-2) if [[ "${MOCK_SAME_START:-0}" == 1 ]]; then start=100; else start=200; fi; printf "process_start_time_seconds %%s\\ngitstore_api_process_instance_info{instance_id=\\"instance-b\\"} 1\\n" "$start" ;; *) exit 1 ;; esac; else cat "${MOCK_READINESS_CONTAINERS_FILE}"; fi\n' >"${test_dir}/bin/docker"
-chmod +x "${test_dir}/bin/docker"
+write_mock "${test_dir}/readiness-bin/docker" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+source "${CAPACITY_TEST_FIXTURES}/capacity.sh"
+if [[ "$1" == exec && "${*:3}" == "/app/api gitctl process-executable" ]]; then
+  printf '%s\n' "${MOCK_API_EXECUTABLE:-/app/api}"
+elif [[ "$1" == exec && "${*:3}" == "/app/api gitctl metrics" ]]; then
+  case "$2" in
+    api-1) mock_api_metrics a container ;;
+    api-2) mock_api_metrics b container ;;
+    *) exit 1 ;;
+  esac
+elif [[ "$1" == exec ]]; then
+  exit 127
+else
+  cat "${MOCK_READINESS_CONTAINERS_FILE}"
+fi
+MOCK
 export MOCK_READINESS_CONTAINERS_FILE="${test_dir}/readiness-containers.json"
 cp "${repo_root}/tests/capacity/examples/config-manifest.json" "${test_dir}/readiness-valid/config.json"
 cp "${repo_root}/tests/capacity/examples/environment-manifest.json" "${test_dir}/readiness-valid/environment.json"
-PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api-a.internal \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
-  CAPACITY_API_CONTAINERS=api-1,api-2 \
-  CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
-  "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid"
+run_readiness() (
+  local evidence="$1"
+  shift
+  env PATH="${test_dir}/readiness-bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api-a.internal \
+    CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
+    CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
+    "$@" "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/${evidence}"
+)
+
+run_readiness readiness-valid
 jq -e '.passed == true and .topology.apiReplicas == 2 and (.topology.liveReplicas | length) == 2 and .resources.runtimeMemoryBytes == 17179869184' \
   "${test_dir}/readiness-valid/preflight-environment.json" >/dev/null
-if PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api-a.internal \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
-  CAPACITY_API_CONTAINERS=api-1,api-2 \
-  CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
-  "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-missing" >/dev/null 2>&1; then
-  echo "production API readiness unexpectedly passed without deployment manifests" >&2
-  exit 1
-fi
-if PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api-a.internal \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-a.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
-  CAPACITY_API_CONTAINERS=api-1,api-2 \
-  CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
-  "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid" >/dev/null 2>&1; then
-  echo "production API readiness unexpectedly accepted one live process twice" >&2
-  exit 1
-fi
-MOCK_SAME_START=1 PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api-a.internal \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
-  CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
-  "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid"
-if PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://unverified.internal \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
-  CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
-  "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid" >/dev/null 2>&1; then
-  echo "production API readiness unexpectedly accepted an unrelated workload URL" >&2
-  exit 1
-fi
-if MOCK_BAD_READY=1 PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api-a.internal \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
-  CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
-  "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid" >/dev/null 2>&1; then
-  echo "production API readiness unexpectedly accepted an unready secondary replica" >&2
-  exit 1
-fi
-if MOCK_READINESS_CONTAINERS_FILE="${test_dir}/unverified-readiness-containers.json" \
-  PATH="${test_dir}/bin:${PATH}" MODE=production CAPACITY_BASE_URL=http://api-a.internal \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
-  CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_RUNTIME_MEMORY_BYTES=17179869184 \
-  "${repo_root}/tests/capacity/preflight/api-readiness.sh" "${test_dir}/readiness-valid" >/dev/null 2>&1; then
-  echo "production API readiness unexpectedly accepted a mutable live image" >&2
-  exit 1
-fi
+run_readiness readiness-valid MOCK_READINESS_CONTAINERS_FILE="${test_dir}/shell-readiness-containers.json"
+run_readiness readiness-valid MOCK_READINESS_CONTAINERS_FILE="${test_dir}/local-digest-readiness-containers.json"
+assert_rejected "readiness accepted a shell as the live API process" "${test_dir}/output" \
+  run_readiness readiness-valid MOCK_API_EXECUTABLE=/bin/sh
+assert_rejected "production API readiness unexpectedly passed without deployment manifests" "${test_dir}/output" \
+  run_readiness readiness-missing
+assert_rejected "production API readiness unexpectedly accepted one live process twice" "${test_dir}/output" \
+  run_readiness readiness-valid CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-a.internal
+run_readiness readiness-valid MOCK_SAME_START=1
+for mismatch in start instance; do
+  assert_rejected "readiness accepted mismatched container ${mismatch}" "${test_dir}/output" \
+    run_readiness readiness-valid MOCK_CONTAINER_IDENTITY_MISMATCH="${mismatch}"
+done
+assert_rejected "production API readiness unexpectedly accepted an unrelated workload URL" "${test_dir}/output" \
+  run_readiness readiness-valid CAPACITY_BASE_URL=http://unverified.internal
+assert_rejected "production API readiness unexpectedly accepted an unready secondary replica" "${test_dir}/output" \
+  run_readiness readiness-valid MOCK_BAD_READY=1
+assert_rejected "aggregate readiness ignored an unavailable selected role" "${test_dir}/output" \
+  run_readiness readiness-valid MOCK_AGGREGATE_NOT_READY=1
+run_readiness readiness-valid MOCK_AGGREGATE_NOT_READY=1 CAPACITY_API_READINESS_ROLE=admin
+assert_rejected "Admin role readiness ignored an unready secondary replica" "${test_dir}/output" \
+  run_readiness readiness-valid MOCK_BAD_READY=1 CAPACITY_API_READINESS_ROLE=admin
+assert_rejected "role readiness accepted an arbitrary operational path" "${test_dir}/output" \
+  run_readiness readiness-valid CAPACITY_API_READINESS_ROLE=health
+assert_rejected "production API readiness unexpectedly accepted a mutable live image" "${test_dir}/output" \
+  run_readiness readiness-valid MOCK_READINESS_CONTAINERS_FILE="${test_dir}/unverified-readiness-containers.json"
 
 make_output="$(make --no-print-directory -C "${repo_root}" capacity TARGET=namespace PROFILE=watch MODE=alpha CAPACITY_DRY_RUN=1)"
 [[ "${make_output}" == *"target=namespace profile=watch mode=alpha"* ]]
@@ -126,24 +822,66 @@ for removed_target in capacity-observability capacity-observability-down test-sc
 done
 
 mkdir -p "${test_dir}/evidence"
-printf '#!/usr/bin/env bash\necho "mock capacity command: $*"\nif [[ -n "${MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE:-}" ]]; then cp "${MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE}" "${MOCK_SERVICE_CONTAINERS_FILE}"; fi\nif [[ -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" ]]; then touch "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}"; fi\n[[ "${FAIL_MAKE:-0}" != "1" ]]\n' >"${test_dir}/bin/make"
-printf '#!/usr/bin/env bash\nif [[ "$1" == exec ]]; then case "$2" in api-1) if [[ -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" && -e "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}" ]]; then instance=instance-a-replacement; else instance=instance-a; fi; printf "process_start_time_seconds 100\\ngitstore_api_process_instance_info{instance_id=\\"%%s\\"} 1\\n" "$instance" ;; api-2) if [[ "${MOCK_SAME_START:-0}" == 1 ]]; then start=100; else start=200; fi; if [[ "${MOCK_REPLACE_ALL:-0}" == 1 && -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" && -e "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}" ]]; then instance=instance-b-replacement; else instance=instance-b; fi; printf "process_start_time_seconds %%s\\ngitstore_api_process_instance_info{instance_id=\\"%%s\\"} 1\\n" "$start" "$instance" ;; *) if [[ "${MOCK_SCYLLA_BAD_MEMBERSHIP:-0}" == 1 ]]; then printf "UN node-1\\n"; else printf "UN node-1\\nUN node-2\\nUN node-3\\n"; fi ;; esac; exit 0; fi\nif [[ "$*" == *api-1* ]]; then cat "${MOCK_SERVICE_CONTAINERS_FILE}"; else cat "${MOCK_SCYLLA_CONTAINERS_FILE}"; fi\n' >"${test_dir}/bin/docker"
-printf '#!/usr/bin/env bash\ncase "$1" in rev-parse) printf "%%s\\n" "${MOCK_SOURCE_REVISION}" ;; status|diff|ls-files) exit 0 ;; *) exit 1 ;; esac\n' >"${test_dir}/bin/git"
-chmod +x "${test_dir}/bin/make"
-chmod +x "${test_dir}/bin/docker"
-chmod +x "${test_dir}/bin/git"
+# The deployment phase has its own command directory; never rewrite readiness mocks.
+cp "${test_dir}/readiness-bin/curl" "${test_dir}/bin/curl"
+write_mock "${test_dir}/bin/make" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "mock capacity command: $*"
+if [[ -n "${MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE:-}" ]]; then
+  cp "${MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE}" "${MOCK_SERVICE_CONTAINERS_FILE}"
+fi
+if [[ -n "${MOCK_REPLACEMENT_MARKER_PREFIX:-}" ]]; then
+  touch "${MOCK_REPLACEMENT_MARKER_PREFIX}-${CAPACITY_RUN_ID:-}"
+fi
+[[ "${FAIL_MAKE:-0}" != 1 ]]
+MOCK
+write_mock "${test_dir}/bin/docker" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+source "${CAPACITY_TEST_FIXTURES}/capacity.sh"
+if [[ "$1" == exec && "${*:3}" == "/app/api gitctl process-executable" ]]; then
+  printf '%s\n' "${MOCK_API_EXECUTABLE:-/app/api}"
+elif [[ "$1" == exec ]]; then
+  case "$2" in
+    api-1|api-2)
+      [[ "${*:3}" == "/app/api gitctl metrics" ]] || exit 127
+      if [[ "$2" == api-1 ]]; then mock_api_metrics a container; else mock_api_metrics b container; fi
+      ;;
+    *)
+      for ((padding=0; padding<${MOCK_SCYLLA_STATUS_PADDING_LINES:-0}; padding++)); do
+        printf 'membership diagnostic padding 0123456789012345678901234567890123456789\n'
+      done
+      if [[ "${MOCK_SCYLLA_BAD_MEMBERSHIP:-0}" == 1 ]]; then
+        printf 'UN node-1\n'
+      else
+        printf 'UN node-1\nUN node-2\nUN node-3\n'
+      fi
+      ;;
+  esac
+elif [[ "$*" == *api-1* ]]; then
+  cat "${MOCK_SERVICE_CONTAINERS_FILE}"
+else
+  cat "${MOCK_SCYLLA_CONTAINERS_FILE}"
+fi
+MOCK
+write_mock "${test_dir}/bin/git" <<'MOCK'
+#!/usr/bin/env bash
+case "$1" in
+  rev-parse) printf '%s\n' "${MOCK_SOURCE_REVISION}" ;;
+  status|diff|ls-files) exit 0 ;;
+  *) exit 1 ;;
+esac
+MOCK
 export MOCK_SOURCE_REVISION="${source_revision}"
-jq -n --arg revision "${source_revision}" --arg digest "${image_digest}" '[
-  {Id:"api-id-1",Name:"/api-1",Image:("sha256:"+$digest),Path:"/bin/sh",Args:["-ec","export GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY=\"$(cat /run/secrets/serviceaccount-signing-key)\"; exec /app/api --config-file /etc/gitstore/gitstore.toml"],Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
-  {Id:"api-id-2",Name:"/api-2",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
-  {Id:"git-id-1",Name:"/git-1",Image:("sha256:"+$digest),Path:"/app/git-service",Config:{Image:("ghcr.io/gitstore-dev/git-service@sha256:"+$digest),Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}}
-]' >"${test_dir}/service-containers.json"
+jq '.[0].Path = "/bin/sh" |
+  .[0].Args = ["-ec","export GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY=\"$(cat /run/secrets/serviceaccount-signing-key)\"; exec /app/api --config-file /etc/gitstore/gitstore.toml"]' \
+  "${test_dir}/base-service-containers.json" >"${test_dir}/service-containers.json"
 jq 'map(.Config.Image |= sub("@sha256:[0-9a-f]+$"; ":local-alpha"))' "${test_dir}/service-containers.json" >"${test_dir}/local-service-containers.json"
-jq -n --arg revision "${source_revision}" --arg digest "${image_digest}" '[
-  {Id:"api-id-1",Name:"/api-1",Image:("sha256:"+$digest),Path:"/bin/sh",Args:["-ec","export GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY=\"$(cat /run/secrets/serviceaccount-signing-key)\"; exec /app/api --config-file /etc/gitstore/gitstore.toml"],Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Env:["GITSTORE_API__GIT_SERVICE__URI=dns:///git-1:50051"],Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
-  {Id:"api-id-2",Name:"/api-2",Image:("sha256:"+$digest),Path:"/app/api",Config:{Image:("ghcr.io/gitstore-dev/api@sha256:"+$digest),Env:["GITSTORE_API__GIT_SERVICE__URI=dns:///git-1:50051"],Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}},
-  {Id:"git-id-1",Name:"/git-1",Image:("sha256:"+$digest),Path:"/app/git-service",Config:{Image:("ghcr.io/gitstore-dev/git-service@sha256:"+$digest),Env:["GITSTORE_GIT_SERVICE__CATALOG__URI=dns:///api-a:6000"],Labels:{"org.opencontainers.image.revision":$revision}},State:{Running:true}}
-]' >"${test_dir}/repository-service-containers.json"
+jq 'map(.Config.Env = [
+  if .Name == "/git-1" then "GITSTORE_GIT_SERVICE__CATALOG__URI=dns:///api-a:6000"
+  else "GITSTORE_API__GIT_SERVICE__URI=dns:///git-1:50051" end
+])' "${test_dir}/service-containers.json" >"${test_dir}/repository-service-containers.json"
 jq 'map(.Config.Image |= sub("@sha256:[0-9a-f]+$"; ":local-alpha"))' "${test_dir}/repository-service-containers.json" >"${test_dir}/repository-local-service-containers.json"
 jq '.[0].Config.Labels["org.opencontainers.image.revision"] = "wrong-revision"' "${test_dir}/service-containers.json" >"${test_dir}/unverified-service-containers.json"
 jq '.[1].Id = .[0].Id' "${test_dir}/service-containers.json" >"${test_dir}/duplicate-service-containers.json"
@@ -156,6 +894,92 @@ export MOCK_SCYLLA_CONTAINERS_FILE="${test_dir}/scylla-containers.json"
 export MOCK_REPLACEMENT_MARKER_PREFIX="${test_dir}/replacement"
 export NAMESPACE_WATCH_API_REPLACEMENT=http://api-a.internal
 export NAMESPACE_WATCH_REPLACEMENT_TRIGGER_FILE="${test_dir}/replacement-trigger"
+
+run_capacity() (
+  local run_id="$1" target="$2" profile="$3" mode="$4"
+  shift 4
+  env PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID="${run_id}" \
+    CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
+    CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
+    "$@" "${dispatcher}" "${target}" "${profile}" "${mode}"
+)
+
+run_deployed_capacity() {
+  local run_id="$1" target="$2" profile="$3" mode="$4"
+  shift 4
+  run_capacity "${run_id}" "${target}" "${profile}" "${mode}" \
+    CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
+    NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-b.internal \
+    CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release CAPACITY_GIT_SERVICE_BUILD=release \
+    CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
+    CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
+    "$@"
+}
+
+mkdir -p "${test_dir}/rbac-bin"
+printf '{}\n' >"${test_dir}/rbac-seed.json"
+printf '{}\n' >"${test_dir}/rbac-topology.json"
+write_mock "${test_dir}/rbac-bin/go" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${RBAC_TEST_CAPACITY_VERIFY_K6:-0}" == 1 ]]; then
+  if [[ "${MOCK_RBAC_SKIP_VERDICT:-0}" != 1 ]]; then
+    umask 077
+    jq -n --arg revision "${MOCK_SOURCE_REVISION}" \
+      '{Passed:true,SourceRevision:$revision,Window:{Owner:"owned-rbac",ProfileDigest:("a"*64)}}' \
+      >"${CAPACITY_RBAC_EVIDENCE_DIR}/rbac-alpha-verifier.json"
+  fi
+  if [[ "${MOCK_RBAC_SOURCE_DRIFT:-0}" == 1 ]]; then
+    touch "${MOCK_RBAC_SOURCE_MARKER}"
+  fi
+fi
+MOCK
+write_mock "${test_dir}/rbac-bin/git" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == status && -f "${MOCK_RBAC_SOURCE_MARKER:-}" ]]; then
+  printf ' M fixture-source.go\n'
+else
+  exec "${MOCK_RBAC_BASE_GIT}" "$@"
+fi
+MOCK
+run_rbac_dispatch() {
+  local run_id="$1" target="$2" profile="$3"
+  shift 3
+  env PATH="${test_dir}/rbac-bin:${test_dir}/bin:${PATH}" CAPACITY_RBAC_WORKLOAD=1 \
+    CAPACITY_EVIDENCE_DIR="${test_dir}/rbac-evidence" CAPACITY_RUN_ID="${run_id}" \
+    CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
+    CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
+    CAPACITY_RBAC_SEED_FILE="${test_dir}/rbac-seed.json" CAPACITY_RBAC_TOPOLOGY_FILE="${test_dir}/rbac-topology.json" \
+    MOCK_RBAC_SOURCE_MARKER="${test_dir}/rbac-source-drift" MOCK_RBAC_BASE_GIT="${test_dir}/bin/git" \
+    "$@" "${dispatcher}" "${target}" "${profile}" alpha
+}
+for target_profile in 'api readiness' 'namespace watch'; do
+  read -r rbac_target rbac_profile <<<"${target_profile}"
+  run_rbac_dispatch complete "${rbac_target}" "${rbac_profile}" >/dev/null
+  jq -e '.passed == true and .postflightRequired == true and .postflightExitCode == 0 and
+    .sourceStateUnchanged == true' \
+    "${test_dir}/rbac-evidence/${rbac_target}/${rbac_profile}/alpha/complete/metadata.json" >/dev/null
+  before_digest="$(shasum -a 256 "${test_dir}/rbac-evidence/${rbac_target}/${rbac_profile}/alpha/complete/metadata.json")"
+  if run_rbac_dispatch complete "${rbac_target}" "${rbac_profile}" >/dev/null 2>&1; then
+    echo "RBAC alpha overwrote an existing run directory" >&2
+    exit 1
+  fi
+  [[ "${before_digest}" == "$(shasum -a 256 "${test_dir}/rbac-evidence/${rbac_target}/${rbac_profile}/alpha/complete/metadata.json")" ]]
+  if run_rbac_dispatch missing-domain "${rbac_target}" "${rbac_profile}" MOCK_RBAC_SKIP_VERDICT=1 >/dev/null 2>&1; then
+    echo "RBAC alpha accepted a skipped domain verifier" >&2
+    exit 1
+  fi
+  jq -e '.passed == false and .postflightExitCode == 2' \
+    "${test_dir}/rbac-evidence/${rbac_target}/${rbac_profile}/alpha/missing-domain/metadata.json" >/dev/null
+done
+if run_rbac_dispatch changed-source api readiness MOCK_RBAC_SOURCE_DRIFT=1 >/dev/null 2>&1; then
+  echo "RBAC alpha accepted source drift during the run" >&2
+  exit 1
+fi
+jq -e '.passed == false and .sourceStateUnchanged == false and .sourceStateExitCode == 2' \
+  "${test_dir}/rbac-evidence/api/readiness/alpha/changed-source/metadata.json" >/dev/null
+
 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=test-run \
   "${dispatcher}" namespace validation diagnostic >/dev/null
 metadata="${test_dir}/evidence/namespace/validation/diagnostic/test-run/metadata.json"
@@ -167,10 +991,7 @@ if PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" C
   exit 1
 fi
 
-PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=validated-run \
-  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
-  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
-  "${dispatcher}" namespace validation alpha >/dev/null
+run_capacity validated-run namespace validation alpha >/dev/null
 metadata="${test_dir}/evidence/namespace/validation/alpha/validated-run/metadata.json"
 jq -e '
   .passed == true and .preflightRequired == true and .preflightExitCode == 0 and
@@ -178,14 +999,8 @@ jq -e '
   (.configDigest | length) == 64 and (.environmentDigest | length) == 64
 ' "${metadata}" >/dev/null
 
-if PATH="${test_dir}/bin:${PATH}" CAPACITY_TEST_FORCE_DIRTY=1 \
-  CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=dirty-verifier \
-  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
-  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
-  "${dispatcher}" namespace validation alpha >/dev/null 2>&1; then
-  echo "alpha capacity evidence unexpectedly accepted a dirty verifier checkout" >&2
-  exit 1
-fi
+assert_rejected "alpha capacity evidence unexpectedly accepted a dirty verifier checkout" "${test_dir}/output" \
+  run_capacity dirty-verifier namespace validation alpha CAPACITY_TEST_FORCE_DIRTY=1
 metadata="${test_dir}/evidence/namespace/validation/alpha/dirty-verifier/metadata.json"
 jq -e '.passed == false and .worktreeDirty == true and .sourceStateExitCode == 2' "${metadata}" >/dev/null
 
@@ -205,17 +1020,9 @@ jq -n '{metrics:{gitstore_namespace_admitted:{values:{count:10}},checks:{values:
 jq -e '.passed == true and .admitted == 10 and .visibilityP99Milliseconds == 200' \
   "${test_dir}/admission-verifier/domain-verifier.json" >/dev/null
 
-MOCK_SAME_START=1 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=deployed-run \
-  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
-  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
-  NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-b.internal \
+run_deployed_capacity deployed-run namespace watch alpha MOCK_SAME_START=1 \
   CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINER=git-1 \
-  MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/service-containers.json" \
-  CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release CAPACITY_GIT_SERVICE_BUILD=release \
-  CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
-  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
-  "${dispatcher}" namespace watch alpha >/dev/null
+  MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/service-containers.json" >/dev/null
 metadata="${test_dir}/evidence/namespace/watch/alpha/deployed-run/metadata.json"
 jq -e '.passed == true and .postflightRequired == true and .postflightExitCode == 0 and .datastoreVerifierExitCode == 0' "${metadata}" >/dev/null
 jq -e '(.topology.liveApiReplicas | length) == 2 and (.artifacts.releaseServiceContainers | length) == 3' \
@@ -272,85 +1079,64 @@ jq -e '.passed == false and .preflightExitCode == 2' "${metadata}" >/dev/null
 
 export MOCK_SCYLLA_CONTAINERS_FILE="${test_dir}/scylla-containers.json"
 
-if MOCK_SAME_START=1 MOCK_REPLACE_ALL=1 PATH="${test_dir}/bin:${PATH}" \
-  CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=all-replicas-replaced-run \
-  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
-  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
-  NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-b.internal \
+assert_rejected "alpha namespace watch evidence unexpectedly accepted replacement of every API replica" "${test_dir}/output" \
+  run_deployed_capacity all-replicas-replaced-run namespace watch alpha MOCK_SAME_START=1 MOCK_REPLACE_ALL=1 \
   CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINER=git-1 \
-  MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/service-containers.json" \
-  CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release CAPACITY_GIT_SERVICE_BUILD=release \
-  CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
-  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
-  "${dispatcher}" namespace watch alpha >/dev/null 2>&1; then
-  echo "alpha namespace watch evidence unexpectedly accepted replacement of every API replica" >&2
-  exit 1
-fi
+  MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/service-containers.json"
 metadata="${test_dir}/evidence/namespace/watch/alpha/all-replicas-replaced-run/metadata.json"
 jq -e '.passed == false and .postflightExitCode == 1' "${metadata}" >/dev/null
 
-if PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=aliased-api-run \
-  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
-  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
+assert_rejected "alpha namespace watch evidence unexpectedly accepted one live API process twice" "${test_dir}/output" \
+  run_deployed_capacity aliased-api-run namespace watch alpha \
   CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-alias.internal \
-  NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-alias.internal \
-  CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release CAPACITY_GIT_SERVICE_BUILD=release \
-  CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
-  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
-  "${dispatcher}" namespace watch alpha >/dev/null 2>&1; then
-  echo "alpha namespace watch evidence unexpectedly accepted one live API process twice" >&2
-  exit 1
-fi
+  NAMESPACE_WATCH_API_B=http://api-alias.internal
 
-if PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=unverified-service-run \
-  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
-  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
-  NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-b.internal \
+assert_rejected "alpha namespace watch evidence unexpectedly accepted an unverified service image" "${test_dir}/output" \
+  run_deployed_capacity unverified-service-run namespace watch alpha \
   CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINER=git-1 \
-  MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/unverified-service-containers.json" \
-  CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release CAPACITY_GIT_SERVICE_BUILD=release \
-  CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
-  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
-  "${dispatcher}" namespace watch alpha >/dev/null 2>&1; then
-  echo "alpha namespace watch evidence unexpectedly accepted an unverified service image" >&2
-  exit 1
-fi
+  MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/unverified-service-containers.json"
 
 cp "${test_dir}/service-containers.json" "${test_dir}/replacement-service-containers.json"
-if MOCK_SAME_START=1 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=unverified-replacement-run \
-  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
-  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
-  NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-b.internal \
+assert_rejected "alpha namespace watch evidence unexpectedly accepted an unverified replacement image" "${test_dir}/output" \
+  run_deployed_capacity unverified-replacement-run namespace watch alpha MOCK_SAME_START=1 \
   CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINER=git-1 \
   MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/replacement-service-containers.json" \
-  MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE="${test_dir}/unverified-service-containers.json" \
-  CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release CAPACITY_GIT_SERVICE_BUILD=release \
-  CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
-  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
-  "${dispatcher}" namespace watch alpha >/dev/null 2>&1; then
-  echo "alpha namespace watch evidence unexpectedly accepted an unverified replacement image" >&2
-  exit 1
-fi
+  MOCK_POSTFLIGHT_SERVICE_CONTAINERS_FILE="${test_dir}/unverified-service-containers.json"
 metadata="${test_dir}/evidence/namespace/watch/alpha/unverified-replacement-run/metadata.json"
 jq -e '.passed == false and .preflightExitCode == 0 and .verifierExitCode == 0 and .postflightExitCode == 1' "${metadata}" >/dev/null
 
-if PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=duplicate-service-run \
-  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
-  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
-  NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-b.internal \
+assert_rejected "alpha namespace watch evidence unexpectedly accepted duplicate service container identities" "${test_dir}/output" \
+  run_deployed_capacity duplicate-service-run namespace watch alpha \
   CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINER=git-1 \
-  MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/duplicate-service-containers.json" \
-  CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release CAPACITY_GIT_SERVICE_BUILD=release \
-  CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
-  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
-  "${dispatcher}" namespace watch alpha >/dev/null 2>&1; then
-  echo "alpha namespace watch evidence unexpectedly accepted duplicate service container identities" >&2
-  exit 1
-fi
+  MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/duplicate-service-containers.json"
+
+for mismatch in start instance; do
+  assert_rejected "release evidence accepted mismatched container ${mismatch}" "${test_dir}/output" \
+    run_deployed_capacity "container-mismatch-${mismatch}" namespace watch alpha \
+    CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINER=git-1 \
+    MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/service-containers.json" \
+    MOCK_CONTAINER_IDENTITY_MISMATCH="${mismatch}"
+done
+
+# Diagnostic preambles must not block the membership reader at pipe-buffer sizes.
+PATH="${test_dir}/bin:${PATH}" CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
+  CAPACITY_DATASTORE_EXPECTED_COUNT=3 CAPACITY_DATASTORE_EXPECTED_MEMORY_BYTES=3221225472 \
+  CAPACITY_DATASTORE_EXPECTED_SMP=2 python3 - "${repo_root}" "${test_dir}" <<'PYTEST'
+import os, signal, subprocess, sys
+from pathlib import Path
+root, output = map(Path, sys.argv[1:])
+for padding in [400, 4000]:
+    env = os.environ.copy()
+    env['MOCK_SCYLLA_STATUS_PADDING_LINES'] = str(padding)
+    process = subprocess.Popen([str(root / 'scripts/check-capacity-containers.sh'), 'snapshot', str(output / f'membership-{padding}.json')], env=env, start_new_session=True)
+    try:
+        status = process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+        raise AssertionError('membership reader blocked on diagnostic preamble')
+    assert status == 0, 'valid membership with diagnostic preamble was rejected'
+PYTEST
 
 if PATH="${test_dir}/bin:${PATH}" CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
   CAPACITY_DATASTORE_EXPECTED_COUNT=3 CAPACITY_DATASTORE_EXPECTED_MEMORY_BYTES=3221225472 \
@@ -374,63 +1160,32 @@ if PATH="${test_dir}/bin:${PATH}" MOCK_SCYLLA_CONTAINERS_FILE="${test_dir}/dupli
   exit 1
 fi
 
-if PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=skipped-replacement \
-  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
-  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
-  NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-b.internal \
-  CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release CAPACITY_GIT_SERVICE_BUILD=release \
-  CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
-  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
-  NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT=1 \
-  "${dispatcher}" namespace watch alpha >/dev/null 2>&1; then
-  echo "alpha namespace watch evidence unexpectedly skipped rolling replacement" >&2
-  exit 1
-fi
+assert_rejected "alpha namespace watch evidence unexpectedly skipped rolling replacement" "${test_dir}/output" \
+  run_deployed_capacity skipped-replacement namespace watch alpha NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT=1
 
-if PATH="${test_dir}/bin:${PATH}" FAIL_MAKE=1 CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=failed-verifier \
-  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
-  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
-  "${dispatcher}" namespace validation alpha >/dev/null 2>&1; then
-  echo "failed non-k6 verifier unexpectedly produced passing evidence" >&2
-  exit 1
-fi
+assert_rejected "failed non-k6 verifier unexpectedly produced passing evidence" "${test_dir}/output" \
+  run_capacity failed-verifier namespace validation alpha FAIL_MAKE=1
 metadata="${test_dir}/evidence/namespace/validation/alpha/failed-verifier/metadata.json"
 jq -e '.passed == false and .verifierExitCode == 1' "${metadata}" >/dev/null
 
-if PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=unverified-dataset \
-  CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
-  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
+if run_capacity unverified-dataset scylla soak production \
   CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 \
-  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
-  "${dispatcher}" scylla soak production >/dev/null 2>&1; then
+  CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 >/dev/null 2>&1; then
   echo "Scylla production evidence unexpectedly passed without observed dataset verification" >&2
   exit 1
 fi
 metadata="${test_dir}/evidence/scylla/soak/production/unverified-dataset/metadata.json"
 jq -e '.passed == false and .preflightExitCode == 2' "${metadata}" >/dev/null
 
-if MOCK_SAME_START=1 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" \
-  CAPACITY_RUN_ID=undersized-overflow CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
-  CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
-  CAPACITY_API_ENDPOINTS=http://api-a.internal,http://api-b.internal \
-  NAMESPACE_WATCH_API_A=http://api-a.internal NAMESPACE_WATCH_API_B=http://api-b.internal \
+assert_rejected "namespace recovery unexpectedly accepted an undersized overflow probe" "${test_dir}/output" \
+  run_deployed_capacity undersized-overflow namespace recovery alpha MOCK_SAME_START=1 \
   CAPACITY_API_CONTAINERS=api-1,api-2 CAPACITY_GIT_SERVICE_CONTAINER=git-1 \
   MOCK_SERVICE_CONTAINERS_FILE="${test_dir}/service-containers.json" NAMESPACE_WATCH_TOKEN=test-token \
-  NAMESPACE_WATCH_OVERFLOW_TRANSITIONS=1 CAPACITY_API_REPLICAS=2 CAPACITY_API_BUILD=release \
-  CAPACITY_GIT_SERVICE_BUILD=release CAPACITY_SCYLLA_NODES=3 CAPACITY_SCYLLA_SMP=2 \
-  CAPACITY_SCYLLA_MEMORY_BYTES_PER_NODE=3221225472 CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated \
-  CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
-  "${dispatcher}" namespace recovery alpha >/dev/null 2>&1; then
-  echo "namespace recovery unexpectedly accepted an undersized overflow probe" >&2
-  exit 1
-fi
+  NAMESPACE_WATCH_OVERFLOW_TRANSITIONS=1
 metadata="${test_dir}/evidence/namespace/recovery/alpha/undersized-overflow/metadata.json"
 jq -e '.passed == false and .preflightExitCode == 2' "${metadata}" >/dev/null
 
-if PATH="${test_dir}/bin:${PATH}" CAPACITY_OBSERVABILITY=invalid "${dispatcher}" namespace validation diagnostic >/dev/null 2>&1; then
-  echo "invalid capacity observability mode unexpectedly succeeded" >&2
-  exit 1
-fi
+assert_rejected "invalid capacity observability mode unexpectedly succeeded" "${test_dir}/output" \
+  env PATH="${test_dir}/bin:${PATH}" CAPACITY_OBSERVABILITY=invalid "${dispatcher}" namespace validation diagnostic
 
 echo "capacity dispatcher tests passed"

@@ -94,7 +94,8 @@ func (r *queryResolver) Product(ctx context.Context, by model.ProductBy) (*model
 }
 ```
 
-Compare to [category.resolvers.go:165](gitstore-api/internal/graph/category.resolvers.go#L165) for the established pattern.
+Compare to the [current Category resolver](../../gitstore-api/internal/admin/graph/resolver/category.resolvers.go)
+for the established pattern; this feature's original source paths are historical.
 
 ### Spec hydration (`converters.go`)
 

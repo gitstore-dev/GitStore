@@ -14,6 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/categorytaxonomy"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/health"
@@ -55,7 +58,7 @@ type resolvedCategoryRef struct {
 }
 
 type CompletionClient interface {
-	CompleteDeletion(context.Context, string, string, string) error
+	CompleteDeletion(context.Context, string, string, string, string) error
 }
 
 // Reconciler implements types.Reconciler for the Product kind: it resolves
@@ -89,9 +92,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		return types.ResultOK()
 	}
 	if p.DeletionTimestamp != nil && hasFinalizer(p.Finalizers) {
-		if err := r.completion.CompleteDeletion(ctx, p.Namespace, p.Name, p.ResourceVersion); err != nil {
+		if err := r.completion.CompleteDeletion(ctx, p.Namespace, p.Name, p.ResourceVersion, p.UID); err != nil {
 			if errors.Is(err, types.ErrConflict) {
-				health.ConflictRequeues.WithLabelValues("Product").Inc()
+				health.ConflictRequeues.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", "Product")))
 				return types.ResultAfter(conflictRequeueDelay)
 			}
 			return types.ResultTransient(fmt.Errorf("product: complete deletion: %w", err))
@@ -143,7 +146,7 @@ func (r *Reconciler) reconcileActive(ctx context.Context, key types.WorkItemKey,
 	if !patch.IsNoOp(current.Status) {
 		if err := r.statusClient.Apply(ctx, key, patch); err != nil {
 			if errors.Is(err, types.ErrConflict) {
-				health.ConflictRequeues.WithLabelValues("Product").Inc()
+				health.ConflictRequeues.Add(context.Background(), 1, metric.WithAttributes(attribute.String("kind", "Product")))
 				// Another replica (or a newer watch event) won the status
 				// write. Re-enter through the queue so the next attempt
 				// observes fresh cache state instead of exhausting one

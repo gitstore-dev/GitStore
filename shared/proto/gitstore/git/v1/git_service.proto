@@ -42,9 +42,11 @@ message AuthContext {
   string subject     = 1; // principal identifier (e.g. "admin", OIDC sub claim)
   string issuer      = 2; // auth provider (e.g. "static-admin", OIDC issuer URL)
   string auth_method = 3; // mechanism used (e.g. "basic", "bearer", "none")
-  repeated string roles  = 4;
+  reserved 4;
+  reserved "roles";
   repeated string groups = 5;
   repeated string scopes = 6;
+  string service_account_uid = 7; // verified immutable account identity, never a role
 }
 
 // RequestAuthorization is the API-approved, non-secret authorization decision
@@ -115,16 +117,28 @@ service GitService {
   // GetFile returns the raw bytes of a single file at the given ref.
   rpc GetFile(GetFileRequest) returns (GetFileResponse);
 
+  // Read at most 32 regular files, each at most 64 KiB, at one exact commit.
+  rpc GetFiles(GetFilesRequest) returns (GetFilesResponse);
+
   // GetFileStream returns a file as a stream of byte chunks.
   rpc GetFileStream(GetFileStreamRequest) returns (stream GetFileStreamResponse);
 
   // ListFiles enumerates file paths under an optional prefix at the given ref.
   rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
 
+  // Resolve at most 32 independently authorized repository refs without listing trees.
+  rpc ResolveRefs(ResolveRefsRequest) returns (ResolveRefsResponse);
+
+  // Bounded first-parent provenance for a canonical RBAC path at an exact commit.
+  rpc GetFileProvenance(GetFileProvenanceRequest) returns (GetFileProvenanceResponse);
+
   // ── Write operations ───────────────────────────────────────────────────────
 
   // CommitFile writes a single file and commits it to the default branch.
   rpc CommitFile(CommitFileRequest) returns (CommitFileResponse);
+  // Commits only if the explicit branch still points to the admitted revision.
+  // Older servers return UNIMPLEMENTED rather than ignoring the precondition.
+  rpc CommitFileAtRevision(CommitFileAtRevisionRequest) returns (CommitFileAtRevisionResponse);
 
   // DeleteFile removes a file and commits the deletion to the default branch.
   rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
@@ -139,6 +153,34 @@ service GitService {
 
   // GetLatestTag returns the latest semver release tag by version ordering.
   rpc GetLatestTag(GetLatestTagRequest) returns (GetLatestTagResponse);
+}
+
+message GetFilesRequest {
+  repeated string paths = 1;
+  string commit_sha = 2;
+  RequestAuthorization authorization = 14;
+  string repository_id = 15;
+}
+
+message GetFilesResponse {
+  string commit_sha = 1;
+  repeated GetFileResponse files = 2;
+}
+
+message GetFileProvenanceRequest {
+  string repository_id = 15;
+  RequestAuthorization authorization = 14;
+  string commit_sha = 1;
+  string path = 2;
+}
+
+message GetFileProvenanceResponse {
+  string snapshot_commit_sha = 1;
+  string change_commit_sha = 2;
+  string path = 3;
+  string author_name = 4;
+  int64 author_time_unix = 5;
+  uint32 commits_examined = 6;
 }
 
 // ─── Git smart HTTP transport messages ────────────────────────────────────────
@@ -288,6 +330,29 @@ message ListFilesResponse {
   string             ref_commit_sha = 2;
 }
 
+message RepositoryRef {
+  string repository_id = 1;
+  string ref = 2;
+  RequestAuthorization authorization = 14;
+}
+
+message ResolveRefsRequest {
+  repeated RepositoryRef refs = 1;
+}
+
+message RepositoryRefProof {
+  string repository_id = 1;
+  string ref = 2;
+  // Empty when this ref cannot be proved; other proofs remain independent.
+  string commit_sha = 3;
+  // A held repository write lock prevented verification; this is not a proof.
+  bool busy = 4;
+}
+
+message ResolveRefsResponse {
+  repeated RepositoryRefProof proofs = 1;
+}
+
 message FileEntry {
   string path       = 1;
   uint64 size_bytes = 2;
@@ -311,12 +376,40 @@ message CommitFileResponse {
   string branch     = 2;
 }
 
+message CommitFileAtRevisionRequest {
+  CommitFileRequest file = 1;
+  string ref_name = 2;
+  string expected_commit_sha = 3;
+  // Retain private durable evidence for retrying this exact write. Retries
+  // return its original commit only with proven bounded branch ancestry;
+  // they never restore content that was subsequently removed or changed.
+  bool retain_receipt = 4;
+  // Inspect proven publication without creating or resuming a write.
+  // Requires retain_receipt; an absent receipt returns NOT_FOUND.
+  bool receipt_only = 5;
+}
+
+message CommitFileAtRevisionResponse {
+  string commit_sha = 1;
+  string branch = 2;
+}
+
 message DeleteFileRequest {
   string repository_id  = 15;
   string path           = 1;
   string commit_message = 2;
   string author_name    = 3;
   string author_email   = 4;
+  // Supply both fields for a conditional deletion on an explicit branch.
+  // The branch must still point to expected_commit_sha when the commit is
+  // published; mismatches without a receipt return ABORTED without changing it.
+  // Retrying the same repository/ref/path/expected commit returns the original
+  // deletion commit only with a private durable receipt, absent path, and proven
+  // publication in bounded branch history. Restored paths or existing receipts
+  // that cannot prove publication return FAILED_PRECONDITION, never re-delete.
+  // Omitting both preserves the legacy default-branch behavior.
+  optional string ref_name = 6; // Fully qualified refs/heads/... name.
+  optional string expected_commit_sha = 7; // Full commit object ID.
   RequestAuthorization authorization = 14;
 }
 

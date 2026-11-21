@@ -11,7 +11,9 @@ import (
 	"testing"
 
 	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -22,9 +24,48 @@ import (
 type writeStub struct {
 	gitv1.UnimplementedGitServiceServer
 
-	commitFileFunc func(*gitv1.CommitFileRequest) (*gitv1.CommitFileResponse, error)
-	deleteFileFunc func(*gitv1.DeleteFileRequest) (*gitv1.DeleteFileResponse, error)
-	createTagFunc  func(*gitv1.CreateTagRequest) (*gitv1.CreateTagResponse, error)
+	commitFileFunc    func(*gitv1.CommitFileRequest) (*gitv1.CommitFileResponse, error)
+	guardedCommitFunc func(*gitv1.CommitFileAtRevisionRequest) (*gitv1.CommitFileAtRevisionResponse, error)
+	deleteFileFunc    func(*gitv1.DeleteFileRequest) (*gitv1.DeleteFileResponse, error)
+	createTagFunc     func(*gitv1.CreateTagRequest) (*gitv1.CreateTagResponse, error)
+}
+
+func (s *writeStub) CommitFileAtRevision(_ context.Context, req *gitv1.CommitFileAtRevisionRequest) (*gitv1.CommitFileAtRevisionResponse, error) {
+	if s.guardedCommitFunc != nil {
+		return s.guardedCommitFunc(req)
+	}
+	return nil, status.Error(codes.Unimplemented, "not set up")
+}
+
+func TestGuardedCommitDoesNotFallBackToLegacyWriter(t *testing.T) {
+	legacyCalled := false
+	c := startBufconn(t, &writeStub{commitFileFunc: func(*gitv1.CommitFileRequest) (*gitv1.CommitFileResponse, error) {
+		legacyCalled = true
+		return &gitv1.CommitFileResponse{}, nil
+	}})
+	_, err := c.CommitFileAtRevisionForRepo(t.Context(), c.RepositoryID, gitclient.CommitFileAtRevisionParams{
+		CommitFileParams: gitclient.CommitFileParams{Path: "rbac/roles/reader.yaml"},
+		RefName:          "refs/heads/main", ExpectedCommitSHA: "old",
+	})
+	require.Equal(t, codes.Unimplemented, status.Code(err))
+	require.False(t, legacyCalled)
+}
+
+func TestGuardedCommitPreservesSignedScopeAndPreconditions(t *testing.T) {
+	c := startBufconn(t, &writeStub{guardedCommitFunc: func(req *gitv1.CommitFileAtRevisionRequest) (*gitv1.CommitFileAtRevisionResponse, error) {
+		require.Equal(t, "refs/heads/main", req.RefName)
+		require.Equal(t, "admitted-tip", req.ExpectedCommitSha)
+		require.Equal(t, "verified-actor", req.File.AuthorName)
+		require.Equal(t, "system:api", req.File.Authorization.Actor.Subject)
+		require.Equal(t, req.File.RepositoryId, req.File.Authorization.RepositoryId)
+		return &gitv1.CommitFileAtRevisionResponse{CommitSha: "committed"}, nil
+	}})
+	sha, err := c.CommitFileAtRevisionForRepo(t.Context(), c.RepositoryID, gitclient.CommitFileAtRevisionParams{
+		CommitFileParams: gitclient.CommitFileParams{Path: "rbac/roles/reader.yaml", AuthorName: "verified-actor"},
+		RefName:          "refs/heads/main", ExpectedCommitSHA: "admitted-tip",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "committed", sha)
 }
 
 func (s *writeStub) CommitFile(_ context.Context, req *gitv1.CommitFileRequest) (*gitv1.CommitFileResponse, error) {
@@ -46,6 +87,29 @@ func (s *writeStub) CreateTag(_ context.Context, req *gitv1.CreateTagRequest) (*
 		return s.createTagFunc(req)
 	}
 	return nil, status.Error(codes.Unimplemented, "not set up")
+}
+
+func TestBackingWriteUsesLiveInternalPolicy(t *testing.T) {
+	called := false
+	c := startBufconn(t, &writeStub{commitFileFunc: func(req *gitv1.CommitFileRequest) (*gitv1.CommitFileResponse, error) {
+		called = true
+		require.Equal(t, "system:api", req.Authorization.Actor.Subject)
+		require.Equal(t, "repository.contents.write", req.Authorization.Action)
+		return &gitv1.CommitFileResponse{CommitSha: "commit"}, nil
+	}})
+	allow := testutil.NewAllowAllAuthZ()
+	registry := auth.NewProviderRegistry(nil, allow, nil)
+	c.Registry = registry
+	ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "alice", AuthMethod: "static-users"})
+	_, err := c.CommitFile(ctx, gitclient.CommitFileParams{Path: "products/p.md"})
+	require.NoError(t, err)
+	require.True(t, called)
+	require.Equal(t, "alice", auth.PrincipalFromContext(ctx).Subject, "backing writer must not replace domain actor")
+	called = false
+	registry.Swap(nil, testutil.NewDenyAllAuthZ(t), nil)
+	_, err = c.CommitFile(ctx, gitclient.CommitFileParams{Path: "products/p.md"})
+	require.ErrorIs(t, err, gitclient.ErrAuthorizationDenied)
+	require.False(t, called, "live reload denial must prevent the Git RPC")
 }
 
 func TestCommitFile_OK(t *testing.T) {
@@ -116,6 +180,32 @@ func TestDeleteFile_NotFound(t *testing.T) {
 	_, err := c.DeleteFile(context.Background(), gitclient.DeleteFileParams{Path: "missing.md"})
 	require.Error(t, err)
 	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+func TestDeleteFile_Preconditions(t *testing.T) {
+	for _, guarded := range []bool{false, true} {
+		t.Run(map[bool]string{false: "legacy", true: "guarded"}[guarded], func(t *testing.T) {
+			p := gitclient.DeleteFileParams{Path: "products/p1.md"}
+			if guarded {
+				p.RefName = "refs/heads/catalog"
+				p.ExpectedCommitSHA = "0123456789012345678901234567890123456789"
+			}
+			c := startBufconn(t, &writeStub{
+				deleteFileFunc: func(req *gitv1.DeleteFileRequest) (*gitv1.DeleteFileResponse, error) {
+					assert.Equal(t, "selected-repository", req.RepositoryId)
+					assert.Equal(t, p.RefName, req.GetRefName())
+					assert.Equal(t, p.ExpectedCommitSHA, req.GetExpectedCommitSha())
+					if !guarded {
+						assert.Nil(t, req.RefName)
+						assert.Nil(t, req.ExpectedCommitSha)
+					}
+					return nil, status.Error(codes.Aborted, "ref changed")
+				},
+			})
+			_, err := c.DeleteFileForRepo(context.Background(), "selected-repository", p)
+			assert.Equal(t, codes.Aborted, status.Code(err))
+		})
+	}
 }
 
 func TestCreateTag_OK(t *testing.T) {

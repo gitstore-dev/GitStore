@@ -6,9 +6,9 @@ package contract_test
 import (
 	"testing"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/resolver"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/resolver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

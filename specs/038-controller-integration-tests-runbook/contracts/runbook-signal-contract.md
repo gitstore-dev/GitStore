@@ -6,17 +6,17 @@ Per FR-011 and SC-003, every signal a runbook instructs an engineer to check MUS
 
 | Runbook | Signal | Type | Source | Validating Test |
 |---|---|---|---|---|
-| `controller-lag.md` | `gitstore_controller_queue_depth{kind}` | Prometheus gauge | `health.QueueDepth` | `TestObservability_QueueDepth_ReflectsPendingItems` |
-| `controller-lag.md` | `gitstore_controller_active_workers{kind}` | Prometheus gauge | `health.ActiveWorkers` | `TestObservability_ActiveWorkers_ReflectsRunningReconciles` |
-| `controller-lag.md` | `gitstore_controller_stalled_workers{kind}` | Prometheus gauge | `health.StalledWorkers` | `TestObservability_StalledWorkers_SetWhenNoRecentSuccess` |
-| `controller-lag.md` | `gitstore_controller_reconcile_total{kind,result}` | Prometheus counter | `health.ReconcileTotal` | `TestObservability_ReconcileTotal_LabeledByOutcome` |
-| `controller-replay-window-exceeded.md` | `gitstore_controller_checkpoint_last_write_timestamp_seconds{kind}` | Prometheus gauge | `health.CheckpointLastWriteTimestamp` | `TestObservability_CheckpointLastWriteTimestamp_UpdatesOnSave` (existing coverage in `tests/contract/health_test.go`; cross-referenced, not duplicated) |
-| `controller-replay-window-exceeded.md` | `gitstore_controller_checkpoint_replay_backlog{kind}` | Prometheus gauge | `health.CheckpointReplayBacklog` | `TestObservability_CheckpointReplayBacklog_TracksQueueDepth` (existing coverage in `tests/contract/health_test.go`; cross-referenced, not duplicated) |
-| `controller-replay-window-exceeded.md` | Structured log: watch expired / relist triggered | zap log line | `internal/listwatch/runner.go` | `TestObservability_WatchExpired_LogsRelistTrigger` |
-| `controller-poisoned-item.md` | `gitstore_controller_poison_items_total{kind}` | Prometheus gauge | `health.PoisonItemsTotal` | `TestObservability_PoisonItemsTotal_IncrementsOnQuarantine` |
-| `controller-poisoned-item.md` | `GET /controller/v1/poison/{kind}`, `GET /controller/v1/poison/_all` | HTTP API | `cmd/controller/main.go` handlers | `TestIntegration_PoisonedItem_VisibleViaHTTPPoisonAPI` (in `poison_item_test.go`) |
-| `controller-poisoned-item.md` | `POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue` | HTTP API | `cmd/controller/main.go` handlers | `TestObservability_RequeuePoisonAPI_ClearsQuarantineAndReenqueues` |
-| `controller-poisoned-item.md` | Structured log: quarantine reason (`LastError`) | zap log line | `internal/manager/manager.go` (`log.Error("terminal reconcile failure...")` / `"reconciler quarantined after exhausting retries"`) | `TestObservability_QuarantineLog_IncludesLastError` |
+| `controller-recovery.md` | `gitstore_controller_queue_depth{kind}` | Prometheus gauge | `health.QueueDepth` | `TestObservability_QueueDepth_ReflectsPendingItems` |
+| `controller-recovery.md` | `gitstore_controller_active_workers{kind}` | Prometheus gauge | `health.ActiveWorkers` | `TestObservability_ActiveWorkers_ReflectsRunningReconciles` |
+| `controller-recovery.md` | `gitstore_controller_stalled_workers{kind}` | Prometheus gauge | `health.StalledWorkers` | `TestObservability_StalledWorkers_SetWhenNoRecentSuccess` |
+| `controller-recovery.md` | `gitstore_controller_reconcile_total{kind,result}` | Prometheus counter | `health.ReconcileTotal` | `TestObservability_ReconcileTotal_LabeledByOutcome` |
+| `controller-recovery.md` | `gitstore_controller_checkpoint_last_write_timestamp_seconds{kind}` | Prometheus gauge | `health.CheckpointLastWriteTimestamp` | `TestObservability_CheckpointLastWriteTimestamp_UpdatesOnSave` (existing coverage in `tests/contract/health_test.go`; cross-referenced, not duplicated) |
+| `controller-recovery.md` | `gitstore_controller_checkpoint_replay_backlog{kind}` | Prometheus gauge | `health.CheckpointReplayBacklog` | `TestObservability_CheckpointReplayBacklog_TracksQueueDepth` (existing coverage in `tests/contract/health_test.go`; cross-referenced, not duplicated) |
+| `controller-recovery.md` | Structured log: watch expired / relist triggered | zap log line | `internal/listwatch/runner.go` | `TestObservability_WatchExpired_LogsRelistTrigger` |
+| `controller-recovery.md` | `gitstore_controller_poison_items_total{kind}` | Prometheus gauge | `health.PoisonItemsTotal` | `TestObservability_PoisonItemsTotal_IncrementsOnQuarantine` |
+| `controller-recovery.md` | `GET /controller/v1/poison/{kind}`, `GET /controller/v1/poison/_all` | HTTP API | `cmd/controller/main.go` handlers | `TestIntegration_PoisonedItem_VisibleViaHTTPPoisonAPI` (in `poison_item_test.go`) |
+| `controller-recovery.md` | `POST /controller/v1/poison/{namespace}/{kind}/{name}/requeue` | HTTP API | `cmd/controller/main.go` handlers | `TestObservability_RequeuePoisonAPI_ClearsQuarantineAndReenqueues` |
+| `controller-recovery.md` | Structured log: quarantine reason (`LastError`) | zap log line | `internal/manager/manager.go` (`log.Error("terminal reconcile failure...")` / `"reconciler quarantined after exhausting retries"`) | `TestObservability_QuarantineLog_IncludesLastError` |
 
 ## Rule
 

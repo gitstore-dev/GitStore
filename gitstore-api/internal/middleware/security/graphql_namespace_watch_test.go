@@ -46,7 +46,7 @@ func TestNamespaceWatchAuthorizationRunsBeforeResolverForBothEntryPoints(t *test
 			require.Error(t, err)
 			assert.False(t, called)
 			assert.Equal(t, "namespace.watch", authz.Action)
-			assert.Equal(t, "Namespace", authz.Resource.Kind)
+			assert.Equal(t, "namespace", authz.Resource.Kind)
 			assert.Empty(t, authz.Resource.Name)
 			assert.Empty(t, authz.Resource.Attrs)
 			var gqlErr *gqlerror.Error

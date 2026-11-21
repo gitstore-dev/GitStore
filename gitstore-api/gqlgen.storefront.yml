@@ -1,0 +1,15 @@
+schema:
+  - ../shared/schemas/storefront/*.graphqls
+  - ../shared/schemas/common/*.graphqls
+exec:
+  filename: internal/storefront/graph/generated/generated.go
+  package: generated
+  worker_limit: 1000
+model:
+  filename: internal/storefront/graph/model/models_gen.go
+  package: model
+resolver:
+  layout: follow-schema
+  dir: internal/storefront/graph/resolver
+  package: resolver
+skip_mod_tidy: true

@@ -1,0 +1,16 @@
+# Create this bucket separately. Use AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+# for backend authentication; do not put credentials in this file.
+bucket                      = "existing-private-state-bucket"
+key                         = "gitstore/production/terraform.tfstate"
+region                      = "us-east-1"
+endpoints                   = { s3 = "https://ams3.digitaloceanspaces.com" }
+skip_credentials_validation = true
+skip_region_validation      = true
+skip_requesting_account_id  = true
+skip_metadata_api_check     = true
+skip_s3_checksum            = true
+use_path_style              = true
+use_lockfile                = true
+# Verify locking with the selected endpoint/tool version before concurrent use.
+# Configure OpenTofu state/plan encryption separately if required. Do not assume
+# encrypt=true (AWS SSE-S3) is supported by every S3-compatible service.

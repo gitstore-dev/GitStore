@@ -32,6 +32,15 @@ CREATE TABLE IF NOT EXISTS namespaces_by_uid (
 ) WITH cdc = {'enabled': 'true', 'preimage': 'full', 'postimage': 'true', 'ttl': '1209600'}
   AND gc_grace_seconds = 864000;
 
+-- Catalog coordination is not a resource change and must not generate CDC.
+-- Fence epochs have no TTL and ambiguous holders require offline repair;
+
+CREATE TABLE IF NOT EXISTS namespace_catalog_fences_by_uid (
+    uid     uuid PRIMARY KEY,
+    epoch   bigint,
+    pending bigint
+) WITH gc_grace_seconds = 864000;
+
 CREATE TABLE IF NOT EXISTS namespaces_by_name (
     name text PRIMARY KEY,
     uid  uuid

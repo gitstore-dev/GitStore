@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.gitstore.dev/rbac.authorization.gitstore.dev/v1beta1/clusterrolebinding.schema.json",
+  "title": "GitStore ClusterRoleBinding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": {"const": "rbac.authorization.gitstore.dev/v1beta1"},
+    "kind": {"const": "ClusterRoleBinding"},
+    "metadata": {"$ref": "role.schema.json#/$defs/ClusterObjectMeta"},
+    "spec": {
+      "allOf": [
+        {"$ref": "role.schema.json#/$defs/BindingSpec"},
+        {"properties": {"roleRef": {"properties": {"kind": {"const": "ClusterRole"}}}}}
+      ]
+    }
+  }
+}

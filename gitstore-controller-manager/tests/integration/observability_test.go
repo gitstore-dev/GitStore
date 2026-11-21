@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/api"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
@@ -24,7 +26,6 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
@@ -82,12 +83,12 @@ func TestObservability_QueueDepth_ReflectsPendingItems(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		mgr.KindStats()
-		if testutil.ToFloat64(health.QueueDepth.WithLabelValues(kind)) == float64(wantPending) {
+		if observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_queue_depth", map[string]string{"kind": kind}) == float64(wantPending) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Errorf("QueueDepth{%s} = %v, want %d waiting tasks while pool is saturated", kind, testutil.ToFloat64(health.QueueDepth.WithLabelValues(kind)), wantPending)
+	t.Errorf("QueueDepth{%s} = %v, want %d waiting tasks while pool is saturated", kind, observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_queue_depth", map[string]string{"kind": kind}), wantPending)
 }
 
 func TestObservability_ActiveWorkers_ReflectsRunningReconciles(t *testing.T) {
@@ -130,7 +131,7 @@ func TestObservability_ActiveWorkers_ReflectsRunningReconciles(t *testing.T) {
 	}
 
 	mgr.KindStats() // refresh the gauge
-	if v := testutil.ToFloat64(health.ActiveWorkers.WithLabelValues(kind)); v != 1 {
+	if v := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_active_workers", map[string]string{"kind": kind}); v != 1 {
 		t.Errorf("ActiveWorkers{%s} while reconcile in flight = %v, want 1", kind, v)
 	}
 	close(release)
@@ -203,7 +204,7 @@ func TestObservability_StalledWorkers_SetWhenNoRecentSuccess(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("GET /metrics status = %d, want 200", rec.Code)
 	}
-	if v := testutil.ToFloat64(health.StalledWorkers.WithLabelValues(kind)); v != 1 {
+	if v := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_stalled_workers", map[string]string{"kind": kind}); v != 1 {
 		t.Errorf("StalledWorkers{%s} after scrape and no successful reconcile = %v, want 1", kind, v)
 	}
 }
@@ -231,7 +232,7 @@ func TestObservability_ReconcileTotal_LabeledByOutcome(t *testing.T) {
 		t.Fatalf("Register failed: %v", err)
 	}
 
-	before := testutil.ToFloat64(health.ReconcileTotal.WithLabelValues(kind, "success"))
+	before := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_reconcile_total", map[string]string{"kind": kind, "result": "success"})
 	go func() { _ = mgr.Start(ctx) }()
 
 	key := types.WorkItemKey{Kind: kind, Namespace: "ns", Name: "w1"}
@@ -241,12 +242,12 @@ func TestObservability_ReconcileTotal_LabeledByOutcome(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if testutil.ToFloat64(health.ReconcileTotal.WithLabelValues(kind, "success")) > before {
+		if observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_reconcile_total", map[string]string{"kind": kind, "result": "success"}) > before {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	after := testutil.ToFloat64(health.ReconcileTotal.WithLabelValues(kind, "success"))
+	after := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_reconcile_total", map[string]string{"kind": kind, "result": "success"})
 	if after != before+1 {
 		t.Errorf("ReconcileTotal{%s,success} delta = %v, want 1 (labeled correctly by kind and outcome)", kind, after-before)
 	}
@@ -323,7 +324,7 @@ func TestObservability_PoisonItemsTotal_IncrementsOnQuarantine(t *testing.T) {
 		t.Fatalf("Register failed: %v", err)
 	}
 
-	before := testutil.ToFloat64(health.PoisonItemsTotal.WithLabelValues(kind))
+	before := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_poison_items_total", map[string]string{"kind": kind})
 	go func() { _ = mgr.Start(ctx) }()
 
 	key := types.WorkItemKey{Kind: kind, Namespace: "ns", Name: "w1"}
@@ -339,7 +340,7 @@ func TestObservability_PoisonItemsTotal_IncrementsOnQuarantine(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	mgr.KindStats()
-	after := testutil.ToFloat64(health.PoisonItemsTotal.WithLabelValues(kind))
+	after := observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_poison_items_total", map[string]string{"kind": kind})
 	if after != before+1 {
 		t.Errorf("PoisonItemsTotal{%s} delta = %v, want 1", kind, after-before)
 	}

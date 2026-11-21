@@ -5,8 +5,6 @@ package status
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
@@ -46,6 +44,9 @@ func (c *graphqlNamespaceStatusClient) Apply(ctx context.Context, key types.Work
 		"name":            key.Name,
 		"resourceVersion": patch.ResourceVersion,
 	}
+	if patch.UID != "" {
+		input["uid"] = patch.UID
+	}
 	if patch.ObservedGeneration != nil {
 		input["observedGeneration"] = *patch.ObservedGeneration
 	}
@@ -53,21 +54,12 @@ func (c *graphqlNamespaceStatusClient) Apply(ctx context.Context, key types.Work
 		input["lastAppliedRevision"] = *patch.LastAppliedRevision
 	}
 	if patch.Conditions != nil {
-		input["conditions"] = toConditionInputs(patch.Conditions)
+		input["conditions"] = ToConditionInputs(patch.Conditions)
 	}
 
 	var resp updateNamespaceStatusResponse
 	if err := c.client.Mutate(ctx, updateNamespaceStatusMutation, map[string]any{"input": input}, &resp); err != nil {
-		var gqlErr *graphqlclient.Error
-		if errors.As(err, &gqlErr) {
-			switch {
-			case gqlErr.Extensions["code"] == "NOT_FOUND":
-				return fmt.Errorf("graphqlNamespaceStatusClient: %w: %w", types.ErrNotFound, err)
-			case graphqlclient.IsConflictCode(gqlErr.Extensions["code"]):
-				return fmt.Errorf("graphqlNamespaceStatusClient: %w: current resourceVersion %q: %w", types.ErrConflict, gqlErr.Extensions["resourceVersion"], err)
-			}
-		}
-		return fmt.Errorf("graphqlNamespaceStatusClient: updateNamespaceStatus: %w", err)
+		return statusMutationError("graphqlNamespaceStatusClient", "updateNamespaceStatus", err)
 	}
 	return nil
 }

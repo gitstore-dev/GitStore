@@ -5,6 +5,7 @@ package validate_test
 
 import (
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -14,7 +15,123 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
+
+func TestManifestEnumCompatibilityAndCanonicalRoundTrip(t *testing.T) {
+	tests := []struct {
+		kind, group, spec, canonical, legacy string
+	}{
+		{"Product", "catalog", "title: ACTIVE\n  lifecycle: {state: %s}", "Active", "ACTIVE"},
+		{"Product", "catalog", "title: RETIRED\n  lifecycle: {state: %s}", "Retired", "RETIRED"},
+		{"Namespace", "", "title: USER\n  tier: %s", "User", "USER"},
+		{"Namespace", "", "tier: %s", "Organization", "ORGANIZATION"},
+		{"ProductVariant", "catalog", "title: deny\n  sku: backorder\n  productRef: {name: parent}\n  inventory: {managed: true, policy: %s}", "Deny", "deny"},
+		{"ProductVariant", "catalog", "title: deny\n  sku: backorder\n  productRef: {name: parent}\n  inventory: {managed: true, policy: %s}", "Backorder", "backorder"},
+	}
+	for _, visibility := range []struct{ canonical, legacy string }{
+		{"Public", "PUBLIC"}, {"Private", "PRIVATE"}, {"Internal", "INTERNAL"},
+		{"Public", "public"}, {"Private", "private"}, {"Internal", "internal"},
+	} {
+		tests = append(tests, struct{ kind, group, spec, canonical, legacy string }{
+			"Repository", "", "defaultBranch: PRIVATE\n  visibility: %s", visibility.canonical, visibility.legacy,
+		}, struct{ kind, group, spec, canonical, legacy string }{
+			"Namespace", "", "tier: Organization\n  repositoryDefaults: {visibility: %s, defaultBranch: PRIVATE}", visibility.canonical, visibility.legacy,
+		})
+	}
+	for _, strategy := range []struct{ canonical, legacy string }{
+		{"Fixed", "fixed"}, {"FixedUnitPrice", "fixedUnitPrice"}, {"Percentage", "percentage"}, {"Tiered", "tiered"},
+	} {
+		tests = append(tests, struct{ kind, group, spec, canonical, legacy string }{
+			"ProductVariant", "catalog", "title: fixedUnitPrice\n  sku: fixed\n  productRef: {name: parent}\n  pricing:\n    priceSet:\n      name: fixed\n      prices:\n      - currencyCode: USD\n        amount: \"9.99\"\n        strategy: {type: %s}\n        eligibility: {operator: Any, constraints: []}",
+			strategy.canonical, strategy.legacy,
+		})
+	}
+	for _, provider := range []struct{ canonical, legacy string }{
+		{"Git", "git"}, {"Lfs", "lfs"}, {"S3", "s3"}, {"Gcs", "gcs"},
+	} {
+		tests = append(tests, struct{ kind, group, spec, canonical, legacy string }{
+			"File", "storage", "contentType: image/png\n  type: gitstore.dev/media\n  provider: %s\n  source: {uri: 's3://assets/deny.png'}",
+			provider.canonical, provider.legacy,
+		})
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind+"/"+tt.legacy, func(t *testing.T) {
+			group := tt.group
+			if group != "" {
+				group += "."
+			}
+			metadata := "  name: enum-example\n  labels: {spelling: USER, operator: NotIn}\n  annotations: {policy: deny}\n"
+			if tt.kind != "Namespace" {
+				metadata += "  namespace: acme-store\n"
+			}
+			manifest := func(value string) string {
+				return fmt.Sprintf("---\napiVersion: %sgitstore.dev/v1beta1\nkind: %s\nmetadata:\n%sspec:\n  %s\n---\nUSER deny NotIn fixedUnitPrice\n",
+					group, tt.kind, metadata, fmt.Sprintf(tt.spec, value))
+			}
+			legacy, legacyBody, err := validate.NewParser().ParseResource(strings.NewReader(manifest(tt.legacy)))
+			require.NoError(t, err)
+			legacyAuthored, err := yaml.Marshal(parsedEnumResource(legacy))
+			require.NoError(t, err)
+			require.Contains(t, string(legacyAuthored), tt.canonical, "encoding a legacy manifest must author canonical spelling")
+			canonical, canonicalBody, err := validate.NewParser().ParseResource(strings.NewReader(manifest(tt.canonical)))
+			require.NoError(t, err)
+			if legacy.Repository != nil {
+				require.Equal(t, tt.legacy, legacy.Repository.Spec.Visibility, "legacy storage must remain stable on re-admission")
+				legacy.Repository.Spec.Visibility = catalog.RepositoryVisibilityFromManifest(legacy.Repository.Spec.Visibility)
+			}
+			if legacy.Namespace != nil && legacy.Namespace.Spec.RepositoryDefaults != nil {
+				require.Equal(t, tt.legacy, legacy.Namespace.Spec.RepositoryDefaults.Visibility, "legacy storage must remain stable on re-admission")
+				legacy.Namespace.Spec.RepositoryDefaults.Visibility = catalog.RepositoryVisibilityFromManifest(legacy.Namespace.Spec.RepositoryDefaults.Visibility)
+			}
+			require.Equal(t, legacy, canonical, "canonical spelling must retain legacy internal semantics")
+			require.Equal(t, legacyBody, canonicalBody)
+			resource := parsedEnumResource(canonical)
+			before, err := json.Marshal(resource)
+			require.NoError(t, err)
+			authored, err := yaml.Marshal(resource)
+			require.NoError(t, err)
+			require.Contains(t, string(authored), tt.canonical)
+			require.Contains(t, string(authored), "spelling: USER")
+			require.Contains(t, string(authored), "operator: NotIn")
+			require.Contains(t, string(authored), "policy: deny", "annotations must not be rewritten")
+			roundTrip, body, err := validate.NewParser().ParseResource(strings.NewReader("---\n" + string(authored) + "---\n" + string(canonicalBody)))
+			require.NoError(t, err)
+			reencoded, err := yaml.Marshal(parsedEnumResource(roundTrip))
+			require.NoError(t, err)
+			require.Equal(t, string(authored), string(reencoded))
+			require.Equal(t, canonicalBody, body)
+			after, err := json.Marshal(resource)
+			require.NoError(t, err)
+			require.Equal(t, before, after, "encoding must not mutate the admitted resource")
+
+			_, _, err = validate.NewParser().ParseResource(strings.NewReader(manifest("nOtAnEnUm")))
+			require.Error(t, err, "compatibility is bounded, not arbitrary case folding")
+			mixed := strings.ToLower(tt.canonical[:1]) + strings.ToUpper(tt.canonical[1:])
+			if mixed != tt.canonical && mixed != tt.legacy {
+				_, _, err = validate.NewParser().ParseResource(strings.NewReader(manifest(mixed)))
+				require.Error(t, err, "undocumented mixed-case aliases must not be invented")
+			}
+		})
+	}
+}
+
+func parsedEnumResource(parsed *validate.ParsedResource) any {
+	switch parsed.Kind {
+	case "Product":
+		return parsed.Product
+	case "Namespace":
+		return parsed.Namespace
+	case "Repository":
+		return parsed.Repository
+	case "ProductVariant":
+		return parsed.ProductVariant
+	case "File":
+		return parsed.File
+	default:
+		panic("unexpected enum fixture")
+	}
+}
 
 //go:embed testdata/*
 var testFS embed.FS
@@ -49,6 +166,7 @@ func TestParse_ValidProduct_OptionalFieldsOmitted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: minimal-product
 spec:
   title: Minimal Product
@@ -70,6 +188,7 @@ func TestParse_Product_MissingTitle_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: minimal-product
 spec: {}
 ---
@@ -85,6 +204,7 @@ func TestParse_ValidProduct_LabelsAndAnnotations(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: labelled-product
   labels:
     env: production
@@ -217,6 +337,7 @@ func TestParse_LegacyFrontmatterRejected(t *testing.T) {
 	doc := `---
 kind: Product
 metadata:
+  namespace: gitstore
   name: old-product
 ---
 body
@@ -231,6 +352,7 @@ func TestParse_StatusKeyRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec: {}
 status:
@@ -248,6 +370,7 @@ func TestParse_WrongApiVersionRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec: {}
 ---
@@ -263,6 +386,7 @@ func TestParse_SpecAbsentRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 ---
 body
@@ -277,6 +401,7 @@ func TestParse_EmptyNameRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: ""
 spec: {}
 ---
@@ -294,6 +419,7 @@ func TestParse_ReadOnlyMetadataUIDRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
   uid: some-uuid
 spec: {}
@@ -312,6 +438,7 @@ func TestParse_OptionMissingNameRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   options:
@@ -329,6 +456,7 @@ func TestParse_DuplicateOptionNamesRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   options:
@@ -348,6 +476,7 @@ func TestParse_ReadOnlyMetadataOwnerReferencesRejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
   ownerReferences: []
 spec: {}
@@ -371,7 +500,7 @@ func TestParse_ReadOnlyMetadataAllFieldsRejected(t *testing.T) {
 	}
 	for _, tc := range readOnlyFields {
 		t.Run(tc.field, func(t *testing.T) {
-			doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\n" +
+			doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  namespace: gitstore\n  name: my-product\n" +
 				tc.yaml + "\nspec: {}\n---\nbody\n"
 			_, _, err := parseProduct(strings.NewReader(doc))
 			require.Error(t, err)
@@ -384,7 +513,7 @@ func TestParse_ReadOnlyMetadataAllFieldsRejected(t *testing.T) {
 
 func TestParse_LabelKeyTooLongRejected(t *testing.T) {
 	longKey := strings.Repeat("a", 64) // exceeds 63-char segment limit
-	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\n  labels:\n    " +
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  namespace: gitstore\n  name: my-product\n  labels:\n    " +
 		longKey + ": value\nspec: {}\n---\nbody\n"
 	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
@@ -394,7 +523,7 @@ func TestParse_LabelKeyTooLongRejected(t *testing.T) {
 func TestParse_LabelKeyPrefixTooLongRejected(t *testing.T) {
 	longPrefix := strings.Repeat("a", 254) // exceeds 253-char prefix limit
 	key := longPrefix + "/name"
-	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\n  labels:\n    \"" +
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  namespace: gitstore\n  name: my-product\n  labels:\n    \"" +
 		key + "\": value\nspec: {}\n---\nbody\n"
 	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
@@ -403,7 +532,7 @@ func TestParse_LabelKeyPrefixTooLongRejected(t *testing.T) {
 
 func TestParse_LabelValueTooLongRejected(t *testing.T) {
 	longVal := strings.Repeat("v", 64) // exceeds 63-char value limit
-	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\n  labels:\n    env: " +
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  namespace: gitstore\n  name: my-product\n  labels:\n    env: " +
 		longVal + "\nspec: {}\n---\nbody\n"
 	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
@@ -417,6 +546,7 @@ func TestParse_MultipleViolationsReportedTogether(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
   labels:
     env: ` + longVal + `
@@ -445,7 +575,7 @@ func TestParse_NoFrontmatterSkipped(t *testing.T) {
 
 func TestParse_SpecTitle_TooLong_Rejected(t *testing.T) {
 	longTitle := strings.Repeat("x", 201) // 201 chars — exceeds max=200
-	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\nspec:\n  title: \"" +
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  namespace: gitstore\n  name: my-product\nspec:\n  title: \"" +
 		longTitle + "\"\n---\nbody\n"
 	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
@@ -454,7 +584,7 @@ func TestParse_SpecTitle_TooLong_Rejected(t *testing.T) {
 
 func TestParse_SpecTitle_MaxLength_Accepted(t *testing.T) {
 	exactTitle := strings.Repeat("x", 200) // 200 chars — at limit, must pass
-	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\nspec:\n  title: \"" +
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  namespace: gitstore\n  name: my-product\nspec:\n  title: \"" +
 		exactTitle + "\"\n---\nbody\n"
 	res, _, err := parseProduct(strings.NewReader(doc))
 	require.NoError(t, err)
@@ -466,6 +596,7 @@ func TestParse_SpecMedia_EmptyFileRefName_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   media:
@@ -487,6 +618,7 @@ func TestParse_SpecMedia_EmptyFileRefKind_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   media:
@@ -508,6 +640,7 @@ func TestParse_SpecMedia_ValidFileRef_Accepted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   title: My Product
@@ -529,7 +662,7 @@ body
 
 func TestParse_SpecTitle_TooLong_FieldNamedInError(t *testing.T) {
 	longTitle := strings.Repeat("x", 201)
-	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: my-product\nspec:\n  title: \"" +
+	doc := "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  namespace: gitstore\n  name: my-product\nspec:\n  title: \"" +
 		longTitle + "\"\n---\nbody\n"
 	_, _, err := parseProduct(strings.NewReader(doc))
 	require.Error(t, err)
@@ -543,6 +676,7 @@ func TestParse_SpecMedia_MissingFileRefName_IndexedError(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   media:
@@ -563,6 +697,7 @@ func TestParse_CategoryRef_MissingName_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   categoryRef:
@@ -581,6 +716,7 @@ func TestParse_OptionsEmptyList_Accepted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   title: My Product
@@ -599,6 +735,7 @@ func TestParse_OptionsAbsent_Accepted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   title: My Product
@@ -616,6 +753,7 @@ func TestParse_MediaOptionalTrue_NoFileRefName_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   media:
@@ -638,6 +776,7 @@ func TestParse_StatusEmptyMap_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec: {}
 status: {}
@@ -656,6 +795,7 @@ func TestParse_MultipleReadOnlyFields_AllNamed(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
   uid: some-uuid
   resourceVersion: "1"
@@ -679,6 +819,7 @@ func TestParse_MultipleReadOnlyFieldsReportedTogether(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
   uid: some-uuid
   resourceVersion: "1"
@@ -700,6 +841,7 @@ func TestParse_SpecMedia_FieldPathInError(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   media:
@@ -722,6 +864,7 @@ func TestParseResource_CategoryTaxonomy_ValidAllFields(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -743,6 +886,7 @@ func TestParseResource_CategoryTaxonomy_MissingTitle(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec: {}
 ---
@@ -812,6 +956,7 @@ func TestParseResource_CategoryTaxonomy_SelfReference(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -830,6 +975,7 @@ func TestParseResource_Product_Regression(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   title: My Product
@@ -852,6 +998,7 @@ func TestParseResource_CategoryTaxonomy_ValidMedia_Accepted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -874,6 +1021,7 @@ func TestParseResource_CategoryTaxonomy_MediaMissingFileRefName_Rejected(t *test
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -894,6 +1042,7 @@ func TestParseResource_CategoryTaxonomy_MediaMissingFileRefKind_Rejected(t *test
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -916,6 +1065,7 @@ func TestParseResource_CategoryTaxonomy_OptionalMediaMissingFile_Accepted(t *tes
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: CategoryTaxonomy
 metadata:
+  namespace: gitstore
   name: electronics
 spec:
   title: Electronics
@@ -940,6 +1090,7 @@ func TestParseResource_Product_SingleCategoryRef_Accepted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   title: My Product
@@ -961,6 +1112,7 @@ func TestParseResource_Product_NoCategoryRef_Accepted(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   title: My Product
@@ -979,6 +1131,7 @@ func TestParseResource_Product_CategoryRefArray_Rejected(t *testing.T) {
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   categoryRef:
@@ -996,6 +1149,7 @@ func TestParseResource_Product_CategoryRefPresentButEmptyName_Rejected(t *testin
 apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
+  namespace: gitstore
   name: my-product
 spec:
   categoryRef:

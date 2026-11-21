@@ -256,7 +256,7 @@ export const preloadQuery = createQueryPreloader(client);
 
 ### Using preloadQuery with Route Loaders
 
-> **Note**: This example applies to React Router in non-framework mode. For React Router framework mode, see [setup-react-router.md](./setup-react-router.md).
+> **Note**: This example applies to React Router in non-framework mode.
 
 Use the preload function with React Router's `loader` function to begin loading data during route transitions:
 
@@ -317,7 +317,7 @@ When `toPromise()` is used, the route transition waits for the query to complete
 
 ### With Next.js Server Components
 
-> **Note**: For Next.js App Router, use the `PreloadQuery` component from `@apollo/client-integration-nextjs` instead. See [setup-nextjs.md](./setup-nextjs.md) for details.
+> **Note**: For Next.js App Router, use the `PreloadQuery` component from `@apollo/client-integration-nextjs` instead.
 
 ## useQueryRefHandlers
 
@@ -685,13 +685,10 @@ const { data } = useSuspenseQuery(GET_POSTS, {
 
 ## Streaming SSR or React Server Components
 
-Apollo Client integrates with modern React frameworks that support Streaming SSR and React Server Components. For detailed setup instructions specific to your framework, see:
-
-- **Next.js App Router**: [setup-nextjs.md](./setup-nextjs.md) - Includes React Server Components, PreloadQuery component, and streaming SSR
-- **React Router**: [setup-react-router.md](./setup-react-router.md) - Framework mode with SSR support
-- **TanStack Start**: [setup-tanstack-start.md](./setup-tanstack-start.md) - Full-stack React framework with SSR
-
-These guides cover:
+Apollo Client integrates with modern React frameworks that support Streaming SSR
+and React Server Components, including Next.js App Router, React Router framework
+mode and TanStack Start. This reference bundle does not include framework-specific
+setup guides. Consult your framework integration's documentation for:
 
 - Framework-specific client setup and configuration
 - Preloading queries for optimal performance

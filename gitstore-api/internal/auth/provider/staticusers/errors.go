@@ -2,9 +2,14 @@
 // Copyright (c) 2026 GitStore contributors
 package staticusers
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
+)
 
 var (
-	ErrUserNotFound = errors.New("staticusers: user not found")
+	ErrUserNotFound = fmt.Errorf("staticusers: user not found: %w", auth.ErrProfileNotFound)
 	ErrUserExists   = errors.New("staticusers: user already exists")
 )

@@ -28,10 +28,11 @@ administrator-issued bearer token.
    its public key through `gitctl enroll-serviceaccount`, `createServiceAccount`,
    or `rotateServiceAccountKey`. Give the key a unique `kid`; record the
    returned ServiceAccount UID.
-3. Ensure the RBAC policy binds
-   `serviceaccount:<namespace>:<name>` to only the controller role. Enrollment
-   does not grant authorization by itself.
-4. Configure `controller.serviceaccount.namespace`, `.name`, and `.uid`, plus
+3. In a v1beta1 policy, bind `{kind: ServiceAccount, name: <name>}` to the
+   controller role and a separate `serviceAccount/token` issue role restricted
+   by `resourceNames: [<name>]`. The authenticated subject is
+   `system:serviceaccount:<name>`. Enrollment does not grant authorization.
+4. Configure `controller.serviceaccount.name` and `.uid`, plus
    a complete `controller.serviceaccount.key_ref` (`kind = "SecretRef"`,
    `name = "<logical-secret-name>"`; `key` must be omitted — the resolver
    reads one atomic JSON signing record, not an individual field). For the
@@ -49,7 +50,60 @@ administrator-issued bearer token.
 The controller requires `controller.serviceaccount.key_ref`; static controller
 API tokens are not supported.
 
+ServiceAccounts are cluster-scoped; enroll and configure them by name without
+a namespace.
+Old v1 policies and namespaced token subjects are rejected; there is no
+translation or dual-format period. The shipped Compose enrollment job uses
+name-only enrollment and keeps the existing isolated key/UID mounts.
+
 ## Renewal, readiness, and backoff
+
+### Policy reload diagnostics
+
+Validate the replacement with
+`make check TARGET=config CONFIG_FILE=<config-path> POLICY_FILE=<candidate-policy-path>`
+before installing it. Send SIGHUP to each intended API process to rebuild and
+atomically swap its complete authentication/authorization provider set. A local
+signal does not update another replica, and editing a mounted file alone does
+not prove the running policy changed.
+
+The API's `auth providers reloaded atomically` message confirms publication.
+`rbac-local policy reloaded` carries the candidate `policy_digest`; correlate it
+with the registry success message because construction precedes publication.
+On `auth provider reload failed; previous configuration remains active`, fix the
+candidate and retry: do not restart merely to discard the valid old snapshot.
+Malformed/v1 policy, legacy settings and ineffective local-user grants fail
+validation. Decision logs include provider, request ID, action, canonical kind,
+outcome and reason; rbac-local reasons identify the policy digest and matching
+binding/role/rule or bounded denial category. Compare exact allow/deny probes on
+each replica after success, not just HTTP status or a matching file on disk.
+Do not copy tokens, assertions, private material or arbitrary resource attributes
+into diagnostics. Sustained-load/replacement acceptance is tracked in
+[#451](https://github.com/gitstore-dev/GitStore/issues/451), not established by
+these operator checks.
+
+### Dynamic RBAC startup and readiness
+
+If an API refuses startup with an OPA production-acceptance message, do not
+work around it by granting the controller or users broader static authority.
+Dynamic production activation is unavailable in this binary. Keep the
+supported provider configured and dynamic writes disabled. A configuration
+change alone cannot activate it; see
+[dynamic RBAC configuration](../configuration.md#dynamic-rbac-rollout).
+
+Credential readiness and authorization readiness are separate checks. A
+controller can have a valid token while the API lacks a complete, fresh policy
+snapshot. Diagnose API readiness and durable watch progress before rotating
+healthy keys. Do not treat retryable authorization unavailability as a policy
+denial or recreate a ServiceAccount to recover missing policy state.
+
+Do not mix static and dynamic authorization providers during a live rollout
+or restore a static file that omits admitted grants or revocations. Preserve
+Git history, bootstrap receipts and each controller's private checkpoints.
+Keep exactly one Git process active; any replacement must stop before its
+successor starts on retained storage.
+
+### Token lifecycle
 
 The controller signs a fresh, 45-second proof-of-possession assertion and
 exchanges it for a short-lived access token. It reuses an access token only
@@ -63,18 +117,21 @@ capped at 30 seconds.
 2. Confirm the API is reachable at `controller.api_uri`, then verify the API
    authentication chain includes both `serviceaccount-assertion` and
    `serviceaccount-jwt`.
-3. Compare only non-secret identity metadata: namespace, name, UID, `kid`, and
+3. Compare only non-secret identity metadata: name, UID, `kid`, and
    both configured audiences. Confirm the `kid` remains enrolled and the
    ServiceAccount is enabled.
 4. For a file resolver, verify the mounted directory and logical
    `SecretRef` components, ownership, and read permission from the controller
-   container. Verify the file is exactly one supported PKCS#8 PEM key without
-   printing it. For an environment resolver, verify the expected variable is
-   present without displaying its value.
+   container. Verify it is a complete atomic JSON signing record containing
+   base64-encoded `privateKey` and `keyID` values, with one supported PKCS#8 PEM
+   key and the matching enrolled ID, without printing it. Raw PEM alone is not
+   accepted. For an environment resolver, verify the configured variable
+   contains the complete record without displaying its value. See
+   [signing-record format](secret-material-rotation.md#formats-and-canonical-configuration).
 5. If credential readiness is true but a watch still reconnects, diagnose the
    watch/replay layer with
    [controller-watch-status](controller-watch-status.md) and
-   [controller-replay-window-exceeded](controller-replay-window-exceeded.md).
+   [expired-cursor recovery](controller-recovery.md#expired-replay-cursor).
    Credential backoff and cursor-expiry recovery are separate failure modes.
 
 ## Controller public-key rotation and re-enrollment
@@ -93,12 +150,16 @@ work:
    `kid` immediately. Expect affected controllers to become unready until they
    are rolled to another enrolled key.
 
-API issuer signing-key rotation also requires an overlap: deploy the new
-signing `kid` while every API replica continues to verify the old key, let
-controllers renew and reconnect with newly signed tokens, then retire the old
-verifier only after the maximum old-token lifetime. Do not roll a single-key
-issuer configuration that invalidates still-live tokens; stage verification
-overlap first and validate every replica before promotion.
+API issuer signing-key rotation uses concatenated private PEM blocks in
+`api.auth.serviceaccount.signing_key`; the first block signs new tokens and all
+blocks supply verification keys. First install an old-then-new bundle on every
+API replica, preserving the old signer while adding the new verifier. Then
+install a new-then-old bundle on every replica and verify controller renewal
+and reconnects. Remove the old block only after the maximum old-token lifetime
+plus clock skew has elapsed since the last replica stopped signing with it.
+Use the deployment's secret provisioning and provider reload procedure; never
+paste the bundle into shell arguments or logs. Replacing an old-only bundle
+directly with a new-only bundle invalidates still-live tokens.
 
 ## Replay, revocation, and multiple replicas
 
@@ -120,7 +181,7 @@ overlap first and validate every replica before promotion.
 
 ## Recover an accidentally deleted ServiceAccount
 
-Deletion invalidates the old UID. Recreating the same namespace/name does not
+Deletion invalidates the old UID. Recreating the same name does not
 restore the old identity.
 
 1. Keep the controller stopped or remove it from service while it is not ready.

@@ -15,9 +15,12 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ErrCommittedManifestSuperseded is retained as an alias for callers that
@@ -30,6 +33,10 @@ var ErrCommittedManifestSuperseded = admission.ErrCommittedManifestSuperseded
 // the synchronous counterpart of the post-receive batch path; neither callers
 // nor GraphQL resolvers may write an author-controlled resource directly.
 func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	principal := auth.PrincipalFromContext(ctx)
+	if !auth.ValidTrustedPrincipal(principal) || principal.Subject != req.ActorSubject {
+		return nil, status.Error(codes.Unauthenticated, "committed manifest actor does not match authenticated principal")
+	}
 	result, err := s.admitCommittedManifest(ctx, req)
 	// Constructor dependencies and request shape are not post-commit failures;
 	// attempting repair for either can dereference an unavailable Git reader.
@@ -53,6 +60,9 @@ func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.Commi
 }
 
 func isCommittedAdmissionDenied(err error) bool {
+	if status.Code(err) == codes.PermissionDenied || status.Code(err) == codes.Unauthenticated {
+		return true
+	}
 	var admissionErr *admission.Error
 	if !errors.As(err, &admissionErr) || admissionErr.Code != admission.CodeAdmissionRejected {
 		return false
@@ -78,9 +88,21 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 		return nil, fmt.Errorf("committed admission requires repository, ref, commit, and path")
 	}
 	if req.Operation == admission.OperationDelete {
+		identity := resourceIdentity{Kind: req.Kind, Namespace: req.Namespace, Name: req.Name}
+		existing, err := s.lookupResourceByIdentity(ctx, identity)
+		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+			return nil, err
+		}
+		if err := s.authorizeOperation(ctx, identity, req.Operation, nil, existing); err != nil {
+			return nil, err
+		}
+		if req.Kind == "Namespace" || req.Kind == "Repository" {
+			return s.admitCommittedInfrastructureDeletion(ctx, req)
+		}
 		if req.Kind == "CategoryTaxonomy" {
 			return s.admitCommittedCategoryDeletion(ctx, req)
 		}
+
 		return s.admitCommittedProductDeletion(ctx, req)
 	}
 	if req.Operation != admission.OperationCreate && req.Operation != admission.OperationUpdate {
@@ -89,14 +111,6 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 
 	content := append([]byte(nil), req.Content...)
 	commitSHA := req.CommitSHA
-	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
-	if !ok {
-		return nil, ErrCommittedManifestSuperseded
-	}
-	if current != req.CommitSHA {
-		return nil, ErrCommittedManifestSuperseded
-	}
-
 	parsed, body, err := s.parser.ParseResource(bytes.NewReader(content))
 	if err != nil || parsed == nil {
 		if err == nil {
@@ -134,6 +148,23 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 		Now:          now,
 		superseded:   &superseded,
 	}
+	// Independent Repository updates share one system branch. A different
+	// path advancing HEAD must not force another durable commit of this same
+	// manifest. Retain the accepted source revision and fence the complete
+	// live manifest, including identity, on every write and before success.
+	isCurrent := func() bool {
+		current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, commitSHA)
+		if !ok || current == "" {
+			return false
+		}
+		if current == commitSHA {
+			return true
+		}
+		return req.Operation == admission.OperationUpdate && entry.parsed.Repository != nil && s.isAdmissionEntryCurrent(ctx, admCtx.forEntry(entry))
+	}
+	if !isCurrent() {
+		return nil, ErrCommittedManifestSuperseded
+	}
 	ops := map[string]resourceAdmissionOperation{entry.identity.key(): {
 		operation: req.Operation,
 		newEntry:  entry,
@@ -143,7 +174,7 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 	if err != nil {
 		return nil, err
 	}
-	if admCtx.wasSuperseded() || !s.isAdmissionCommitCurrent(ctx, req.RepositoryID, req.RefName, commitSHA) {
+	if admCtx.wasSuperseded() || !isCurrent() {
 		return nil, ErrCommittedManifestSuperseded
 	}
 	result := &admission.CommittedManifestResult{Kind: entry.identity.Kind, Namespace: entry.identity.Namespace, Name: entry.identity.Name, CommitSHA: commitSHA}
@@ -236,8 +267,8 @@ func (s *Server) repairCommittedManifest(ctx context.Context, req admission.Comm
 		}
 		retry.Content = content
 		// The mutation was authorized for req.Operation. Do not turn a failed
-		// create into an update (or vice versa) here: this boundary has no
-		// principal authorizer and must not broaden the caller's authority.
+		// create into an update (or vice versa). Each attempt reloads and
+		// authorizes its snapshot, without broadening the caller's operation.
 		retry.Operation = req.Operation
 		if _, err := s.admitCommittedManifest(ctx, retry); err == nil {
 			return "repaired"
@@ -292,6 +323,15 @@ func committedResourceMatches(resource any, req admission.CommittedManifestReque
 	if !ok {
 		return false
 	}
+	if parent, ok := resource.(*datastore.Namespace); ok {
+		var decision *namespaceadmission.Decision
+		expected.Annotations, decision = namespaceadmission.OwnerIdentityAnnotations(namespaceadmission.PolicyCheck{
+			Tier: parent.Tier, Annotations: expected.Annotations,
+		}, parent)
+		if decision != nil {
+			return false
+		}
+	}
 	expectedSpec, expectedErr := json.Marshal(expected.Spec)
 	var expectedValue, storedValue any
 	if expectedErr != nil || json.Unmarshal(expectedSpec, &expectedValue) != nil || json.Unmarshal(storedSpec, &storedValue) != nil ||
@@ -309,6 +349,54 @@ func errorText(err error) string {
 		return "unknown error"
 	}
 	return err.Error()
+}
+
+func (s *Server) admitCommittedInfrastructureDeletion(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	current, ok := s.currentAdmissionCommit(ctx, req.RepositoryID, req.RefName, req.CommitSHA)
+	if !ok || current != req.CommitSHA {
+		return nil, ErrCommittedManifestSuperseded
+	}
+	id := resourceIdentity{Kind: req.Kind, Namespace: req.Namespace, Name: req.Name}
+	resource, err := s.lookupResourceByIdentity(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	var uid, path, ref string
+	var raw json.RawMessage
+	switch r := resource.(type) {
+	case *datastore.Namespace:
+		uid, path, ref, raw = r.UID, r.SourcePath, r.GitRef, r.Status
+		err = s.validateNamespaceAuthoringTarget(ctx, req.RepositoryID, path, r.Name)
+	case *datastore.Repository:
+		uid, path, ref, raw = r.UID, r.SourcePath, r.GitRef, r.Status
+		err = s.validateRepositoryAuthoringTarget(ctx, req.RepositoryID, path, r.Namespace, r.Name)
+	default:
+		return nil, fmt.Errorf("unsupported infrastructure deletion")
+	}
+	if err != nil {
+		return nil, err
+	}
+	intent, err := admission.ReadDeletionIntent(raw)
+	if err != nil {
+		return nil, err
+	}
+	if req.ExpectedUID == "" || uid != req.ExpectedUID || path != req.Path || ref != req.RefName ||
+		intent == nil || intent.UID != uid || intent.RepositoryID != req.RepositoryID || intent.Path != path || intent.Ref != ref || intent.RemovalCommit == "" {
+		return nil, admission.NewError(admission.CodeConflict, "DELETION_IDENTITY_MISMATCH", "deletion does not match recorded identity and provenance")
+	}
+	if _, err := s.git.ReadFile(ctx, req.RepositoryID, path, intent.RemovalCommit); status.Code(err) != codes.NotFound {
+		return nil, admission.NewError(admission.CodeFailedPrecondition, "REMOVAL_UNVERIFIED", "recorded removal cannot be verified")
+	}
+	if _, err := s.git.ReadFile(ctx, req.RepositoryID, path, req.CommitSHA); status.Code(err) != codes.NotFound {
+		if err != nil {
+			return nil, err
+		}
+		return nil, admission.NewError(admission.CodeFailedPrecondition, "MANIFEST_PRESENT", "deletion commit still contains the manifest")
+	}
+	if err := admission.MarkInfrastructureDeletion(ctx, s.store, resource, s.clock.Now().UTC(), req.ActorSubject); err != nil {
+		return nil, err
+	}
+	return &admission.CommittedManifestResult{Kind: req.Kind, Namespace: req.Namespace, Name: req.Name, CommitSHA: req.CommitSHA}, nil
 }
 
 func (s *Server) admitCommittedProductDeletion(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
@@ -417,8 +505,8 @@ func (s *Server) validateCommittedOperation(ctx context.Context, entry *parsedEn
 			if !ok {
 				return fmt.Errorf("unsupported tier %q", entry.parsed.Namespace.Spec.Tier)
 			}
-			if namespaceadmission.TierRank(tier) < namespaceadmission.TierRank(resource.Tier) {
-				return namespaceadmission.ErrTierDemotion
+			if decision := namespaceadmission.ValidateIdentity(namespaceadmission.PolicyCheck{Name: entry.identity.Name, Tier: tier, Actor: auth.PrincipalFromContext(ctx).Subject, Principal: auth.PrincipalFromContext(ctx), Annotations: entry.parsed.Namespace.Metadata.Annotations}, resource); decision != nil {
+				return decision
 			}
 		}
 	case *datastore.Repository:
@@ -428,6 +516,12 @@ func (s *Server) validateCommittedOperation(ctx context.Context, entry *parsedEn
 	}
 	if entry.identity.Kind == "Namespace" && namespaceadmission.IsBootstrap(entry.identity.Name) {
 		return namespaceadmission.ErrBootstrapNamespace
+	}
+	if existing == nil && entry.parsed.Namespace != nil {
+		tier, _ := namespaceadmission.TierFromManifest(entry.parsed.Namespace.Spec.Tier)
+		if decision := namespaceadmission.ValidateIdentity(namespaceadmission.PolicyCheck{Name: entry.identity.Name, Tier: tier, Actor: auth.PrincipalFromContext(ctx).Subject, Principal: auth.PrincipalFromContext(ctx), Annotations: entry.parsed.Namespace.Metadata.Annotations}, nil); decision != nil {
+			return decision
+		}
 	}
 	return nil
 }

@@ -34,7 +34,7 @@ metadata:
       blockOwnerDeletion: true
 spec:
   defaultBranch: main
-  visibility: PRIVATE
+  visibility: Private
   pushPolicy:
     maxPackSizeBytes: 0
     maxFileSizeBytes: 0
@@ -60,23 +60,37 @@ status:
 | `metadata.resourceVersion`, `metadata.generation` | System                             | Maintained by existing lifecycle operations                   |
 | `spec.defaultBranch`                              | Repository manifest                | Mutable through manifest or `updateRepository`                |
 | `spec.pushPolicy.max*Bytes`                       | Persisted repository limits        | Read-only projection                                          |
-| `spec.visibility`                                 | Reserved contract field            | Always `PRIVATE`                                              |
+| `spec.visibility`                                 | Repository manifest                | `Public`, `Private`, `Internal`; legacy upper/lowercase accepted; GraphQL uses uppercase |
 | Extended push-policy groups                       | Reserved contract fields           | Always null                                                   |
 | `status`                                          | Controller                         | `updateRepositoryStatus`, never author writable               |
 | `status.resolved`                                 | System                             | Derived from repository identity and storage configuration    |
 
 Zero maximum pack/file sizes retain the existing unlimited sentinel.
-Visibility and extended policy groups are deterministic placeholders until a
-future feature defines their write, persistence, validation, and inheritance
-semantics.
+Visibility records the admitted value and defaults to `Private` when omitted;
+it does not enable Storefront publication. Extended policy groups remain
+reserved rather than implemented hook/phase overrides.
 
 ## Version transitions
+
+`generation` tracks desired state only: changes to the Repository `spec` or
+Markdown body advance both counters. Labels, annotations, canonical Namespace
+owner-reference projections, and Git provenance changes (including a source
+path move) advance only `resourceVersion`; exact re-admission changes neither.
+Admission preserves controller-owned status fields while refreshing its
+accepted revision and `AdmissionAccepted` condition.
 
 | Transition              | UID       | Generation | ResourceVersion | Status            |
 |-------------------------|-----------|------------|-----------------|-------------------|
 | Create                  | New       | `1`        | `"1"`           | Initial status    |
 | Manifest spec write     | Preserved | `+1`       | `+1`            | Admission updated |
 | Controller status write | Preserved | Unchanged  | `+1`            | Updated           |
+
+## Generation-semantics rollout
+
+Pause external GraphQL authoring and Git pushes, drain admissions, replace all
+API replicas, then resume authoring. Repeat that pause and drain before a
+rollback so an older replica cannot write under the prior semantics. Controller
+status writes can remain enabled because they do not advance generation.
 
 Rows created before this contract normalize to generation `1`,
 resourceVersion `"1"`, and
@@ -89,14 +103,28 @@ resourceVersion `"1"`, and
 and foreground-deletion finalizer. Authors cannot submit `status` or
 `metadata.ownerReferences`; admission rejects either attempt.
 
-## Legacy GraphQL fields
+## GraphQL fields
 
-The legacy `name`, `namespace`, `defaultBranch`, `storageClass`, `storagePath`,
-`createdAt`, `createdBy`, `updatedAt`, and `updatedBy` fields remain selectable
-with their existing values and explicit deprecation reasons. Relay `id` remains
-non-deprecated. Removal requires a future major GraphQL API release.
+Use `metadata` for identity and lifecycle fields, `spec.defaultBranch` for
+configuration, and `status.resolved` for storage information. The old flat
+Repository fields are not in the current schema. Relay `id` remains the
+transport identity; do not assume removed fields are compatibility aliases.
 
 ## Valid and invalid expectations
+
+Deletion removes the manifest in the namespace's system repository at initiation,
+not at `completeRepositoryDeletion`. Admission retains the terminating record and
+name mapping until UID-bound backing-storage cleanup completes. Catalog resources
+block deletion; other finalizers block final record removal. A pending authorized
+Git deletion is durable system state, not an authored manifest field. Direct
+user deletion of the system repository is not supported: Namespace completion
+removes it only when empty.
+
+`completeRepositoryDeletion` requires the observed Relay Node `id`, `namespace`,
+`name`, and `resourceVersion`. The input identity field is `id`, not `uid`;
+`metadata.uid` remains an output field. Completion verifies the exact resource
+incarnation before deleting backing storage, so a delayed request cannot delete a
+same-name replacement.
 
 Valid:
 

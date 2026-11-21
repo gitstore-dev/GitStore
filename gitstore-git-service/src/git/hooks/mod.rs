@@ -33,16 +33,51 @@ pub struct RefUpdate {
 pub struct HookContext {
     /// Stable repository UUID from the API-supplied PushContext.
     pub repository_id: String,
-    /// Principal identifier (e.g. "admin", OIDC sub claim).
+    /// Principal identifier selected by the authenticating provider.
     pub actor_subject: String,
     /// Auth mechanism (e.g. "basic", "bearer").
     pub actor_auth_method: String,
+    pub actor_issuer: String,
+    pub actor_groups: Vec<String>,
+    pub actor_service_account_uid: String,
+    pub receive_id: String,
     /// Pack size limit; 0 = unlimited.
     pub max_pack_size_bytes: i64,
     /// Per-blob size limit; 0 = unlimited.
     pub max_file_size_bytes: i64,
     /// Opaque audit tag from the datastore record.
     pub config_resource_version: String,
+}
+
+impl HookContext {
+    pub fn callback_authorization(
+        &self,
+        refs: Vec<validation_handler::catalog_proto::ReceiveRef>,
+    ) -> validation_handler::catalog_proto::CallbackAuthorization {
+        use validation_handler::catalog_proto::{CallbackActor, CallbackAuthorization};
+        CallbackAuthorization {
+            repository_id: self.repository_id.clone(),
+            receive_id: self.receive_id.clone(),
+            refs,
+            actor: Some(CallbackActor {
+                subject: self.actor_subject.clone(),
+                groups: self.actor_groups.clone(),
+                auth_method: self.actor_auth_method.clone(),
+                service_account_uid: self.actor_service_account_uid.clone(),
+                issuer: self.actor_issuer.clone(),
+            }),
+        }
+    }
+}
+
+impl From<&RefUpdate> for validation_handler::catalog_proto::ReceiveRef {
+    fn from(update: &RefUpdate) -> Self {
+        Self {
+            ref_name: update.ref_name.clone(),
+            old_commit_sha: update.old_oid.clone(),
+            new_commit_sha: update.new_oid.clone(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -83,7 +118,7 @@ impl std::error::Error for HookRejection {}
 // ---------------------------------------------------------------------------
 
 /// Raw bytes of a candidate resource file extracted from a push commit.
-/// Any file beginning with `---` qualifies; kind/apiVersion inside determine routing.
+/// Catalog frontmatter and every file in the reserved RBAC subtree qualify.
 #[derive(Clone, Debug)]
 pub struct ResourceBlob {
     pub path: String,
@@ -376,6 +411,11 @@ pub(crate) fn with_quarantine_repo<T>(
     quarantine_dir: Option<&Path>,
     operation: impl FnOnce(&gix::Repository) -> Result<T, String>,
 ) -> Result<T, String> {
+    if let Some(repository) =
+        quarantine_dir.and_then(|directory| small_quarantine_view(git_dir, directory))
+    {
+        return operation(&repository);
+    }
     let pack_dir = git_dir.join("objects").join("pack");
     let mut staged_files: Vec<std::path::PathBuf> = Vec::new();
     if let Some(q) = quarantine_dir {
@@ -397,7 +437,7 @@ pub(crate) fn with_quarantine_repo<T>(
         }
     }
 
-    let result = gix::open(git_dir)
+    let result = crate::git::repo::open_repository_uncached(git_dir)
         .map_err(|e| format!("open repository: {e}"))
         .and_then(|repo| operation(&repo));
 
@@ -407,13 +447,39 @@ pub(crate) fn with_quarantine_repo<T>(
     result
 }
 
+fn small_quarantine_view(git_dir: &Path, quarantine: &Path) -> Option<gix::Repository> {
+    use gix::objs::Write;
+    let path = std::fs::read_dir(quarantine)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "pack")
+        })?;
+    let objects = crate::git::pack_server::small_pack_objects(&path)?;
+    let repository = crate::git::repo::open_repository(git_dir)
+        .ok()?
+        .with_object_memory();
+    for (id, kind, data) in objects {
+        let actual = repository
+            .objects
+            .write_buf_with_known_id(kind, &data, id)
+            .ok()?;
+        if actual != id {
+            return None;
+        }
+    }
+    Some(repository)
+}
+
 /// Walk the commit trees for all ref updates and collect resource blobs (files
 /// beginning with `---`).
 ///
-/// `quarantine_dir` is the TempDir written by `stage_pack_from_reader`. When
-/// present its path is written to `{git_dir}/objects/info/alternates` so that
-/// gix-odb resolves pushed objects that are not yet promoted to the live ODB.
-/// The alternates entry is removed after extraction regardless of outcome.
+/// `quarantine_dir` is the TempDir written by `stage_pack_from_reader`.
+/// Small packs use bounded request-local object memory; larger packs use the
+/// isolated temporary-link view owned by `with_quarantine_repo`. Neither view
+/// publishes objects to the live repository after extraction.
 ///
 /// Returns an empty vec if git_dir is not a valid repo or any update fails.
 fn extract_resource_blobs(
@@ -421,78 +487,39 @@ fn extract_resource_blobs(
     updates: &[RefUpdate],
     quarantine_dir: Option<&Path>,
 ) -> Vec<ResourceBlob> {
-    let zero = "0".repeat(40);
-
-    // To make pushed objects visible before promote_quarantine runs, temporarily
-    // hard-link the quarantine pack/index files into the live objects/pack dir.
-    // Hard-links are instant and atomic; the files are removed after extraction.
-    // This mirrors what native git does with GIT_ALTERNATE_OBJECT_DIRECTORIES.
-    let pack_dir = git_dir.join("objects").join("pack");
-    let mut staged_files: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(q) = quarantine_dir {
-        let _ = std::fs::create_dir_all(&pack_dir);
-        if let Ok(entries) = std::fs::read_dir(q) {
-            for entry in entries.flatten() {
-                let src = entry.path();
-                let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("");
-                if ext == "pack" || ext == "idx" {
-                    let dst = pack_dir.join(entry.file_name());
-                    if !dst.exists() {
-                        // Try hard link first (free); fall back to copy across filesystems.
-                        let ok = std::fs::hard_link(&src, &dst).is_ok()
-                            || std::fs::copy(&src, &dst).is_ok();
-                        if ok {
-                            staged_files.push(dst);
-                        }
-                    }
-                }
+    with_quarantine_repo(git_dir, quarantine_dir, |repo| {
+        let zero = "0".repeat(40);
+        let mut blobs = Vec::new();
+        for update in updates {
+            let new_oid_hex = &update.new_oid;
+            let old_oid_hex = &update.old_oid;
+            if new_oid_hex == &zero {
+                continue; // branch deletion — no blobs to extract
             }
-        }
-    }
-
-    let repo = match gix::open(git_dir) {
-        Ok(r) => r,
-        Err(_) => {
-            for f in &staged_files {
-                let _ = std::fs::remove_file(f);
-            }
-            return vec![];
-        }
-    };
-
-    let mut blobs = Vec::new();
-    for update in updates {
-        let new_oid_hex = &update.new_oid;
-        let old_oid_hex = &update.old_oid;
-        if new_oid_hex == &zero {
-            continue; // branch deletion — no blobs to extract
-        }
-        let new_oid = match gix::ObjectId::from_hex(new_oid_hex.as_bytes()) {
-            Ok(id) => id,
-            Err(_) => continue,
-        };
-        if old_oid_hex == &zero {
-            // New branch creation — scan the full new tree.
-            collect_blobs_from_commit(&repo, new_oid, &mut blobs);
-        } else {
-            // Ref update — only validate files changed in the push delta.
-            // This avoids re-validating files that already passed in prior commits.
-            let old_oid = match gix::ObjectId::from_hex(old_oid_hex.as_bytes()) {
+            let new_oid = match gix::ObjectId::from_hex(new_oid_hex.as_bytes()) {
                 Ok(id) => id,
-                Err(_) => {
-                    collect_blobs_from_commit(&repo, new_oid, &mut blobs);
-                    continue;
-                }
+                Err(_) => continue,
             };
-            collect_changed_blobs(&repo, old_oid, new_oid, &mut blobs);
+            if old_oid_hex == &zero {
+                // New branch creation — scan the full new tree.
+                collect_blobs_from_commit(repo, new_oid, &mut blobs);
+            } else {
+                // Ref update — only validate files changed in the push delta.
+                // This avoids re-validating files that already passed in prior commits.
+                let old_oid = match gix::ObjectId::from_hex(old_oid_hex.as_bytes()) {
+                    Ok(id) => id,
+                    Err(_) => {
+                        collect_blobs_from_commit(repo, new_oid, &mut blobs);
+                        continue;
+                    }
+                };
+                collect_changed_blobs(repo, old_oid, new_oid, &mut blobs);
+            }
         }
-    }
 
-    for f in &staged_files {
-        let _ = std::fs::remove_file(f);
-    }
-
-    blobs
+        Ok(blobs)
+    })
+    .unwrap_or_default()
 }
 
 fn collect_blobs_from_commit(
@@ -634,6 +661,10 @@ fn collect_changed_resource_blobs_from_trees(
     }
 }
 
+pub(crate) fn is_rbac_resource_path(path: &str) -> bool {
+    path == "rbac" || path.starts_with("rbac/")
+}
+
 fn collect_resource_entry(
     repo: &gix::Repository,
     object_id: gix::ObjectId,
@@ -644,13 +675,39 @@ fn collect_resource_entry(
     match kind {
         gix::object::tree::EntryKind::Tree => collect_blobs_from_tree(repo, object_id, path, out),
         gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable => {
+            // Retain one overflow entry so oversized candidates cannot become truncated accepts.
+            if is_rbac_resource_path(path)
+                && out
+                    .iter()
+                    .filter(|blob| is_rbac_resource_path(&blob.path))
+                    .count()
+                    > 256
+            {
+                return;
+            }
+            if is_rbac_resource_path(path)
+                && validation_handler::rbac_blob_size(repo, object_id).is_err()
+            {
+                // Preserve an overflow marker, never omit a candidate that
+                // cannot safely be inflated within the manifest ceiling.
+                out.push(ResourceBlob {
+                    path: path.to_owned(),
+                    blob_oid: object_id.to_string(),
+                    content: vec![0; 64 * 1024 + 1],
+                });
+                return;
+            }
             if let Ok(blob_obj) = repo.find_object(object_id) {
-                let content = blob_obj.data.to_vec();
-                if content.starts_with(b"---") {
+                if blob_obj.data.starts_with(b"---") || is_rbac_resource_path(path) {
+                    let size = if is_rbac_resource_path(path) {
+                        blob_obj.data.len().min(64 * 1024 + 1)
+                    } else {
+                        blob_obj.data.len()
+                    };
                     out.push(ResourceBlob {
                         path: path.to_string(),
                         blob_oid: object_id.to_string(),
-                        content,
+                        content: blob_obj.data[..size].to_vec(),
                     });
                 }
             }
@@ -668,25 +725,7 @@ pub(crate) fn collect_blobs_from_tree(
     for entry in decode_tree(repo, tree_id) {
         let name = entry.filename.to_string();
         let path = make_path(prefix, &name);
-        match entry.mode.kind() {
-            gix::object::tree::EntryKind::Tree => {
-                collect_blobs_from_tree(repo, entry.oid, &path, out);
-            }
-            gix::object::tree::EntryKind::Blob | gix::object::tree::EntryKind::BlobExecutable => {
-                let blob_id: gix::ObjectId = entry.oid;
-                if let Ok(blob_obj) = repo.find_object(blob_id) {
-                    let content = blob_obj.data.to_vec();
-                    if content.starts_with(b"---") {
-                        out.push(ResourceBlob {
-                            path,
-                            blob_oid: blob_id.to_string(),
-                            content,
-                        });
-                    }
-                }
-            }
-            _ => {}
-        }
+        collect_resource_entry(repo, entry.oid, entry.mode.kind(), &path, out);
     }
 }
 
@@ -874,12 +913,20 @@ mod tests {
 
     // T009: ResourceBlob extraction logic
 
-    fn make_repo_with_files(
+    pub(super) fn make_repo_with_files(
         dir: &std::path::Path,
         files: &[(&str, &[u8])],
     ) -> (gix::Repository, gix::ObjectId) {
         let repo = gix::init_bare(dir).unwrap();
+        let commit_id = commit_files(&repo, files, None);
+        (repo, commit_id)
+    }
 
+    pub(super) fn commit_files(
+        repo: &gix::Repository,
+        files: &[(&str, &[u8])],
+        parent: Option<gix::ObjectId>,
+    ) -> gix::ObjectId {
         let mut tree_id = gix::ObjectId::empty_tree(gix::hash::Kind::Sha1);
         for (path, content) in files {
             let blob_oid = repo.write_blob(content).unwrap().detach();
@@ -903,18 +950,11 @@ mod tests {
         let mut time_buf = gix::date::parse::TimeBuf::default();
         let sig_ref = sig.to_ref(&mut time_buf);
         let commit_id = repo
-            .commit_as(
-                sig_ref,
-                sig_ref,
-                "HEAD",
-                "init",
-                tree_id,
-                std::iter::empty::<gix::ObjectId>(),
-            )
+            .commit_as(sig_ref, sig_ref, "HEAD", "init", tree_id, parent)
             .unwrap()
             .detach();
 
-        (repo, commit_id)
+        commit_id
     }
 
     #[test]

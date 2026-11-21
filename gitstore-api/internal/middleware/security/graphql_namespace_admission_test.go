@@ -161,7 +161,7 @@ func postNamespaceMutation(t *testing.T, handler http.Handler, query string) nam
 	t.Helper()
 	payload, err := json.Marshal(map[string]string{"query": query})
 	require.NoError(t, err)
-	request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(string(payload)))
+	request := httptest.NewRequest(http.MethodPost, "/admin/graphql", strings.NewReader(string(payload)))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)

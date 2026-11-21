@@ -32,11 +32,12 @@ func TestFileSpecSourceValidation(t *testing.T) {
 	namespace := "store"
 	require.NoError(t, (FileSpec{
 		ContentType: "image/jpeg",
-		Source:      FileSourceDefinition{Type: "s3", URI: "s3://bucket/key"},
+		Provider:    "s3",
+		Source:      FileSourceDefinition{URI: "s3://bucket/key"},
 	}).Validate("store"))
 	require.NoError(t, (FileSpec{
-		ContentType: "image/jpeg", Source: FileSourceDefinition{
-			Type: "s3", URI: "s3://bucket/key", CredentialsRef: &secretmaterial.CredentialsRef{
+		ContentType: "image/jpeg", Provider: "s3", Source: FileSourceDefinition{
+			URI: "s3://bucket/key", CredentialsRef: &secretmaterial.CredentialsRef{
 				Kind: "CredentialsRef", Type: "aws-access-key/v1",
 				SecretRef: secretmaterial.SecretRef{Kind: "SecretRef", Name: "cloud", Namespace: &namespace},
 			},
@@ -52,7 +53,8 @@ func TestFileResourceContractIdentityDefaultsAndSystemStatus(t *testing.T) {
 		Metadata:   ObjectMeta{Name: "hero"},
 		Spec: FileSpec{
 			ContentType: "image/jpeg",
-			Source:      FileSourceDefinition{Type: "git", URI: "media/hero.jpg"},
+			Provider:    "git",
+			Source:      FileSourceDefinition{URI: "media/hero.jpg"},
 		},
 	}
 	require.Equal(t, FileAPIVersion, resource.APIVersion)

@@ -13,13 +13,16 @@ Go API service for GitStore. It is the public front door for GraphQL and Git Sma
 - Datastore access through the `memdb` and ScyllaDB backends.
 - Authentication, request middleware, health checks, and generated gqlgen wiring.
 
-Catalogue writes are Git-driven today. GraphQL catalogue CRUD is not the documented write path while Git-backed catalogue writes over GraphQL are being finalized.
+Catalogue writes are primarily Git-driven. Product and CategoryTaxonomy also expose
+Git-backed GraphQL create/update/delete operations; consult the
+[API reference](../docs/api-reference.md#catalogue-writes) for the supported
+per-kind write surface rather than assuming all catalogue kinds expose CRUD.
 
 Post-receive admission is operation-aware for current Git-backed catalog resources: `Product`, `ProductVariant`, `CategoryTaxonomy`, and `Collection`. The API compares old/new commit state, treats `apiVersion` + `kind` + namespace + `metadata.name` as identity, stores file path as provenance, deletes removed identities, preserves UID on path moves, and skips stale admissions when the ref has already advanced.
 
 ## Boundaries
 
-- Clients send GraphQL traffic to this service on port `4000`.
+- Admin clients use port `4000`; explicitly selected Storefront uses port `4001`.
 - Git clients use this service's Smart HTTP port `9000` in the default Compose deployment.
 - `gitstore-git-service` calls this service's CatalogService gRPC endpoint on port `6000`.
 - This service calls `gitstore-git-service` through GitService gRPC on port `50051`.
@@ -27,15 +30,21 @@ Post-receive admission is operation-aware for current Git-backed catalog resourc
 
 ## Ports And Paths
 
+The table uses listener/container ports for selected roles. Storefront is omitted
+by default; when selected, Compose publishes its 4001 listener on host port
+4100 and native defaults use 4001 directly.
+
 |   Port | Path                                       | Purpose                             |
 |-------:|--------------------------------------------|-------------------------------------|
-| `4000` | `/graphql`                                 | GraphQL API                         |
-| `4000` | `/playground`                              | GraphQL Playground                  |
+| `4000` | `/admin/graphql`                                 | Admin GraphQL API                   |
+| `4000` | `/admin/playground`                              | GraphQL Playground                  |
 | `4000` | `/health`                                  | Liveness health check               |
 | `4000` | `/ready`                                   | Readiness check                     |
-| `5000` | `/{namespace}/{repo}.git/info/refs`        | Git Smart HTTP ref advertisement    |
-| `5000` | `/{namespace}/{repo}.git/git-upload-pack`  | Git fetch/clone                     |
-| `5000` | `/{namespace}/{repo}.git/git-receive-pack` | Git push                            |
+| `4001` | `/storefront/graphql` | Public boundary (503 until publication is implemented) |
+| `4001` | `/storefront/playground` | Public API explorer |
+| `9000` | `/{namespace}/{repo}.git/info/refs`        | Git Smart HTTP ref advertisement    |
+| `9000` | `/{namespace}/{repo}.git/git-upload-pack`  | Git fetch/clone                     |
+| `9000` | `/{namespace}/{repo}.git/git-receive-pack` | Git push                            |
 | `6000` | gRPC                                       | CatalogService validation/admission |
 
 ## Project Structure
@@ -43,8 +52,7 @@ Post-receive admission is operation-aware for current Git-backed catalog resourc
 ```text
 gitstore-api/
 ├── cmd/
-│   ├── server/       # API server entrypoint
-│   └── gitctl/       # operator CLI: auth config, secrets, and datastore repair
+│   └── server/       # API server and gitctl subcommand entrypoint
 ├── gen/              # Generated protobuf Go code
 ├── internal/
 │   ├── app/          # Runtime composition
@@ -55,17 +63,44 @@ gitstore-api/
 │   ├── datastore/    # Datastore abstraction and backends
 │   ├── gitclient/    # GitService gRPC client
 │   ├── githttp/      # Git Smart HTTP handler
-│   ├── graph/        # gqlgen resolvers and generated code
+│   ├── gitctl/       # Operator commands, shared by the API entrypoint
+│   ├── admin/graph/  # Admin resolvers and generated code
+│   ├── storefront/   # Isolated public boundary and generated schema
 │   ├── health/       # Health and readiness handlers
 │   ├── middleware/   # HTTP middleware
 │   └── validate/     # Frontmatter validation
 ├── tests/            # Contract tests
 ├── generate.go       # gqlgen directive
-├── gqlgen.yml        # gqlgen configuration
+├── gqlgen.admin.yml  # Admin generation
+├── gqlgen.storefront.yml # Separate Storefront generation
 └── go.mod
 ```
 
 ## Configuration Highlights
+
+Admin and Storefront have fixed prefixed paths and dedicated named listeners by
+default. `api serve --roles=smart-http,catalog,admin` composes runtime roles in the
+same binary/image; `--all` selects the currently available roles. Explicit
+`--roles=storefront` runs only the unavailable Storefront boundary, without Git
+or datastore initialization. `api.graphql_layout="shared"` can share the Admin
+listener when both GraphQL roles are selected. No `/graphql` alias is restored.
+See [runtime roles and advertised endpoints](../docs/runbooks/api-runtime-roles.md)
+for budgets, bootstrap, role readiness, private Admin and proxy configuration.
+`api.admin_port` defaults to 4000; `api.storefront_port` defaults to 4001.
+The generic `api.port` and old `/graphql`/`/playground` routes are removed.
+Storefront has a separate generated schema but returns a fixed no-store 503
+until publication and target binding are implemented. Admin authentication and
+durable watches retain their existing contracts; introspection requires login.
+The playground selector accepts an explicit peer URL and clears headers on
+switch. Configure independent CORS policies to use it across listeners; see
+[configuration](../docs/configuration.md).
+
+Upgrade API images, controller/CLI/Admin clients and proxy routes together.
+Remove generic port settings and configure complete `/admin/graphql` URLs,
+including WebSocket clients. Keep health checks at the Admin root. Roll back
+images, client URLs and routes together, preserving authored data and Git
+storage. Mixed old/new routing is unsupported. Coordinate the standalone CLI, external Admin and
+quickstart consumers before release.
 
 Pass `--config-file PATH` to require and load an explicit TOML file. Environment
 variables override file values. Repeat the flag to layer additive overlays on
@@ -80,9 +115,9 @@ Required for local API startup unless provided by `.env`:
 | Variable                                        | Default                  | Purpose                  |
 |---------------------------------------------------|--------------------------|--------------------------|
 | `GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE`  | `users.yaml`             | Local users YAML         |
-| `GITSTORE_API__AUTH__JWT__SECRET`               | unset                    | JWT signing secret       |
-| `GITSTORE_API__PORT`                            | `4000`                   | GraphQL HTTP port        |
-| `GITSTORE_API__GIT_PORT`                        | `5000`                   | Git Smart HTTP port      |
+| `GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET`               | unset                    | JWT signing secret       |
+| `GITSTORE_API__ADMIN_PORT`                            | `4000`                   | GraphQL HTTP port        |
+| `GITSTORE_API__GIT_PORT`                        | `9000`                   | Git Smart HTTP port      |
 | `GITSTORE_API__GRPC_PORT`                       | `6000`                   | CatalogService gRPC port |
 | `GITSTORE_API__GIT_SERVICE__URI`                | `dns:///localhost:50051` | GitService gRPC target   |
 | `GITSTORE_API__DATASTORE__BACKEND`              | `memdb`                  | `memdb` or `scylla`      |
@@ -112,7 +147,7 @@ From this module:
 ```bash
 go test ./...
 go generate ./...
-go run ./cmd/gitctl hash-password <password>
+go run ./cmd/server gitctl hash-password <password>
 ```
 
 Scylla-backed tests:

@@ -1,0 +1,51 @@
+name: License Headers
+
+on:
+  pull_request:
+    paths: &license-paths
+      - '**/*.go'
+      - '**/*.rs'
+      - '**/*.ts'
+      - '**/*.tsx'
+      - '**/*.js'
+      - '**/*.jsx'
+      - '**/*.mjs'
+      - '**/*.cjs'
+      - 'shared/scylla-cdc-go/LICENSE.txt'
+      - 'scripts/check-license-headers.sh'
+      - 'scripts/test-license-headers.sh'
+      - '.github/workflows/license-headers.yml'
+  push:
+    branches:
+      - main
+    paths: *license-paths
+
+permissions:
+  contents: read
+
+jobs:
+  check-license-headers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Test license checker
+        run: bash ./scripts/test-license-headers.sh
+
+      - name: Verify all source headers
+        run: ./scripts/check-license-headers.sh --all
+
+      - name: Fetch pull request base branch
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git fetch -- origin "$BASE_REF"
+
+      - name: Verify changed sources include current-year headers
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: ./scripts/check-license-headers.sh --diff-base "origin/$BASE_REF"

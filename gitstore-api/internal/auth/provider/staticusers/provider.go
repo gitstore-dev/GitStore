@@ -52,6 +52,18 @@ func New(cfg config.AuthConfig, logger *zap.Logger) (*StaticUsersProvider, error
 	return NewWithRevocationStore(cfg, logger, newMemoryRevocationStore())
 }
 
+func NewDirectory(cfg config.StaticUsersConfig, logger *zap.Logger) (*StaticUsersProvider, error) {
+	path := cfg.UsersFile
+	if path == "" {
+		path = "users.yaml"
+	}
+	users, err := loadUsers(path)
+	if err != nil {
+		return nil, err
+	}
+	return &StaticUsersProvider{users: users, path: path, logger: logger}, nil
+}
+
 func NewWithRevocationStore(cfg config.AuthConfig, logger *zap.Logger, revocations RevocationStore) (*StaticUsersProvider, error) {
 	path := cfg.StaticUsers.UsersFile
 	if path == "" {
@@ -61,10 +73,10 @@ func NewWithRevocationStore(cfg config.AuthConfig, logger *zap.Logger, revocatio
 	if err != nil {
 		return nil, err
 	}
-	if cfg.JWT.Secret == "" {
-		return nil, errors.New("staticusers: GITSTORE_API__AUTH__JWT__SECRET is required")
+	if cfg.StaticUsers.JWT.Secret == "" {
+		return nil, errors.New("staticusers: GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET is required")
 	}
-	issuer := cfg.JWT.Issuer
+	issuer := cfg.StaticUsers.JWT.Issuer
 	if issuer == "" {
 		issuer = "gitstore"
 	}
@@ -73,21 +85,24 @@ func NewWithRevocationStore(cfg config.AuthConfig, logger *zap.Logger, revocatio
 	// these to non-zero); a negative value is used as-is — tests rely on it
 	// to construct an already-expired token.
 	duration := 24 * time.Hour
-	if cfg.JWT.TTL != 0 {
-		duration = cfg.JWT.TTL
+	if cfg.StaticUsers.JWT.TTL != 0 {
+		duration = cfg.StaticUsers.JWT.TTL
 	}
 	grace := time.Minute
-	if cfg.JWT.RefreshGrace != 0 {
-		grace = cfg.JWT.RefreshGrace
+	if cfg.StaticUsers.JWT.RefreshGrace != 0 {
+		grace = cfg.StaticUsers.JWT.RefreshGrace
 	}
 	if revocations == nil {
 		return nil, errors.New("staticusers: revocation store is required")
 	}
-	return &StaticUsersProvider{users: users, path: path, jwtSecret: []byte(cfg.JWT.Secret), jwtIssuer: issuer, jwtDuration: duration, refreshGrace: grace, revocations: revocations, logger: logger}, nil
+	return &StaticUsersProvider{users: users, path: path, jwtSecret: []byte(cfg.StaticUsers.JWT.Secret), jwtIssuer: issuer, jwtDuration: duration, refreshGrace: grace, revocations: revocations, logger: logger}, nil
 }
 func (p *StaticUsersProvider) Name() string { return "static-users" }
 func (p *StaticUsersProvider) Shutdown()    {}
 func (p *StaticUsersProvider) Capabilities() auth.Capability {
+	if len(p.jwtSecret) == 0 {
+		return auth.CapUserLookup
+	}
 	return auth.CapAuthenticate | auth.CapIssueSession | auth.CapIntrospect | auth.CapUserLookup
 }
 func (p *StaticUsersProvider) Reload() error {
@@ -114,6 +129,9 @@ func (p *StaticUsersProvider) Usernames() []string {
 	return out
 }
 func (p *StaticUsersProvider) Authenticate(ctx context.Context, req auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
+	if len(p.jwtSecret) == 0 {
+		return nil, auth.Deny(p.Name(), "directory-only provider"), auth.ErrNotSupported
+	}
 	h := req.Header.Get("Authorization")
 	if h == "" {
 		return nil, auth.Challenge(p.Name(), "no authorization header"), nil
@@ -169,6 +187,9 @@ func (p *StaticUsersProvider) authenticateBearer(ctx context.Context, token stri
 	if strings.TrimSpace(claims.Subject) == "" || strings.TrimSpace(claims.ID) == "" {
 		return nil, auth.Challenge(p.Name(), "jwt subject and jti are required"), nil
 	}
+	if !auth.ValidExternalUsername(claims.Subject) {
+		return nil, auth.Deny(p.Name(), "reserved or invalid username"), nil
+	}
 	revoked, revokeErr := p.revocations.IsSessionRevoked(ctx, claims.ID)
 	if revokeErr != nil {
 		return nil, auth.Deny(p.Name(), "session revocation state unavailable"), fmt.Errorf("staticusers: check session revocation: %w", revokeErr)
@@ -183,6 +204,9 @@ func (p *StaticUsersProvider) authenticateBearer(ctx context.Context, token stri
 	return pr, auth.Allow(p.Name(), "valid jwt"), nil
 }
 func (p *StaticUsersProvider) IssueSession(_ context.Context, subject string) (string, time.Time, error) {
+	if len(p.jwtSecret) == 0 {
+		return "", time.Time{}, auth.ErrNotSupported
+	}
 	return p.issueToken(subject)
 }
 func (p *StaticUsersProvider) issueToken(subject string) (string, time.Time, error) {
@@ -206,6 +230,9 @@ func (p *StaticUsersProvider) issueToken(subject string) (string, time.Time, err
 	return signed, exp, nil
 }
 func (p *StaticUsersProvider) RevokeSession(ctx context.Context, jti string, expiresAt time.Time) error {
+	if len(p.jwtSecret) == 0 {
+		return auth.ErrNotSupported
+	}
 	until := expiresAt.Add(2 * time.Minute)
 	if until.Before(time.Now()) {
 		until = time.Now().Add(2 * time.Minute)
@@ -213,6 +240,9 @@ func (p *StaticUsersProvider) RevokeSession(ctx context.Context, jti string, exp
 	return p.revocations.RevokeSession(ctx, jti, until)
 }
 func (p *StaticUsersProvider) RefreshSession(ctx context.Context, old string) (string, time.Time, error) {
+	if len(p.jwtSecret) == 0 {
+		return "", time.Time{}, auth.ErrNotSupported
+	}
 	c := &refreshClaims{}
 	_, err := jwt.ParseWithClaims(old, c, func(t *jwt.Token) (any, error) {
 		if t.Method != jwt.SigningMethodHS256 {
@@ -266,7 +296,7 @@ func (p *StaticUsersProvider) GetBySubject(_ context.Context, s string) (*auth.U
 	if !ok {
 		return nil, ErrUserNotFound
 	}
-	return &auth.UserProfile{Subject: u.Username, DisplayName: u.DisplayName, Email: u.Email, Active: true}, nil
+	return &auth.UserProfile{Subject: u.Username, Username: u.Username, DisplayName: u.DisplayName, Email: u.Email, Active: true, Lifecycle: auth.ActorActive}, nil
 }
 func (p *StaticUsersProvider) ListGroups(ctx context.Context, s string) ([]string, error) {
 	if _, err := p.GetBySubject(ctx, s); err != nil {
@@ -287,7 +317,7 @@ func (p *StaticUsersProvider) SearchUsers(_ context.Context, q string, limit int
 	for _, username := range usernames {
 		u := p.users[username]
 		if q == "" || strings.Contains(strings.ToLower(u.Username), q) || strings.Contains(strings.ToLower(u.DisplayName), q) || strings.Contains(strings.ToLower(u.Email), q) {
-			out = append(out, &auth.UserProfile{Subject: u.Username, DisplayName: u.DisplayName, Email: u.Email, Active: true})
+			out = append(out, &auth.UserProfile{Subject: u.Username, Username: u.Username, DisplayName: u.DisplayName, Email: u.Email, Active: true, Lifecycle: auth.ActorActive})
 			if limit > 0 && len(out) >= limit {
 				break
 			}

@@ -3,12 +3,81 @@
 
 package memdb
 
-import "maps"
+import (
+	"encoding/binary"
+	"fmt"
+	"maps"
 
-import "github.com/hashicorp/go-memdb"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/hashicorp/go-memdb"
+)
+
+// repositoryNamespaceOrderIndex supports bounded first-page lifecycle probes
+// without materializing and sorting all repositories in the namespace.
+type repositoryNamespaceOrderIndex struct{}
+
+func (repositoryNamespaceOrderIndex) FromObject(raw interface{}) (bool, []byte, error) {
+	repository := raw.(*datastore.Repository)
+	key := append([]byte(repository.Namespace), 0)
+	key = binary.BigEndian.AppendUint64(key, ^(uint64(repository.CreationTimestamp.Unix()) ^ (1 << 63)))
+	key = binary.BigEndian.AppendUint32(key, ^uint32(repository.CreationTimestamp.Nanosecond()))
+	for _, value := range []byte(repository.UID) {
+		key = append(key, ^value)
+	}
+	return true, key, nil
+}
+
+func (repositoryNamespaceOrderIndex) FromArgs(args ...interface{}) ([]byte, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("repository namespace index requires one namespace")
+	}
+	namespace, ok := args[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("repository namespace index requires a string")
+	}
+	return append([]byte(namespace), 0), nil
+}
+
+func (index repositoryNamespaceOrderIndex) PrefixFromArgs(args ...interface{}) ([]byte, error) {
+	return index.FromArgs(args...)
+}
 
 var schema = &memdb.DBSchema{
 	Tables: map[string]*memdb.TableSchema{
+		"rbac_namespace_cleanup": {
+			Name: "rbac_namespace_cleanup",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {Name: "id", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "ID"}},
+			},
+		},
+		"rbac_resource": {
+			Name: "rbac_resource",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id":       {Name: "id", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "ID"}},
+				"uid":      {Name: "uid", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "UID"}},
+				"tier":     {Name: "tier", Indexer: &memdb.StringFieldIndex{Field: "TierID"}},
+				"role_uid": optionalStringIndex("role_uid", "RoleUID"),
+			},
+		},
+		"rbac_tier": {
+			Name: "rbac_tier",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {Name: "id", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "TierID"}},
+			},
+		},
+		"rbac_guard": {
+			Name: "rbac_guard",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {Name: "id", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "RoleUID"}},
+			},
+		},
+		"rbac_claim": {
+			Name: "rbac_claim",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id":       {Name: "id", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "ID"}},
+				"role_uid": {Name: "role_uid", Indexer: &memdb.StringFieldIndex{Field: "RoleUID"}},
+			},
+		},
 		"product": resourceTableSchema("product", map[string]*memdb.IndexSchema{
 			"repository_id": optionalStringIndex("repository_id", "RepositoryID"),
 		}),
@@ -46,7 +115,13 @@ var schema = &memdb.DBSchema{
 				},
 			},
 		},
-		"service_account": resourceTableSchema("service_account", map[string]*memdb.IndexSchema{}),
+		"service_account": {
+			Name: "service_account",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id":   {Name: "id", Unique: true, Indexer: &memdb.UUIDFieldIndex{Field: "UID"}},
+				"name": {Name: "name", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "Name"}},
+			},
+		},
 		"service_account_assertion_replay": {
 			Name: "service_account_assertion_replay",
 			Indexes: map[string]*memdb.IndexSchema{
@@ -139,9 +214,18 @@ var schema = &memdb.DBSchema{
 				"tier": optionalStringIndex("tier", "Tier"),
 			},
 		},
+		"deleted_repository": {
+			Name: "deleted_repository",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {Name: "id", Unique: true, Indexer: &memdb.UUIDFieldIndex{Field: "UID"}},
+			},
+		},
 		"repository": {
 			Name: "repository",
 			Indexes: map[string]*memdb.IndexSchema{
+				"namespace_created": {
+					Name: "namespace_created", Unique: true, Indexer: repositoryNamespaceOrderIndex{},
+				},
 				"id": {
 					Name:    "id",
 					Unique:  true,

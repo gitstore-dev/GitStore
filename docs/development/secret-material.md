@@ -1,8 +1,9 @@
 # Shared secret-material boundary
 
-`shared/secretmaterial` is a dependency-free Go 1.25 module. API/controller
-services currently use Go 1.26. Root `make build`, `make test` and `make lint`
-include the module. For focused work:
+`shared/secretmaterial` is a dependency-free Go 1.27.2 module. API/controller
+services and the workspace also require Go 1.27.2. Root `make build`, `make test`
+and `make lint` include the module. Use Go 1.27.2 for focused work as well;
+`GOWORK=off` does not lower the module's Go requirement:
 
 ```sh
 cd shared/secretmaterial
@@ -14,6 +15,14 @@ The controller's production bootstrap adapter uses this module. It binds its
 owner and reference at construction and resolves a fresh signing record for
 every token exchange; only access tokens are cached. The File integration
 remains metadata validation plus a contract-only runtime consumer.
+
+The controller bootstrap owner is the cluster-scoped subject
+`system:serviceaccount:<name>`, bound to its enrolled immutable UID. No
+ServiceAccount namespace is accepted in configuration, enrollment or token
+claims. This does not remove namespaces from runtime catalog secret references:
+their environment/namespace containment remains enforced. Authentication
+rejection invalidates the matching cached token and coalesces reacquisition;
+authorization denial never triggers a token refresh or mutation replay.
 
 Use pure `ValidateSecretRef`/`ValidateCredentialsRef` for admission. JSON
 decoding rejects unknown/duplicate/case-folded fields and explicit null

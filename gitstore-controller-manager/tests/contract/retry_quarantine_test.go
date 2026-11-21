@@ -17,9 +17,12 @@ import (
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/api"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/categorytaxonomy"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/retry"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/stretchr/testify/require"
 )
@@ -49,6 +52,138 @@ func diskManagerStore(t *testing.T, rows int) *checkpoint.DiskStore {
 	}
 	require.NoError(t, store.FinishSnapshot(t.Context(), generation, "snapshot"))
 	return store
+}
+
+type categoryStatusFunc func(context.Context, types.WorkItemKey, *status.StatusPatch) error
+
+func (f categoryStatusFunc) Apply(ctx context.Context, key types.WorkItemKey, patch *status.StatusPatch) error {
+	return f(ctx, key, patch)
+}
+
+func TestCategoryReplicasKeepConflictsPendingAcrossRestartUntilWatchRefresh(t *testing.T) {
+	key := types.WorkItemKey{Kind: "CategoryTaxonomy", Namespace: "shop", Name: "leaf"}
+	current := categorytaxonomy.CategoryTaxonomy{
+		UID: "category-id", Namespace: key.Namespace, Name: key.Name, Generation: 1, ResourceVersion: "1",
+	}
+	var mu sync.Mutex
+	var conflicts atomic.Int32
+	writes := 0
+	statuses := categoryStatusFunc(func(_ context.Context, got types.WorkItemKey, patch *status.StatusPatch) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if got != key || patch.ResourceVersion != current.ResourceVersion {
+			conflicts.Add(1)
+			return fmt.Errorf("other replica updated status: %w", types.ErrConflict)
+		}
+		writes++
+		current.ResourceVersion = "2"
+		current.Status = status.ResourceStatus{
+			ResourceVersion: "2", ObservedGeneration: *patch.ObservedGeneration,
+			Conditions: patch.Conditions, Resolved: patch.Resolved,
+		}
+		return nil
+	})
+	item := func(category categorytaxonomy.CategoryTaxonomy) checkpoint.DiskItem {
+		t.Helper()
+		data, err := json.Marshal(category)
+		require.NoError(t, err)
+		return checkpoint.DiskItem{Key: key, Version: category.ResourceVersion, Value: data}
+	}
+	directories := []string{t.TempDir(), t.TempDir()}
+	stores := make([]*checkpoint.DiskStore, 2)
+	cancel := make([]context.CancelFunc, 2)
+	done := make([]chan error, 2)
+	stop := func(replica int) {
+		if cancel[replica] != nil {
+			cancel[replica]()
+			select {
+			case err := <-done[replica]:
+				require.NoError(t, err)
+			case <-time.After(3 * time.Second):
+				t.Fatal("controller replacement did not stop bounded work")
+			}
+			cancel[replica] = nil
+		}
+	}
+	t.Cleanup(func() {
+		for replica := range stores {
+			stop(replica)
+			if stores[replica] != nil {
+				require.NoError(t, stores[replica].Close())
+			}
+		}
+	})
+	start := func(replica int) {
+		gate := cache.New[categorytaxonomy.CategoryTaxonomy]()
+		gate.MarkSynced()
+		runner := &listwatch.Runner[categorytaxonomy.CategoryTaxonomy]{
+			Kind: key.Kind, Cache: gate, Disk: stores[replica],
+			KeyFunc: func(c categorytaxonomy.CategoryTaxonomy) types.WorkItemKey {
+				return types.WorkItemKey{Kind: key.Kind, Namespace: c.Namespace, Name: c.Name}
+			},
+			RevisionFunc: func(c categorytaxonomy.CategoryTaxonomy) string { return c.ResourceVersion },
+		}
+		count := func(context.Context, string, string) (int64, error) { return 0, nil }
+		reconciler := categorytaxonomy.NewReconcilerWithLookup(runner.Lookup, statuses, count, count, nil)
+		mgr := manager.New()
+		require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+			Kind: key.Kind, Cache: gate, Disk: stores[replica], Reconciler: reconciler,
+			WorkerCount: 1, MaxAttempts: 1, StallThreshold: time.Minute,
+		}))
+		ctx, cancelReplica := context.WithCancel(t.Context())
+		cancel[replica] = cancelReplica
+		done[replica] = make(chan error, 1)
+		go func() { done[replica] <- mgr.Start(ctx) }()
+	}
+	for replica := range stores {
+		var err error
+		stores[replica], err = checkpoint.OpenDiskStore(directories[replica], key.Kind)
+		require.NoError(t, err)
+		generation, err := stores[replica].BeginSnapshot(t.Context())
+		require.NoError(t, err)
+		require.NoError(t, stores[replica].PutSnapshotPage(t.Context(), generation, []checkpoint.DiskItem{item(current)}))
+		require.NoError(t, stores[replica].FinishSnapshot(t.Context(), generation, "snapshot"))
+	}
+	for replica := range stores {
+		start(replica)
+	}
+	require.Eventually(t, func() bool {
+		return conflicts.Load() >= 4 && stores[0].Counts().Pending+stores[1].Counts().Pending == 1
+	}, 3*time.Second, 5*time.Millisecond, "watch lag must outlive the retry budget without poisoning the losing replica")
+	for _, store := range stores {
+		require.Zero(t, store.Counts().Poison)
+	}
+	loser := 0
+	if stores[0].Counts().Pending == 0 {
+		loser = 1
+	}
+	stop(loser)
+	schedule, err := stores[loser].WorkSchedule(t.Context(), key)
+	require.NoError(t, err)
+	require.Positive(t, schedule.Due)
+	require.True(t, schedule.QuarantinedAt.IsZero())
+	require.NoError(t, stores[loser].Close())
+	stores[loser], err = checkpoint.OpenDiskStore(directories[loser], key.Kind)
+	require.NoError(t, err)
+	before := conflicts.Load()
+	start(loser)
+	require.Eventually(t, func() bool { return conflicts.Load() > before }, time.Second, time.Millisecond)
+	require.EqualValues(t, 1, stores[loser].Counts().Pending, "replacement must not acknowledge stale work")
+	require.Zero(t, stores[loser].Counts().Poison)
+	mu.Lock()
+	refreshed := item(current)
+	mu.Unlock()
+	require.NoError(t, stores[loser].Apply(t.Context(), refreshed, false, false, "status-refreshed"))
+	require.Eventually(t, func() bool { return stores[loser].Counts().Pending == 0 },
+		time.Second, time.Millisecond, "the newer status snapshot must settle the retained obligation")
+	mu.Lock()
+	applied, observedGeneration := writes, current.Status.ObservedGeneration
+	mu.Unlock()
+	require.Equal(t, 1, applied, "only the winning conditional write may apply")
+	require.EqualValues(t, 1, observedGeneration)
+	for _, store := range stores {
+		require.Zero(t, store.Counts().Poison)
+	}
 }
 
 func TestDiskManagerCredentialOutagePreservesWorkUntilRecovery(t *testing.T) {

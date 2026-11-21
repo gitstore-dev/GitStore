@@ -95,7 +95,7 @@ The persisted Namespace candidate retains every accepted authored field:
 | Group | Persisted fields | Version effect |
 |---|---|---|
 | Envelope | `apiVersion`, `kind`, `metadata.name` | Name remains immutable; other accepted changes advance generation and resourceVersion. |
-| Authored metadata | `labels`, `annotations` | Any change advances generation and resourceVersion. |
+| Authored metadata | `labels`, `annotations` | **Superseded by #481:** any change advances only resourceVersion. |
 | Desired state | Full `spec`, including `repositoryDefaults` and `pushPolicyDefaults` | Any change advances generation and resourceVersion. |
 | Content | Markdown `body` | Any change advances generation and resourceVersion. |
 | Provenance | `revision`, `sourcePath`, `gitCommitSHA`, `gitRef` | Provenance-only change advances resourceVersion only. |

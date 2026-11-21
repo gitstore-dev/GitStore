@@ -3,69 +3,23 @@
 
 package datastore
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"github.com/gitstore-dev/gitstore/observability"
+	"go.opentelemetry.io/otel/metric"
+)
 
 type datastoreMetrics struct {
-	duration             *prometheus.HistogramVec
-	errors               *prometheus.CounterVec
-	projectionFailures   *prometheus.CounterVec
-	compensationAttempts *prometheus.CounterVec
-	compensationFailures *prometheus.CounterVec
-	findings             *prometheus.CounterVec
+	duration                                                                         metric.Float64Histogram
+	errors, projectionFailures, compensationAttempts, compensationFailures, findings metric.Float64Counter
 }
 
-func newMetrics(reg prometheus.Registerer) *datastoreMetrics {
-	metrics := &datastoreMetrics{}
-	metrics.duration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: "gitstore",
-		Subsystem: "datastore",
-		Name:      "operation_duration_seconds",
-		Help:      "Latency of datastore operations.",
-		Buckets:   prometheus.DefBuckets,
-	}, []string{"operation", "backend"})
-
-	metrics.errors = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "gitstore",
-		Subsystem: "datastore",
-		Name:      "operation_errors_total",
-		Help:      "Total datastore operation errors.",
-	}, []string{"operation", "backend"})
-
-	metrics.projectionFailures = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "gitstore",
-		Subsystem: "datastore",
-		Name:      "projection_write_failures_total",
-		Help:      "Projection write failures requiring compensation or repair.",
-	}, []string{"operation", "backend", "resource_kind", "projection"})
-
-	metrics.compensationAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "gitstore",
-		Subsystem: "datastore",
-		Name:      "compensation_attempts_total",
-		Help:      "Mutation compensation attempts.",
-	}, []string{"operation", "backend", "resource_kind", "projection"})
-
-	metrics.compensationFailures = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "gitstore",
-		Subsystem: "datastore",
-		Name:      "compensation_failures_total",
-		Help:      "Mutation compensation failures requiring operator repair.",
-	}, []string{"operation", "backend", "resource_kind", "projection"})
-
-	metrics.findings = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "gitstore",
-		Subsystem: "datastore",
-		Name:      "projection_findings_total",
-		Help:      "Observed missing, dangling, duplicate, or stale projections.",
-	}, []string{"operation", "backend", "resource_kind", "projection", "finding_type"})
-
-	reg.MustRegister(
-		metrics.duration,
-		metrics.errors,
-		metrics.projectionFailures,
-		metrics.compensationAttempts,
-		metrics.compensationFailures,
-		metrics.findings,
-	)
-	return metrics
+func newMetrics(meter metric.Meter) *datastoreMetrics {
+	return &datastoreMetrics{
+		duration:             observability.MustInstrument(meter.Float64Histogram("gitstore_datastore_operation_duration_seconds", metric.WithDescription("Latency of datastore operations."), metric.WithUnit("s"), metric.WithExplicitBucketBoundaries(.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10))),
+		errors:               observability.MustInstrument(meter.Float64Counter("gitstore_datastore_operation_errors_total", metric.WithDescription("Total datastore operation errors."))),
+		projectionFailures:   observability.MustInstrument(meter.Float64Counter("gitstore_datastore_projection_write_failures_total", metric.WithDescription("Projection write failures requiring compensation or repair."))),
+		compensationAttempts: observability.MustInstrument(meter.Float64Counter("gitstore_datastore_compensation_attempts_total", metric.WithDescription("Mutation compensation attempts."))),
+		compensationFailures: observability.MustInstrument(meter.Float64Counter("gitstore_datastore_compensation_failures_total", metric.WithDescription("Mutation compensation failures requiring operator repair."))),
+		findings:             observability.MustInstrument(meter.Float64Counter("gitstore_datastore_projection_findings_total", metric.WithDescription("Observed missing, dangling, duplicate, or stale projections."))),
+	}
 }

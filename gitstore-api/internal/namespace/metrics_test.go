@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	namespaceadmission "github.com/gitstore-dev/gitstore/api/internal/namespace"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -16,7 +18,7 @@ import (
 
 func TestNamespaceMetricsUseOnlyBoundedLabels(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	metrics := namespaceadmission.NewMetrics(registry)
+	metrics := namespaceadmission.NewMetrics(observabilitytest.Meter(t, registry, "gitstore/namespace"))
 
 	metrics.ObserveRejection(namespaceadmission.ReasonInvalidIdentifier)
 	metrics.ObserveDeletionBlocked(namespaceadmission.ReasonNamespaceNotEmpty)

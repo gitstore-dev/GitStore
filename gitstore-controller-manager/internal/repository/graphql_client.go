@@ -84,7 +84,7 @@ func NewGraphQLCompletionClient(client *graphqlclient.Client) *GraphQLCompletion
 // atomically complete the Repository lifecycle transition. A conflict remains
 // retryable work: a fresh watch event will replace the cache entry and enqueue
 // its current resourceVersion.
-func (c *GraphQLCompletionClient) CompleteDeletion(ctx context.Context, namespace, name, resourceVersion string) error {
+func (c *GraphQLCompletionClient) CompleteDeletion(ctx context.Context, namespace, name, resourceVersion, uid string) error {
 	var response struct {
 		CompleteRepositoryDeletion struct {
 			ID *string `json:"id"`
@@ -95,6 +95,7 @@ func (c *GraphQLCompletionClient) CompleteDeletion(ctx context.Context, namespac
 			"namespace":       namespace,
 			"name":            name,
 			"resourceVersion": resourceVersion,
+			"id":              uid,
 		},
 	}, &response); err != nil {
 		var gqlErr *graphqlclient.Error

@@ -128,6 +128,21 @@ func TestClassifyResourcePreservesKindScopeAndResourceLabels(t *testing.T) {
 	assert.Equal(t, "standard", event.PreviousSelectorLabels["tier"])
 }
 
+func TestClassifyResourceRetainsOnlySourceSuppliedDeletionIdentity(t *testing.T) {
+	identity := json.RawMessage(`{"UID":"source-uid"}`)
+	change := Change{Kind: "ServiceAccount", Name: "ci-bot",
+		Before: json.RawMessage(`{"UID":"source-uid","Name":"ci-bot","PublicKeys":["not-needed"]}`), DeletionPayload: identity}
+	event, ok := ClassifyResource(change, namespaceLabels)
+	require.True(t, ok)
+	require.Equal(t, datastore.ResourceWatchDeleted, event.Type)
+	require.JSONEq(t, `{"UID":"source-uid"}`, string(event.Payload))
+	identity[0] = 'x'
+	require.JSONEq(t, `{"UID":"source-uid"}`, string(event.Payload), "journal payload must not alias the source")
+	event, ok = ClassifyResource(Change{Kind: "Repository", Before: change.Before}, namespaceLabels)
+	require.True(t, ok)
+	require.Empty(t, event.Payload, "existing sources retain their payload-free deletion contract")
+}
+
 func TestClassifyResourceSuppressesNoopRepositoryCDCWrite(t *testing.T) {
 	payload := json.RawMessage(`{"Labels":{"team":"catalog"},"Name":"catalog","Namespace":"shop"}`)
 	event, ok := ClassifyResource(Change{
@@ -135,6 +150,30 @@ func TestClassifyResourceSuppressesNoopRepositoryCDCWrite(t *testing.T) {
 	}, namespaceLabels)
 	assert.False(t, ok)
 	assert.Empty(t, event.Type)
+}
+
+func TestRBACEnvelopeClassificationAndTierProgress(t *testing.T) {
+	for _, kind := range []string{"Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding"} {
+		t.Run(kind, func(t *testing.T) {
+			materializer := NewMaterializer(&orderedMaterializerStore{}, MaterializerConfig{})
+			event, err := materializer.Materialize(t.Context(), datastore.ResourceWatchLease{}, Change{
+				Kind: kind, Name: "readers", Namespace: "shop",
+				Before: json.RawMessage(`{"metadata":{"labels":{"team":"old"}}}`),
+				After:  json.RawMessage(`{"metadata":{"labels":{"team":"new"}}}`),
+			})
+			require.NoError(t, err)
+			require.Equal(t, "old", event.PreviousSelectorLabels["team"])
+			require.Equal(t, "new", event.SelectorLabels["team"])
+		})
+	}
+	progress := &datastore.RBACTierProgress{TierID: "cluster", Revision: 7}
+	event, ok := ClassifyResource(Change{TierProgress: progress}, namespaceLabels)
+	require.True(t, ok)
+	require.Equal(t, datastore.ResourceWatchProgress, event.Type)
+	require.Equal(t, "RBACTier", event.Kind)
+	require.Empty(t, event.Name)
+	require.Empty(t, event.Namespace)
+	require.JSONEq(t, `{"tierID":"cluster","revision":7}`, string(event.Payload))
 }
 
 func TestMaterializerAppendsBeforeSavingProgress(t *testing.T) {

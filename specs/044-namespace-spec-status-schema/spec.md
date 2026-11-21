@@ -102,7 +102,7 @@ Today's namespace consumers (the admin console, the controller-manager, and othe
 ### Key Entities
 
 - **Namespace resource**: The declarative representation of a namespace using the standard `apiVersion`, `kind`, `metadata`, `spec`, and `status` envelope. It replaces the implicit flat-record model with the same resource contract used by CategoryTaxonomy, Collection, and Product.
-- **Owner-supplied configuration**: The author-controlled Namespace fields: `metadata.name`, `metadata.labels`, `metadata.annotations`, `spec.title`, `spec.tier`, `spec.repositoryDefaults`, and `spec.pushPolicyDefaults`. Changing any of these advances the generation counter.
+- **Owner-supplied configuration**: The author-controlled Namespace fields: `metadata.name`, `metadata.labels`, `metadata.annotations`, `spec.title`, `spec.tier`, `spec.repositoryDefaults`, and `spec.pushPolicyDefaults`. **Superseded by #481 for generation semantics:** only `spec` and Markdown-body changes advance generation; labels and annotations advance only `resourceVersion`.
 - **System-managed identity/versioning metadata**: The shared `ObjectMeta` fields controlled by the system: `uid`, `resourceVersion`, `generation`, `creationTimestamp`, `revision`, `ownerReferences`, and `finalizers`. Namespace omits only the owning `namespace` field.
 - **System-computed status**: The system-owned `observedGeneration`, `lastAppliedRevision`, and shared condition set. Namespace has no kind-specific `resolved` payload.
 

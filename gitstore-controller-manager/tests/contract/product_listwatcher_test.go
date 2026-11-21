@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/categorytaxonomy"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
@@ -79,7 +80,11 @@ func productNodeJSON(uid, name, namespace, rv, categoryRef string) map[string]an
 // ProductListWatcher.List captures a typed Product watch cursor before it
 // enumerates namespaces and paginates products per namespace.
 func TestProductList_EnumeratesNamespacesThenPaginatesProducts(t *testing.T) {
+	revision := "main@sha1:" + strings.Repeat("a", 40)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/admin/graphql" {
+			t.Errorf("request path = %q, want /admin/graphql", r.URL.Path)
+		}
 		if serveProductBootstrapBookmark(t, w, r, "42") {
 			return
 		}
@@ -99,6 +104,9 @@ func TestProductList_EnumeratesNamespacesThenPaginatesProducts(t *testing.T) {
 				{"cursor":"n1","node":{"metadata":{"name":"acme"}}}
 			],"pageInfo":{"hasNextPage":false,"endCursor":"n1"}}}}`))
 		case strings.Contains(req.Query, "products("):
+			if !strings.Contains(req.Query, "generation revision") {
+				t.Error("product list must select metadata.revision")
+			}
 			if !strings.Contains(req.Query, "first: 250,") {
 				t.Errorf("Product recovery must request bounded 250-row pages: %s", req.Query)
 			}
@@ -106,12 +114,19 @@ func TestProductList_EnumeratesNamespacesThenPaginatesProducts(t *testing.T) {
 			if ns != "acme" {
 				t.Errorf("unexpected namespace variable: %q", ns)
 			}
+			var edges []any
+			for i, value := range []any{revision, nil, nil} {
+				node := productNodeJSON("uid-1", "widget", "acme", "5", "electronics")
+				if i < 2 {
+					node["metadata"].(map[string]any)["revision"] = value
+				}
+				node["status"] = map[string]any{"lastAppliedRevision": "stale-status-revision"}
+				edges = append(edges, map[string]any{"node": node})
+			}
 			resp := map[string]any{
 				"data": map[string]any{
 					"products": map[string]any{
-						"edges": []any{
-							map[string]any{"cursor": "p1", "node": productNodeJSON("uid-1", "widget", "acme", "5", "electronics")},
-						},
+						"edges":    edges,
 						"pageInfo": map[string]any{"hasNextPage": false, "endCursor": "p1"},
 					},
 				},
@@ -123,21 +138,86 @@ func TestProductList_EnumeratesNamespacesThenPaginatesProducts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("test-token"))
+	client := graphqlclient.New(srv.URL+"/admin/graphql", graphqlclient.NewStaticToken("test-token"))
 	lw := listwatch.NewProductListWatcher(client)
 
 	resp, err := lw.List(context.Background())
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
 	}
-	if len(resp.Items) != 1 {
-		t.Fatalf("len(Items) = %d, want 1", len(resp.Items))
+	if len(resp.Items) != 3 {
+		t.Fatalf("len(Items) = %d, want 3", len(resp.Items))
+	}
+	for i, want := range []string{revision, "", ""} {
+		require.Equal(t, want, resp.Items[i].Revision)
+		require.Equal(t, "stale-status-revision", resp.Items[i].Status.LastAppliedRevision)
 	}
 	if resp.Items[0].Name != "widget" || resp.Items[0].CategoryRefName != "electronics" {
 		t.Errorf("unexpected item: %+v", resp.Items[0])
 	}
 	if resp.ResourceVersion != "42" {
 		t.Errorf("ResourceVersion = %q, want durable journal cursor %q", resp.ResourceVersion, "42")
+	}
+}
+
+func TestProductWatch_DecodesAuthoredRevisionAndLegacyMetadata(t *testing.T) {
+	revision := "main@sha1:" + strings.Repeat("a", 40)
+	upgrader := websocket.Upgrader{Subprotocols: []string{"graphql-transport-ws"}}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/admin/graphql" {
+			t.Errorf("request path = %q, want /admin/graphql", r.URL.Path)
+		}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		var init map[string]any
+		if conn.ReadJSON(&init) != nil {
+			return
+		}
+		_ = conn.WriteJSON(map[string]any{"type": "connection_ack"})
+		var subscribe struct {
+			ID      string `json:"id"`
+			Payload struct {
+				Query string `json:"query"`
+			} `json:"payload"`
+		}
+		if conn.ReadJSON(&subscribe) != nil {
+			return
+		}
+		if !strings.Contains(subscribe.Payload.Query, "generation revision") {
+			t.Error("product watch must select metadata.revision")
+		}
+		for i, value := range []any{revision, nil, nil} {
+			node := productNodeJSON("uid-1", "widget", "acme", "5", "")
+			if i < 2 {
+				node["metadata"].(map[string]any)["revision"] = value
+			}
+			node["status"] = map[string]any{"lastAppliedRevision": "stale-status-revision"}
+			_ = conn.WriteJSON(map[string]any{
+				"id": subscribe.ID, "type": "next",
+				"payload": map[string]any{"data": map[string]any{"watchProducts": map[string]any{
+					"type": "MODIFIED", "namespace": "acme", "name": "widget", "resourceVersion": "5", "product": node,
+				}}},
+			})
+		}
+	}))
+	defer srv.Close()
+	lw := listwatch.NewProductListWatcher(graphqlclient.New(srv.URL+"/admin/graphql", graphqlclient.NewStaticToken("test-token")))
+	watcher, err := lw.Watch(t.Context(), "cursor")
+	require.NoError(t, err)
+	defer watcher.Stop()
+	for _, want := range []string{revision, "", ""} {
+		select {
+		case event, ok := <-watcher.Events():
+			require.True(t, ok)
+			require.Equal(t, want, event.Object.Revision)
+			require.Equal(t, "stale-status-revision", event.Object.Status.LastAppliedRevision)
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for product revision")
+		}
 	}
 }
 

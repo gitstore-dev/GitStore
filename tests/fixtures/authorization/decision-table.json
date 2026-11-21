@@ -1,0 +1,2939 @@
+{
+  "schemaVersion": 1,
+  "description": "Provider-neutral design fixtures; promote unchanged to tests/fixtures during implementation. End-to-end principals must come from trusted AuthN. Admission and token-proof checks remain separate from provider decisions.",
+  "policies": {
+    "base": {
+      "apiVersion": "rbac.authorization.gitstore.dev/v1beta1",
+      "kind": "RbacLocalConfiguration",
+      "clusterRoles": {
+        "reader": {
+          "rules": [
+            {
+              "resources": [
+                "product"
+              ],
+              "verbs": [
+                "read"
+              ]
+            }
+          ]
+        },
+        "instance": {
+          "rules": [
+            {
+              "resources": [
+                "repository/contents"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "resourceNames": [
+                "catalog",
+                "spring-sale"
+              ]
+            },
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "list",
+                "watch"
+              ],
+              "resourceNames": [
+                "catalog",
+                "spring-sale"
+              ]
+            }
+          ]
+        },
+        "owner": {
+          "rules": [
+            {
+              "resources": [
+                "namespace"
+              ],
+              "verbs": [
+                "read",
+                "delete",
+                "transfer"
+              ],
+              "when": [
+                "owner"
+              ]
+            }
+          ]
+        },
+        "creator": {
+          "rules": [
+            {
+              "resources": [
+                "namespace"
+              ],
+              "verbs": [
+                "create"
+              ],
+              "when": [
+                {
+                  "attr": "tier",
+                  "op": "eq",
+                  "value": "USER"
+                }
+              ]
+            }
+          ]
+        },
+        "transfer": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "transfer"
+              ]
+            }
+          ]
+        },
+        "conditionalTransfer": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "transfer"
+              ],
+              "when": [
+                "owner",
+                "targetOwnerMember"
+              ]
+            }
+          ]
+        },
+        "public": {
+          "rules": [
+            {
+              "resources": [
+                "repository/contents"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "when": [
+                {
+                  "attr": "visibility",
+                  "op": "eq",
+                  "value": "public"
+                }
+              ]
+            }
+          ]
+        },
+        "admin": {
+          "rules": [
+            {
+              "resources": [
+                "*"
+              ],
+              "verbs": [
+                "*"
+              ]
+            }
+          ]
+        },
+        "token": {
+          "rules": [
+            {
+              "resources": [
+                "serviceAccount/token"
+              ],
+              "verbs": [
+                "issue"
+              ],
+              "resourceNames": [
+                "controller"
+              ]
+            }
+          ]
+        },
+        "neq": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "when": [
+                {
+                  "attr": "visibility",
+                  "op": "neq",
+                  "value": "private"
+                }
+              ]
+            }
+          ]
+        },
+        "in": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "when": [
+                {
+                  "attr": "namespace",
+                  "op": "in",
+                  "values": [
+                    "acme",
+                    "beta"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "notIn": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "when": [
+                {
+                  "attr": "namespace",
+                  "op": "notIn",
+                  "values": [
+                    "blocked"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "roles": {
+        "editor": {
+          "rules": [
+            {
+              "resources": [
+                "product"
+              ],
+              "verbs": [
+                "create",
+                "read",
+                "list",
+                "update",
+                "delete"
+              ]
+            }
+          ]
+        }
+      },
+      "clusterRoleBindings": [
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "reader"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "reader"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "instance"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "instance"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "transfer"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "cluster-transfer"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "conditionalTransfer"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "conditional"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "admin"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "admin"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "neq"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "negative"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "in"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "included"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "notIn"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "excluded"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "owner"
+          },
+          "subjects": [
+            {
+              "kind": "Group",
+              "name": "system:authenticated"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "creator"
+          },
+          "subjects": [
+            {
+              "kind": "Group",
+              "name": "system:authenticated"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "public"
+          },
+          "subjects": [
+            {
+              "kind": "Group",
+              "name": "system:unauthenticated"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "token"
+          },
+          "subjects": [
+            {
+              "kind": "ServiceAccount",
+              "name": "controller"
+            }
+          ]
+        }
+      ],
+      "roleBindings": [
+        {
+          "namespace": "acme",
+          "roleRef": {
+            "kind": "Role",
+            "name": "editor"
+          },
+          "subjects": [
+            {
+              "kind": "Group",
+              "name": "system:group:merchandiser"
+            }
+          ]
+        },
+        {
+          "namespace": "acme",
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "reader"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "local-reader"
+            }
+          ]
+        },
+        {
+          "namespace": "acme",
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "owner"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "local-owner"
+            }
+          ]
+        },
+        {
+          "namespace": "acme",
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "transfer"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "local-transfer"
+            }
+          ]
+        }
+      ],
+      "defaultDeny": true
+    },
+    "scopeOnly": {
+      "apiVersion": "rbac.authorization.gitstore.dev/v1beta1",
+      "kind": "RbacLocalConfiguration",
+      "clusterRoles": {
+        "owner": {
+          "rules": [
+            {
+              "resources": [
+                "namespace"
+              ],
+              "verbs": [
+                "read",
+                "delete",
+                "transfer"
+              ],
+              "when": [
+                "owner"
+              ]
+            }
+          ]
+        }
+      },
+      "roles": {},
+      "clusterRoleBindings": [],
+      "roleBindings": [
+        {
+          "namespace": "acme",
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "owner"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "local-owner"
+            }
+          ]
+        }
+      ],
+      "defaultDeny": true
+    },
+    "dualTransfer": {
+      "apiVersion": "rbac.authorization.gitstore.dev/v1beta1",
+      "kind": "RbacLocalConfiguration",
+      "clusterRoles": {
+        "reader": {
+          "rules": [
+            {
+              "resources": [
+                "product"
+              ],
+              "verbs": [
+                "read"
+              ]
+            }
+          ]
+        },
+        "instance": {
+          "rules": [
+            {
+              "resources": [
+                "repository/contents"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "resourceNames": [
+                "catalog",
+                "spring-sale"
+              ]
+            },
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "list",
+                "watch"
+              ],
+              "resourceNames": [
+                "catalog",
+                "spring-sale"
+              ]
+            }
+          ]
+        },
+        "owner": {
+          "rules": [
+            {
+              "resources": [
+                "namespace"
+              ],
+              "verbs": [
+                "read",
+                "delete",
+                "transfer"
+              ],
+              "when": [
+                "owner"
+              ]
+            }
+          ]
+        },
+        "creator": {
+          "rules": [
+            {
+              "resources": [
+                "namespace"
+              ],
+              "verbs": [
+                "create"
+              ],
+              "when": [
+                {
+                  "attr": "tier",
+                  "op": "eq",
+                  "value": "USER"
+                }
+              ]
+            }
+          ]
+        },
+        "transfer": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "transfer"
+              ]
+            }
+          ]
+        },
+        "conditionalTransfer": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "transfer"
+              ],
+              "when": [
+                "owner",
+                "targetOwnerMember"
+              ]
+            }
+          ]
+        },
+        "public": {
+          "rules": [
+            {
+              "resources": [
+                "repository/contents"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "when": [
+                {
+                  "attr": "visibility",
+                  "op": "eq",
+                  "value": "public"
+                }
+              ]
+            }
+          ]
+        },
+        "admin": {
+          "rules": [
+            {
+              "resources": [
+                "*"
+              ],
+              "verbs": [
+                "*"
+              ]
+            }
+          ]
+        },
+        "token": {
+          "rules": [
+            {
+              "resources": [
+                "serviceAccount/token"
+              ],
+              "verbs": [
+                "issue"
+              ],
+              "resourceNames": [
+                "controller"
+              ]
+            }
+          ]
+        },
+        "neq": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "when": [
+                {
+                  "attr": "visibility",
+                  "op": "neq",
+                  "value": "private"
+                }
+              ]
+            }
+          ]
+        },
+        "in": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "when": [
+                {
+                  "attr": "namespace",
+                  "op": "in",
+                  "values": [
+                    "acme",
+                    "beta"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "notIn": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "when": [
+                {
+                  "attr": "namespace",
+                  "op": "notIn",
+                  "values": [
+                    "blocked"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "roles": {
+        "editor": {
+          "rules": [
+            {
+              "resources": [
+                "product"
+              ],
+              "verbs": [
+                "create",
+                "read",
+                "list",
+                "update",
+                "delete"
+              ]
+            }
+          ]
+        }
+      },
+      "clusterRoleBindings": [
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "reader"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "reader"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "instance"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "instance"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "transfer"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "cluster-transfer"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "conditionalTransfer"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "conditional"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "admin"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "admin"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "neq"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "negative"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "in"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "included"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "notIn"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "excluded"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "owner"
+          },
+          "subjects": [
+            {
+              "kind": "Group",
+              "name": "system:authenticated"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "creator"
+          },
+          "subjects": [
+            {
+              "kind": "Group",
+              "name": "system:authenticated"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "public"
+          },
+          "subjects": [
+            {
+              "kind": "Group",
+              "name": "system:unauthenticated"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "token"
+          },
+          "subjects": [
+            {
+              "kind": "ServiceAccount",
+              "name": "controller"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "transfer"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "local-transfer"
+            }
+          ]
+        }
+      ],
+      "roleBindings": [
+        {
+          "namespace": "acme",
+          "roleRef": {
+            "kind": "Role",
+            "name": "editor"
+          },
+          "subjects": [
+            {
+              "kind": "Group",
+              "name": "system:group:merchandiser"
+            }
+          ]
+        },
+        {
+          "namespace": "acme",
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "reader"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "local-reader"
+            }
+          ]
+        },
+        {
+          "namespace": "acme",
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "owner"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "local-owner"
+            }
+          ]
+        },
+        {
+          "namespace": "acme",
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "transfer"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "local-transfer"
+            }
+          ]
+        }
+      ],
+      "defaultDeny": true
+    },
+    "instanceTransfer": {
+      "apiVersion": "rbac.authorization.gitstore.dev/v1beta1",
+      "kind": "RbacLocalConfiguration",
+      "clusterRoles": {
+        "reader": {
+          "rules": [
+            {
+              "resources": [
+                "product"
+              ],
+              "verbs": [
+                "read"
+              ]
+            }
+          ]
+        },
+        "instance": {
+          "rules": [
+            {
+              "resources": [
+                "repository/contents"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "resourceNames": [
+                "catalog",
+                "spring-sale"
+              ]
+            },
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "list",
+                "watch"
+              ],
+              "resourceNames": [
+                "catalog",
+                "spring-sale"
+              ]
+            }
+          ]
+        },
+        "owner": {
+          "rules": [
+            {
+              "resources": [
+                "namespace"
+              ],
+              "verbs": [
+                "read",
+                "delete",
+                "transfer"
+              ],
+              "when": [
+                "owner"
+              ]
+            }
+          ]
+        },
+        "creator": {
+          "rules": [
+            {
+              "resources": [
+                "namespace"
+              ],
+              "verbs": [
+                "create"
+              ],
+              "when": [
+                {
+                  "attr": "tier",
+                  "op": "eq",
+                  "value": "USER"
+                }
+              ]
+            }
+          ]
+        },
+        "transfer": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "transfer"
+              ],
+              "resourceNames": [
+                "catalog"
+              ]
+            }
+          ]
+        },
+        "conditionalTransfer": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "transfer"
+              ],
+              "when": [
+                "owner",
+                "targetOwnerMember"
+              ]
+            }
+          ]
+        },
+        "public": {
+          "rules": [
+            {
+              "resources": [
+                "repository/contents"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "when": [
+                {
+                  "attr": "visibility",
+                  "op": "eq",
+                  "value": "public"
+                }
+              ]
+            }
+          ]
+        },
+        "admin": {
+          "rules": [
+            {
+              "resources": [
+                "*"
+              ],
+              "verbs": [
+                "*"
+              ]
+            }
+          ]
+        },
+        "token": {
+          "rules": [
+            {
+              "resources": [
+                "serviceAccount/token"
+              ],
+              "verbs": [
+                "issue"
+              ],
+              "resourceNames": [
+                "controller"
+              ]
+            }
+          ]
+        },
+        "neq": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "when": [
+                {
+                  "attr": "visibility",
+                  "op": "neq",
+                  "value": "private"
+                }
+              ]
+            }
+          ]
+        },
+        "in": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "when": [
+                {
+                  "attr": "namespace",
+                  "op": "in",
+                  "values": [
+                    "acme",
+                    "beta"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "notIn": {
+          "rules": [
+            {
+              "resources": [
+                "repository"
+              ],
+              "verbs": [
+                "read"
+              ],
+              "when": [
+                {
+                  "attr": "namespace",
+                  "op": "notIn",
+                  "values": [
+                    "blocked"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "roles": {
+        "editor": {
+          "rules": [
+            {
+              "resources": [
+                "product"
+              ],
+              "verbs": [
+                "create",
+                "read",
+                "list",
+                "update",
+                "delete"
+              ]
+            }
+          ]
+        }
+      },
+      "clusterRoleBindings": [
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "reader"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "reader"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "instance"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "instance"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "transfer"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "cluster-transfer"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "conditionalTransfer"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "conditional"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "admin"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "admin"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "neq"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "negative"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "in"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "included"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "notIn"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "excluded"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "owner"
+          },
+          "subjects": [
+            {
+              "kind": "Group",
+              "name": "system:authenticated"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "creator"
+          },
+          "subjects": [
+            {
+              "kind": "Group",
+              "name": "system:authenticated"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "public"
+          },
+          "subjects": [
+            {
+              "kind": "Group",
+              "name": "system:unauthenticated"
+            }
+          ]
+        },
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "token"
+          },
+          "subjects": [
+            {
+              "kind": "ServiceAccount",
+              "name": "controller"
+            }
+          ]
+        }
+      ],
+      "roleBindings": [
+        {
+          "namespace": "acme",
+          "roleRef": {
+            "kind": "Role",
+            "name": "editor"
+          },
+          "subjects": [
+            {
+              "kind": "Group",
+              "name": "system:group:merchandiser"
+            }
+          ]
+        },
+        {
+          "namespace": "acme",
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "reader"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "local-reader"
+            }
+          ]
+        },
+        {
+          "namespace": "acme",
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "owner"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "local-owner"
+            }
+          ]
+        },
+        {
+          "namespace": "acme",
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "transfer"
+          },
+          "subjects": [
+            {
+              "kind": "User",
+              "name": "local-transfer"
+            }
+          ]
+        }
+      ],
+      "defaultDeny": true
+    },
+    "empty": {
+      "apiVersion": "rbac.authorization.gitstore.dev/v1beta1",
+      "kind": "RbacLocalConfiguration"
+    },
+    "saGroup": {
+      "apiVersion": "rbac.authorization.gitstore.dev/v1beta1",
+      "kind": "RbacLocalConfiguration",
+      "clusterRoles": {
+        "reader": {
+          "rules": [
+            {
+              "resources": [
+                "product"
+              ],
+              "verbs": [
+                "read"
+              ]
+            }
+          ]
+        }
+      },
+      "clusterRoleBindings": [
+        {
+          "roleRef": {
+            "kind": "ClusterRole",
+            "name": "reader"
+          },
+          "subjects": [
+            {
+              "kind": "Group",
+              "name": "system:serviceaccounts"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "cluster-grant-any-namespace",
+      "policy": "base",
+      "principal": {
+        "subject": "reader",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "product.read",
+      "resource": {
+        "kind": "product",
+        "name": "p",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "other"
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "group-role-same-namespace",
+      "policy": "base",
+      "principal": {
+        "subject": "bob",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated",
+          "system:group:merchandiser"
+        ]
+      },
+      "action": "product.create",
+      "resource": {
+        "kind": "product",
+        "name": "p",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "group-role-other-namespace",
+      "policy": "base",
+      "principal": {
+        "subject": "bob",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated",
+          "system:group:merchandiser"
+        ]
+      },
+      "action": "product.create",
+      "resource": {
+        "kind": "product",
+        "name": "p",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "other"
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "role-definition-alone-no-grant",
+      "policy": "base",
+      "principal": {
+        "subject": "bob",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "product.read",
+      "resource": {
+        "kind": "product",
+        "name": "p",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "namespaced-clusterrole-reuse",
+      "policy": "base",
+      "principal": {
+        "subject": "local-reader",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "product.read",
+      "resource": {
+        "kind": "product",
+        "name": "p",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "namespaced-clusterrole-no-leak",
+      "policy": "base",
+      "principal": {
+        "subject": "local-reader",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "product.read",
+      "resource": {
+        "kind": "product",
+        "name": "p",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "other"
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "missing-namespace-no-local-grant",
+      "policy": "base",
+      "principal": {
+        "subject": "local-reader",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "product.read",
+      "resource": {
+        "kind": "product",
+        "name": "p",
+        "ownerSub": "",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "missing-namespace-cluster-grant",
+      "policy": "base",
+      "principal": {
+        "subject": "reader",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "product.read",
+      "resource": {
+        "kind": "product",
+        "name": "p",
+        "ownerSub": "",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "instance-match",
+      "policy": "base",
+      "principal": {
+        "subject": "instance",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.contents.read",
+      "resource": {
+        "kind": "repository",
+        "name": "catalog",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "instance-mismatch",
+      "policy": "base",
+      "principal": {
+        "subject": "instance",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.contents.read",
+      "resource": {
+        "kind": "repository",
+        "name": "drafts",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "instance-cannot-list",
+      "policy": "base",
+      "principal": {
+        "subject": "instance",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.list",
+      "resource": {
+        "kind": "repository",
+        "name": "",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "owner-direct",
+      "policy": "base",
+      "principal": {
+        "subject": "alice",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "namespace.delete",
+      "resource": {
+        "kind": "namespace",
+        "name": "acme",
+        "ownerSub": "alice",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "owner-group-member",
+      "policy": "base",
+      "principal": {
+        "subject": "alice",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated",
+          "system:group:platform"
+        ]
+      },
+      "action": "namespace.delete",
+      "resource": {
+        "kind": "namespace",
+        "name": "acme",
+        "ownerSub": "system:group:platform",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "creator-is-not-group-owner",
+      "policy": "base",
+      "principal": {
+        "subject": "alice",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "namespace.delete",
+      "resource": {
+        "kind": "namespace",
+        "name": "acme",
+        "ownerSub": "system:group:platform",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "empty-owner-false",
+      "policy": "base",
+      "principal": {
+        "subject": "alice",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "namespace.delete",
+      "resource": {
+        "kind": "namespace",
+        "name": "acme",
+        "ownerSub": "",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "cluster-kind-cannot-use-rolebinding",
+      "policy": "scopeOnly",
+      "principal": {
+        "subject": "local-owner",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "namespace.delete",
+      "resource": {
+        "kind": "namespace",
+        "name": "acme",
+        "ownerSub": "local-owner",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "user-tier-create",
+      "policy": "base",
+      "principal": {
+        "subject": "bob",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "namespace.create",
+      "resource": {
+        "kind": "namespace",
+        "name": "bob",
+        "ownerSub": "",
+        "attrs": {
+          "tier": "USER"
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "organization-tier-denied",
+      "policy": "base",
+      "principal": {
+        "subject": "bob",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "namespace.create",
+      "resource": {
+        "kind": "namespace",
+        "name": "org",
+        "ownerSub": "",
+        "attrs": {
+          "tier": "ORGANIZATION"
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "missing-tier-denied",
+      "policy": "base",
+      "principal": {
+        "subject": "bob",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "namespace.create",
+      "resource": {
+        "kind": "namespace",
+        "name": "bob",
+        "ownerSub": "",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "owner-transfer-member",
+      "policy": "base",
+      "principal": {
+        "subject": "alice",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated",
+          "system:group:platform"
+        ]
+      },
+      "action": "namespace.transfer",
+      "resource": {
+        "kind": "namespace",
+        "name": "org",
+        "ownerSub": "alice",
+        "attrs": {
+          "targetOwnerRef": {
+            "kind": "Group",
+            "name": "platform"
+          }
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "owner-transfer-nonmember",
+      "policy": "base",
+      "principal": {
+        "subject": "alice",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "namespace.transfer",
+      "resource": {
+        "kind": "namespace",
+        "name": "org",
+        "ownerSub": "alice",
+        "attrs": {
+          "targetOwnerRef": {
+            "kind": "Group",
+            "name": "platform"
+          }
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "cluster-unconditional-transfer",
+      "policy": "base",
+      "principal": {
+        "subject": "cluster-transfer",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.transfer",
+      "resource": {
+        "kind": "repository",
+        "name": "catalog",
+        "ownerSub": "alice",
+        "attrs": {
+          "namespace": "acme",
+          "targetOwnerRef": {
+            "kind": "User",
+            "name": "elsewhere"
+          }
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "local-unconditional-no-seizure",
+      "policy": "base",
+      "principal": {
+        "subject": "local-transfer",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.transfer",
+      "resource": {
+        "kind": "repository",
+        "name": "catalog",
+        "ownerSub": "alice",
+        "attrs": {
+          "namespace": "acme",
+          "targetOwnerRef": {
+            "kind": "User",
+            "name": "local-transfer"
+          }
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "local-unconditional-owned-target-override",
+      "policy": "base",
+      "principal": {
+        "subject": "local-transfer",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.transfer",
+      "resource": {
+        "kind": "repository",
+        "name": "catalog",
+        "ownerSub": "local-transfer",
+        "attrs": {
+          "namespace": "acme",
+          "targetOwnerRef": {
+            "kind": "User",
+            "name": "elsewhere"
+          }
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "conditional-transfer-both",
+      "policy": "base",
+      "principal": {
+        "subject": "conditional",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.transfer",
+      "resource": {
+        "kind": "repository",
+        "name": "catalog",
+        "ownerSub": "conditional",
+        "attrs": {
+          "namespace": "acme",
+          "targetOwnerRef": {
+            "kind": "User",
+            "name": "conditional"
+          }
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "conditional-transfer-no-target-member",
+      "policy": "base",
+      "principal": {
+        "subject": "conditional",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.transfer",
+      "resource": {
+        "kind": "repository",
+        "name": "catalog",
+        "ownerSub": "conditional",
+        "attrs": {
+          "namespace": "acme",
+          "targetOwnerRef": {
+            "kind": "User",
+            "name": "other"
+          }
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "transfer-target-required",
+      "policy": "base",
+      "principal": {
+        "subject": "cluster-transfer",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.transfer",
+      "resource": {
+        "kind": "repository",
+        "name": "catalog",
+        "ownerSub": "alice",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "anonymous-public-read",
+      "policy": "base",
+      "principal": {
+        "subject": "anon",
+        "authMethod": "none",
+        "groups": [
+          "system:unauthenticated"
+        ]
+      },
+      "action": "repository.contents.read",
+      "resource": {
+        "kind": "repository",
+        "name": "catalog",
+        "ownerSub": "",
+        "attrs": {
+          "visibility": "public"
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "anonymous-private-read",
+      "policy": "base",
+      "principal": {
+        "subject": "anon",
+        "authMethod": "none",
+        "groups": [
+          "system:unauthenticated"
+        ]
+      },
+      "action": "repository.contents.read",
+      "resource": {
+        "kind": "repository",
+        "name": "catalog",
+        "ownerSub": "",
+        "attrs": {
+          "visibility": "private"
+        }
+      },
+      "expected": {
+        "outcome": "deny",
+        "response": "NOT_FOUND"
+      }
+    },
+    {
+      "id": "anonymous-missing-visibility",
+      "policy": "base",
+      "principal": {
+        "subject": "anon",
+        "authMethod": "none",
+        "groups": [
+          "system:unauthenticated"
+        ]
+      },
+      "action": "repository.contents.read",
+      "resource": {
+        "kind": "repository",
+        "name": "catalog",
+        "ownerSub": "",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "deny",
+        "response": "FORBIDDEN"
+      }
+    },
+    {
+      "id": "unmatched-private-read-concealed",
+      "policy": "base",
+      "principal": {
+        "subject": "bob",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "product.read",
+      "resource": {
+        "kind": "product",
+        "name": "p",
+        "ownerSub": "",
+        "attrs": {
+          "visibility": "private",
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "deny",
+        "response": "NOT_FOUND"
+      }
+    },
+    {
+      "id": "unmatched-public-read-forbidden",
+      "policy": "base",
+      "principal": {
+        "subject": "bob",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "product.read",
+      "resource": {
+        "kind": "product",
+        "name": "p",
+        "ownerSub": "",
+        "attrs": {
+          "visibility": "public",
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "deny",
+        "response": "FORBIDDEN"
+      }
+    },
+    {
+      "id": "list-not-concealed",
+      "policy": "base",
+      "principal": {
+        "subject": "bob",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "product.list",
+      "resource": {
+        "kind": "product",
+        "name": "",
+        "ownerSub": "",
+        "attrs": {
+          "visibility": "private",
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "deny",
+        "response": "FORBIDDEN"
+      }
+    },
+    {
+      "id": "negative-comparison",
+      "policy": "base",
+      "principal": {
+        "subject": "negative",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.read",
+      "resource": {
+        "kind": "repository",
+        "name": "r",
+        "ownerSub": "",
+        "attrs": {
+          "visibility": "public"
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "negative-missing-fails-closed",
+      "policy": "base",
+      "principal": {
+        "subject": "negative",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.read",
+      "resource": {
+        "kind": "repository",
+        "name": "r",
+        "ownerSub": "",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "typed-attribute-no-coercion",
+      "policy": "base",
+      "principal": {
+        "subject": "negative",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.read",
+      "resource": {
+        "kind": "repository",
+        "name": "r",
+        "ownerSub": "",
+        "attrs": {
+          "visibility": 42
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "in-member",
+      "policy": "base",
+      "principal": {
+        "subject": "included",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.read",
+      "resource": {
+        "kind": "repository",
+        "name": "r",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "in-not-member",
+      "policy": "base",
+      "principal": {
+        "subject": "included",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.read",
+      "resource": {
+        "kind": "repository",
+        "name": "r",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "other"
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "notIn-member-denied",
+      "policy": "base",
+      "principal": {
+        "subject": "excluded",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.read",
+      "resource": {
+        "kind": "repository",
+        "name": "r",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "blocked"
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "notIn-other",
+      "policy": "base",
+      "principal": {
+        "subject": "excluded",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.read",
+      "resource": {
+        "kind": "repository",
+        "name": "r",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "notIn-missing-fails-closed",
+      "policy": "base",
+      "principal": {
+        "subject": "excluded",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.read",
+      "resource": {
+        "kind": "repository",
+        "name": "r",
+        "ownerSub": "",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "masters-trusted-group",
+      "policy": "base",
+      "principal": {
+        "subject": "breakglass",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated",
+          "system:masters"
+        ]
+      },
+      "action": "namespace.delete",
+      "resource": {
+        "kind": "namespace",
+        "name": "org",
+        "ownerSub": "",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "masters-unknown-action-denied",
+      "policy": "base",
+      "principal": {
+        "subject": "breakglass",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated",
+          "system:masters"
+        ]
+      },
+      "action": "namespace.publish",
+      "resource": {
+        "kind": "namespace",
+        "name": "org",
+        "ownerSub": "",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "wildcard-admin",
+      "policy": "base",
+      "principal": {
+        "subject": "admin",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "product.purge",
+      "resource": {
+        "kind": "product",
+        "name": "p",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "wildcard-kind-mismatch",
+      "policy": "base",
+      "principal": {
+        "subject": "admin",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "product.read",
+      "resource": {
+        "kind": "file",
+        "name": "f",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "delete-does-not-purge",
+      "policy": "base",
+      "principal": {
+        "subject": "bob",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated",
+          "system:group:merchandiser"
+        ]
+      },
+      "action": "product.purge",
+      "resource": {
+        "kind": "product",
+        "name": "p",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "sa-binding-verified",
+      "policy": "base",
+      "principal": {
+        "subject": "system:serviceaccount:controller",
+        "authMethod": "serviceaccount-jwt",
+        "serviceAccountUID": "verified-uid",
+        "groups": [
+          "system:authenticated",
+          "system:serviceaccounts"
+        ]
+      },
+      "action": "serviceAccount.token.issue",
+      "resource": {
+        "kind": "serviceAccount",
+        "name": "controller",
+        "ownerSub": "",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "sa-binding-other-target",
+      "policy": "base",
+      "principal": {
+        "subject": "system:serviceaccount:controller",
+        "authMethod": "serviceaccount-jwt",
+        "serviceAccountUID": "verified-uid",
+        "groups": [
+          "system:authenticated",
+          "system:serviceaccounts"
+        ]
+      },
+      "action": "serviceAccount.token.issue",
+      "resource": {
+        "kind": "serviceAccount",
+        "name": "other",
+        "ownerSub": "",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "sa-prefix-is-not-proof",
+      "policy": "base",
+      "principal": {
+        "subject": "system:serviceaccount:controller",
+        "authMethod": "oidc-jwt",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "serviceAccount.token.issue",
+      "resource": {
+        "kind": "serviceAccount",
+        "name": "controller",
+        "ownerSub": "",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "instance-cannot-watch",
+      "policy": "base",
+      "principal": {
+        "subject": "instance",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.watch",
+      "resource": {
+        "kind": "repository",
+        "name": "",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "cluster-transfer-binding-survives-dedup",
+      "policy": "dualTransfer",
+      "principal": {
+        "subject": "local-transfer",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.transfer",
+      "resource": {
+        "kind": "repository",
+        "name": "catalog",
+        "ownerSub": "alice",
+        "attrs": {
+          "namespace": "acme",
+          "targetOwnerRef": {
+            "kind": "User",
+            "name": "local-transfer"
+          }
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "cluster-transfer-instance-match",
+      "policy": "instanceTransfer",
+      "principal": {
+        "subject": "cluster-transfer",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.transfer",
+      "resource": {
+        "kind": "repository",
+        "name": "catalog",
+        "ownerSub": "alice",
+        "attrs": {
+          "namespace": "acme",
+          "targetOwnerRef": {
+            "kind": "User",
+            "name": "elsewhere"
+          }
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    },
+    {
+      "id": "cluster-transfer-instance-mismatch",
+      "policy": "instanceTransfer",
+      "principal": {
+        "subject": "cluster-transfer",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "repository.transfer",
+      "resource": {
+        "kind": "repository",
+        "name": "drafts",
+        "ownerSub": "alice",
+        "attrs": {
+          "namespace": "acme",
+          "targetOwnerRef": {
+            "kind": "User",
+            "name": "elsewhere"
+          }
+        }
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "omitted-default-denies",
+      "policy": "empty",
+      "principal": {
+        "subject": "bob",
+        "authMethod": "static-users",
+        "groups": [
+          "system:authenticated"
+        ]
+      },
+      "action": "product.read",
+      "resource": {
+        "kind": "product",
+        "name": "p",
+        "ownerSub": "",
+        "attrs": {}
+      },
+      "expected": {
+        "outcome": "deny"
+      }
+    },
+    {
+      "id": "sa-synthesized-group",
+      "policy": "saGroup",
+      "principal": {
+        "subject": "system:serviceaccount:controller",
+        "authMethod": "serviceaccount-jwt",
+        "serviceAccountUID": "verified-uid",
+        "groups": [
+          "system:authenticated",
+          "system:serviceaccounts"
+        ]
+      },
+      "action": "product.read",
+      "resource": {
+        "kind": "product",
+        "name": "p",
+        "ownerSub": "",
+        "attrs": {
+          "namespace": "acme"
+        }
+      },
+      "expected": {
+        "outcome": "allow"
+      }
+    }
+  ],
+  "validationCases": [
+    {
+      "id": "default-omitted",
+      "operation": "remove",
+      "path": "/defaultDeny",
+      "expected": "valid"
+    },
+    {
+      "id": "default-false",
+      "operation": "replace",
+      "path": "/defaultDeny",
+      "value": false,
+      "expected": "invalid"
+    },
+    {
+      "id": "unknown-version",
+      "operation": "replace",
+      "path": "/apiVersion",
+      "value": "rbac.authorization.gitstore.dev/v2",
+      "expected": "invalid"
+    },
+    {
+      "id": "effect-rejected",
+      "operation": "add",
+      "path": "/clusterRoles/reader/rules/0/effect",
+      "value": "deny",
+      "expected": "invalid"
+    },
+    {
+      "id": "expression-rejected",
+      "operation": "add",
+      "path": "/clusterRoles/reader/rules/0/when",
+      "value": "attrs.visibility == 'public'",
+      "expected": "invalid"
+    },
+    {
+      "id": "scalar-owner-rejected",
+      "operation": "add",
+      "path": "/clusterRoles/reader/rules/0/when",
+      "value": "owner",
+      "expected": "invalid"
+    },
+    {
+      "id": "unknown-attribute",
+      "operation": "add",
+      "path": "/clusterRoles/reader/rules/0/when",
+      "value": [
+        {
+          "attr": "secret",
+          "op": "eq",
+          "value": "x"
+        }
+      ],
+      "expected": "invalid"
+    },
+    {
+      "id": "unknown-operator",
+      "operation": "add",
+      "path": "/clusterRoles/reader/rules/0/when",
+      "value": [
+        {
+          "attr": "tier",
+          "op": "regex",
+          "value": ".*"
+        }
+      ],
+      "expected": "invalid"
+    },
+    {
+      "id": "mixed-operands",
+      "operation": "add",
+      "path": "/clusterRoles/reader/rules/0/when",
+      "value": [
+        {
+          "attr": "tier",
+          "op": "eq",
+          "value": "USER",
+          "values": [
+            "USER"
+          ]
+        }
+      ],
+      "expected": "invalid"
+    },
+    {
+      "id": "legacy-resource",
+      "operation": "replace",
+      "path": "/clusterRoles/reader/rules/0/resources",
+      "value": [
+        "category"
+      ],
+      "expected": "invalid"
+    },
+    {
+      "id": "unknown-verb",
+      "operation": "replace",
+      "path": "/clusterRoles/reader/rules/0/verbs",
+      "value": [
+        "publish"
+      ],
+      "expected": "invalid"
+    },
+    {
+      "id": "partial-wildcard",
+      "operation": "replace",
+      "path": "/clusterRoles/reader/rules/0/resources",
+      "value": [
+        "*/status"
+      ],
+      "expected": "invalid"
+    },
+    {
+      "id": "undefined-ref",
+      "operation": "replace",
+      "path": "/roleBindings/0/roleRef/name",
+      "value": "absent",
+      "expected": "invalid"
+    },
+    {
+      "id": "ref-kind-mismatch",
+      "operation": "replace",
+      "path": "/roleBindings/0/roleRef/kind",
+      "value": "ClusterRole",
+      "expected": "invalid"
+    },
+    {
+      "id": "role-binding-no-namespace",
+      "operation": "remove",
+      "path": "/roleBindings/0/namespace",
+      "expected": "invalid"
+    },
+    {
+      "id": "cluster-binding-namespace",
+      "operation": "add",
+      "path": "/clusterRoleBindings/0/namespace",
+      "value": "acme",
+      "expected": "invalid"
+    },
+    {
+      "id": "namespaced-role-cluster-kind",
+      "operation": "replace",
+      "path": "/roles/editor/rules/0/resources",
+      "value": [
+        "namespace"
+      ],
+      "expected": "invalid"
+    },
+    {
+      "id": "reserved-user",
+      "operation": "replace",
+      "path": "/clusterRoleBindings/0/subjects/0/name",
+      "value": "system:masters",
+      "expected": "invalid"
+    },
+    {
+      "id": "allowed-internal-user",
+      "operation": "replace",
+      "path": "/clusterRoleBindings/0/subjects/0/name",
+      "value": "system:api",
+      "expected": "valid"
+    },
+    {
+      "id": "sa-subject-namespace",
+      "operation": "add",
+      "path": "/clusterRoleBindings/11/subjects/0/namespace",
+      "value": "controllers",
+      "expected": "invalid"
+    },
+    {
+      "id": "unknown-condition",
+      "operation": "add",
+      "path": "/clusterRoles/reader/rules/0/when",
+      "value": [
+        "administrator"
+      ],
+      "expected": "invalid"
+    },
+    {
+      "id": "unknown-kind",
+      "operation": "replace",
+      "path": "/clusterRoles/reader/rules/0/resources",
+      "value": [
+        "unknownKind"
+      ],
+      "expected": "invalid"
+    },
+    {
+      "id": "unknown-subresource",
+      "operation": "replace",
+      "path": "/clusterRoles/reader/rules/0/resources",
+      "value": [
+        "product/secret"
+      ],
+      "expected": "invalid"
+    },
+    {
+      "id": "legacy-verb",
+      "operation": "replace",
+      "path": "/clusterRoles/reader/rules/0/verbs",
+      "value": [
+        "read.any"
+      ],
+      "expected": "invalid"
+    },
+    {
+      "id": "namespaced-role-wildcard-cluster-kind",
+      "operation": "replace",
+      "path": "/roles/editor/rules/0/resources",
+      "value": [
+        "*"
+      ],
+      "expected": "invalid"
+    }
+  ],
+  "rawValidationCases": [
+    {
+      "id": "legacy-v1",
+      "yaml": "version: v1\nroles: {}\nrole_bindings: {}\n",
+      "expected": "invalid",
+      "reason": "supported apiVersion required"
+    },
+    {
+      "id": "duplicate-key",
+      "yaml": "apiVersion: rbac.authorization.gitstore.dev/v1beta1\nkind: RbacLocalConfiguration\nkind: RbacLocalConfiguration\n",
+      "expected": "invalid"
+    },
+    {
+      "id": "multiple-documents",
+      "yaml": "apiVersion: rbac.authorization.gitstore.dev/v1beta1\nkind: RbacLocalConfiguration\n---\nkind: RbacLocalConfiguration\n",
+      "expected": "invalid"
+    }
+  ],
+  "fixtureInstructions": "Each validationCase applies its single JSON Pointer add/replace/remove operation to a fresh copy of policies.base. Each decision case references a full policy by key. Run all decision, validation and response mapping cases without changing expectations. Adapters ignore provider-specific reason prose and timestamps but require a nonempty reason on every decision; matching rbac-local allows must identify binding, role and rule. Future cases append rather than weaken expectations."
+}

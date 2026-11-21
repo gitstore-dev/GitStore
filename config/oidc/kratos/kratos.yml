@@ -3,7 +3,7 @@
 # Secrets and DSN arrive via environment variables (DSN, SECRETS_COOKIE,
 # SECRETS_DEFAULT — Ory's native env binding); only non-secret settings live here.
 
-version: v1.3.1
+version: v26.2.0
 
 serve:
   public:
@@ -21,12 +21,32 @@ serve:
     port: 4434
 
 identity:
-  default_schema_id: gitstore-user
+  default_schema_id: customer
   schemas:
-    - id: gitstore-user
-      url: file:///etc/config/kratos/identity.schema.json
+    - id: staff
+      url: file:///etc/config/kratos/staff.schema.json
+      selfservice_selectable: false
+    - id: customer
+      url: file:///etc/config/kratos/customer.schema.json
+      selfservice_selectable: true
+    - id: serviceAccount
+      url: file:///etc/config/kratos/serviceaccount.schema.json
+      selfservice_selectable: false
 
 courier:
+  http:
+    request_config:
+      url: http://api:4000/internal/notifications/mail
+      method: POST
+      body: file:///etc/config/kratos/courier.jsonnet
+      headers:
+        Content-Type: application/json
+      auth:
+        type: api_key
+        config:
+          name: GitStore-Mail-Key
+          in: header
+          value: ""
   smtp:
     # mailslurper catches all outbound mail in this dev/reference deployment.
     connection_uri: smtp://mailslurper:1025/
@@ -40,6 +60,8 @@ selfservice:
     - http://localhost:4445
   methods:
     password:
+      enabled: true
+    link:
       enabled: true
   flows:
     error:

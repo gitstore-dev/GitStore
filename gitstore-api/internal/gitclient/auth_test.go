@@ -4,23 +4,42 @@
 package gitclient
 
 import (
-	"context"
 	"testing"
+	"time"
 
-	"github.com/stretchr/testify/assert"
+	gitv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/git/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc/metadata"
 )
 
-// T026: GetRequestMetadata injects Bearer token
-func TestHmacCreds_GetRequestMetadata(t *testing.T) {
-	creds := hmacCreds{token: "mysecret"}
-	md, err := creds.GetRequestMetadata(context.Background())
+func TestSignedRPCPropagatesOnlyTraceIdentityAlongsideItsSignature(t *testing.T) {
+	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("baggage", "private-resource"))
+	ctx = trace.ContextWithSpanContext(ctx, trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{2}, TraceFlags: trace.FlagsSampled,
+	}))
+	ctx, err := signedContext(ctx, "test-secret", gitv1.GitService_CreateRepository_FullMethodName, &gitv1.CreateRepositoryRequest{})
 	require.NoError(t, err)
-	assert.Equal(t, "Bearer mysecret", md["authorization"])
+	md, _ := metadata.FromOutgoingContext(ctx)
+	require.Equal(t, []string{"00-01000000000000000000000000000000-0200000000000000-01"}, md.Get("traceparent"))
+	require.Empty(t, md.Get("baggage"))
+	require.Len(t, md.Get(auth.RPCSignatureMetadata), 1)
 }
 
-// T027: RequireTransportSecurity returns false (no TLS in Phase 4)
-func TestHmacCreds_RequireTransportSecurity_False(t *testing.T) {
-	creds := hmacCreds{}
-	assert.False(t, creds.RequireTransportSecurity())
+func TestSignedRequestNeverForwardsSigningKey(t *testing.T) {
+	request := &gitv1.CreateRepositoryRequest{RepositoryId: "repository"}
+	ctx := metadata.NewOutgoingContext(t.Context(), metadata.Pairs("authorization", "Bearer user-token"))
+	ctx, err := signedContext(ctx, "mysecret", gitv1.GitService_CreateRepository_FullMethodName, request)
+	require.NoError(t, err)
+	md, _ := metadata.FromOutgoingContext(ctx)
+	require.Empty(t, md.Get("authorization"))
+	require.Len(t, md.Get(auth.RPCSignatureMetadata), 1)
+	envelope := md.Get(auth.RPCSignatureMetadata)[0]
+	require.NotContains(t, envelope, "mysecret")
+	_, _, err = auth.VerifyRPC("mysecret", "gitstore-git", gitv1.GitService_CreateRepository_FullMethodName, envelope, request, time.Now())
+	require.NoError(t, err)
+	request.RepositoryId = "another"
+	_, _, err = auth.VerifyRPC("mysecret", "gitstore-git", gitv1.GitService_CreateRepository_FullMethodName, envelope, request, time.Now())
+	require.Error(t, err)
 }

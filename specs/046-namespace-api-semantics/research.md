@@ -8,7 +8,7 @@
 
 **Alternatives considered**:
 - *Narrower git-delegation* (`GitWriter.CommitFile` as audit trail, synchronous datastore write in the same request, no new admission kind/controller/finalizer). Rejected by the project owner — smaller and shippable sooner, but leaves Namespace's write-path inconsistent with the documented architecture and does not close ADR-0002.
-- *Revert to direct-API-mutation, no Git involvement* (this spec's original draft). Rejected — contradicts the recorded Clarification and ADR-0002's classification of Namespace as git-backed in `docs/resource-storage/git-backed.md`.
+- *Revert to direct-API-mutation, no Git involvement* (this spec's original draft). Rejected — contradicts the recorded Clarification and ADR-0002's classification of Namespace as git-backed in `docs/storage-groups/git-backed.md`.
 
 ## 2. Admission mechanism for the new `Namespace` kind
 

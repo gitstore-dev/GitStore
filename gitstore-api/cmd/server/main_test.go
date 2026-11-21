@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -75,18 +76,70 @@ func TestMain(m *testing.M) {
 }
 
 func TestParseConfigFile(t *testing.T) {
-	paths, err := parseConfigFiles([]string{"--config-file", "/config/shared.toml"})
+	options, err := parseOptions([]string{"--config-file", "/config/shared.toml"})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"/config/shared.toml"}, paths)
+	assert.Equal(t, configFileFlags{"/config/shared.toml"}, options.configFiles)
+}
+
+func TestParseComposableServeRoles(t *testing.T) {
+	for _, args := range [][]string{{"serve", "--roles=admin"}, {"--roles", "smart-http,catalog"}, {"serve", "--all"}, {"--all"}} {
+		_, err := parseOptions(args)
+		require.NoError(t, err, args)
+	}
+	for _, args := range [][]string{{"serve", "--all", "--roles=admin"}, {"--roles="}, {"--roles=admin,admin"}, {"serve", "--roles=invalid"}, {"serve", "unexpected"}} {
+		_, err := parseOptions(args)
+		require.Error(t, err, args)
+	}
 }
 
 func TestParseConfigFilesRepeated(t *testing.T) {
-	paths, err := parseConfigFiles([]string{
+	options, err := parseOptions([]string{
 		"--config-file", "/config/shared.toml",
 		"--config-file", "/config/overlay.toml",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"/config/shared.toml", "/config/overlay.toml"}, paths)
+	assert.Equal(t, configFileFlags{"/config/shared.toml", "/config/overlay.toml"}, options.configFiles)
+}
+
+func TestOperatorCommandDoesNotLoadServerConfiguration(t *testing.T) {
+	if os.Getenv("GITSTORE_TEST_OPERATOR_ENTRYPOINT") == "1" {
+		os.Args = []string{"api", "gitctl", "migrate", "--timeout", "0s"}
+		main()
+		return
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOperatorCommandDoesNotLoadServerConfiguration$")
+	command.Env = append(os.Environ(),
+		"GITSTORE_TEST_OPERATOR_ENTRYPOINT=1",
+		"GITSTORE_API__DATASTORE__BACKEND=invalid",
+		"GITSTORE_API__AUTH__AUTHN__CHAIN=invalid",
+	)
+	output, err := command.CombinedOutput()
+	var exit *exec.ExitError
+	require.ErrorAs(t, err, &exit)
+	assert.Equal(t, 2, exit.ExitCode())
+	assert.Contains(t, string(output), "timeout")
+	assert.NotContains(t, string(output), "Failed to load configuration")
+}
+
+func TestSigningKeyFileOverridesEnvironmentWithoutChangingConfigLayers(t *testing.T) {
+	t.Setenv("GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY", "environment-key")
+	path := filepath.Join(t.TempDir(), "issuer-key")
+	require.NoError(t, os.WriteFile(path, []byte("mounted-key\n"), 0600))
+	options, err := parseOptions([]string{
+		"--config-file", "shared.toml", "--config-file", "overlay.toml",
+		"--serviceaccount-signing-key-file", path,
+	})
+	require.NoError(t, err)
+	require.NoError(t, loadSigningKeyFile(options.signingKeyFile))
+	assert.Equal(t, "mounted-key\n", os.Getenv("GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY"))
+	assert.Equal(t, configFileFlags{"shared.toml", "overlay.toml"}, options.configFiles)
+	require.NoError(t, loadSigningKeyFile(""))
+	assert.Equal(t, "mounted-key\n", os.Getenv("GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY"))
+	require.NoError(t, os.WriteFile(path, []byte(" \n"), 0600))
+	assert.Error(t, loadSigningKeyFile(path))
+	assert.Error(t, loadSigningKeyFile(filepath.Join(t.TempDir(), "missing")))
 }
 
 func (m *mockGitWriter) CommitFile(_ context.Context, p gitclient.CommitFileParams) (string, error) {
@@ -180,11 +233,13 @@ func newTestGraphQLRegistry(t *testing.T) *authpkg.ProviderRegistry {
 	usersFile := filepath.Join(t.TempDir(), "users.yaml")
 	require.NoError(t, os.WriteFile(usersFile, []byte("version: v1\nusers:\n  - username: admin\n    password_hash: \""+string(hash)+"\"\n"), 0600))
 	cfg := config.AuthConfig{
-		StaticUsers: config.StaticUsersConfig{UsersFile: usersFile},
-		JWT: config.JWTConfig{
-			Secret: "dev-secret",
-			Issuer: "gitstore",
-			TTL:    2 * time.Hour,
+		StaticUsers: config.StaticUsersConfig{
+			UsersFile: usersFile,
+			JWT: config.JWTConfig{
+				Secret: "dev-secret",
+				Issuer: "gitstore",
+				TTL:    2 * time.Hour,
+			},
 		},
 	}
 
@@ -217,7 +272,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator(), CommittedManifestAdmitter: testCommittedManifestAdmitter{store: store}})
 	require.NoError(t, err)
 
-	loginReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
+	loginReq := httptest.NewRequest(http.MethodPost, "/admin/graphql", strings.NewReader(`{
 		"query": "mutation { login(input: { username: \"admin\", password: \"admin123\" }) { token { accessToken tokenType } } }"
 	}`))
 	loginReq.Header.Set("Content-Type", "application/json")
@@ -244,7 +299,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	require.NotEmpty(t, loginResponse.Data.Login.Token.AccessToken)
 	assert.Equal(t, "Bearer", loginResponse.Data.Login.Token.TokenType)
 
-	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{"query":"mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { metadata { name } } } }"}`))
+	req := httptest.NewRequest(http.MethodPost, "/admin/graphql", strings.NewReader(`{"query":"mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: ORGANIZATION } }) { namespace { metadata { name } } } }"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+loginResponse.Data.Login.Token.AccessToken)
 	w := httptest.NewRecorder()
@@ -270,7 +325,7 @@ func TestGraphQLHandlerAcceptsBearerTokenForNamespaceMutation(t *testing.T) {
 	require.Empty(t, response.Errors)
 	assert.Equal(t, "alice", response.Data.CreateNamespace.Namespace.Metadata.Name)
 
-	listReq := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
+	listReq := httptest.NewRequest(http.MethodPost, "/admin/graphql", strings.NewReader(`{
 		"query": "query { namespaces(first: 10) { edges { cursor node { metadata { name } } } pageInfo { hasNextPage endCursor } } }"
 	}`))
 	listReq.Header.Set("Content-Type", "application/json")
@@ -310,7 +365,7 @@ func TestGraphQLHandlerRejectsLoginWithInvalidCredentials(t *testing.T) {
 	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator()})
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
+	req := httptest.NewRequest(http.MethodPost, "/admin/graphql", strings.NewReader(`{
 		"query": "mutation { login(input: { username: \"admin\", password: \"wrong\" }) { token { accessToken } } }"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -335,7 +390,7 @@ func TestGraphQLHandlerRejectsNamespaceMutationWithoutBearerToken(t *testing.T) 
 
 	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator()})
 	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
+	req := httptest.NewRequest(http.MethodPost, "/admin/graphql", strings.NewReader(`{
 		"query": "mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { metadata { name } } } }"
 	}`))
 	req.Header.Set("Content-Type", "application/json")
@@ -361,7 +416,7 @@ func TestGraphQLHandlerRejectsMutationWithInvalidBearerToken(t *testing.T) {
 	handler, err := app.NewGraphQLHandler(app.GraphQLHandlerDeps{Store: store, GitWriter: &mockGitWriter{}, Logger: zap.NewNop(), Registry: newTestGraphQLRegistry(t), IDs: apiruntime.NewSequenceIDGenerator()})
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`{
+	req := httptest.NewRequest(http.MethodPost, "/admin/graphql", strings.NewReader(`{
 		"query": "mutation { createNamespace(input: { apiVersion: \"gitstore.dev/v1beta1\", kind: \"Namespace\", metadata: { name: \"alice\" }, spec: { tier: USER } }) { namespace { metadata { name } } } }"
 	}`))
 	req.Header.Set("Content-Type", "application/json")

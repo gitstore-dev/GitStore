@@ -35,3 +35,5 @@ func (p *NoneProvider) UpsertProfile(_ context.Context, _ *auth.UserProfile) err
 func (p *NoneProvider) Deactivate(_ context.Context, _ string) error {
 	return auth.ErrNotSupported
 }
+
+var _ auth.UserDirProvider = (*NoneProvider)(nil)

@@ -58,6 +58,8 @@ func TestProductVariantBlockingOwnerReferenceIsIndexedByProductScope(t *testing.
 	owners, ok := any(store).(datastore.OwnerReferenceStore)
 	require.True(t, ok)
 	product := &datastore.Product{UID: uuid.NewString(), RepositoryID: uuid.NewString(), Namespace: "acme", Name: "widget", ResourceVersion: "1"}
+	require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{UID: uuid.NewString(), Name: product.Namespace}))
+	require.NoError(t, store.CreateRepository(t.Context(), &datastore.Repository{UID: product.RepositoryID, Namespace: product.Namespace, Name: "catalog"}))
 	require.NoError(t, store.CreateProduct(t.Context(), product))
 	references, err := json.Marshal([]catalog.OwnerReference{{
 		APIVersion: "catalog.gitstore.dev/v1beta1", Kind: "Product", Name: product.Name,

@@ -25,10 +25,12 @@ func namespaceNodeJSON(name, rv string, generation int, finalizers []string) map
 			"name":            name,
 			"resourceVersion": rv,
 			"generation":      generation,
+			"revision":        "main@sha1:" + strings.Repeat(rv, 40),
 			"finalizers":      finalizers,
 		},
 		"status": map[string]any{
-			"observedGeneration": generation,
+			"observedGeneration":  generation,
+			"lastAppliedRevision": "stale-status-revision",
 			"conditions": []any{
 				map[string]any{"type": "AdmissionAccepted", "status": "TRUE", "observedGeneration": generation},
 			},
@@ -38,6 +40,10 @@ func namespaceNodeJSON(name, rv string, generation int, finalizers []string) map
 
 func TestNamespaceListWatcherListsNamespaces(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/admin/graphql" {
+			http.NotFound(w, r)
+			return
+		}
 		if websocket.IsWebSocketUpgrade(r) {
 			upgrader := websocket.Upgrader{Subprotocols: []string{"graphql-transport-ws"}}
 			conn, err := upgrader.Upgrade(w, r, nil)
@@ -55,6 +61,9 @@ func TestNamespaceListWatcherListsNamespaces(t *testing.T) {
 			if err := conn.ReadJSON(&subMsg); err != nil {
 				return
 			}
+			if !strings.Contains(subMsg["payload"].(map[string]any)["query"].(string), " revision ") {
+				t.Error("watch must select metadata.revision")
+			}
 			_ = conn.WriteJSON(map[string]any{
 				"id": subMsg["id"], "type": "next",
 				"payload": map[string]any{"data": map[string]any{"watchNamespaces": map[string]any{
@@ -62,6 +71,14 @@ func TestNamespaceListWatcherListsNamespaces(t *testing.T) {
 				}}},
 			})
 			return
+		}
+		var request struct{ Query string }
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		if !strings.Contains(request.Query, " revision ") {
+			t.Error("list must select metadata.revision")
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
@@ -73,7 +90,7 @@ func TestNamespaceListWatcherListsNamespaces(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lw := listwatch.NewNamespaceListWatcher(graphqlclient.New(srv.URL, graphqlclient.NewStaticToken("token")))
+	lw := listwatch.NewNamespaceListWatcher(graphqlclient.New(srv.URL+"/admin/graphql", graphqlclient.NewStaticToken("token")))
 	resp, err := lw.List(context.Background())
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
@@ -84,11 +101,18 @@ func TestNamespaceListWatcherListsNamespaces(t *testing.T) {
 	if resp.ResourceVersion != "17" {
 		t.Fatalf("ResourceVersion = %q, want 17", resp.ResourceVersion)
 	}
+	if resp.Items[0].Revision != "main@sha1:"+strings.Repeat("8", 40) || resp.Items[0].Status.LastAppliedRevision != "stale-status-revision" {
+		t.Fatalf("authored/status revisions = %+v", resp.Items[0])
+	}
 }
 
 func TestNamespaceListWatcherMapsTypedWatchEvents(t *testing.T) {
 	upgrader := websocket.Upgrader{Subprotocols: []string{"graphql-transport-ws"}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/admin/graphql" {
+			http.NotFound(w, r)
+			return
+		}
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			t.Errorf("upgrade failed: %v", err)
@@ -107,6 +131,9 @@ func TestNamespaceListWatcherMapsTypedWatchEvents(t *testing.T) {
 		if err := conn.ReadJSON(&subMsg); err != nil {
 			return
 		}
+		if !strings.Contains(subMsg["payload"].(map[string]any)["query"].(string), " revision ") {
+			t.Error("watch must select metadata.revision")
+		}
 		out := map[string]any{"id": subMsg["id"]}
 		maps.Copy(out, map[string]any{
 			"type": "next",
@@ -121,7 +148,7 @@ func TestNamespaceListWatcherMapsTypedWatchEvents(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	lw := listwatch.NewNamespaceListWatcher(graphqlclient.New("ws"+strings.TrimPrefix(srv.URL, "http"), graphqlclient.NewStaticToken("token")))
+	lw := listwatch.NewNamespaceListWatcher(graphqlclient.New("ws"+strings.TrimPrefix(srv.URL, "http")+"/admin/graphql", graphqlclient.NewStaticToken("token")))
 	watcher, err := lw.Watch(context.Background(), "8")
 	if err != nil {
 		t.Fatalf("Watch failed: %v", err)
@@ -135,6 +162,9 @@ func TestNamespaceListWatcherMapsTypedWatchEvents(t *testing.T) {
 		}
 		if len(event.Object.Finalizers) != 1 {
 			t.Fatalf("finalizers = %v, want foreground deletion", event.Object.Finalizers)
+		}
+		if event.Object.Revision != "main@sha1:"+strings.Repeat("9", 40) || event.Object.Status.LastAppliedRevision != "stale-status-revision" {
+			t.Fatalf("authored/status revisions = %+v", event.Object)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for namespace watch event")

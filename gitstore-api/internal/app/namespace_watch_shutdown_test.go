@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/observability/observabilitytest"
+
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
@@ -68,7 +70,7 @@ func TestFileCDCReadinessGatesSharedBookmarksAndShutdownReleasesLease(t *testing
 	store, err := memdb.New()
 	require.NoError(t, err)
 	journal := store.(datastore.ResourceWatchJournal)
-	metrics, err := watchjournal.NewMetrics(prometheus.NewRegistry())
+	metrics, err := watchjournal.NewMetrics(observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/watchjournal"))
 	require.NoError(t, err)
 	clock := apiruntime.SystemClock{}
 	runner := &fakeCatalogCDCRunner{kinds: []string{"CategoryTaxonomy", "File", "Product"}, gated: "File", started: make(chan struct{}), allowReady: make(chan struct{})}
@@ -113,7 +115,7 @@ func TestNamespaceWatchLeaderReleasesLeaseBeforeReturning(t *testing.T) {
 	lease, acquired, err := leader.Acquire(context.Background())
 	require.NoError(t, err)
 	require.True(t, acquired)
-	metrics, err := watchjournal.NewMetrics(prometheus.NewRegistry())
+	metrics, err := watchjournal.NewMetrics(observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/watchjournal"))
 	require.NoError(t, err)
 	runtime := &namespaceWatchRuntime{
 		journal:      journal,
@@ -174,7 +176,7 @@ func TestNamespaceWatchRuntimeStopsRetryingAfterOrderingDiscontinuity(t *testing
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	journal := store.(datastore.NamespaceWatchJournal)
-	metrics, err := watchjournal.NewMetrics(prometheus.NewRegistry())
+	metrics, err := watchjournal.NewMetrics(observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/watchjournal"))
 	require.NoError(t, err)
 	runner := &discontinuityNamespaceCDCRunner{}
 	runtime := &namespaceWatchRuntime{
@@ -203,7 +205,7 @@ func TestNamespaceWatchLeaderStartsEveryCatalogCDCWorker(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	journal := store.(datastore.NamespaceWatchJournal)
-	metrics, err := watchjournal.NewMetrics(prometheus.NewRegistry())
+	metrics, err := watchjournal.NewMetrics(observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/watchjournal"))
 	require.NoError(t, err)
 	clock := apiruntime.SystemClock{}
 	runner := &fakeCatalogCDCRunner{kinds: []string{"CategoryTaxonomy", "File", "Product"}}
@@ -242,7 +244,7 @@ func TestNamespaceWatchReadinessRefreshesFollowerMetricsFromSharedBounds(t *test
 	_, err = journal.Append(context.Background(), lease, datastore.NamespaceWatchEvent{Type: datastore.NamespaceWatchBookmark, At: now}, time.Hour)
 	require.NoError(t, err)
 	registry := prometheus.NewRegistry()
-	metrics, err := watchjournal.NewMetrics(registry)
+	metrics, err := watchjournal.NewMetrics(observabilitytest.Meter(t, registry, "gitstore/watchjournal"))
 	require.NoError(t, err)
 	runtime := &namespaceWatchRuntime{
 		journal: journal, metrics: metrics,

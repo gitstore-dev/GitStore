@@ -6,11 +6,23 @@ package admission
 import (
 	"context"
 	"errors"
+
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
 
 // ErrCommittedManifestSuperseded means a committed file was replaced before
 // it could be admitted. Callers must begin a new authoring attempt.
 var ErrCommittedManifestSuperseded = errors.New("committed manifest superseded")
+
+var ErrCommittedRBACProjectionPending = errors.New("committed RBAC projection pending")
+
+// CommittedRBACResult preserves the durable Git outcome even when projecting
+// its whole admitted candidate fails. It is not a new authorization decision.
+type CommittedRBACResult struct {
+	CommitSHA         string
+	State             datastore.RBACTierState
+	ProjectionPending bool
+}
 
 // CommittedManifestRequest describes one already-committed resource manifest.
 // Both the post-receive batch path and synchronous GraphQL mutations use this
@@ -29,6 +41,8 @@ type CommittedManifestRequest struct {
 	// exists at CommitSHA. They are used only for OperationDelete.
 	Kind string
 	Name string
+	// ExpectedUID binds infrastructure deletion to the admitted incarnation.
+	ExpectedUID string
 }
 
 // CommittedManifestResult identifies the resource admitted from a committed

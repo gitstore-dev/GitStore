@@ -40,15 +40,15 @@ func generateEd25519PEM(t *testing.T) string {
 
 // stubLookup is a minimal ServiceAccountLookup test double.
 type stubLookup struct {
-	accounts map[string]*datastore.ServiceAccount // keyed by "namespace/name"
+	accounts map[string]*datastore.ServiceAccount // keyed by "name"
 	err      error
 }
 
-func (s *stubLookup) GetServiceAccountBySubject(_ context.Context, namespace, name string) (*datastore.ServiceAccount, error) {
+func (s *stubLookup) GetServiceAccountBySubject(_ context.Context, name string) (*datastore.ServiceAccount, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
-	sa, ok := s.accounts[namespace+"/"+name]
+	sa, ok := s.accounts[name]
 	if !ok {
 		return nil, datastore.ErrNotFound
 	}
@@ -78,10 +78,9 @@ func bearerRequest(token string) auth.AuthRequest {
 	return auth.AuthRequest{Header: h}
 }
 
-func testServiceAccount(namespace, name, uid string) *datastore.ServiceAccount {
+func testServiceAccount(name, uid string) *datastore.ServiceAccount {
 	return &datastore.ServiceAccount{
 		UID:             uid,
-		Namespace:       namespace,
 		Name:            name,
 		Disabled:        false,
 		Generation:      1,
@@ -91,8 +90,8 @@ func testServiceAccount(namespace, name, uid string) *datastore.ServiceAccount {
 
 func TestServiceAccountJWT_RoundTrip_Allow(t *testing.T) {
 	pemKey := generateEd25519PEM(t)
-	sa := testServiceAccount("controllers", "gitstore-controller-manager", "uid-1")
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/gitstore-controller-manager": sa}}
+	sa := testServiceAccount("gitstore-controller-manager", "uid-1")
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"gitstore-controller-manager": sa}}
 	p := newTestProvider(t, pemKey, lookup)
 
 	token, exp, err := p.IssueAccessToken(sa, "", 0)
@@ -103,9 +102,9 @@ func TestServiceAccountJWT_RoundTrip_Allow(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, auth.OutcomeAllow, decision.Outcome)
 	require.NotNil(t, principal)
-	assert.Equal(t, "serviceaccount:controllers:gitstore-controller-manager", principal.Subject)
+	assert.Equal(t, "system:serviceaccount:gitstore-controller-manager", principal.Subject)
 	assert.Equal(t, providerName, principal.AuthMethod)
-	assert.Empty(t, principal.Roles, "roles must never be embedded — resolved exclusively by rbac-local")
+
 }
 
 func TestKidFromPublicKeyUsesCanonicalDER(t *testing.T) {
@@ -184,7 +183,7 @@ func TestServiceAccountJWT_WrongIssuer_Challenge(t *testing.T) {
 	claims := accessTokenClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "some-other-issuer",
-			Subject:   "serviceaccount:controllers:x",
+			Subject:   "system:serviceaccount:x",
 			Audience:  jwt.ClaimStrings{"gitstore-api"},
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute)),
@@ -202,8 +201,8 @@ func TestServiceAccountJWT_WrongIssuer_Challenge(t *testing.T) {
 
 func TestServiceAccountJWT_BadSignature_Deny(t *testing.T) {
 	pemKey := generateEd25519PEM(t)
-	sa := testServiceAccount("controllers", "x", "uid-1")
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	sa := testServiceAccount("x", "uid-1")
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, pemKey, lookup)
 
 	token, _, err := p.IssueAccessToken(sa, "", 0)
@@ -214,16 +213,32 @@ func TestServiceAccountJWT_BadSignature_Deny(t *testing.T) {
 	assert.Equal(t, auth.OutcomeDeny, decision.Outcome)
 }
 
+func TestServiceAccountJWTRejectsLegacySubject(t *testing.T) {
+	pemKey := generateEd25519PEM(t)
+	p := newTestProvider(t, pemKey, &stubLookup{})
+	priv, err := jwt.ParseEdPrivateKeyFromPEM([]byte(pemKey))
+	require.NoError(t, err)
+	for _, subject := range []string{"serviceaccount:controllers:manager", "serviceaccount:manager", "system:serviceaccount:ns:manager", "system:api"} {
+		claims := accessTokenClaims{RegisteredClaims: jwt.RegisteredClaims{Issuer: p.issuer, Subject: subject, Audience: jwt.ClaimStrings{p.audience}, ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute))}, ServiceAccountUID: "uid"}
+		token, err := jwt.NewWithClaims(jwt.SigningMethodEdDSA, claims).SignedString(priv)
+		require.NoError(t, err)
+		principal, decision, err := p.Authenticate(t.Context(), bearerRequest(token))
+		require.NoError(t, err)
+		require.Nil(t, principal)
+		require.NotEqual(t, auth.OutcomeAllow, decision.Outcome)
+	}
+}
+
 func TestServiceAccountJWT_WrongAudience_Deny(t *testing.T) {
 	pemKey := generateEd25519PEM(t)
-	sa := testServiceAccount("controllers", "x", "uid-1")
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	sa := testServiceAccount("x", "uid-1")
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, pemKey, lookup)
 
 	token, err := p.signWithClaims(accessTokenClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    p.issuer,
-			Subject:   "serviceaccount:controllers:x",
+			Subject:   "system:serviceaccount:x",
 			Audience:  jwt.ClaimStrings{"some-other-audience"},
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute)),
@@ -239,14 +254,14 @@ func TestServiceAccountJWT_WrongAudience_Deny(t *testing.T) {
 
 func TestServiceAccountJWT_Expired_Deny(t *testing.T) {
 	pemKey := generateEd25519PEM(t)
-	sa := testServiceAccount("controllers", "x", "uid-1")
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	sa := testServiceAccount("x", "uid-1")
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, pemKey, lookup)
 
 	token, err := p.signWithClaims(accessTokenClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    p.issuer,
-			Subject:   "serviceaccount:controllers:x",
+			Subject:   "system:serviceaccount:x",
 			Audience:  jwt.ClaimStrings{"gitstore-api"},
 			IssuedAt:  jwt.NewNumericDate(time.Now().Add(-time.Hour)),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(-time.Hour + time.Minute)),
@@ -262,14 +277,14 @@ func TestServiceAccountJWT_Expired_Deny(t *testing.T) {
 
 func TestServiceAccountJWT_SAUIDMismatch_Deny(t *testing.T) {
 	pemKey := generateEd25519PEM(t)
-	sa := testServiceAccount("controllers", "x", "uid-current")
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	sa := testServiceAccount("x", "uid-current")
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, pemKey, lookup)
 
 	// Token was signed for a previous incarnation of this namespace/name
 	// pair (uid-old) — must be denied even though namespace/name match,
 	// guarding against delete+recreate confusion (FR-005).
-	staleSA := testServiceAccount("controllers", "x", "uid-old")
+	staleSA := testServiceAccount("x", "uid-old")
 	token, _, err := p.IssueAccessToken(staleSA, "", 0)
 	require.NoError(t, err)
 
@@ -280,9 +295,9 @@ func TestServiceAccountJWT_SAUIDMismatch_Deny(t *testing.T) {
 
 func TestServiceAccountJWT_DisabledAccount_Deny(t *testing.T) {
 	pemKey := generateEd25519PEM(t)
-	sa := testServiceAccount("controllers", "x", "uid-1")
+	sa := testServiceAccount("x", "uid-1")
 	sa.Disabled = true
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, pemKey, lookup)
 
 	token, _, err := p.IssueAccessToken(sa, "", 0)
@@ -295,10 +310,10 @@ func TestServiceAccountJWT_DisabledAccount_Deny(t *testing.T) {
 
 func TestServiceAccountJWT_DeletedAccount_Deny(t *testing.T) {
 	pemKey := generateEd25519PEM(t)
-	sa := testServiceAccount("controllers", "x", "uid-1")
+	sa := testServiceAccount("x", "uid-1")
 	now := time.Now()
 	sa.DeletionTimestamp = &now
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, pemKey, lookup)
 
 	token, _, err := p.IssueAccessToken(sa, "", 0)
@@ -311,7 +326,7 @@ func TestServiceAccountJWT_DeletedAccount_Deny(t *testing.T) {
 
 func TestServiceAccountJWT_AccountNotFound_Deny(t *testing.T) {
 	pemKey := generateEd25519PEM(t)
-	sa := testServiceAccount("controllers", "x", "uid-1")
+	sa := testServiceAccount("x", "uid-1")
 	p := newTestProvider(t, pemKey, &stubLookup{}) // empty lookup — no such account
 
 	token, _, err := p.IssueAccessToken(sa, "", 0)
@@ -324,8 +339,8 @@ func TestServiceAccountJWT_AccountNotFound_Deny(t *testing.T) {
 
 func TestServiceAccountJWT_TTLClampedToMaxTTL(t *testing.T) {
 	pemKey := generateEd25519PEM(t)
-	sa := testServiceAccount("controllers", "x", "uid-1")
-	p := newTestProvider(t, pemKey, &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}})
+	sa := testServiceAccount("x", "uid-1")
+	p := newTestProvider(t, pemKey, &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}})
 
 	_, exp, err := p.IssueAccessToken(sa, "", 24*time.Hour) // way beyond max_ttl (1h)
 	require.NoError(t, err)
@@ -335,8 +350,8 @@ func TestServiceAccountJWT_TTLClampedToMaxTTL(t *testing.T) {
 func TestServiceAccountJWT_MultiKeyOverlapWindow_BothKeysVerify(t *testing.T) {
 	oldPEM := generateEd25519PEM(t)
 	newPEM := generateEd25519PEM(t)
-	sa := testServiceAccount("controllers", "x", "uid-1")
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	sa := testServiceAccount("x", "uid-1")
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 
 	// The "new" key is listed first (active signer); the "old" key remains
 	// in the bundle for the overlap window, per FR-013.
@@ -363,8 +378,8 @@ func TestServiceAccountJWT_MultiKeyOverlapWindow_BothKeysVerify(t *testing.T) {
 func TestServiceAccountJWT_OverlapWindowEnded_OldKeyRejected(t *testing.T) {
 	oldPEM := generateEd25519PEM(t)
 	newPEM := generateEd25519PEM(t)
-	sa := testServiceAccount("controllers", "x", "uid-1")
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	sa := testServiceAccount("x", "uid-1")
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 
 	oldProvider := newTestProvider(t, oldPEM, lookup)
 	// Overlap window has ended: the old key's PEM block has been removed
@@ -381,8 +396,8 @@ func TestServiceAccountJWT_OverlapWindowEnded_OldKeyRejected(t *testing.T) {
 
 func TestServiceAccountJWT_RevokeSession_DeniesSubsequentAuth(t *testing.T) {
 	pemKey := generateEd25519PEM(t)
-	sa := testServiceAccount("controllers", "x", "uid-1")
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/x": sa}}
+	sa := testServiceAccount("x", "uid-1")
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"x": sa}}
 	p := newTestProvider(t, pemKey, lookup)
 
 	token, exp, err := p.IssueAccessToken(sa, "", 0)
@@ -428,8 +443,8 @@ func TestNew_EmptySigningKey_Errors(t *testing.T) {
 
 func TestServiceAccountJWT_AuthenticateReturnsPrincipalWithEmptyRoles(t *testing.T) {
 	pemKey := generateEd25519PEM(t)
-	sa := testServiceAccount("controllers", "manager", "uid-123")
-	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"controllers/manager": sa}}
+	sa := testServiceAccount("manager", "uid-123")
+	lookup := &stubLookup{accounts: map[string]*datastore.ServiceAccount{"manager": sa}}
 	p := newTestProvider(t, pemKey, lookup)
 
 	// Issue a token for the service account
@@ -444,7 +459,7 @@ func TestServiceAccountJWT_AuthenticateReturnsPrincipalWithEmptyRoles(t *testing
 	// Verify that Roles is always empty, regardless of any role_bindings entry
 	// (FR-011: authorization must be resolved by rbac-local at request time,
 	// never via roles embedded in the token or principal)
-	assert.Empty(t, principal.Roles, "Principal.Roles must be empty for serviceaccount-jwt principal")
-	assert.Equal(t, "serviceaccount:controllers:manager", principal.Subject)
+
+	assert.Equal(t, "system:serviceaccount:manager", principal.Subject)
 	assert.Equal(t, "serviceaccount-jwt", principal.AuthMethod)
 }

@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-readonly source_file="gitstore-api/cmd/gitctl/enroll_serviceaccount.go"
+readonly source_file="gitstore-api/internal/gitctl/enroll_serviceaccount.go"
 
 if grep -nE 'fmt\.(Fprint|Fprintf|Fprintln)\((stdout|stderr).*(adminToken|privateKey|publicKey|token)' "$source_file"; then
   echo "enroll-serviceaccount must not write credential material to stdout or stderr" >&2
@@ -17,7 +17,7 @@ fi
 
 (
   cd gitstore-api
-  go test ./cmd/gitctl -run '^TestEnrollServiceAccount' -count=1
+  go test ./internal/gitctl -run '^TestEnrollServiceAccount' -count=1
 )
 
 echo "enroll-serviceaccount output leakage check passed"

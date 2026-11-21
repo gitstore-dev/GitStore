@@ -12,17 +12,15 @@ services:
         GIT_REVISION: ${CAPACITY_GIT_REVISION:-unknown}
     container_name: gitstore-capacity-api-a
     command:
-      - /bin/sh
-      - -ec
-      - |
-        if [ "$${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" = 1 ]; then
-          export GITSTORE_API__AUTH__SERVICEACCOUNT__DEFAULT_TTL=60s
-          export GITSTORE_API__AUTH__SERVICEACCOUNT__MAX_TTL=60s
-        fi
-        export GITSTORE_API__AUTH__SERVICEACCOUNT__SIGNING_KEY="$$(cat /run/secrets/serviceaccount-signing-key)"
-        exec /app/api --config-file /etc/gitstore/gitstore.toml
+      - /app/api
+      - --config-file
+      - /etc/gitstore/gitstore.toml
+      - --serviceaccount-signing-key-file
+      - /run/secrets/serviceaccount-signing-key
     environment: &capacity-api-environment
       REPOSITORY_CAPACITY_SECRET_SCENARIO: ${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}
+      GITSTORE_API__AUTH__SERVICEACCOUNT__DEFAULT_TTL: ${CAPACITY_SERVICEACCOUNT_DEFAULT_TTL:-10m}
+      GITSTORE_API__AUTH__SERVICEACCOUNT__MAX_TTL: ${CAPACITY_SERVICEACCOUNT_MAX_TTL:-1h}
       GITSTORE_API__DATASTORE__BACKEND: scylla
       GITSTORE_API__DATASTORE__SCYLLA__HOSTS: scylla-1:9042,scylla-2:9042,scylla-3:9042
       GITSTORE_API__DATASTORE__SCYLLA__KEYSPACE: gitstore
@@ -41,6 +39,7 @@ services:
       GITSTORE_API__WATCH__JOURNAL__MATERIALIZER__MAX_LAG: 60s
     ports:
       - "4000:4000"
+      - "4100:4001"
       - "9000:9000"
       - "6000:6000"
     volumes:
@@ -58,7 +57,7 @@ services:
     networks:
       - gitstore-network
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:4000/ready"]
+      test: ["CMD", "/app/api", "gitctl", "healthcheck"]
       interval: 2s
       timeout: 2s
       retries: 30
@@ -80,11 +79,20 @@ services:
         condition: service_healthy
     ports:
       - "4001:4000"
+      - "4101:4001"
       - "9001:9000"
       - "6001:6000"
 
   capacity-credential-bootstrap:
     <<: *capacity-api
+    image: ${CAPACITY_API_DEBUG_IMAGE:-gitstore-capacity-api-debug:${CAPACITY_GIT_REVISION:-unknown}}
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+      target: debug
+      args:
+        GIT_REVISION: ${CAPACITY_GIT_REVISION:-unknown}
+    user: "0:0"
     container_name: gitstore-capacity-credential-bootstrap
     command:
       - /bin/sh
@@ -92,8 +100,9 @@ services:
       - |
         mkdir -p /run/controller-secrets/gitstore-controller-manager-signing-key
         rm -f /run/controller-bootstrap/serviceaccount.env
-        /app/gitctl generate-signing-key --private-key-path /run/api-issuer/serviceaccount-signing-key
-        /app/gitctl generate-signing-key --private-key-path /run/controller-secrets/gitstore-controller-manager-signing-key/privateKey --record-output-path /run/controller-secrets/gitstore-controller-manager-signing-key.json --key-id controller-key
+        /app/api gitctl generate-signing-key --private-key-path /run/api-issuer/serviceaccount-signing-key
+        chown 65532:65532 /run/api-issuer/serviceaccount-signing-key
+        /app/api gitctl generate-signing-key --private-key-path /run/controller-secrets/gitstore-controller-manager-signing-key/privateKey --record-output-path /run/controller-secrets/gitstore-controller-manager-signing-key.json --key-id controller-key
     environment: {}
     ports: []
     volumes:
@@ -106,17 +115,17 @@ services:
 
   capacity-serviceaccount-enrollment:
     <<: *capacity-api
+    user: "0:0"
     container_name: gitstore-capacity-serviceaccount-enrollment
     environment:
       GITSTORE_BOOTSTRAP_ADMIN_USERNAME: ${GITSTORE_BOOTSTRAP_ADMIN_USERNAME:-admin}
       GITSTORE_BOOTSTRAP_ADMIN_PASSWORD: ${GITSTORE_BOOTSTRAP_ADMIN_PASSWORD:-admin123}
     command:
-      - /app/gitctl
+      - /app/api
+      - gitctl
       - enroll-serviceaccount
       - --api-url
-      - http://api-a:4000/graphql
-      - --namespace
-      - controllers
+      - http://api-a:4000/admin/graphql
       - --name
       - gitstore-controller-manager
       - --key-id
@@ -172,7 +181,7 @@ services:
         export GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$serviceaccount_uid"
         exec /app/controller-manager --config-file /etc/gitstore/gitstore.toml
     environment:
-      GITSTORE_CONTROLLER__API_URI: http://api-a:4000/graphql
+      GITSTORE_CONTROLLER__API_URI: http://api-a:4000/admin/graphql
     ports:
       - "5001:5001"
     volumes:
@@ -196,7 +205,7 @@ services:
     <<: *capacity-controller
     container_name: gitstore-capacity-controller-manager-b
     environment:
-      GITSTORE_CONTROLLER__API_URI: http://api-b:4000/graphql
+      GITSTORE_CONTROLLER__API_URI: http://api-b:4000/admin/graphql
     ports:
       - "5002:5001"
     volumes:

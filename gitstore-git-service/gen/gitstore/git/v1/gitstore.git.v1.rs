@@ -15,12 +15,13 @@ pub struct AuthContext {
     /// mechanism used (e.g. "basic", "bearer", "none")
     #[prost(string, tag="3")]
     pub auth_method: ::prost::alloc::string::String,
-    #[prost(string, repeated, tag="4")]
-    pub roles: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, repeated, tag="5")]
     pub groups: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, repeated, tag="6")]
     pub scopes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// verified immutable account identity, never a role
+    #[prost(string, tag="7")]
+    pub service_account_uid: ::prost::alloc::string::String,
 }
 /// RequestAuthorization is the API-approved, non-secret authorization decision
 /// for a single GitService call. Git service validates that the action and scope
@@ -68,6 +69,50 @@ pub struct PushContext {
     pub policy: ::core::option::Option<PushPolicy>,
     #[prost(message, optional, tag="14")]
     pub authorization: ::core::option::Option<RequestAuthorization>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetFilesRequest {
+    #[prost(string, repeated, tag="1")]
+    pub paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag="2")]
+    pub commit_sha: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
+    #[prost(string, tag="15")]
+    pub repository_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetFilesResponse {
+    #[prost(string, tag="1")]
+    pub commit_sha: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="2")]
+    pub files: ::prost::alloc::vec::Vec<GetFileResponse>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetFileProvenanceRequest {
+    #[prost(string, tag="15")]
+    pub repository_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
+    #[prost(string, tag="1")]
+    pub commit_sha: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub path: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetFileProvenanceResponse {
+    #[prost(string, tag="1")]
+    pub snapshot_commit_sha: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub change_commit_sha: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub author_name: ::prost::alloc::string::String,
+    #[prost(int64, tag="5")]
+    pub author_time_unix: i64,
+    #[prost(uint32, tag="6")]
+    pub commits_examined: u32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InfoRefsRequest {
@@ -254,6 +299,38 @@ pub struct ListFilesResponse {
     pub ref_commit_sha: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RepositoryRef {
+    #[prost(string, tag="1")]
+    pub repository_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub r#ref: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResolveRefsRequest {
+    #[prost(message, repeated, tag="1")]
+    pub refs: ::prost::alloc::vec::Vec<RepositoryRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RepositoryRefProof {
+    #[prost(string, tag="1")]
+    pub repository_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub r#ref: ::prost::alloc::string::String,
+    /// Empty when this ref cannot be proved; other proofs remain independent.
+    #[prost(string, tag="3")]
+    pub commit_sha: ::prost::alloc::string::String,
+    /// A held repository write lock prevented verification; this is not a proof.
+    #[prost(bool, tag="4")]
+    pub busy: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResolveRefsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub proofs: ::prost::alloc::vec::Vec<RepositoryRefProof>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FileEntry {
     #[prost(string, tag="1")]
     pub path: ::prost::alloc::string::String,
@@ -289,6 +366,31 @@ pub struct CommitFileResponse {
     pub branch: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CommitFileAtRevisionRequest {
+    #[prost(message, optional, tag="1")]
+    pub file: ::core::option::Option<CommitFileRequest>,
+    #[prost(string, tag="2")]
+    pub ref_name: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub expected_commit_sha: ::prost::alloc::string::String,
+    /// Retain private durable evidence for retrying this exact write. Retries
+    /// return its original commit only with proven bounded branch ancestry;
+    /// they never restore content that was subsequently removed or changed.
+    #[prost(bool, tag="4")]
+    pub retain_receipt: bool,
+    /// Inspect proven publication without creating or resuming a write.
+    /// Requires retain_receipt; an absent receipt returns NOT_FOUND.
+    #[prost(bool, tag="5")]
+    pub receipt_only: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CommitFileAtRevisionResponse {
+    #[prost(string, tag="1")]
+    pub commit_sha: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub branch: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteFileRequest {
     #[prost(string, tag="15")]
     pub repository_id: ::prost::alloc::string::String,
@@ -300,6 +402,21 @@ pub struct DeleteFileRequest {
     pub author_name: ::prost::alloc::string::String,
     #[prost(string, tag="4")]
     pub author_email: ::prost::alloc::string::String,
+    /// Supply both fields for a conditional deletion on an explicit branch.
+    /// The branch must still point to expected_commit_sha when the commit is
+    /// published; mismatches without a receipt return ABORTED without changing it.
+    /// Retrying the same repository/ref/path/expected commit returns the original
+    /// deletion commit only with a private durable receipt, absent path, and proven
+    /// publication in bounded branch history. Restored paths or existing receipts
+    /// that cannot prove publication return FAILED_PRECONDITION, never re-delete.
+    /// Omitting both preserves the legacy default-branch behavior.
+    ///
+    /// Fully qualified refs/heads/... name.
+    #[prost(string, optional, tag="6")]
+    pub ref_name: ::core::option::Option<::prost::alloc::string::String>,
+    /// Full commit object ID.
+    #[prost(string, optional, tag="7")]
+    pub expected_commit_sha: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag="14")]
     pub authorization: ::core::option::Option<RequestAuthorization>,
 }

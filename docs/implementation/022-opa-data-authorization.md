@@ -1,9 +1,125 @@
 # OPA Data-Aware Authorization for GraphQL Catalog Reads
-**Status**: 🟡 Proposed (architecture only; implementation requires a separate feature specification)
+
+> **Endpoint boundary update (2026-11-04):** Admin uses the fixed `/admin/graphql` path on `api.admin_port`; Storefront uses `/storefront/graphql` on `api.storefront_port`. The coordinated pre-GA cutover removes the generic port and legacy route in one release. The identity-only Storefront schema currently returns a fixed unavailable response before authentication or data execution. Publication/target readers, buyer workflows and declarative authorization directives described below remain separate work; no enablement or compatibility layer is introduced.
+**Status**: Partially implemented; embedded RBAC remains production-gated, while the broader catalog authorization design remains proposed.
+
+## Implemented boundary
+
+The Git-backed RBAC implementation prepares one compiled-in OPA decision
+module and translates immutable model-v1 tiers for Role, ClusterRole,
+RoleBinding and ClusterRoleBinding. It preserves the existing provider
+contract, finite allow-only catalog, trusted identity rules and bounded
+in-memory evaluation. It does not load local/remote operator bundles or
+perform request-time datastore/UserDir reads. Git is authoritative; durable
+projections, watch continuity and complete snapshot readiness precede serving.
+
+Snapshot recovery repairs a proven mismatch between the canonical Git
+identity and its durable projection, or finishes pending index repair for a
+verified current committed snapshot before publication. Source outages, terminating namespaces
+and unstable reads remain unavailable without launching a repair write.
+Immutable manifest reads overlap in batches of at most two files; aggregate
+payload limits and the final live Namespace/Git identity check still apply.
+
+Periodic origin checks batch at most 32 Namespace identities. Scylla reads live
+authoritative Namespace/Repository rows and both mapping directions with four
+bounded CQL queries, joining by identity rather than result order. Uncommitted
+Namespace saga rows, missing or inconsistent mappings and failed reads cannot
+authorize a Git proof. Other backends retain bounded individual reads. No live
+facts are cached, root checks remain independent, and canonical Git proofs,
+freshness clocks and publication fences are unchanged. This reduces read
+fan-out; it does not establish deployed latency or sustained acceptance.
+
+Complete tier scans can publish across concurrent revision notifications only
+when the captured revision covers every received update. Namespace lifecycle,
+repository mapping and watch-continuity changes still fence the scan. A covered
+notification does not schedule another scan; origin freshness and the durable
+journal publication barrier remain required.
+
+Durable journal appends group events within both 32 statements and 512 KiB of
+conservatively encoded data, without crossing a journal bucket. This lets padded
+RBAC resources share a conditional append instead of reducing a maximum root
+admission to one LWT pair per resource. A single oversized event retains its
+existing isolated path; source-progress checkpoint batches retain their separate
+32 KiB bound. Lease fencing, ambiguous-outcome recovery, ordering, retention and
+authorization freshness are unchanged. This batching bound is not a deployed
+propagation or sustained-load acceptance claim.
+
+Scylla repairs a tier's independent UID lookup/link projections with at most
+four workers per repair. Each resource's lookup precedes its binding link,
+conditional inserts retain UID tombstones, and the tier's pending-repair marker
+is cleared by the original revision CAS only after every worker succeeds.
+Failure cancels and joins the workers, leaving repair pending for retry.
+
+Role diagnostics and physical cleanup after termination retain durable resource
+events and CAS revisions without invalidating unchanged prepared authority.
+Termination itself remains authoritative. Scylla suppresses cleanup progress
+only for complete consecutive tier images with the same projection, the exact
+Role-count decrement and the exact removed Role UID/key repair steps; binding
+changes, unknown repair and incomplete evidence retain the publication fence.
+Finalizers, finalized role guards, claims, index repair and raw snapshot fences
+remain enforced. Prepared sources may retain already-denying terminating rows
+between policy rebuilds; live storage still removes those rows and lookup links.
+
+Authoring and SubjectAccessReview use authoritative validation-start captures,
+not an atomic global authorization fence. Already-authorized writes may
+finish after concurrent revocation. Failed containment proofs require explicit
+bind/escalate. Virtual release built-ins, once-only removable initial-admin
+bootstrap, UID-bound role claims and protected Staff owner templates share the
+provider-neutral model. Authorized opt-in source inspection follows bounded
+signed Git history rather than adding history I/O to decisions.
+
+An existing ordinary owner-binding collision can be deleted under normal RBAC
+authorization only when its persisted UID and absence of managed provenance
+prove it is not the managed binding. Managed and unknown-identity bindings,
+and bindings with copied provenance, remain protected. This cleanup exception does not allow
+reserved-name creation, replacement or silent adoption.
+
+Production construction is still gated. Local contract/race evidence does not
+establish deployed replica/rolling, load/fault, memory/RSS or large-catalog
+acceptance. ADR 0010 section 16 records the current boundary; ADR 0018 remains
+Proposed because platform-wide leases and side-effect fencing are not added.
+
+The private native capacity diagnostic can run an isolated eight-phase root
+propagation preamble during ordinary k6 traffic, followed by the full declared
+four-tier Namespace mutation schedule. It requires independently captured
+ordinary decisions from both APIs, a disjoint holdout, original admission
+clocks and sealed source/decision replay. Source frames coalesce writes through
+one bounded 64 KiB buffer per API capture; the complete frame must flush before
+snapshot preparation/publication continues. Cancellation, quota and write
+failures still prevent successful capture and sealing. An optional maximum root
+batch adds only owned, unbound filler Roles and verifies their complete removal.
+Single-attempt GraphQL refusal receipts retain only HTTP status and allowlisted
+error-code classifications, not response messages or arbitrary extensions.
+Cleanup compares the exact authored JSON bytes in `.yaml` manifest paths, not a YAML
+re-encoding; the maximum batch is sized from those committed bytes. Cleanup
+must stop and join ordinary traffic before restoring root policy. See the
+[capacity contributor guide](../../tests/capacity/README.md) for bounded
+declarations. Both existing public capacity families also support a strict
+healthy-alpha declaration with full dataset/durations, maximum root batch,
+repository-generated source/artifact receipts, actual SDK resource observations
+and independently replayed provider/propagation percentiles. Neither a requested
+limit nor a subprocess success substitutes for those gates. Local contracts
+establish runner behavior only, not a sustained deployed pass; production
+capacity and production OPA activation remain separately gated.
+
+Provider conformance reads the sole authored
+[`tests/fixtures/authorization/decision-table.json`](../../tests/fixtures/authorization/decision-table.json).
+The OPA and local RBAC adapters exercise the same 55 independent decision
+expectations, including nonempty reasons and binding/role/rule diagnostics for
+ordinary allows. Local RBAC also exercises all 28 policy-validation expectations.
+Expected outcomes are reviewed fixture data, not generated from either provider.
+
+The sections below retain the broader proposal for historical/design context.
+Their configured-bundle, deny-precedence, hybrid IAM and catalog-scope
+descriptions are not the implemented embedded RBAC contract. Declarative
+GraphQL directives, published Product/ProductVariant readers and semantic
+Storefront query plans remain separate work; this implementation does not
+accept or activate that broader proposal.
 
 > Extends `020-pluggable_auth_architecture.md` and `021-controller_service_account_auth.md`.
-> This document is authoritative for the embedded OPA provider, GraphQL read authorization,
-> semantic catalog scopes, hybrid IAM data, and authorization-aware Product/ProductVariant reads.
+> The implemented boundary above takes precedence for embedded RBAC. The remaining sections
+> describe proposed GraphQL read authorization, semantic catalog scopes, hybrid IAM data,
+> and authorization-aware Product/ProductVariant reads.
 
 > **Amended by [ADR 0012](../ADRs/0012-admin-storefront-graphql-endpoints.md)** (separate Admin and
 > Storefront GraphQL endpoints). Where this document and ADR 0012 disagree, ADR 0012 wins:
@@ -41,8 +157,9 @@ reads (Storefront API) use public Product/ProductVariant projections; management
 use the complete catalog projections. GitStore never fetches a page and removes unauthorized nodes afterward, and it
 never relies on CQL `ALLOW FILTERING` for authorization.
 
-OPA remains opt-in. This design does not change the default provider or implement any runtime
-code, GraphQL schema, IAM mutation, or ScyllaDB migration.
+The broader catalog design remains opt-in/proposed and does not change the
+default provider. The gated RBAC runtime, schemas and migrations described
+above do not implement these proposed catalog query plans.
 
 ## 2. Goals and Non-Goals
 
@@ -70,9 +187,10 @@ code, GraphQL schema, IAM mutation, or ScyllaDB migration.
 - Replacing gqlgen's parsing, validation, complexity limiting, or persisted-query handling.
 - Changing current production defaults before a later rollout explicitly approves that change.
 
-## 3. Verified Current-State Constraints
+## 3. Historical Proposal Baseline
 
-The design extends these existing contracts rather than creating a parallel security path:
+The original design used the following baseline; it is not a current-state
+inventory after the gated RBAC implementation:
 
 - `gitstore-api/internal/auth/types.go` defines `Principal`, `Decision`, `ResourceContext`, and
   `AuthZProvider.Authorize(ctx, principal, action, resource)`.
@@ -637,7 +755,7 @@ new scope.
 Authorization answers **which catalog view the principal may request**. Publication answers **which
 resources belong in the public view**. These decisions must remain separate.
 
-[Product and Variant Publication Lifecycle](../products/publication-lifecycle.md)
+[Proposed Product and Variant Publication Lifecycle](proposed-publication-lifecycle.md)
 implements the GH#314 release/publication contract: protected tags, admitted
 commit evidence, schedules, retirement, immutable snapshots, and target-specific
 public projections. OPA does not recreate those rules. It selects `PUBLIC` or

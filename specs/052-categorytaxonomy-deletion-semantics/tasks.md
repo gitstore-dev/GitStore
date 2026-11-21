@@ -134,7 +134,7 @@ operations and rollout.
 - [x] T036 [P] Add an idempotent owner-reference/projection backfill command and its resumability tests in `gitstore-api/cmd/backfill-owner-references/main.go` and `gitstore-api/cmd/backfill-owner-references/main_test.go`
 - [x] T037 [P] Add Scylla and memdb migration/rollback compatibility tests for legacy records without owner references in `gitstore-api/internal/datastore/scylla/owner_references_test.go` and `gitstore-api/internal/datastore/memdb/owner_references_test.go`
 - [x] T038 [P] Add sustained-load coverage for limit-one child lookup and paged Product decoupling at the configured high-cardinality fixture in `gitstore-controller-manager/tests/integration/categorytaxonomy_deletion_capacity_test.go`
-- [x] T039 [P] Document staged rollout, rollback, alerts, dashboards, and operator remediation in `docs/runbooks/categorytaxonomy-deletion.md`
+- [x] T039 [P] Document staged rollout, rollback, alerts, dashboards, and operator remediation in `docs/runbooks/catalog-lifecycle.md`
 - [x] T040 Validate every quickstart scenario and update results/commands in `specs/052-categorytaxonomy-deletion-semantics/quickstart.md`
 - [x] T041 Run `make pr-ready` and record any required remediation in `specs/052-categorytaxonomy-deletion-semantics/tasks.md` (passed 2026-08-20 after adding bounded page caps, lifecycle observability, backfill, and deletion coverage)
 

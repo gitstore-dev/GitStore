@@ -2,6 +2,23 @@
 
 Utility scripts for GitStore development and demonstration.
 
+## run-infrastructure.sh
+
+Runs the DigitalOcean OpenTofu configuration through the root command interface:
+
+```bash
+make check TARGET=infrastructure PROFILE=digitalocean
+make bootstrap TARGET=infrastructure PROFILE=digitalocean ACTION=init
+make bootstrap TARGET=infrastructure PROFILE=digitalocean ACTION=plan
+make bootstrap TARGET=infrastructure PROFILE=digitalocean ACTION=show
+make bootstrap TARGET=infrastructure PROFILE=digitalocean ACTION=apply
+```
+
+Set `INFRA_BACKEND_CONFIG` and `INFRA_VAR_FILE` to absolute private paths for
+initialization and planning. `apply` executes the saved plan without a prompt.
+See the [provisioning runbook](../docs/runbooks/digitalocean-provisioning.md)
+for prerequisites, outputs and application configuration after provisioning.
+
 ## run-capacity.sh
 
 Runs a named profile from `tests/capacity/profiles/` with pinned k6 and writes
@@ -41,21 +58,24 @@ make check TARGET=credentials
 
 The check excludes test files and is required by the main CI workflow.
 
-## check-go-license-headers.sh
+## check-license-headers.sh
 
-Validates that Go files include the required AGPL header and that changed files include the current year in their copyright line.
+Validates tracked Go (`.go`), Rust (`.rs`) and JavaScript/TypeScript
+(`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`) files through one checker.
+`make check TARGET=licenses DIFF_BASE=origin/main` runs both the full
+header check and the changed-file current-year check.
 
 ### Usage
 
 ```bash
-# Check all tracked Go files
-./scripts/check-go-license-headers.sh --all
+# Check all tracked sources using working-tree content
+./scripts/check-license-headers.sh --all
 
-# Check only staged added/modified Go files
-./scripts/check-go-license-headers.sh --staged
+# Check staged additions, modifications and rename destinations from the index
+./scripts/check-license-headers.sh --staged
 
-# Check added/modified Go files between a base ref and HEAD
-./scripts/check-go-license-headers.sh --diff-base origin/main
+# Check working-tree sources changed between a base ref and HEAD
+./scripts/check-license-headers.sh --diff-base origin/main
 ```
 
 The required file header is:
@@ -65,9 +85,34 @@ The required file header is:
 // Copyright (c) 2026 GitStore contributors
 ```
 
+Copyright may use a single year or a `YYYY-YYYY` range. Changed files must
+have the current year as either endpoint; unchanged files need not be updated.
+Headers must appear within the first 12 lines (Go/Rust) or 14 lines (JS/TS).
+Generated-file exceptions are language-specific:
+
+- Go: `Code generated` or `DO NOT EDIT` in the first 8 lines, case-sensitive.
+- Rust: the Go markers plus `@generated` in the first 8 lines, case-sensitive.
+- JS/TS: `Code generated`, `AUTO-GENERATED` or `DO NOT EDIT` in the first
+  12 lines, case-insensitive.
+
+The pinned `shared/scylla-cdc-go` Go sources retain their original upstream
+Apache attribution rather than receiving GitStore headers. Their
+`LICENSE.txt` must contain the Apache license notice. Staged checks read
+that notice from the index too, including when only the license is changed
+or deleted.
+
+`.github/workflows/license-headers.yml` runs checker regressions and full
+header validation on pushes to `main` and pull requests touching checked
+sources or checker inputs, plus changed-file validation on pull requests.
+Run the focused regressions with `bash scripts/test-license-headers.sh`;
+they are also included in the default `make test` suite.
+
 ## install-git-hooks.sh
 
-Installs repository-local git hooks into the standard `.git/hooks` directory, enabling automatic staged-file licence checks and Conventional Commits validation.
+Installs the repository's `pre-commit` and `commit-msg` hooks, enabling
+staged-file licence checks and Conventional Commits validation. Git resolves
+the hooks directory, so installation works from a main checkout or linked
+worktree, including paths with spaces.
 
 ### Usage
 
@@ -75,11 +120,19 @@ Installs repository-local git hooks into the standard `.git/hooks` directory, en
 ./scripts/install-git-hooks.sh
 ```
 
-This installs the `pre-commit` and `commit-msg` hooks into `.git/hooks`.
+You may invoke the script from a subdirectory using its relative or absolute
+path. Hooks are clone-shared: installing from any worktree updates the hooks
+used by **all linked worktrees**. The installer prints this warning and does
+not change Git configuration or create per-worktree hook settings.
 
-In CI, `.github/workflows/go-license-headers.yml` runs:
-- `--all` checks on pushes to `main`
-- `--diff-base` checks on pull requests
+Identical installed hooks may be reinstalled. A configured `core.hooksPath`,
+differing installed hook, or symlinked hook causes installation to stop without
+replacing hooks. Review ownership and preserve any existing integration before
+an explicitly approved replacement; do not remove another worktree's hooks
+merely to make installation succeed.
+
+`bash scripts/test-license-headers.sh` covers installation in fresh test-owned
+repositories and linked worktrees as well as the licence checks.
 
 ## update-env-secret.sh
 
@@ -88,48 +141,6 @@ Updates a `KEY='value'` entry in one or more `.env` files. If the key exists, th
 ### Usage
 
 ```bash
-./scripts/update-env-secret.sh GITSTORE_API__AUTH__JWT__SECRET "new-secret" gitstore-api/.env
+./scripts/update-env-secret.sh GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET "new-secret" gitstore-api/.env
 ./scripts/update-env-secret.sh GITSTORE_GRPC_AUTH__HMAC_SECRET "shared-secret" gitstore-api/.env gitstore-git-service/.env
 ```
-
-## check-rust-license-headers.sh
-
-Validates that Rust files include the required AGPL header and that changed files include the current year in their copyright line. Generated Rust files with `Code generated`, `@generated`, or `DO NOT EDIT` markers near the top are skipped.
-
-### Usage
-
-```bash
-# Check all tracked Rust files
-./scripts/check-rust-license-headers.sh --all
-
-# Check only staged added/modified Rust files
-./scripts/check-rust-license-headers.sh --staged
-
-# Check added/modified Rust files between a base ref and HEAD
-./scripts/check-rust-license-headers.sh --diff-base origin/main
-```
-
-In CI, `.github/workflows/rust-license-headers.yml` runs:
-- `--all` checks on pushes to `main`
-- `--diff-base` checks on pull requests
-
-## check-js-license-headers.sh
-
-Validates that JavaScript/TypeScript files include the required AGPL header and that changed files include the current year in their copyright line.
-
-### Usage
-
-```bash
-# Check all tracked JS/TS files
-./scripts/check-js-license-headers.sh --all
-
-# Check only staged added/modified JS/TS files
-./scripts/check-js-license-headers.sh --staged
-
-# Check added/modified JS/TS files between a base ref and HEAD
-./scripts/check-js-license-headers.sh --diff-base origin/main
-```
-
-In CI, `.github/workflows/js-license-headers.yml` runs:
-- `--all` checks on pushes to `main`
-- `--diff-base` checks on pull requests

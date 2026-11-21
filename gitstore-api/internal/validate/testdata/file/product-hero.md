@@ -2,14 +2,15 @@
 apiVersion: storage.gitstore.dev/v1beta1
 kind: File
 metadata:
+  namespace: acme-store
   name: product-hero
   labels:
     role: hero
 spec:
   contentType: image/jpeg
   type: gitstore.dev/media
+  provider: s3
   source:
-    type: s3
     uri: s3://acme-assets/products/product-hero.jpg
     checksum:
       algorithm: sha256

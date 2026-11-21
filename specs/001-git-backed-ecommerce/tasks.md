@@ -402,7 +402,7 @@ Multi-service architecture:
   - **Benefits**: True microservices, remote git-server support, better scalability
   - **Testing**: Verify both git:// and /data/repos/ paths work
   - **Priority**: DEFERRED - Quick fix (T146) sufficient for MVP
-  - **Documentation**: See T152-PROPER-GIT-PROTOCOL.md for detailed implementation plan
+  - **Documentation**: The superseded shared-volume/native-git plan was removed; see the [current gRPC architecture](../../docs/architecture/README.md). This task remains historical, not a current implementation instruction.
 
 - [ ] T154 [MEDIUM] Use temporary clones for API mutations (GitLab/Gitea pattern)
   - **Purpose**: API should not maintain persistent working copy for mutations

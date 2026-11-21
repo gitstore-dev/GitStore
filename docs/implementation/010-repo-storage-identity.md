@@ -5,30 +5,33 @@
 
 Repositories have two distinct identities:
 
-- **External identity**: `namespace/repo-name` — human-readable, mutable (rename, transfer)
-- **Internal identity**: `repo_id` — a UUIDv7, immutable, assigned at creation
+- **External path**: `namespace/repo-name` — human-readable; names and namespace
+  ownership are immutable after admission in the current contract.
+- **Internal identity**: Repository UID — an immutable UUIDv7 assigned at
+  creation, passed to GitService as `repository_id`.
 
-Storage is keyed solely on `repo_id`. Renaming or transferring a repository updates only
-database mappings; no files move on disk.
+Storage is keyed solely on that UID. Repository rename and transfer are not
+implemented; stable UID-derived placement must not be mistaken for supported
+rename/transfer APIs.
 
 ## Lookup Flow
 
 ```
-Client: GET /alice/configs/info/refs
+Client: GET /alice/configs.git/info/refs
           │
           ▼
   gitstore-api (GraphQL / HTTP)
   ┌──────────────────────────────────────┐
   │ 1. GetNamespaceByName("alice")       │
-  │    → namespace_id (UUID)             │
-  │ 2. LookupRepository(ns_id, "configs")│
-  │    → repo_id (UUIDv7)                │
+  │    → canonical namespace            │
+  │ 2. Resolve path to Repository UID  │
+  │    → repository_id (UUIDv7)         │
   └────────────────┬─────────────────────┘
                    │ gRPC (repo_id only)
                    ▼
   gitstore-git-service (Rust)
   ┌─────────────────────────────────────┐
-  │ 3. fanout_path(data_root, repo_id)  │
+  │ 3. fanout_path(data_root, UID)     │
   │    → /data/xx/yy/{repo_id}.git      │
   │ 4. Open / serve bare repository     │
   └─────────────────────────────────────┘
@@ -50,10 +53,10 @@ The full UUID (with hyphens) is used as the directory name. Only the first four 
 
 ## Data Model
 
-| Table                | Primary Key            | Purpose                                              |
-|----------------------|------------------------|------------------------------------------------------|
-| `repositories`       | `id` (UUIDv7)          | Repository metadata (name, namespace, storage class) |
-| `namespace_mappings` | `(namespace_id, name)` | Maps `namespace/name` → `repo_id`                    |
+`repositories_by_uid` stores the authoritative Repository envelope.
+Namespace/path and ordering projections resolve resource UIDs and hydrate that
+record; they are not alternate sources of desired state. See
+[datastore resource storage](../architecture/datastore-resource-storage.md).
 
 `StoragePath` is **never stored** — it is derived on the fly from `repo_id` in both Go and Rust.
 
@@ -61,10 +64,9 @@ The full UUID (with hyphens) is used as the directory name. Only the first four 
 
 | Mutation             | DB change                                                             | Storage change                        | gRPC call          |
 |----------------------|-----------------------------------------------------------------------|---------------------------------------|--------------------|
-| `createRepository`   | Insert `repository` + `namespace_mapping`                             | Create fanout dir + `git init --bare` | `CreateRepository` |
-| `renameRepository`   | Delete old `namespace_mapping`, insert new                            | None                                  | None               |
-| `transferRepository` | Delete old mapping, insert new mapping, update `namespace_id` on repo | None                                  | None               |
-| `deleteRepository`   | Delete `namespace_mapping` + `repository`                             | Remove bare repo dir                  | `DeleteRepository` |
+| `createRepository`   | Commit/admit the manifest, create authoritative state and projections | Controller provisions the UID-derived bare repository natively | `CreateRepository` |
+| `updateRepository`   | Commit/admit supported desired-state changes                         | UID-derived path unchanged            | Per lifecycle operation |
+| `deleteRepository`   | Begin guarded foreground termination; keep identity until completion | UID-bound cleanup before final removal | `DeleteRepository` |
 
 ## Operator Runbook
 
@@ -75,26 +77,30 @@ Via GraphQL:
 query {
   repository(by: { namespacePath: { namespace: "alice", name: "configs" } }) {
     id
-    storagePath
+    metadata { name }
+    status { resolved { storagePath } }
   }
 }
 ```
 
 Or compute it manually:
-1. Look up `repo_id` from the `namespace_mappings` table.
+1. Obtain the authoritative Repository UID, not an encoded Relay node ID.
 2. Strip hyphens from the UUID; take `hex[0..2]` as `l1` and `hex[2..4]` as `l2`.
 3. Path: `{DATA_ROOT}/{l1}/{l2}/{repo_id}.git`
 
 ### Orphaned storage (mapping deleted, files remain)
 
-If a `namespace_mapping` row is missing but the `.git` directory exists, the repository is
-unreachable via any API. To recover, either re-insert the mapping row directly or delete the
-directory after confirming no other mapping points to the same `repo_id`.
+A missing path projection can make retained repository storage unreachable.
+Do not insert guessed mapping rows or delete repository directories. First
+identify the authoritative resource and use the existing
+[projection audit/repair procedure](../runbooks/scylla-projection-repair.md).
+Preserve storage throughout recovery.
 
 ### Missing mapping (repo row exists, no mapping)
 
-Run `LookupNamespaceByRepoID(repo_id)` to check if any mapping exists. If none, insert a
-`namespace_mapping` row for the correct `(namespace_id, name)` pair.
+Audit authoritative state and derived projections with quiescent writers.
+Repair rolls forward from authoritative state; it must not recreate ownership
+from an arbitrary filesystem directory.
 
 ### Malformed UUID in storage path
 
@@ -103,5 +109,6 @@ Run `LookupNamespaceByRepoID(repo_id)` to check if any mapping exists. If none, 
 - contains `/`, `\`, or `..`
 - has non-hex characters after stripping hyphens
 
-If a directory exists under `data_root` with a non-UUID name it was created outside the normal
-API flow and can be safely removed after confirming it holds no live data.
+An unexpected directory name is a diagnostic, not permission to delete it.
+Preserve retained assets and investigate resource ownership and backups before
+any explicitly scoped maintenance.

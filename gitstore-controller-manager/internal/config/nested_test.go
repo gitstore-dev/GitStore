@@ -44,26 +44,6 @@ func TestLoadAPIClientBudgetDefaultsOverridesAndValidation(t *testing.T) {
 	}
 }
 
-// TestLoadRejectsObsoleteAPIClientRateLimitKeys verifies the pre-grouping
-// flat api_client.requests_per_second/burst keys (now nested under
-// api_client.rate_limit) fail startup by name rather than silently
-// resolving to the rate_limit defaults.
-func TestLoadRejectsObsoleteAPIClientRateLimitKeys(t *testing.T) {
-	for _, key := range []string{"REQUESTS_PER_SECOND", "BURST"} {
-		t.Run(key, func(t *testing.T) {
-			setenv(t)
-			t.Setenv("GITSTORE_CONTROLLER__API_CLIENT__"+key, "MUST-NOT-LEAK")
-			_, err := config.Load()
-			if err == nil || strings.Contains(err.Error(), "MUST-NOT-LEAK") {
-				t.Fatalf("obsolete api_client rate limit path did not fail safely: %v", err)
-			}
-			if !strings.Contains(err.Error(), "RATE_LIMIT") {
-				t.Fatalf("error must name the rate_limit replacement: %v", err)
-			}
-		})
-	}
-}
-
 func TestLoadCanonicalProviderAndWatchLeaves(t *testing.T) {
 	setenv(t)
 	for key, value := range map[string]string{
@@ -91,24 +71,19 @@ func TestLoadCanonicalProviderAndWatchLeaves(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsObsoleteSourcesEvenWhenOverridden(t *testing.T) {
+func TestLoadRejectsUnknownEnvironmentSourcesEvenWhenOverridden(t *testing.T) {
 	for _, key := range []string{
-		"SERVICEACCOUNT_NAMESPACE", "SERVICEACCOUNT_NAME", "SERVICEACCOUNT_UID",
-		"SERVICEACCOUNT_KEY_ID", "SERVICEACCOUNT_KEY_REF__KIND",
-		"SERVICEACCOUNT_ASSERTION_AUDIENCE", "SERVICEACCOUNT_ACCESS_TOKEN_AUDIENCE",
-		"SECRET_PROVIDER_BOOTSTRAP__TYPE", "CHECKPOINT_DIR",
-		"CHECKPOINT_FLUSH_INTERVAL_EVENTS", "DEFAULT_MAX_ATTEMPTS",
-		"DEFAULT_STALL_THRESHOLD", "MAX_WATCH_BACKOFF", "RESYNC_INTERVAL",
-		"CONTROLLER__SERVICEACCOUNT__NAME", "SECRET_PROVIDERS__RUNTIME__TYPE",
-		"SERVICEACCOUNT__KEY_ID", "SERVICEACCOUNT__KEY_REF__KEY",
-		"SECRET_PROVIDERS__BOOTSTRAP__FORMAT", "SECRET_PROVIDERS__BOOTSTRAP__ENV_PREFIX",
+		"UNSUPPORTED_SETTING", "SERVICEACCOUNT__UNSUPPORTED_SETTING",
 	} {
 		t.Run(key, func(t *testing.T) {
 			setenv(t)
 			t.Setenv("GITSTORE_CONTROLLER__"+key, "MUST-NOT-LEAK")
 			_, err := config.Load()
 			if err == nil || strings.Contains(err.Error(), "MUST-NOT-LEAK") {
-				t.Fatalf("obsolete environment path did not fail safely: %v", err)
+				t.Fatalf("unknown environment path did not fail safely: %v", err)
+			}
+			if !strings.Contains(err.Error(), "unknown configuration path") {
+				t.Fatalf("expected an unknown configuration path error: %v", err)
 			}
 			if !strings.Contains(err.Error(), key) {
 				t.Fatalf("error must identify the environment path: %v", err)
@@ -117,21 +92,12 @@ func TestLoadRejectsObsoleteSourcesEvenWhenOverridden(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsObsoleteFilePaths(t *testing.T) {
+func TestLoadRejectsUnknownFilePaths(t *testing.T) {
 	for _, content := range []string{
 		`[controller]
-serviceaccount_namespace = "MUST-NOT-LEAK"`,
-		`[controller.controller]
-serviceaccount_namespace = "MUST-NOT-LEAK"`,
-		`[controller.secret_providers.runtime]`,
+unsupported_setting = "MUST-NOT-LEAK"`,
 		`[controller.serviceaccount]
-key_id = "MUST-NOT-LEAK"`,
-		`[controller.serviceaccount.key_ref]
-key = "MUST-NOT-LEAK"`,
-		`[controller.secret_providers.bootstrap]
-format = "MUST-NOT-LEAK"`,
-		`[controller.secret_providers.bootstrap]
-env_prefix = "MUST-NOT-LEAK"`,
+unsupported_setting = "MUST-NOT-LEAK"`,
 	} {
 		setenv(t)
 		path := filepath.Join(t.TempDir(), "config.toml")
@@ -140,7 +106,10 @@ env_prefix = "MUST-NOT-LEAK"`,
 		}
 		_, err := config.LoadFrom(path)
 		if err == nil || strings.Contains(err.Error(), "MUST-NOT-LEAK") {
-			t.Fatalf("obsolete file path did not fail safely: %v", err)
+			t.Fatalf("unknown file path did not fail safely: %v", err)
+		}
+		if !strings.Contains(err.Error(), "unknown configuration path") {
+			t.Fatalf("expected an unknown configuration path error: %v", err)
 		}
 	}
 }

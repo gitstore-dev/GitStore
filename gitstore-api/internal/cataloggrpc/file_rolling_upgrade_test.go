@@ -83,8 +83,8 @@ func TestAdmitResources_FileAdmittedAlongsideKindUnknownToThisReplica(t *testing
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID, NewCommitSha: commit, RefName: "refs/heads/main",
 	})
 	require.NoError(t, err, "an unrecognized kind elsewhere in the push must never fail admission of the rest")
 
@@ -114,7 +114,7 @@ func TestAdmitResources_FileUpdateAcceptsRecordWrittenBeforeOptionalFieldsExiste
 	// legacy fixture below correctly omits only the "resolved" key.
 	commitOld := "1111111111111111111111111111111111111111"
 	commitNew := "2222222222222222222222222222222222222222"
-	legacySpec := []byte(`{"ContentType":"image/jpeg","Source":{"Type":"s3","URI":"s3://bucket/hero"}}`)
+	legacySpec := []byte(`{"ContentType":"image/jpeg","Provider":"s3","Source":{"URI":"s3://bucket/hero"}}`)
 	legacyStatus := []byte(`{"observedGeneration":1,"lastAppliedRevision":"main@sha1:` + commitOld + `","conditions":[{"type":"AdmissionAccepted","status":"True"}]}`)
 	require.NoError(t, store.CreateFile(context.Background(), &datastore.File{
 		UID: "00000000-0000-0000-0000-000000000200", Namespace: "gitstore", Name: "hero",
@@ -144,8 +144,8 @@ func TestAdmitResources_FileUpdateAcceptsRecordWrittenBeforeOptionalFieldsExiste
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID, OldCommitSha: commitOld, NewCommitSha: commitNew,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID, OldCommitSha: commitOld, NewCommitSha: commitNew,
 		RefName: "refs/heads/main", ChangedPaths: []string{"files/hero.md"},
 	})
 	require.NoError(t, err, "admitting an update over a legacy-shaped record must not error")
@@ -174,7 +174,7 @@ func TestAdmitResources_FileContentTypeImmutabilityEnforcedAgainstLegacyShapeSpe
 	now := time.Now().UTC()
 	commitOld := "4444444444444444444444444444444444444444"
 	commitNew := "3333333333333333333333333333333333333333"
-	legacySpec := []byte(`{"ContentType":"image/jpeg","Source":{"Type":"s3","URI":"s3://bucket/hero"}}`)
+	legacySpec := []byte(`{"ContentType":"image/jpeg","Provider":"s3","Source":{"URI":"s3://bucket/hero"}}`)
 	require.NoError(t, store.CreateFile(context.Background(), &datastore.File{
 		UID: "00000000-0000-0000-0000-000000000201", Namespace: "gitstore", Name: "hero",
 		APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File",
@@ -194,8 +194,8 @@ func TestAdmitResources_FileContentTypeImmutabilityEnforcedAgainstLegacyShapeSpe
 	srv := newCatalogServer(t, store, git)
 
 	_, err := srv.AdmitResources(context.Background(), &catalogv1.AdmitResourcesRequest{
-		ActorSubject: "test-admission-actor",
-		RepositoryId: testRepoID, OldCommitSha: commitOld, NewCommitSha: commitNew,
+		Authorization: &catalogv1.CallbackAuthorization{Actor: &catalogv1.CallbackActor{Subject: "test-admission-actor", AuthMethod: "static-users"}},
+		RepositoryId:  testRepoID, OldCommitSha: commitOld, NewCommitSha: commitNew,
 		RefName: "refs/heads/main", ChangedPaths: []string{"files/hero.md"},
 	})
 	require.NoError(t, err)

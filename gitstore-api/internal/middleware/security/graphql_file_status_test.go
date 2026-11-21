@@ -7,13 +7,14 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/99designs/gqlgen/graphql"
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/memdb"
-	"github.com/gitstore-dev/gitstore/api/internal/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,13 +23,78 @@ import (
 	"go.uber.org/zap"
 )
 
+type unavailableStatusAuthZ struct{ auth.AuthZProvider }
+
+func (unavailableStatusAuthZ) Authorize(context.Context, *auth.Principal, string, auth.ResourceContext) (auth.Decision, error) {
+	return auth.Decision{}, errors.New("private authorization dependency failure")
+}
+
+type unavailableSnapshotAuthZ struct{ auth.AuthZProvider }
+
+func (unavailableSnapshotAuthZ) Authorize(context.Context, *auth.Principal, string, auth.ResourceContext) (auth.Decision, error) {
+	return auth.Decision{}, fmt.Errorf("private snapshot dependency failure: %w", auth.ErrAuthorizationUnavailable)
+}
+
+func TestCatalogSnapshotUnavailableRetainsRetryableEnvelope(t *testing.T) {
+	for _, field := range []struct{ object, name string }{
+		{"Query", "products"}, {"Mutation", "createProduct"}, {"Subscription", "watchProducts"},
+	} {
+		t.Run(field.name, func(t *testing.T) {
+			provider := unavailableSnapshotAuthZ{testutil.NewAllowAllAuthZ()}
+			middleware := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, provider, nil), &testutil.StubStore{}, zap.NewNop())
+			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "reader"})
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+				Object: field.object, Field: graphql.CollectedField{Field: &ast.Field{Name: field.name}},
+				Args: map[string]any{
+					"namespace": "shop",
+					"input":     map[string]any{"metadata": map[string]any{"namespace": "shop", "name": "pending"}},
+				},
+			})
+			called := false
+			_, err := middleware.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+				called = true
+				return nil, nil
+			})
+			require.False(t, called)
+			var structured *gqlerror.Error
+			require.ErrorAs(t, err, &structured)
+			require.Equal(t, "AUTHORIZATION_UNAVAILABLE", structured.Extensions["code"])
+			require.Equal(t, true, structured.Extensions["retryable"])
+			require.NotContains(t, structured.Message, "private")
+		})
+	}
+}
+
+func TestRBACStatusUnavailableRetainsRetryableEnvelope(t *testing.T) {
+	for _, kind := range []string{"Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding"} {
+		t.Run(kind, func(t *testing.T) {
+			provider := unavailableStatusAuthZ{testutil.NewAllowAllAuthZ()}
+			middleware := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, provider, nil), &testutil.StubStore{}, zap.NewNop())
+			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "controller"})
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
+				Object: "Mutation", Field: graphql.CollectedField{Field: &ast.Field{Name: "updateResourceStatus"}},
+				Args: map[string]any{"input": model.UpdateResourceStatusInput{Kind: kind, Name: "pending", Namespace: "shop", ResourceVersion: "1"}},
+			})
+			called := false
+			_, err := middleware.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) {
+				called = true
+				return nil, nil
+			})
+			require.False(t, called)
+			var structured *gqlerror.Error
+			require.ErrorAs(t, err, &structured)
+			require.Equal(t, "AUTHORIZATION_UNAVAILABLE", structured.Extensions["code"])
+			require.Equal(t, true, structured.Extensions["retryable"])
+			require.NotContains(t, structured.Message, "private")
+		})
+	}
+}
+
 // TestGraphQLFieldAuthorizerUpdateResourceStatusFileUsesFileStatusWriteAction
 // exercises the REAL production authorization boundary for File status
-// writes: GraphQLFieldAuthorizer's "updateResourceStatus" case derives
-// action = lowerCamelFirst(kind) + ".status.write". For kind "File" that
-// action string is exactly "file.status.write" — no "own"/"any" suffix
-// exists for this generic kind-agnostic path (unlike namespace.delete.*,
-// which does have that split). This replaces an earlier version of this
+// writes: GraphQLFieldAuthorizer resolves the exact registered status action.
+// For kind "File" that action is "file.status.write", with no ownership suffix.
+// This replaces an earlier version of this
 // coverage that exercised invented action strings
 // ("file.status.write.own"/".any") against the rbac-local policy engine in
 // isolation, which never matched what this middleware actually derives or
@@ -38,7 +104,7 @@ func TestGraphQLFieldAuthorizerUpdateResourceStatusFileUsesFileStatusWriteAction
 	registry := auth.NewProviderRegistry(nil, authz, nil)
 
 	mw := NewAuthorizeWithStore(registry, &testutil.StubStore{}, zap.NewNop())
-	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-users", Roles: []string{"controller"}})
+	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "controller-manager", AuthMethod: "static-users"})
 	ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{
 		Object: "Mutation",
 		Field:  graphql.CollectedField{Field: &ast.Field{Name: "updateResourceStatus"}},
@@ -60,7 +126,7 @@ func TestGraphQLFieldAuthorizerUpdateResourceStatusFileUsesFileStatusWriteAction
 	require.NoError(t, err)
 	assert.True(t, called)
 	assert.Equal(t, "file.status.write", authz.Action)
-	assert.Equal(t, "File", authz.Resource.Kind)
+	assert.Equal(t, "file", authz.Resource.Kind)
 	assert.Equal(t, "hero", authz.Resource.Name)
 }
 
@@ -124,7 +190,7 @@ func TestGraphQLFieldAuthorizerRejectsUnauthorizedFileWatch(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, called)
 	assert.Equal(t, "file.watch", authz.Action)
-	assert.Equal(t, "File", authz.Resource.Kind)
+	assert.Equal(t, "file", authz.Resource.Kind)
 	assert.Equal(t, "acme-store", authz.Resource.Attrs["namespace"])
 	var gqlErr *gqlerror.Error
 	require.True(t, errors.As(err, &gqlErr))
@@ -163,7 +229,7 @@ func TestFileReadsAuthorizeLookupAndRelayNodesBeforeResolver(t *testing.T) {
 		t.Run(field, func(t *testing.T) {
 			authz := testutil.NewDenyAllAuthZ(t)
 			mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, authz, nil), store, zap.NewNop())
-			args := map[string]any{"namespace": "private", "name": "hero", "id": id, "ids": []string{id}}
+			args := map[string]any{"by": model.FileBy{NamespacePath: &model.FileNamespacePath{Namespace: "private", Name: "hero"}}, "id": id, "ids": []string{id}}
 			ctx := graphql.WithFieldContext(t.Context(), &graphql.FieldContext{
 				Object: "Query", Field: graphql.CollectedField{Field: &ast.Field{Name: field}}, Args: args,
 			})
@@ -172,7 +238,7 @@ func TestFileReadsAuthorizeLookupAndRelayNodesBeforeResolver(t *testing.T) {
 			require.Error(t, err)
 			require.False(t, called)
 			require.Equal(t, "file.read", authz.Action)
-			require.Equal(t, "File", authz.Resource.Kind)
+			require.Equal(t, "file", authz.Resource.Kind)
 			require.Equal(t, "private", authz.Resource.Attrs["namespace"])
 		})
 	}
@@ -196,4 +262,78 @@ func TestGraphQLFieldAuthorizerAuthorizesProductWatches(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, called)
 	assert.Equal(t, "product.watch", authz.Action)
+}
+
+func TestCanonicalWatchAndStatusBoundaryMatrix(t *testing.T) {
+	principal := &auth.Principal{Subject: "alice", AuthMethod: "static-users"}
+	for _, tc := range []struct{ kind, canonical, watch, status string }{
+		{"Namespace", "namespace", "watchNamespaces", "updateNamespaceStatus"},
+		{"Repository", "repository", "watchRepositories", "updateRepositoryStatus"},
+		{"CategoryTaxonomy", "categoryTaxonomy", "watchCategories", "updateCategoryStatus"},
+		{"Product", "product", "watchProducts", "updateProductStatus"},
+		{"File", "file", "watchFiles", ""},
+		{"Role", "role", "watchRoles", ""},
+		{"RoleBinding", "roleBinding", "watchRoleBindings", ""},
+		{"ClusterRole", "clusterRole", "watchClusterRoles", ""},
+		{"ClusterRoleBinding", "clusterRoleBinding", "watchClusterRoleBindings", ""},
+	} {
+		for _, field := range []string{tc.watch, "watchResources", tc.status, "updateResourceStatus"} {
+			if field == "" || (tc.kind == "Product" && field == "updateResourceStatus") {
+				continue
+			}
+			for _, allowed := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/allow=%t", tc.kind, field, allowed), func(t *testing.T) {
+					recorder := testutil.NewAllowAllAuthZ()
+					if !allowed {
+						recorder = testutil.NewDenyAllAuthZ(t)
+					}
+					mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, recorder, nil), &testutil.StubStore{}, zap.NewNop())
+					object, verb := "Subscription", "watch"
+					args := map[string]any{"kind": tc.kind, "namespace": "acme"}
+					want := auth.ResourceContext{Kind: tc.canonical, Attrs: map[string]any{}}
+					if tc.kind != "Namespace" && tc.kind != "ClusterRole" && tc.kind != "ClusterRoleBinding" {
+						want.Attrs["namespace"] = "acme"
+					}
+					if field == tc.status || field == "updateResourceStatus" {
+						object, verb = "Mutation", "status.write"
+						args = map[string]any{"input": model.UpdateResourceStatusInput{Kind: tc.kind, Namespace: "acme", Name: "item"}}
+						want.Name = "item"
+						if tc.kind == "Namespace" && field != "updateResourceStatus" {
+							want.Attrs = nil
+						} else {
+							want.Attrs["namespace"] = "acme"
+						}
+					}
+					ctx := auth.ContextWithPrincipal(t.Context(), principal)
+					ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: object, Field: graphql.CollectedField{Field: &ast.Field{Name: field, Alias: "aliased"}}, Args: args})
+					called := false
+					_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { called = true; return nil, nil })
+					require.Equal(t, allowed, called)
+					if allowed {
+						require.NoError(t, err)
+					} else {
+						require.Error(t, err)
+					}
+					assertAuthorizationCalls(t, recorder, testutil.AuthorizationCall{Subject: "alice", Action: tc.canonical + "." + verb, Resource: want})
+				})
+			}
+		}
+	}
+}
+
+func TestGenericStatusRejectsUnknownAndUnimplementedKindsBeforeAuthorizer(t *testing.T) {
+	for _, kind := range []string{"Unknown", "ServiceAccount", "Collection", "ProductVariant", "Product", "category", ""} {
+		t.Run(kind, func(t *testing.T) {
+			recorder := testutil.NewAllowAllAuthZ()
+			mw := NewAuthorizeWithStore(auth.NewProviderRegistry(nil, recorder, nil), &testutil.StubStore{}, zap.NewNop())
+			ctx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: "admin", AuthMethod: "static-users"})
+			ctx = graphql.WithFieldContext(ctx, &graphql.FieldContext{Object: "Mutation", Field: graphql.CollectedField{Field: &ast.Field{Name: "updateResourceStatus"}}, Args: map[string]any{"input": model.UpdateResourceStatusInput{Kind: kind}}})
+			_, err := mw.GraphQLFieldAuthorizer(ctx, func(context.Context) (any, error) { t.Fatal("unsupported status reached resolver"); return nil, nil })
+			require.Error(t, err)
+			require.Empty(t, recorder.Calls)
+			var gqlErr *gqlerror.Error
+			require.ErrorAs(t, err, &gqlErr)
+			require.Equal(t, "UNSUPPORTED_KIND", gqlErr.Extensions["code"])
+		})
+	}
 }

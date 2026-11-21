@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) 2026 GitStore contributors
+set -euo pipefail
+%{ for volume in volumes ~}
+device='/dev/disk/by-id/scsi-0DO_Volume_${volume.name}'
+target='${volume.mount}'
+for attempt in $(seq 1 120); do
+  [[ -b "$device" ]] && break
+  sleep 1
+done
+[[ -b "$device" ]] || { echo "Required storage device is absent: $device" >&2; exit 1; }
+# Never format a device during boot or recovery.
+[[ "$(blkid -s TYPE -o value "$device")" == ext4 ]] || { echo 'Expected an existing ext4 volume' >&2; exit 1; }
+install -d -m 0755 "$target"
+if ! mountpoint -q "$target"; then
+  # Refuse to conceal data accidentally written onto the host root filesystem.
+  [[ -z "$(find "$target" -mindepth 1 -maxdepth 1 -print -quit)" ]] || { echo "Unmounted storage directory contains data: $target" >&2; exit 1; }
+  mount -t ext4 -o defaults,noatime "$device" "$target"
+fi
+[[ "$(findmnt -n -o UUID --target "$target")" == "$(blkid -s UUID -o value "$device")" ]] || { echo "Wrong volume mounted at $target" >&2; exit 1; }
+%{ endfor ~}

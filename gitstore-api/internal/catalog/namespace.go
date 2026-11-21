@@ -18,7 +18,7 @@ type NamespaceSpec struct {
 }
 
 type NamespaceRepositoryDefaults struct {
-	Visibility    string `yaml:"visibility" json:"visibility"`
+	Visibility    string `yaml:"visibility" json:"visibility" validate:"omitempty,oneof=PUBLIC PRIVATE INTERNAL public private internal"`
 	DefaultBranch string `yaml:"defaultBranch" json:"defaultBranch"`
 }
 

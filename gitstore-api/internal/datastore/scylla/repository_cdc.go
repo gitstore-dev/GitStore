@@ -29,6 +29,15 @@ func (s *scyllaDatastore) RunRepositoryCDC(ctx context.Context, materializer *wa
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	sequencer := newNamespaceCDCSequencer(materializer, lease)
+	sequencer.progressTable = s.keyspace + ".repositories_by_uid"
+	sequencer.persistProgress = func(ctx context.Context, progress map[string]gocql.UUID) error {
+		return s.saveCDCProgressBatch(ctx, lease, repositoryCDCSource, progress)
+	}
+	var err error
+	sequencer.persistReadProgress, err = s.sourceReadProgress(runCtx, lease, "Repository")
+	if err != nil {
+		return err
+	}
 	progress := &repositoryCDCProgressManager{journal: s, lease: lease}
 	progress.beginGeneration = func(generationCtx context.Context, generation time.Time) error {
 		streams, err := s.resourceCDCGenerationStreams(generationCtx, generation, "repositories_by_uid", "Repository")
@@ -48,7 +57,8 @@ func (s *scyllaDatastore) RunRepositoryCDC(ctx context.Context, materializer *wa
 		ProgressManager:       progress,
 		Logger:                zapCDCLogger{s.log},
 		Advanced: scyllacdc.AdvancedReaderConfig{ChangeAgeLimit: changeAgeLimit, ConfidenceWindowSize: confidenceWindow,
-			PostEmptyQueryDelay: 100 * time.Millisecond, PostNonEmptyQueryDelay: 100 * time.Millisecond,
+			MaxEmptyQueryTimeWindowSize: namespaceCDCEmptyProbeWindow,
+			PostEmptyQueryDelay:         100 * time.Millisecond, PostNonEmptyQueryDelay: 100 * time.Millisecond,
 			PostFailedQueryDelay: 100 * time.Millisecond, MaxPostFailedQueryDelay: 2 * time.Second, TableMissingRetryLimit: 30},
 	})
 	if err != nil {
@@ -130,6 +140,10 @@ func (c *repositoryCDCConsumer) Empty(ctx context.Context, ackTime gocql.UUID) e
 		return c.reporter.MarkProgress(markCtx, scyllacdc.Progress{LastProcessedRecordTime: ackTime})
 	}})
 }
+func (c *repositoryCDCConsumer) QueryCompleted(ctx context.Context, ackTime gocql.UUID) error {
+	return c.Empty(ctx, ackTime)
+}
+
 func (c *repositoryCDCConsumer) End() error { return c.sequencer.Unregister(c.streamID) }
 
 func repositoryCDCPostimage(rows []*scyllacdc.ChangeRow) *datastore.Repository {

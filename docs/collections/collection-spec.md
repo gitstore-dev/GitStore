@@ -24,7 +24,7 @@ A Collection resource is a Markdown file with YAML frontmatter pushed to a GitSt
 | Field                  | Type              | Required | Constraint                                                             |
 |------------------------|-------------------|----------|------------------------------------------------------------------------|
 | `metadata.name`        | string            | yes      | DNS subdomain format; unique within namespace                          |
-| `metadata.namespace`   | string            | no       | Optional. Inferred from the repository's owning namespace when omitted |
+| `metadata.namespace`   | string            | yes      | Must match the repository's owning namespace                           |
 | `metadata.labels`      | map[string]string | no       | Key prefix ≤ 253 chars; key name ≤ 63 chars; value ≤ 63 chars          |
 | `metadata.annotations` | map[string]string | no       | No length restriction                                                  |
 
@@ -151,32 +151,27 @@ Populated by the admission pipeline after a successful push. Never author-writab
 | `status.observedGeneration`   | int    | Generation of the spec this status reflects                                    |
 | `status.lastAppliedRevision`  | string | Git ref + SHA, e.g. `main@sha1:abc123`                                         |
 | `status.conditions`           | array  | See Condition Types below                                                      |
-| `status.resolved.memberCount` | int    | Cached product count at admission time; `collection.products` is authoritative |
-| `status.resolved.media`       | array  | Resolved file URLs for each media entry                                        |
+| `status.resolved.memberCount` | int    | Exposed schema field, not currently materialized; do not use as a membership count |
 
-### Condition Types
+### Admission and membership status
 
-| Type               | Meaning                       | Normal status |
-|--------------------|-------------------------------|---------------|
-| `SelectorAccepted` | Selector syntax is valid      | `"True"`      |
-| `MembersResolved`  | Membership count was computed | `"True"`      |
-| `Ready`            | All sub-conditions are True   | `"True"`      |
+Successful admission records `AdmissionAccepted=True` with reason
+`AdmittedByHookPipeline`. There is no Collection reconciler computing
+`MembersResolved`, `Ready`, resolved media or a membership count.
 
-### Condition Reasons
-
-| Reason              | Condition        | Meaning                                                   |
-|---------------------|------------------|-----------------------------------------------------------|
-| `SelectorValid`     | SelectorAccepted | Selector parsed successfully                              |
-| `ProductsMatched`   | MembersResolved  | One or more products matched the selector                 |
-| `NoProductsMatched` | MembersResolved  | Selector present but zero products matched (not an error) |
-| `Reconciled`        | Ready            | All sub-conditions satisfied                              |
-| `MediaNotResolved`  | Ready `"False"`  | A non-optional media file could not be resolved           |
+`collection.products` evaluates the current label selector when each page is
+requested. It is not a frozen membership snapshot, so concurrent product edits
+can change membership between requests. Without a selector it returns an empty
+connection. Do not use `status.resolved.memberCount` as an authoritative total
+or infer a scalable materialized membership index from this field.
 
 ---
 
 ## Validation Errors
 
-All validation errors are returned as plain text on the `git push` stderr stream. Tests should use substring matching rather than exact string comparison.
+Pre-receive structural validation errors appear in `git push` stderr. Semantic
+admission runs after the accepted ref update and cannot retroactively reject
+the push; inspect API diagnostics if an expected Collection is not projected.
 
 | Condition                     | Error message pattern                                                                                 |
 |-------------------------------|-------------------------------------------------------------------------------------------------------|
@@ -247,7 +242,8 @@ Apple laptop products across MacBook Air and MacBook Pro families.
 
 ### Zero-Member Selector (no `spec.selector`)
 
-Omitting `spec.selector` is valid. The collection is admitted with `status.resolved.memberCount: 0`.
+Omitting `spec.selector` is valid. The Collection's `products` connection is
+empty; admission does not materialize `status.resolved.memberCount`.
 
 ```markdown
 ---

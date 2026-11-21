@@ -15,7 +15,7 @@ import (
 )
 
 const repositoryFields = `
-  metadata { uid name namespace resourceVersion generation finalizers }
+  metadata { uid name namespace resourceVersion generation revision finalizers }
   spec { defaultBranch }
   status {
     observedGeneration
@@ -50,6 +50,7 @@ type repositoryMetadataJSON struct {
 	Name            string   `json:"name"`
 	Namespace       string   `json:"namespace"`
 	ResourceVersion string   `json:"resourceVersion"`
+	Revision        string   `json:"revision"`
 	Generation      int64    `json:"generation"`
 	Finalizers      []string `json:"finalizers"`
 }
@@ -82,6 +83,7 @@ func (n repositoryNodeJSON) toRepository() repositorycontroller.Repository {
 		Name:            n.Metadata.Name,
 		Generation:      n.Metadata.Generation,
 		ResourceVersion: n.Metadata.ResourceVersion,
+		Revision:        n.Metadata.Revision,
 		Finalizers:      append([]string(nil), n.Metadata.Finalizers...),
 	}
 	if n.Status == nil {

@@ -3,16 +3,19 @@
 
 > Extends `020-pluggable_auth_architecture.md` (principal model) and
 > `021-controller_service_account_auth.md` (controller identity). Schema-annotation style follows
-> [ADR 0011](../ADRs/0011-graphql-authorization-directive.md). This document is authoritative for
-> GraphQL operation cost, per-principal cost budgets, the per-IP request limiter, structural
-> request limits, and how all of them are reported to clients.
+> [ADR 0011](../ADRs/0011-graphql-authorization-directive.md). This document proposes richer
+> operation-cost accounting and reporting. Supported runtime behavior and defaults are
+> documented in [configuration](../configuration.md).
 
 > **Amended by [ADR 0012](../ADRs/0012-admin-storefront-graphql-endpoints.md)** (separate Admin and
 > Storefront GraphQL endpoints). Limits are applied as **per-endpoint profiles** (§8.4). Everything
-> else in this document describes the **admin profile**, served at `/admin/graphql` on the shared
-> listener or `/graphql` on `api.admin.port`. The storefront profile (`/storefront/graphql` or
-> `/graphql` on `api.storefront.port`) reuses the same pipeline and `ratelimit.Limiter` with the
-> differences in §8.4.
+> else in this document describes a proposed richer **admin profile**. The implemented
+> boundary uses fixed `/admin/graphql` on `api.admin_port` and `/storefront/graphql`
+> on `api.storefront_port`; there is no shared routing or enablement flag. It uses
+> pinned gqlgen validation/complexity hooks and the existing bounded IP limiter,
+> not the proposed `ratelimit.Limiter`, cost directives, refunds or shared quota store.
+> Storefront currently stops at the fixed unavailable guard before execution.
+> See the supported defaults in [configuration](../configuration.md).
 
 ## 1. Executive Decision
 
@@ -69,23 +72,24 @@ controllers and apps, including future CRD controllers and GitStore apps, are no
 
 ## 3. Verified Current-State Constraints
 
-| #   | Finding                                                                                                                                                                                                                                                                                                    | Location                                                                   |
-|-----|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------|
-| C1  | `first`/`last` are not capped. `PageParams.Limit()` only substitutes `DefaultPageSize = 100` when the value is `0`, so `first: 1000000` reaches the datastore.                                                                                                                                             | `gitstore-api/internal/datastore/datastore.go:128-143`                     |
-| C2  | No complexity, depth, alias or root-field limit. The handler registers only `Introspection` and `AutomaticPersistedQuery`.                                                                                                                                                                                 | `gitstore-api/internal/app/server.go:382-410`                              |
-| C3  | No parser token limit. gqlgen's executor defaults to unlimited (`parserTokenNoLimit`), and `SetParserTokenLimit` is never called. This is the mitigation for CVE-2023-49559 / [GHSA-2hmf-46v7-v6fx](https://github.com/advisories/GHSA-2hmf-46v7-v6fx), directive overloading.                             | gqlgen `graphql/executor/executor.go:44,188`                               |
-| C4  | No request body limit. gqlgen's POST transport does `io.ReadAll(r.Body)`.                                                                                                                                                                                                                                  | gqlgen `graphql/handler/transport/http_post.go:88`                         |
-| C5  | Introspection is enabled for every caller, including anonymous.                                                                                                                                                                                                                                            | `server.go:399`                                                            |
-| C6  | L0 is a per-IP `x/time/rate` bucket in a per-replica map. It returns `{"error":"rate limit exceeded"}`, which is not GraphQL-shaped, and sends no rate-limit headers.                                                                                                                                      | `gitstore-api/internal/middleware/security/secure.go:100-196,489-504`      |
-| C7  | `gin.New()` is used without `SetTrustedProxies`. gin's default trusts every proxy, so `c.ClientIP()` honours a client-supplied `X-Forwarded-For` and L0 can be bypassed by rotating that header.                                                                                                           | `server.go:428`, `secure.go:490`                                           |
-| C8  | The Git smart-HTTP server (`api.git_port`) has no limiter at all.                                                                                                                                                                                                                                          | `server.go:291`                                                            |
-| C9  | Authentication runs in `AroundOperations`, after gqlgen's `CreateOperationContext` (parse, validate, `MutateOperationContext`). A cost computed in `MutateOperationContext` is therefore principal-agnostic. The bucket charge must happen in an operation interceptor registered after the authenticator. | `server.go:406-409`, gqlgen `executor.go`                                  |
-| C10 | gqlgen chooses the HTTP status itself: 200, or 422 (`application/json`) / 400 (`application/graphql-response+json`) for `KindProtocol` errors. There is no hook that produces 429.                                                                                                                         | gqlgen `transport/http_get.go:112-129`                                     |
-| C11 | Product controllers page with `first: 250`; the other controller connection queries use 100 or fewer. All remain subject to the page cap. | `gitstore-controller-manager/internal/listwatch/*.go` |
-| C12 | Connections expose only `edges` and `pageInfo` (no `nodes` shortcut, no `totalCount` — removed 2026-10 since ScyllaDB has no cheap cross-partition count).                                                                                                                                                | `shared/schemas/*.graphqls`                                                |
-| C13 | Controller principals are service accounts issued by the API itself, with `Subject = "serviceaccount:controllers:gitstore-controller-manager"`.                                                                                                                                                            | `config/policy.yaml:35`, `auth/provider/serviceaccountjwt/provider.go:159` |
+The endpoint boundary implements the baseline below. The later directive, refund,
+policy-tier and distributed-accounting design remains proposed.
 
-C1, C3, C4 and C7 are exploitable today, whatever happens to cost analysis. They make up Phase 1 (§13).
+| # | Supported behavior / remaining constraint | Source |
+| --- | --- | --- |
+| C1 | GraphQL page sizes are capped at 250 and node-ID batches at 50 before datastore access. | `internal/middleware/security/graphql_limits.go` |
+| C2 | Operation ceiling 1,000; depth 15, aliases 30 and root fields 20. Cost multiplies requested list cardinality. Stored metadata/spec/status and pageInfo have zero fetch cost; structural checks still count their selections. Related resource traversal remains charged. | API limits and app wiring |
+| C3 | The handler sets 15,000 parser tokens, a 64 KiB document cap, bounded fragment/directive traversal and validation errors. Cached documents retain the same checks. | API limits and app wiring |
+| C4 | HTTP bodies are capped at 1 MiB. Storefront does not read the body to construct its unavailable response. WebSocket pre-decode allocation remains an inherited hardening gap. | `internal/app/endpoint_admission.go` |
+| C5 | Admin introspection requires authentication. Storefront returns unavailable before schema execution. | `internal/app/graphql.go` |
+| C6 | IP and principal tables have finite key counts and idle cleanup. Quota/concurrency rejection returns GraphQL-shaped HTTP 429; counters and budgets are per replica. | Existing security limiter and app admission |
+| C7 | Trusted proxies are explicit and default to empty. Untrusted forwarded-IP headers do not establish client identity. | Endpoint construction |
+| C8 | Git smart HTTP retains its existing ingress behavior; this GraphQL split does not add its proposed L0 limiter. | Git HTTP construction |
+| C9 | Authentication runs after parse/validation; principal cost is charged after authentication and calculated cost. | App operation interceptors |
+| C10 | The owned response writer preserves gqlgen transports while allowing HTTP 429 for operation admission. | `internal/app/endpoint_admission.go` |
+| C11 | Product controllers retain 250-row pages; other controller connections use 100 or fewer. Actual query documents must fit the default operation ceiling. | Controller list/watch queries and API contract tests |
+| C12 | Connections expose edges/pageInfo, without an unbounded totalCount or nodes shortcut. | `shared/schemas/admin/` |
+| C13 | Only the configured canonical controller subject, authenticated by the ServiceAccount JWT provider with a verified UID, is exempt from the principal bucket. The operation ceiling and other bounds still apply. | `internal/app/operation_admission.go` |
 
 ## 4. Request Pipeline
 
@@ -196,7 +200,7 @@ directive @listSize(
 ```
 
 ```yaml
-# gitstore-api/gqlgen.yml
+# gitstore-api/gqlgen.admin.yml
 directives:
   cost:     { skip_runtime: true }
   listSize: { skip_runtime: true }
@@ -378,7 +382,7 @@ in §4 is identical; the profile decides which layers run and with which values.
 
 - The buyer-IP header is ignored on any request without a storefront access token, so it can't be
   used to spoof L0 keys (same class as C7).
-- The storefront handler exists only when `api.storefront.enabled = true` (ADR 0012 §1).
+- The Storefront listener is always constructed; absent publication/target support produces a fixed unavailable response, without an enablement flag (ADR 0012 §1).
 - Bot and crawler protection stays with the operator's CDN or WAF in alpha.
 
 ## 9. Multi-Replica, Restart, and Rolling-Upgrade Semantics
@@ -598,7 +602,7 @@ rate_limit_burst = 40
    - `valkey` provider (Lua GCRA/token bucket with atomic refund).
    - Policy-driven tiers for third-party apps and CRD controllers.
    - Per-namespace budgets.
-   - Storefront profile (§8.4), shipped with the Storefront API behind `api.storefront.enabled`.
+   - Future Storefront execution profile (§8.4), activated by real publication/target dependencies rather than an enablement setting.
 
 ## 14. Observability
 

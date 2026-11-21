@@ -1,0 +1,589 @@
+{
+  "schemaVersion": 1,
+  "grammar": "<kind>[.<subresource>].<verb>",
+  "description": "Planning contract; promote to shared/schemas/authorization-actions.json during implementation. Reserved actions define vocabulary only, not new endpoints. Dynamic workflow.action capabilities require a future finite catalog amendment.",
+  "actions": [
+    {
+      "action": "namespace.create",
+      "kind": "namespace",
+      "scope": "cluster",
+      "resource": "namespace",
+      "verb": "create"
+    },
+    {
+      "action": "namespace.read",
+      "kind": "namespace",
+      "scope": "cluster",
+      "resource": "namespace",
+      "verb": "read"
+    },
+    {
+      "action": "namespace.list",
+      "kind": "namespace",
+      "scope": "cluster",
+      "resource": "namespace",
+      "verb": "list"
+    },
+    {
+      "action": "namespace.watch",
+      "kind": "namespace",
+      "scope": "cluster",
+      "resource": "namespace",
+      "verb": "watch"
+    },
+    {
+      "action": "namespace.update",
+      "kind": "namespace",
+      "scope": "cluster",
+      "resource": "namespace",
+      "verb": "update"
+    },
+    {
+      "action": "namespace.delete",
+      "kind": "namespace",
+      "scope": "cluster",
+      "resource": "namespace",
+      "verb": "delete"
+    },
+    {
+      "action": "namespace.status.write",
+      "kind": "namespace",
+      "scope": "cluster",
+      "resource": "namespace/status",
+      "verb": "write"
+    },
+    {
+      "action": "namespace.transfer",
+      "kind": "namespace",
+      "scope": "cluster",
+      "resource": "namespace",
+      "verb": "transfer"
+    },
+    {
+      "action": "namespace.purge",
+      "kind": "namespace",
+      "scope": "cluster",
+      "resource": "namespace",
+      "verb": "purge"
+    },
+    {
+      "action": "repository.create",
+      "kind": "repository",
+      "scope": "namespace",
+      "resource": "repository",
+      "verb": "create"
+    },
+    {
+      "action": "repository.read",
+      "kind": "repository",
+      "scope": "namespace",
+      "resource": "repository",
+      "verb": "read"
+    },
+    {
+      "action": "repository.list",
+      "kind": "repository",
+      "scope": "namespace",
+      "resource": "repository",
+      "verb": "list"
+    },
+    {
+      "action": "repository.watch",
+      "kind": "repository",
+      "scope": "namespace",
+      "resource": "repository",
+      "verb": "watch"
+    },
+    {
+      "action": "repository.update",
+      "kind": "repository",
+      "scope": "namespace",
+      "resource": "repository",
+      "verb": "update"
+    },
+    {
+      "action": "repository.delete",
+      "kind": "repository",
+      "scope": "namespace",
+      "resource": "repository",
+      "verb": "delete"
+    },
+    {
+      "action": "repository.status.write",
+      "kind": "repository",
+      "scope": "namespace",
+      "resource": "repository/status",
+      "verb": "write"
+    },
+    {
+      "action": "repository.transfer",
+      "kind": "repository",
+      "scope": "namespace",
+      "resource": "repository",
+      "verb": "transfer"
+    },
+    {
+      "action": "repository.purge",
+      "kind": "repository",
+      "scope": "namespace",
+      "resource": "repository",
+      "verb": "purge"
+    },
+    {
+      "action": "categoryTaxonomy.create",
+      "kind": "categoryTaxonomy",
+      "scope": "namespace",
+      "resource": "categoryTaxonomy",
+      "verb": "create"
+    },
+    {
+      "action": "categoryTaxonomy.read",
+      "kind": "categoryTaxonomy",
+      "scope": "namespace",
+      "resource": "categoryTaxonomy",
+      "verb": "read"
+    },
+    {
+      "action": "categoryTaxonomy.list",
+      "kind": "categoryTaxonomy",
+      "scope": "namespace",
+      "resource": "categoryTaxonomy",
+      "verb": "list"
+    },
+    {
+      "action": "categoryTaxonomy.watch",
+      "kind": "categoryTaxonomy",
+      "scope": "namespace",
+      "resource": "categoryTaxonomy",
+      "verb": "watch"
+    },
+    {
+      "action": "categoryTaxonomy.update",
+      "kind": "categoryTaxonomy",
+      "scope": "namespace",
+      "resource": "categoryTaxonomy",
+      "verb": "update"
+    },
+    {
+      "action": "categoryTaxonomy.delete",
+      "kind": "categoryTaxonomy",
+      "scope": "namespace",
+      "resource": "categoryTaxonomy",
+      "verb": "delete"
+    },
+    {
+      "action": "categoryTaxonomy.status.write",
+      "kind": "categoryTaxonomy",
+      "scope": "namespace",
+      "resource": "categoryTaxonomy/status",
+      "verb": "write"
+    },
+    {
+      "action": "categoryTaxonomy.transfer",
+      "kind": "categoryTaxonomy",
+      "scope": "namespace",
+      "resource": "categoryTaxonomy",
+      "verb": "transfer"
+    },
+    {
+      "action": "categoryTaxonomy.purge",
+      "kind": "categoryTaxonomy",
+      "scope": "namespace",
+      "resource": "categoryTaxonomy",
+      "verb": "purge"
+    },
+    {
+      "action": "product.create",
+      "kind": "product",
+      "scope": "namespace",
+      "resource": "product",
+      "verb": "create"
+    },
+    {
+      "action": "product.read",
+      "kind": "product",
+      "scope": "namespace",
+      "resource": "product",
+      "verb": "read"
+    },
+    {
+      "action": "product.list",
+      "kind": "product",
+      "scope": "namespace",
+      "resource": "product",
+      "verb": "list"
+    },
+    {
+      "action": "product.watch",
+      "kind": "product",
+      "scope": "namespace",
+      "resource": "product",
+      "verb": "watch"
+    },
+    {
+      "action": "product.update",
+      "kind": "product",
+      "scope": "namespace",
+      "resource": "product",
+      "verb": "update"
+    },
+    {
+      "action": "product.delete",
+      "kind": "product",
+      "scope": "namespace",
+      "resource": "product",
+      "verb": "delete"
+    },
+    {
+      "action": "product.status.write",
+      "kind": "product",
+      "scope": "namespace",
+      "resource": "product/status",
+      "verb": "write"
+    },
+    {
+      "action": "product.transfer",
+      "kind": "product",
+      "scope": "namespace",
+      "resource": "product",
+      "verb": "transfer"
+    },
+    {
+      "action": "product.purge",
+      "kind": "product",
+      "scope": "namespace",
+      "resource": "product",
+      "verb": "purge"
+    },
+    {
+      "action": "productVariant.create",
+      "kind": "productVariant",
+      "scope": "namespace",
+      "resource": "productVariant",
+      "verb": "create"
+    },
+    {
+      "action": "productVariant.read",
+      "kind": "productVariant",
+      "scope": "namespace",
+      "resource": "productVariant",
+      "verb": "read"
+    },
+    {
+      "action": "productVariant.list",
+      "kind": "productVariant",
+      "scope": "namespace",
+      "resource": "productVariant",
+      "verb": "list"
+    },
+    {
+      "action": "productVariant.watch",
+      "kind": "productVariant",
+      "scope": "namespace",
+      "resource": "productVariant",
+      "verb": "watch"
+    },
+    {
+      "action": "productVariant.update",
+      "kind": "productVariant",
+      "scope": "namespace",
+      "resource": "productVariant",
+      "verb": "update"
+    },
+    {
+      "action": "productVariant.delete",
+      "kind": "productVariant",
+      "scope": "namespace",
+      "resource": "productVariant",
+      "verb": "delete"
+    },
+    {
+      "action": "productVariant.status.write",
+      "kind": "productVariant",
+      "scope": "namespace",
+      "resource": "productVariant/status",
+      "verb": "write"
+    },
+    {
+      "action": "productVariant.transfer",
+      "kind": "productVariant",
+      "scope": "namespace",
+      "resource": "productVariant",
+      "verb": "transfer"
+    },
+    {
+      "action": "collection.create",
+      "kind": "collection",
+      "scope": "namespace",
+      "resource": "collection",
+      "verb": "create"
+    },
+    {
+      "action": "collection.read",
+      "kind": "collection",
+      "scope": "namespace",
+      "resource": "collection",
+      "verb": "read"
+    },
+    {
+      "action": "collection.list",
+      "kind": "collection",
+      "scope": "namespace",
+      "resource": "collection",
+      "verb": "list"
+    },
+    {
+      "action": "collection.watch",
+      "kind": "collection",
+      "scope": "namespace",
+      "resource": "collection",
+      "verb": "watch"
+    },
+    {
+      "action": "collection.update",
+      "kind": "collection",
+      "scope": "namespace",
+      "resource": "collection",
+      "verb": "update"
+    },
+    {
+      "action": "collection.delete",
+      "kind": "collection",
+      "scope": "namespace",
+      "resource": "collection",
+      "verb": "delete"
+    },
+    {
+      "action": "collection.status.write",
+      "kind": "collection",
+      "scope": "namespace",
+      "resource": "collection/status",
+      "verb": "write"
+    },
+    {
+      "action": "collection.transfer",
+      "kind": "collection",
+      "scope": "namespace",
+      "resource": "collection",
+      "verb": "transfer"
+    },
+    {
+      "action": "file.create",
+      "kind": "file",
+      "scope": "namespace",
+      "resource": "file",
+      "verb": "create"
+    },
+    {
+      "action": "file.read",
+      "kind": "file",
+      "scope": "namespace",
+      "resource": "file",
+      "verb": "read"
+    },
+    {
+      "action": "file.list",
+      "kind": "file",
+      "scope": "namespace",
+      "resource": "file",
+      "verb": "list"
+    },
+    {
+      "action": "file.watch",
+      "kind": "file",
+      "scope": "namespace",
+      "resource": "file",
+      "verb": "watch"
+    },
+    {
+      "action": "file.update",
+      "kind": "file",
+      "scope": "namespace",
+      "resource": "file",
+      "verb": "update"
+    },
+    {
+      "action": "file.delete",
+      "kind": "file",
+      "scope": "namespace",
+      "resource": "file",
+      "verb": "delete"
+    },
+    {
+      "action": "file.status.write",
+      "kind": "file",
+      "scope": "namespace",
+      "resource": "file/status",
+      "verb": "write"
+    },
+    {
+      "action": "file.transfer",
+      "kind": "file",
+      "scope": "namespace",
+      "resource": "file",
+      "verb": "transfer"
+    },
+    {
+      "action": "repository.contents.read",
+      "kind": "repository",
+      "scope": "namespace",
+      "resource": "repository/contents",
+      "verb": "read"
+    },
+    {
+      "action": "repository.contents.write",
+      "kind": "repository",
+      "scope": "namespace",
+      "resource": "repository/contents",
+      "verb": "write"
+    },
+    {
+      "action": "product.management.read",
+      "kind": "product",
+      "scope": "namespace",
+      "resource": "product/management",
+      "verb": "read"
+    },
+    {
+      "action": "product.management.list",
+      "kind": "product",
+      "scope": "namespace",
+      "resource": "product/management",
+      "verb": "list"
+    },
+    {
+      "action": "productVariant.management.read",
+      "kind": "productVariant",
+      "scope": "namespace",
+      "resource": "productVariant/management",
+      "verb": "read"
+    },
+    {
+      "action": "productVariant.management.list",
+      "kind": "productVariant",
+      "scope": "namespace",
+      "resource": "productVariant/management",
+      "verb": "list"
+    },
+    {
+      "action": "namespace.system-repository.provision",
+      "kind": "namespace",
+      "scope": "cluster",
+      "resource": "namespace/system-repository",
+      "verb": "provision"
+    },
+    {
+      "action": "serviceAccount.create",
+      "kind": "serviceAccount",
+      "scope": "cluster",
+      "resource": "serviceAccount",
+      "verb": "create"
+    },
+    {
+      "action": "serviceAccount.read",
+      "kind": "serviceAccount",
+      "scope": "cluster",
+      "resource": "serviceAccount",
+      "verb": "read"
+    },
+    {
+      "action": "serviceAccount.list",
+      "kind": "serviceAccount",
+      "scope": "cluster",
+      "resource": "serviceAccount",
+      "verb": "list"
+    },
+    {
+      "action": "serviceAccount.update",
+      "kind": "serviceAccount",
+      "scope": "cluster",
+      "resource": "serviceAccount",
+      "verb": "update"
+    },
+    {
+      "action": "serviceAccount.delete",
+      "kind": "serviceAccount",
+      "scope": "cluster",
+      "resource": "serviceAccount",
+      "verb": "delete"
+    },
+    {
+      "action": "serviceAccount.token.issue",
+      "kind": "serviceAccount",
+      "scope": "cluster",
+      "resource": "serviceAccount/token",
+      "verb": "issue"
+    },
+    {
+      "action": "serviceAccount.key.rotate",
+      "kind": "serviceAccount",
+      "scope": "cluster",
+      "resource": "serviceAccount/key",
+      "verb": "rotate"
+    },
+    {
+      "action": "workflow.definition.manage",
+      "kind": "workflow",
+      "scope": "namespace",
+      "resource": "workflow/definition",
+      "verb": "manage",
+      "reserved": true
+    },
+    {
+      "action": "workflow.release.approve",
+      "kind": "workflow",
+      "scope": "namespace",
+      "resource": "workflow/release",
+      "verb": "approve",
+      "reserved": true
+    },
+    {
+      "action": "workflow.execution.transition",
+      "kind": "workflow",
+      "scope": "namespace",
+      "resource": "workflow/execution",
+      "verb": "transition",
+      "reserved": true
+    },
+    {
+      "action": "workflow.bundle.install",
+      "kind": "workflow",
+      "scope": "namespace",
+      "resource": "workflow/bundle",
+      "verb": "install",
+      "reserved": true
+    },
+    {
+      "action": "catalogRelease.create",
+      "kind": "catalogRelease",
+      "scope": "namespace",
+      "resource": "catalogRelease",
+      "verb": "create",
+      "reserved": true
+    },
+    {
+      "action": "publication.create",
+      "kind": "publication",
+      "scope": "namespace",
+      "resource": "publication",
+      "verb": "create",
+      "reserved": true
+    },
+    {
+      "action": "publication.read",
+      "kind": "publication",
+      "scope": "namespace",
+      "resource": "publication",
+      "verb": "read",
+      "reserved": true
+    },
+    {
+      "action": "iam.manage",
+      "kind": "iam",
+      "scope": "cluster",
+      "resource": "iam",
+      "verb": "manage",
+      "reserved": true
+    }
+  ]
+}

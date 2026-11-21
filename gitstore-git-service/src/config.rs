@@ -15,6 +15,18 @@ pub struct AppConfig {
     pub log: LogConfig,
     pub grpc_auth: GrpcAuthConfig,
     pub push_limits: PushLimitsConfig,
+    pub observability: ObservabilityConfig,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ObservabilityConfig {
+    pub otlp: OtlpConfig,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct OtlpConfig {
+    pub uri: String,
+    pub trace_sample_ratio: f64,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -143,6 +155,27 @@ impl AppConfig {
     /// Validate all fields and collect every failure into a single `ConfigErrors`.
     pub fn validate(&self) -> Result<(), ConfigErrors> {
         let mut errors = Vec::new();
+        let otlp = &self.observability.otlp;
+        if !(0.0..=1.0).contains(&otlp.trace_sample_ratio) {
+            errors
+                .push("observability.otlp.trace_sample_ratio must be between zero and one".into());
+        }
+        let valid_endpoint = otlp.uri.len() <= 256
+            && !otlp.uri.contains('#')
+            && otlp
+                .uri
+                .parse::<tonic::codegen::http::Uri>()
+                .is_ok_and(|uri| {
+                    matches!(uri.scheme_str(), Some("http" | "https"))
+                        && uri.host().is_some_and(|host| !host.is_empty())
+                        && uri.query().is_none()
+                        && uri
+                            .authority()
+                            .is_some_and(|authority| !authority.as_str().contains('@'))
+                });
+        if !otlp.uri.is_empty() && !valid_endpoint {
+            errors.push("observability.otlp.uri must be an HTTP(S) URI without credentials, query or fragment".into());
+        }
 
         if self.git_service.grpc_port == 0 {
             errors.push(format!(
@@ -194,71 +227,6 @@ impl AppConfig {
     }
 }
 
-/// Every TOML path (or env var) gitstore-git-service used to own before the
-/// config-grouping refactor. Checked independently of the final merged
-/// config state so a renamed/removed key never silently resolves to a
-/// default. One file is mounted into every service, so this cannot use a
-/// global strict/deny-unknown-fields check — each service checks only the
-/// keys it used to own. Ordered most-specific-first so the most helpful
-/// match wins.
-const LEGACY_KEYS: &[(&str, &str)] = &[
-    ("grpc.port", "git_service.grpc_port"),
-    ("grpc", "git_service.grpc_port"),
-    ("git.data_dir", "git_service.data_dir"),
-    (
-        "git.repo.max_file_size",
-        "push_limits.max_file_size (removed; now a shared static ceiling)",
-    ),
-    (
-        "git.repo.max_pack_size_bytes",
-        "push_limits.max_pack_size (removed; now a shared static ceiling)",
-    ),
-    ("git.repo", "push_limits"),
-    ("git", "git_service.data_dir / push_limits"),
-    (
-        "hooks",
-        "removed; pre-receive validation and post-receive admission are always on",
-    ),
-    (
-        "schema_validation.phase",
-        "removed; schema validation always runs at pre-receive",
-    ),
-    (
-        "schema_validation.timeout_secs",
-        "git_service.validation.timeout",
-    ),
-    ("schema_validation", "git_service.validation.timeout"),
-    (
-        "admission_control.phase",
-        "removed; admission control always runs at post-receive",
-    ),
-    (
-        "admission_control.branch_pattern",
-        "git_service.admission.branch_pattern",
-    ),
-    ("admission_control", "git_service.admission.branch_pattern"),
-    ("catalog_service.uri", "git_service.catalog.uri"),
-    ("catalog_service", "git_service.catalog.uri"),
-    ("auth.grpc.hmac_secret", "grpc_auth.hmac_secret"),
-    (
-        "auth.grpc.hmac_secret_previous",
-        "grpc_auth.hmac_secret_previous",
-    ),
-    ("auth.grpc", "grpc_auth"),
-    ("auth", "grpc_auth"),
-];
-
-fn check_legacy_keys(cfg: &Config) -> Result<(), config::ConfigError> {
-    for (path, replacement) in LEGACY_KEYS {
-        if cfg.get::<config::Value>(path).is_ok() {
-            return Err(config::ConfigError::Message(format!(
-                "config: {path} is no longer recognised; use {replacement} instead"
-            )));
-        }
-    }
-    Ok(())
-}
-
 /// Resolves a configured `dns:///host:port` gRPC URI into a URI tonic can
 /// dial directly. tonic has no dns resolver, so git-service resolves once
 /// at connect — unlike Go clients (grpc.NewClient), there is no
@@ -297,7 +265,6 @@ pub fn load_config_from(config_file: Option<&str>) -> Result<AppConfig, config::
         );
 
     let built = builder.build()?;
-    check_legacy_keys(&built)?;
     let mut cfg = built.try_deserialize::<AppConfig>()?;
 
     cfg.git_service.catalog.uri =
@@ -330,6 +297,10 @@ timeout = "10s"
 [git_service.admission]
 branch_pattern = "^refs/heads/main$"
 
+[observability.otlp]
+uri = ""
+trace_sample_ratio = 0.05
+
 [log]
 level = "info"
 format = "json"
@@ -359,6 +330,8 @@ mod tests {
             "GITSTORE_GIT_SERVICE__DATA_DIR",
             "GITSTORE_LOG__LEVEL",
             "GITSTORE_LOG__FORMAT",
+            "GITSTORE_OBSERVABILITY__OTLP__URI",
+            "GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO",
             "GITSTORE_GIT_SERVICE__VALIDATION__TIMEOUT",
             "GITSTORE_GIT_SERVICE__ADMISSION__BRANCH_PATTERN",
             "GITSTORE_GIT_SERVICE__CATALOG__URI",
@@ -366,23 +339,42 @@ mod tests {
             "GITSTORE_GRPC_AUTH__HMAC_SECRET_PREVIOUS",
             "GITSTORE_PUSH_LIMITS__MAX_PACK_SIZE",
             "GITSTORE_PUSH_LIMITS__MAX_FILE_SIZE",
-            // Legacy keys exercised by rejection tests.
-            "GITSTORE_GRPC__PORT",
-            "GITSTORE_GIT__DATA_DIR",
-            "GITSTORE_GIT__REPO__MAX_FILE_SIZE",
-            "GITSTORE_GIT__REPO__MAX_PACK_SIZE_BYTES",
-            "GITSTORE_SCHEMA_VALIDATION__PHASE",
-            "GITSTORE_SCHEMA_VALIDATION__TIMEOUT_SECS",
-            "GITSTORE_ADMISSION_CONTROL__PHASE",
-            "GITSTORE_ADMISSION_CONTROL__BRANCH_PATTERN",
-            "GITSTORE_CATALOG_SERVICE__URI",
-            "GITSTORE_HOOKS__GIT_RECEIVE_PACK__PRE_RECEIVE__ENABLED",
-            "GITSTORE_AUTH__GRPC__HMAC_SECRET",
-            "GITSTORE_AUTH__GRPC__HMAC_SECRET_PREVIOUS",
         ];
         for k in &keys {
             env::remove_var(k);
         }
+    }
+
+    #[test]
+    fn telemetry_config_is_opt_in_and_validates_export_settings() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        clear_env();
+        let mut cfg = load_config_from(None).unwrap();
+        cfg.grpc_auth.hmac_secret = "test-key".into();
+        assert!(cfg.observability.otlp.uri.is_empty());
+        for endpoint in ["http://collector:4318", "https://collector:4318/otlp", ""] {
+            cfg.observability.otlp.uri = endpoint.into();
+            cfg.validate().unwrap();
+        }
+        for endpoint in [
+            "ftp://collector",
+            "http://collector:4318?private",
+            "http://collector:4318#private",
+        ] {
+            cfg.observability.otlp.uri = endpoint.into();
+            let error = cfg.validate().unwrap_err().to_string();
+            assert!(error.contains("observability.otlp.uri"));
+            assert!(!error.contains("private"));
+        }
+        cfg.observability.otlp.uri.clear();
+        cfg.observability.otlp.trace_sample_ratio = f64::NAN;
+        assert!(cfg.validate().is_err());
+        env::set_var("GITSTORE_OBSERVABILITY__OTLP__URI", "http://collector:4318");
+        env::set_var("GITSTORE_OBSERVABILITY__OTLP__TRACE_SAMPLE_RATIO", "0.25");
+        let cfg = load_config_from(None).unwrap();
+        assert_eq!(cfg.observability.otlp.uri, "http://collector:4318");
+        assert_eq!(cfg.observability.otlp.trace_sample_ratio, 0.25);
+        clear_env();
     }
 
     #[test]
@@ -652,80 +644,6 @@ mod tests {
         env::set_var("GITSTORE_PUSH_LIMITS__MAX_PACK_SIZE", "1GiB");
         let cfg = load_config_from(None).expect("load failed");
         assert_eq!(cfg.push_limits.max_pack_size.0, 1024 * 1024 * 1024);
-        clear_env();
-    }
-
-    // --- legacy key rejection tests ---
-
-    #[test]
-    fn test_legacy_grpc_port_env_var_rejected() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        env::set_var("GITSTORE_GRPC__PORT", "9999");
-        let err = load_config_from(None).expect_err("legacy grpc.port must be rejected");
-        assert!(
-            err.to_string().contains("git_service.grpc_port"),
-            "got: {err}"
-        );
-        clear_env();
-    }
-
-    #[test]
-    fn test_legacy_hooks_table_rejected() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        let dir = tempfile::tempdir().expect("tempdir");
-        let file_path = dir.path().join("custom_config.toml");
-        std::fs::write(
-            &file_path,
-            "[hooks.git_receive_pack]\npre_receive = { enabled = true }\n",
-        )
-        .expect("write config");
-        let stem = dir.path().join("custom_config");
-        let path_str = stem.to_str().expect("path str");
-        let err =
-            load_config_from(Some(path_str)).expect_err("legacy hooks table must be rejected");
-        assert!(err.to_string().contains("always on"), "got: {err}");
-    }
-
-    #[test]
-    fn test_legacy_auth_grpc_hmac_secret_env_var_rejected() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        env::set_var("GITSTORE_AUTH__GRPC__HMAC_SECRET", "legacy-secret");
-        let err =
-            load_config_from(None).expect_err("legacy auth.grpc.hmac_secret must be rejected");
-        assert!(
-            err.to_string().contains("grpc_auth.hmac_secret"),
-            "got: {err}"
-        );
-        clear_env();
-    }
-
-    #[test]
-    fn test_legacy_catalog_service_uri_env_var_rejected() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        env::set_var("GITSTORE_CATALOG_SERVICE__URI", "http://localhost:6000");
-        let err = load_config_from(None).expect_err("legacy catalog_service.uri must be rejected");
-        assert!(
-            err.to_string().contains("git_service.catalog.uri"),
-            "got: {err}"
-        );
-        clear_env();
-    }
-
-    #[test]
-    fn test_legacy_schema_validation_timeout_secs_rejected() {
-        let _lock = ENV_LOCK.lock().unwrap();
-        clear_env();
-        env::set_var("GITSTORE_SCHEMA_VALIDATION__TIMEOUT_SECS", "5");
-        let err = load_config_from(None)
-            .expect_err("legacy schema_validation.timeout_secs must be rejected");
-        assert!(
-            err.to_string().contains("git_service.validation.timeout"),
-            "got: {err}"
-        );
         clear_env();
     }
 }

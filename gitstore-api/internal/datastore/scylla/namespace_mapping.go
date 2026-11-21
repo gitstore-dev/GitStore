@@ -553,6 +553,9 @@ func (s *scyllaDatastore) commitRepositorySaga(
 	if err != nil {
 		return false, err
 	}
+	if repository.DeletionTimestamp != nil || datastore.HasDeletionIntent(repository.Status) {
+		return false, datastore.ErrConflict
+	}
 	if repositoryHasPath(repository, target) {
 		if version == repositorySagaSystemVersion {
 			previous := *repository
