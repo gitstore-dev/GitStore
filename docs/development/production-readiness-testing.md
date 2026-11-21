@@ -148,8 +148,190 @@ A complete run must retain:
    its boolean state and credential readiness, not HTTP status alone.
 
 Health-only readiness and ordinary Namespace watch load do not test dynamic
-RBAC capacity. The dispatcher explicitly refuses `CAPACITY_RBAC_WORKLOAD=1`
-until the native workload and domain verifier are available. Local tests cover
+RBAC capacity. `CAPACITY_RBAC_WORKLOAD=1` selects a bounded, explicitly owned
+native diagnostic under `api/readiness` or `namespace/watch` with
+`MODE=diagnostic`. It requires private seed/live-topology declarations, two
+directly probed APIs, two controllers, singleton Git, independent checkpoints
+and actual ordinary-principal/source receipts; see the
+[capacity command guide](../../tests/capacity/README.md).
+With propagation diagnostics selected, the independent verifier replays all
+twelve Namespace/root mutation phases from private HTTP probes, authored
+histories and persisted source/decision streams, including after owned-process
+shutdown. It rejects missing replica evidence and altered mutation declarations;
+bounded diagnostics do not establish sustained propagation percentiles.
+An explicit conditional root variant changes a custom ClusterRole's Namespace
+equality condition, preserves its binding reference, and verifies restoration
+and removal against the sealed source and HTTP evidence.
+The optional concurrent diagnostic instead uses a separately enrolled holdout
+principal and rotates 50 writes/minute across four owned organization
+Namespaces while ordinary k6 traffic runs. It independently replays changed
+source vectors and restores remaining grants after the load, including bounded
+cleanup on workload/evidence failures. It can change binding subjects or,
+with the explicit conditional Role declaration, change only a Role's Namespace
+condition while retaining the binding identity and reference. Both variants
+preserve the ordinary request cohort and restore their original policy specs.
+Failed HTTP responses produce bounded,
+redacted diagnostic receipts without tokens or raw bodies. This is still a
+diagnostic, not a sustained-load or single-Namespace hot-spot result. Its
+declared mutation schedule may extend to 30 minutes, with bounded journals,
+probe counts and streamed trace reads; duration alone does not establish
+full-scale, propagation-distribution, fault or interference acceptance.
+The native harness also supports explicitly selected, read-only retained-data
+revalidation with `VerifyRetained` in its private fixture declaration. This
+diagnostic requires complete native import receipts, fresh independent source
+and decision captures on both APIs, authored root/principal expectations and
+one complete 60/30/10 rotation over every Namespace per API. It performs no
+seeding or policy mutations, never overwrites the original receipts and does
+not change a prior run's failed result. Public capacity families reject this
+selection; it is not sustained acceptance. Readiness joins are streamed once
+per replica across all requested Namespaces, rather than rescanning the entire
+source capture for each Namespace, within the unchanged 30-second gate.
+Readiness probes rotate the fixture's already enrolled direct grantees and
+select only the connection type, keeping each principal's normal query-credit
+budget intact while still requiring the actual `product.list`
+authorization/source join. Ordinary workload queries are unchanged.
+RBAC lists may wait briefly for a committed projection to become readable
+within their existing three-attempt/30-second snapshot budget. Reads never
+repair the projection or return a pending/mixed snapshot; outages and
+exhausted retries remain failures.
+RBAC controllers defer optimistic-concurrency races through bounded durable
+requeues rather than exhausting the failure/quarantine budget. Journal events
+do not preload unused Namespace policies: ordinary demand starts a complete
+authoritative scan, while events for requested tiers still fence in-flight
+snapshots, deletions and Namespace replacement. Unrelated source activity
+cannot fill the bounded serving queue.
+With multiple rebuild workers, local scans and origin probes leave one worker
+available for shared root proofs or replacement. A blocked Namespace check
+must not expire authority for every Namespace; failed local proofs still
+invalidate their own tier and require complete recovery scans.
+Origin probes
+still read live Namespace, mapping and repository facts and verify the signed
+canonical Git ref on every check. For installed origins, the prior identity
+supplies lookup keys so the three live reads can overlap, but their fresh
+results must agree before the ref RPC. Each bounded worker issues this fixed
+set of logical reads and waits for cancellation before continuing; mapping
+validation may perform additional datastore queries. Those facts
+are reused only within that probe, never cached as a freshness proof.
+Origin proof age and the next-check deadline both start before the live I/O.
+A slow successful check cannot defer its own renewal by adding another full
+interval after completion; the original freshness bound still applies.
+Workers partition due Namespace proofs, ordered by their existing deadlines,
+into signed ref batches. With four workers, each local worker checks at most
+eight identities, leaving eight of the shared 32 ref slots for concurrent
+recovery or validation. Every identity still receives its own
+three fresh logical reads; batching adds no workers or parallel metadata
+reads. The shared 32-ref pending/in-flight bound and independent root path
+remain unchanged. Each result is checked against its captured publication
+generation, and failed or superseded proofs cannot renew authority. The
+entire batch consumes the freshness budget measured before its live I/O.
+Worker reservations count executing workers, not the identities captured in
+their batches, so batching retains local parallelism without consuming the
+shared root's reserved worker.
+Namespace and Repository deletion events may contain only their journal
+envelope, without a resource payload. RBAC fences matching Namespace tiers
+and rereads authoritative UID-bound snapshots; an unrelated local deletion
+does not invalidate shared root authority. A name-only deletion cannot
+permanently retire a same-name replacement. Missing envelope identities and
+malformed non-deletion payloads still fail closed.
+SDK source-failure counters distinguish bounded journal, frontier and event
+validation stages without resource names, identifiers or raw errors.
+Serving failures additionally distinguish `cluster-origin`, `namespace-origin`
+and `serving-progress`. Rebuild failures distinguish scratch reservation,
+snapshot capture, journal bounds, translation, canonical-origin verification
+(including explicit ref contention), continuity and installation. Superseded
+scans do not increment source-failure counters. These stages report failures,
+not successful publication or proof renewal.
+The unavailable counter's tier class follows the
+requested resource scope, not necessarily the failed proof: a namespaced
+request can fail because shared cluster authority or journal progress is stale.
+Owned RBAC API process fixtures initialize the same production telemetry SDK as
+the server entry point. Disabling OTLP export does not disable SDK-backed
+runtime and Git RPC metrics on the health listener's `/metrics` endpoint.
+Git RPC completion counters and client-duration histograms observe transport
+termination even when a stream consumer does not read another message.
+Client duration includes transport lifetime, not individual Git stage timings.
+The native Git SDK exports `gitstore_rpc_verification_duration_seconds` through
+its configured OTLP metrics exporter. Its closed `stage` set separates blocking
+worker dispatch, replay-lock wait, envelope validation and durable replay
+reservation as `dispatch`, `lock`, `envelope` and `replay`. Early failures
+record stages they reached; capacity refusal before dispatch does not.
+These stage distributions include failed attempts, carry no caller/resource
+identifiers and do not replace whole-RPC or authorization-decision timings.
+Instrumentation does not change signature checks, replay durability, clock
+rollback protection or the existing verification-slot bound.
+Expired native RPC nonce files are retained between 100 ms cleanup batches;
+retention continues to reject replay across process replacement. Each batch
+persists the clock before removing at most 256 expired records. The 100,000
+entry bound forces reclamation without waiting for the next batch deadline,
+and live records are never evicted. Each new nonce still requires its file and
+directory durability checks before the RPC can proceed.
+Nonce reservation remains atomic, but independent file and directory syncs
+run outside the replay mutex within the same 32 verification slots. Pending
+reservations count toward the entry bound and cannot be reclaimed until their
+sync attempt finishes. A failed sync leaves its nonce spent and fails closed;
+late completion cannot move the reservation clock backwards.
+Scylla RBAC status and finalizer updates still use the authoritative tier CAS,
+but do not reopen index repair when their UID and resolved Role link are
+unchanged. Creation, removal and newly resolved links retain durable repair.
+RBAC status mutations make at most three tier CAS attempts, with 100 ms
+between attempts, inside the existing 30-second request deadline. Every retry
+retains the caller's original resource UID and version. A changed resource,
+source outage or already committed update is not replayed; a pending projection
+is never bypassed or repaired speculatively by the status mutation.
+Canonical Namespace ref checks use a 1 ms coalescing window for batches of up to
+32 independently authorized branches. One signed, replay-protected RPC binds
+the complete batch; it resolves refs without listing trees. Pending and in-flight
+Namespace checks share a 32-entry bound and at most two batches run concurrently,
+so one blocked batch does not serialize all Namespace proofs.
+Responses are capped at 64 KiB, and the RPC deadline is five seconds.
+Each caller retains its own cancellation and
+freshness checks. Shared root checks bypass the Namespace queue, so a blocked
+batch cannot consume the root's reserved proof path. Missing refs fail only their
+own checks; mismatched response identities or malformed proofs fail the batch.
+Canonical tree scans read at most 32 regular files from one exact commit per
+signed RPC, with a 64 KiB limit per file and a 2 MiB content bound per batch.
+The native service checks blob headers before loading content and admits at
+most eight file batches concurrently. Responses must match the requested commit
+and path order, with valid blob IDs and consistent byte counts; a failed item
+rejects the whole batch. Live Namespace/repository identity is still verified before and
+after the complete scan, and snapshot byte limits, scratch reservations,
+rebuild workers and freshness deadlines remain unchanged.
+Native RBAC runtime metrics expose current, peak and configured reservation
+bytes through `gitstore_authz_rbac_reserved_bytes`,
+`gitstore_authz_rbac_peak_reserved_bytes` and
+`gitstore_authz_rbac_reservation_limit_bytes`, with only
+`pool="snapshot"` or `pool="rebuild"`. These are conservative reservations,
+not measured heap allocations. Snapshot peaks include overlapping publications
+retained by pinned readers. The rebuild pool is the aggregate across workers;
+`gitstore_authz_rbac_rebuild_buffer_limit_bytes` reports the separate per-buffer
+ceiling. `gitstore_authz_rbac_dirty_queue_entries`,
+`gitstore_authz_rbac_dirty_queue_peak_entries` and
+`gitstore_authz_rbac_dirty_queue_limit_entries` expose the bounded pending queue,
+including queued Namespace lookups but excluding executing work.
+Peak observations last for the runtime's lifetime; shutdown unregisters its
+callback so a replacement cannot report retired state. These instruments do
+not enable production OPA activation or replace paired heap/RSS measurements.
+Periodic metric capture is diagnostic overhead, not an unprofiled acceptance
+measurement.
+The owned rolling suite separates feature-disabled production compatibility
+from diagnostic RBAC cutover. The production case uses distinct pre-RBAC/current
+server binaries, validates additive migration and read-only startup, and
+preserves caller identities, seeded Git history and the sole Git process.
+The diagnostic case requires distinct compatible API/controller binaries,
+private policies and credentials, stopped owned API endpoints and separate
+controller checkpoints. Seed controllers reconcile admitted resources before
+the lifecycle/parity checks; they stop before the provider-switch sequence.
+Its frontend freezes writes and drains an admitted in-flight request before
+admitting a source-ready replacement.
+
+`RBAC_TEST_ROLLING_STATIC_NATIVE_PROCESS=1` explicitly selects the static native
+test-process adapter when the owned Scylla fixture requires NAT routing. This
+adapter requires `rbac-local` and does not enable production RBAC activation.
+Stale static rollback is refused by the independent frontend parity/admission
+oracle, not by an intrinsic static-provider startup or hot-reload check.
+Neither matrix alone establishes sustained capacity or production OPA cutover.
+Alpha/production are still refused pending the sustained admitted-write
+companion and changing-policy oracle. Local tests cover
 bounded scheduling, exact offered/completed/dropped accounting, independent
 committed-policy expectations and process-epoch counters, but they do not
 establish native dataset, propagation, recovery or sustained-load acceptance.

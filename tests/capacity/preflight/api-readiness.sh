@@ -14,6 +14,34 @@ case "${CAPACITY_API_READINESS_ROLE:-}" in
   *) echo "CAPACITY_API_READINESS_ROLE must be empty or admin" >&2; exit 2 ;;
 esac
 
+if [[ "${CAPACITY_RBAC_WORKLOAD:-0}" == 1 ]]; then
+  [[ "${mode}" == diagnostic || "${mode}" == alpha ]] || {
+    echo "RBAC production requires separate interference and fault/recovery acceptance" >&2; exit 2;
+  }
+  if [[ "${mode}" == alpha ]]; then
+    jq -e '.schemaVersion == 1 and (.runtime | strings | length > 0) and
+      (.architecture | strings | length > 0) and (.host.logicalCPUs | numbers | . > 0) and
+      (.host.memoryBytes | numbers | . > 0)' "${evidence_dir}/environment.json" >/dev/null || {
+      echo "alpha RBAC requires declared hardware/runtime context in CAPACITY_ENVIRONMENT_MANIFEST" >&2; exit 2;
+    }
+    jq -e '.schemaVersion == 1' "${evidence_dir}/config.json" >/dev/null || {
+      echo "alpha RBAC requires CAPACITY_CONFIG_MANIFEST alongside native source/build and SDK observations" >&2; exit 2;
+    }
+  fi
+  [[ -r "${CAPACITY_RBAC_SEED_FILE:-}" && -r "${CAPACITY_RBAC_TOPOLOGY_FILE:-}" ]] || {
+    echo "RBAC preflight requires private seed and live owned-process declarations" >&2; exit 2;
+  }
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+  (
+    cd "${repo_root}/tests/integration"
+    CAPACITY_EVIDENCE_DIR="${evidence_dir}" RBAC_TEST_RUN=1 RBAC_TEST_CAPACITY_VERIFY_DEPLOYMENT=1 \
+      go test -count=1 -timeout=2m -run '^TestRBACCapacityDeploymentPreflight$' .
+  )
+  jq -n --arg mode "${mode}" \
+    '{schemaVersion:1,mode:$mode,topologyVerified:true,nativeCountsVerified:false,note:"preflight is not a pass; connected driver and sealed domain replay verify actual counts, workload, latency and SDK bounds"}' >"${output}"
+  exit
+fi
+
 if [[ "${mode}" == "diagnostic" ]]; then
   jq -n --arg mode "${mode}" \
     '{schemaVersion:1,mode:$mode,passed:true,note:"diagnostic evidence does not assert deployment topology"}' \

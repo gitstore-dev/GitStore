@@ -18,7 +18,7 @@ puts safe common admission before exposing writes and runtime convergence.
 moves to #451. T096/T098 and T097's thirty-minute fault-load portion are
 deferred, not passed or retired. T097's native functional recovery proof
 and T103's correctness closeout remain feature requirements. Configured
-freshness/revocation/resource bounds, no-wrong-decision checks and the declared
+freshness/revocation/resource bounds, no-wrong-grant checks and the declared
 functional recovery deadline are unchanged. Earlier experiment narratives
 retain their original outcomes; they do not override this delivery scope.
 
@@ -468,20 +468,132 @@ supported operating behavior. Keep the unchanged production-capacity envelope
 pending in #451. Tests below must precede runner changes.
 
 - [X] T089 Add failing local workload/verifier regressions in `tests/integration/rbac_capacity_contract_test.go` and `scripts/test-capacity-dispatch.sh`: exact offered/completed/dropped accounting, independently checked policy revisions, owned topology/dataset proof, private fixtures, fault epochs and unchanged default health-only driver behavior.
-- [ ] T090 Extend the existing namespace/watch harness in `tests/integration/namespace_watch_capacity_test.go` with bounded RBAC fixture seeding and an independent revision-aware decision oracle; verify native counts for 1,000 namespaces, 10,000 roles and 50,000 bindings, rotate subjects/namespaces and avoid catalog-wide scans or a second capacity framework.
-- [ ] T091 Extend `tests/capacity/profiles/api-readiness.js`, `tests/capacity/preflight/api-readiness.sh` and `tests/capacity/verifiers/api-readiness.sh` with an explicit RBAC workload selector under the current Makefile interface; require two directly probed APIs/two controllers/one Git, and preserve the existing health-only and identity scenarios when not selected.
-- [ ] T092 Wire RBAC propagation observers, workload bounds and domain verification into `scripts/run-capacity-target.sh` and `tests/integration/namespace_watch_capacity_test.go`; use existing `TARGET=namespace PROFILE=watch` and `TARGET=api PROFILE=readiness MODE=alpha` families, bounded pending offers and the contract's 60/30/10 outcome mix without suppressing errors or drops.
+- [X] T090 Extend the existing namespace/watch harness in `tests/integration/namespace_watch_capacity_test.go` with bounded RBAC fixture seeding and an independent revision-aware decision oracle; verify native counts for 1,000 namespaces, 10,000 roles and 50,000 bindings, rotate subjects/namespaces and avoid catalog-wide scans or a second capacity framework.
+- [X] T091 Extend `tests/capacity/profiles/api-readiness.js`, `tests/capacity/preflight/api-readiness.sh` and `tests/capacity/verifiers/api-readiness.sh` with an explicit RBAC workload selector under the current Makefile interface; require two directly probed APIs/two controllers/one Git, and preserve the existing health-only and identity scenarios when not selected.
+- [X] T092 Wire RBAC propagation observers, workload bounds and domain verification into `scripts/run-capacity-target.sh` and `tests/integration/namespace_watch_capacity_test.go`; use existing `TARGET=namespace PROFILE=watch` and `TARGET=api PROFILE=readiness MODE=alpha` families, bounded pending offers and the contract's 60/30/10 outcome mix without suppressing errors or drops.
 - [X] T093 Extend `scripts/run-chaos.sh` and its existing regression coverage for explicitly owned journal interruption, API restart and controller replacement; declare bounded fault windows, verify ownership/restoration and process epochs, retain independent controller checkpoint volumes and prohibit overlapping singleton Git replacement.
-- [ ] T094 Add and run `tests/integration/rbac_rolling_upgrade_test.go` for old/new feature-disabled compatibility, additive migration with read-only startup validation, seeded parity, USER-owner catch-up, provider-switch write freeze/traffic drain, snapshot-ready traffic admission, compatible rolling replacements and refusal of stale static-policy rollback.
-- [ ] T095 Measure actual before/after API binary and same-architecture image size, heap/RSS, prepared-evaluation latency and existing SDK telemetry regressions using `docker/api.Dockerfile`, `gitstore-api/internal/auth/metrics_sdk_test.go` and `specs/066-git-backed-rbac/research.md`; distinguish these results from the isolated planning probe and do not claim image-reduction issue #487 is complete.
+- [X] T094 Add and run `tests/integration/rbac_rolling_upgrade_test.go` for old/new feature-disabled compatibility, additive migration with read-only startup validation, seeded parity, USER-owner catch-up, provider-switch write freeze/traffic drain, snapshot-ready traffic admission, compatible rolling replacements and refusal of stale static-policy rollback.
+- [X] T095 Measure actual before/after API binary and same-architecture image size, heap/RSS, prepared-evaluation latency and existing SDK telemetry regressions using `docker/api.Dockerfile`, `gitstore-api/internal/auth/metrics_sdk_test.go` and `specs/066-git-backed-rbac/research.md`; distinguish these results from the isolated planning probe and do not claim image-reduction issue #487 is complete.
 - T096 **Deferred to #451 (2026-11-21), not passed**: run both extended capacity families for the declared unprofiled 30-minute healthy workload and record attributable results in `specs/066-git-backed-rbac/contracts/capacity-recovery.md`: 1,000 requests/s total, 50 admitted RBAC writes/min, at most four writers, decision p99 <=2 ms, propagation p99 <=5 s with p95 reported against the non-blocking <=2 s goal, zero wrong/dropped decisions and all queue/snapshot/memory limits. This is no longer a feature-closeout prerequisite.
 - [X] T097 Prove native functional fault/recovery correctness on two APIs/two controllers and one Git service with bounded owned fault windows and an independent revision-aware decision oracle: API restart, below/above-bound journal interruption, cursor-loss full resync, controller recovery and recovery <=30 s. Verify surviving peers, readiness before traffic, no expired/revoked/stale-UID grants and no duplicate managed bindings. Record actual domain recovery separately from injector/process receipts in `specs/066-git-backed-rbac/contracts/capacity-recovery.md`. The original 30-minute fault-load/rate/percentile acceptance remains pending under #451; it is not required for this functional proof.
 - T098 **Deferred to #451 (2026-11-21), not passed**: run the existing sustained peak catalog-push profile concurrently with RBAC against an eligible owned retained dataset of at least 5,000,000 products, preserving original thresholds/storage/history. Record scoped interference acceptance in `specs/066-git-backed-rbac/contracts/capacity-recovery.md`; an unavailable runtime/asset leaves production acceptance pending, not reduced to alpha. This is no longer a feature-closeout prerequisite.
 - [X] T099 Update `docs/configuration.md`, `docs/api-reference.md`, `docs/storage-groups/transient.md` and `docs/runbooks/controller-auth.md` for implemented provider settings, SubjectAccessReview, freshness/readiness, bootstrap, protected owner bindings, safe cutover/rollback and supported diagnostics; keep user-facing docs free of internal spec/task references and private experiment data.
 - [X] T100 Amend `docs/ADRs/0010-authorization-model.md`, `docs/ADRs/README.md` and `docs/implementation/022-opa-data-authorization.md` for the implemented dynamic model and validation-start boundary, preserving ADR-0010's acceptance date; explicitly verify ADR-0018 remains Proposed because platform-wide lease/fencing is not implemented, and require a separately scoped status-flip task if that core is later approved.
 - [X] T101 Run focused suites/race checks, `make build`, `make test`, `make lint`, `make check TARGET=all` and the full default `make pr-ready`; refresh the code graph with `graphify update .`, check generated drift and confirm all source changes behind `shared/schemas/admin/rbac.graphqls` and `gitstore-api/internal/rbac/` retain the declared compatibility and no-secret guarantees.
-- T102 **Retired (owner decision 2026-11-19), not passed**: the separate quickstart-validation closure gate is no longer required. Command documentation remains maintained under T099 and source validation under T101.
-- [ ] T103 After every non-deferred functional, native-store, concurrent-replica/rolling, bounded-work and functional fault/recovery gate passes, update `specs/066-git-backed-rbac/spec.md` to Closed and finalize an explicitly correctness-only acceptance summary in `specs/066-git-backed-rbac/contracts/capacity-recovery.md` in the implementing PR. Retain Draft/pending status while a correctness proof such as T097 is missing. Leave T096/T098 and sustained fault-load acceptance pending in #451; do not claim production readiness/activation or completion of unrelated Proposed ADRs, #487 or GraphQL-alignment #548.
+- T102 **Retired (2026-11-19)**: the separate quickstart-validation closure gate is no longer required. Existing command documentation remains maintained under T099 and source validation under T101; retirement does not claim another quickstart or native acceptance pass.
+- [X] T103 After every non-deferred functional, native-store, concurrent-replica/rolling, bounded-work and functional fault/recovery gate passes, update `specs/066-git-backed-rbac/spec.md` to Closed and finalize an explicitly correctness-only acceptance summary in `specs/066-git-backed-rbac/contracts/capacity-recovery.md` in the implementing PR. Retain Draft/pending status while a correctness proof such as T097 is missing. Leave T096/T098 and sustained fault-load acceptance pending in #451; do not claim production readiness/activation or completion of unrelated Proposed ADRs, #487 or GraphQL-alignment #548.
+
+Correctness-only closeout passes on the implementation branch after T097's
+native journal and controller domain proofs, the native five-minute
+directory-lease-boundary proof for #588, the full default `make pr-ready`,
+serialized `make check TARGET=all`, affected race suites and AST refresh.
+There are 100 completed tasks, no open non-deferred tasks, two tasks deferred
+to #451 and one retired task. Independent main-based PRs must preserve their
+actual implementation/task state rather than importing unchecked acceptance
+work as completed. Production OPA remains gated.
+
+T092 is complete as runner integration, independently of sustained acceptance.
+The implementation includes strict healthy-alpha dispatch for both
+existing families, source/artifact build receipts, actual SDK resource captures,
+original-ACK percentile replay and mandatory sealed domain postflight.
+Focused rejection/positive contracts live in
+`tests/integration/rbac_capacity_alpha_test.go` and
+`scripts/test-capacity-dispatch.sh`; the capacity README and quickstart describe
+the supported declaration and private evidence handling. On source `463149d4`,
+the capacity-dispatch regressions and all `TestRBACCapacity` race contracts pass
+(125.380 seconds for the Go suite). Both public selector families retain owned
+preflight, bounded work and independent sealed postflight; production selection
+still refuses unsupported acceptance. Full native healthy, sustained-fault and
+larger-catalog acceptance remains pending in #451; T097 separately requires
+native functional domain recovery. None is inferred from these local runner
+checks. T102 is retired rather than reported as a validation pass.
+
+T101 passes on source `886e409e`: the full default `make pr-ready` includes
+canonical lint, build and test suites, and `make check TARGET=all` separately
+passes configuration/Compose, license, credential-leakage and generated-drift
+checks. Focused API auth/RBAC/OPA/app and capacity-contract race suites and vet
+also pass. Runtime reservation/queue telemetry, complete provider-call timing
+joins and full-window summary verification are included. This is source
+validation, not a substitute for pending native acceptance; rerun the affected
+checks after subsequent implementation changes.
+
+The subsequent finite origin-failure attribution change also passes the full
+default `make pr-ready`, API auth/OPA/app race suites and separately serialized
+`make check TARGET=all`; AST refresh and whitespace checks pass. Its reasons
+distinguish absent tiers, unverified proofs, expiry and clock skew while keeping
+the same fail-closed error class and freshness bound. It is diagnostic
+attribution, not a repair or pass for the failed full-duration attempt.
+
+The bounded parallel origin-input follow-up passes source/proof/expiry race
+suites, the full default `make pr-ready`, serialized `make check TARGET=all`
+and AST refresh. Its blocked-reader regression proves four concurrent
+identities and ordered proof association without caching live facts or changing
+freshness. Native sustained validation remains pending.
+
+The receiver's per-repository proof-isolation regression also passes after
+failing against a held write lock. The full default `make pr-ready`, serialized
+`make check TARGET=all`, signed-proof regressions and AST refresh pass with the
+proof-only nonblocking read-lock change. Native availability remains a separate
+pending gate; busy repositories never receive an affirmative proof.
+
+T095's exact same-platform pre-OPA/linked release-image pair now also has actual
+serial process heap/RSS measurements with identical memdb/static/allow-all
+configuration, container limits and health/metric sampling. Median heap is
+22,205,104 versus 23,607,640 bytes; median RSS is 51,859,456 versus 60,096,512
+bytes. These health-warmed measurements are not active-RBAC, after-GC or peak
+memory acceptance. Together with the recorded actual binary/image comparison,
+prepared-decision benchmark and current-source API/shared SDK race regressions,
+they complete the scoped cost/telemetry task. Full-geometry active-provider
+diagnostics remain separately attributed; no sustained gate or #487 claim is
+inferred from either measurement.
+
+T094's final-source feature-disabled production matrix passes against the exact
+pre-RBAC release, including additive migration, read-only refusal, caller/UID
+preservation and unchanged singleton Git history. The separate forward diagnostic
+matrix passes with distinct compatible API/controller sources, real in-flight
+drain/write freeze, source-ready admission, seeded parity, USER-owner catch-up,
+private checkpoint recovery and off-traffic stale static rollback refusal.
+The compatible API baseline contains the verified payload-free deletion repair;
+an earlier buggy baseline remains failed evidence, not a healthy upgrade claim.
+Static rollback refusal is the independent frontend admission oracle, not an
+intrinsic static-provider startup or hot-reload check. Full default readiness
+and affected race/vet checks pass. Production OPA activation and sustained
+healthy/fault/interference gates remain pending; T094 does not close them.
+
+The retained native corpus now has all 1,000 import acknowledgements and
+61,000 distinct Namespace/policy UIDs. Fresh independent source/ordinary-grantee
+joins cover every Namespace on both APIs within the unchanged shared
+30-second gate (9.75 and 19.43 seconds), and the five original ordinary policy
+cases pass. On source `7c814edeb29b2bef80b0c576909b312ad5e2a5ca`, the complete
+500-second rotation at 40 requests/s completes all 20,000 offered requests:
+12,000 allowed, 6,000 denied and 2,000 isolation denials, with zero dropped,
+unavailable or wrong decisions. The independent source/vector joins and native
+counts close T090's fixture/oracle prerequisite, not sustained acceptance.
+The repair batches fresh Namespace-origin proofs within the existing shared
+32-ref bound and four workers, preserving root reservation, five-second
+freshness, pre-I/O proof clocks and generation fencing. Original failed results,
+all seed receipts, identities and storage remain unchanged. Both controllers
+retain their independent checkpoints; all owned listeners close normally
+without forced stops and the isolated database process is unchanged.
+The later selector proof below closes T091 independently of the remaining
+healthy/fault/interference gates; no acceptance requirement is waived.
+
+T091's public selector and complete independent verifier pass on source
+`466f99a28fbcd6376870f35922abe84ee0a1d0cd` at the full native geometry.
+The 36-second diagnostic completes 18,000 ordinary offers on each direct API
+with exact 10,800/5,400/1,800 allow/deny/isolation outcomes and zero wrong,
+unavailable or dropped requests. Twenty admissions at 50/minute exercise
+general Role resource/verb/condition edits through ten Git pushes and ten
+GraphQL updates; both APIs replay every source and original acknowledgement.
+All four forward restorations and independent sealed replay pass. Finite
+ingress/VU allocations support the offered rate, and the directory uses its
+existing 4,096-entry/16-lookup defaults rather than the small fixture's 128/8;
+identity TTLs, deadlines and all acceptance gates remain unchanged. Earlier
+directory failures remain failed evidence. Original seed receipts and resource
+identities are preserved; live canonical refs advance only through recorded
+owned writes and restorations. T092 still requires the complete sustained/root/
+maximum-batch and alpha-mode path. Seven formal tasks remain open; this short
+diagnostic does not close T095-T098, T102 or T103.
 
 T089's local test-first foundation is implemented in the existing namespace/watch
 harness. The scheduler computes every scheduled offer independently of timer
@@ -509,8 +621,8 @@ pins root intent, so this is not dynamic-root or sustained acceptance.
 This is not deployed capacity evidence. `CAPACITY_RBAC_WORKLOAD=1` is explicitly
 refused until T090-T092 finish native seeding/probes, ordinary decision observations,
 propagation and domain-verifier receipts; default health-only and identity
-drivers remain unchanged. T090's reusable scheduler/oracle foundation exists,
-but its native dataset and driver are not complete. The owner matrix is now
+drivers remain unchanged. T090's native fixture and static source/oracle rotation are verified above;
+the sustained mutable-policy driver remains incomplete. The owner matrix is now
 closed by the fresh final-source results above. Historical stacks concentrate the repeated
 Repository status timeouts at the Namespace catalog-fence acquisition path;
 they do not establish the underlying cause. No production repair was inferred.
@@ -694,8 +806,131 @@ all five authored source/history states and 120 static outcomes in 71.10 seconds
 Binding generations advance to two and three while the reference pin stays at
 one; both APIs verify binding revocation in about 2.47-2.57 seconds and restoration
 in about 2.63-2.74 seconds. The failed first expanded fixture is preserved. These
-are bounded observations, not the two-second p95 gate, general dynamic-root
-history, thousand-Namespace counts or sustained acceptance; T090-T092 remain open.
+are bounded observations, not the two-second p95 gate, thousand-Namespace counts
+or sustained acceptance; T090-T092 remain open.
+
+The diagnostic also verifies independently authored root binding histories.
+A complete two-API/two-controller/singleton-Git native run passes in 66.49 seconds:
+120 exact ordinary outcomes, four Namespace mutation phases and four root
+grant/revoke/restore/removal phases, with every observed vector joined to its
+independent source history. Its oracle separates controller acknowledgement
+from an already resolved immutable role reference, and separately declares the
+inactive initial-reference transition under the unchanged successful-push-plus-
+five-second bound. Unresolved states never count as ready aliases. Root removal
+pins any terminating row and accepts its later physical absence, but rejects a
+live retained binding. Sealed regressions cover these states and independent
+clocks; static warm-up verifies an evaluated admitted source before measurement.
+No runtime publication gate or controller authorization bypass is introduced.
+This closes the bounded binding-root diagnostic gap, not mutable ClusterRole
+rule histories, native thousand-Namespace counts, percentiles or sustained
+acceptance; the eleven remaining formal tasks are still open.
+
+Seeding now declares ten-manifest or complete 60-manifest imports. Full-count
+seeding defaults to one candidate per Namespace, retaining every changed
+resource, the actual successful-push clock and exact two-API UID/reference
+readback. The existing four-second shared readback pacing and 30-second
+deadline remain unchanged; six repeated imports otherwise impose at least
+6,000 readbacks per API for the declared dataset. A fresh two-Namespace native
+proof passes one complete admission per Namespace, all 120 ordinary outcomes
+and every Namespace/root history join in 53.68 seconds. Local race contracts
+cover declaration bounds and immutable admission clocks. This verifies the
+bounded complete-import mechanism, not T090's required thousand-Namespace
+counts or T096 throughput and percentile gates.
+
+The k6 ordinary-request path and bounded full-window receipt verifier are now
+connected to the existing native fixture. A fresh combined run passes in
+58.00 seconds with two APIs/two controllers/singleton Git, two complete
+Namespace imports, 120 native ordinary outcomes, 360 real k6 outcomes and all
+eight Namespace/root binding mutation phases. Each API's 180 k6 decisions
+contain exactly 108 allows, 54 denials and 18 owner-isolation denials, with zero
+wrong/unavailable/dropped results and exact independently authored source joins.
+Test-first regressions catch real k6 boundary over-offers and native/k6 request
+correlation collisions. The independent existing readiness verifier replays
+sealed private counts, authored cases, k6 counters and source clocks; it rejects
+non-diagnostic claims and different evidence directories. Source models from
+later mutation phases cannot contaminate the earlier k6 window, nor may a
+source alias captured after a decision supply its proof. All RBAC capacity
+race contracts, integration vet and dispatcher regressions pass. Storage and
+the live database process remain unchanged, with normal owned-process cleanup.
+T090-T092 remain open for the full native working set,
+general mutable policy histories and sustained admitted writes/propagation.
+
+The existing public diagnostic families now dispatch the actual native
+seed/k6/source verifier rather than refusing or falling back. Live preflight
+requires two directly probed APIs/two controllers/singleton Git, owned Scylla,
+unchanged process epochs/executable digests and independent private checkpoints.
+The finite driver independently enumerates native counts, joins every ordinary
+decision, rechecks the live topology afterward and replays sealed k6 evidence.
+A fresh public api/readiness run passes in 52.87 seconds and an independently
+fresh namespace/watch run passes in 52.20 seconds, both with exact two-API
+60/30/10 outcomes, all eight binding mutation phases and sealed replay. Test-first diagnostic
+dispatch/count-bound regressions and missing-fixture/unsupported-family checks
+pass under the existing local suite. Alpha/production remain fail-closed;
+T090-T092 are not closed by bounded test-composition evidence.
+
+Source/decision evidence production is now runtime-configured rather than
+test-only snapshot injection. The private exclusive 1-GiB source and 8-GiB
+decision streams retain complete source clocks, unsampled individual receipts
+and sticky failures without changing default operational-log sampling.
+Constructor/shutdown and capture-selection reload boundaries are tested under
+race; selecting evidence never opens the pending production OPA gate.
+A fresh public diagnostic with the configured producer passes in 57.84 seconds,
+and independent sealed replay passes after all owned processes stop.
+The runtime producer is complete; general mutable policy histories and the
+declared sustained admitted-write/propagation driver remain pending.
+
+The root oracle and existing propagation diagnostic now additionally cover an
+independently authored custom ClusterRole's unconditional rule grant/revoke/
+restore/removal. Canonical tree-content tests distinguish rule revisions;
+source tests reject older Role generations, replacement reference UIDs and
+invented reference generations while accepting unchanged original references.
+Later newly unresolved root grants retain prior authored truth without
+reinterpreting earlier live references. The fresh public run passes in
+67.96 seconds with all twelve mutation phases, exact k6 outcomes and source
+joins. The first run's verifier-only pending-creation assumption failed and is
+preserved, not counted as a pass. RBAC capacity race/vet and canonical lint pass.
+T090-T092 remain open for the complete native working set, conditional/general
+policy histories and the declared sustained mutation/propagation envelope.
+
+The independent public verifier now replays the dynamic phases as well as
+static k6 traffic. Private named receipts retain every HTTP probe, the four-phase
+Namespace history and two separately bounded four-phase root probe stages.
+Replay reconstructs the mutation recipes from the original seed plan, requires
+both APIs and every phase, and verifies original acknowledgement clocks,
+generations, immutable references and complete source/decision joins.
+The first fresh run exposed later root captures being checked against the
+earlier fixed-root Namespace phase; original capture-clock scoping fixes that
+without reinterpreting its history. The corrected fresh public run passes in
+58.54 seconds, and all twelve phases independently replay after owned shutdown.
+Separate persisted-evidence tampering checks reject missing API probes,
+altered root Role generations and omitted root stages. The failed run remains
+preserved. This closes sealed diagnostic propagation replay, not T090-T092's
+native scale, general policy or sustained-write envelope.
+
+The existing bounded scheduler now supports a per-minute rate period while
+preserving the default per-second behavior. A test-first timed regression
+verifies that 50 writes/minute uses original 1.2-second due times, rather than
+rounding to one write/second or issuing a batch; the required thirty-minute
+offer count is 1,500. Race/vet and canonical lint pass. This is a prerequisite
+for the concurrent sustained mutation companion, not completion of T091/T092.
+
+The bounded concurrent companion is now implemented and native-verified.
+It independently enrolls a groupless holdout, rotates total 50/minute writes
+across four owned ORGANIZATION Namespaces with one serialized writer, and
+retains original acknowledgement/supersession clocks and immutable references.
+Idempotent cleanup joins k6 before ownership-pinned restoration, including
+process/evidence/assertion failures; redacted bounded failed-response receipts
+distinguish HTTP/GraphQL/transport failures without exposing bodies or tokens.
+The final-source public diagnostic passes in 88.30 seconds: all ten writes
+admitted without drops, 1,440 ordinary outcomes in exact per-API 60/30/10,
+zero wrong/unavailable results, two restored grants and independent ordinary
+and mutation replay after shutdown. Earlier runs remain failures: synchronous
+observations blocked scheduling; later provider errors and one unclassified
+HTTP-unavailable response failed the hard gate. Exact recovery restored the
+two remaining old fixture grants to generation five and independently verified
+denials without rewinding refs. Later launcher/recovery-helper configuration
+and clock failures are not acceptance evidence. T090-T092 remain open for
+general mutation histories, full scale, required rates/durations and percentiles.
 
 The representative provider reservation regression now uses the seeded
 conditional, multi-resource rules and binding mix. It exposed a separate
@@ -814,7 +1049,7 @@ resolver or generated-file edits. Code generation has one owner per batch.
 | FR-016/017 | T020/T022, T074-T080 |
 | FR-018/018a-d | T006/T021/T022/T033/T043, T063/T065-T068/T073 |
 | FR-019-021 | T005/T006/T008/T012-T018, T038/T041/T045/T051/T055/T058/T086, T089-T098 |
-| FR-022-024 | T003/T004/T019/T024/T060, T094/T100/T102 |
+| FR-022-024 | T003/T004/T019/T024/T060, T094/T099/T100 |
 | FR-025-031 | T057/T060, T062-T073, T094/T096/T097 |
 | PR-001/002/004 | T006/T014/T021/T027-T050/T058-T064/T073/T080/T088/T094 |
 | PR-003/005 | T089-T092; T096/T098 and sustained fault-load acceptance deferred to #451 with unchanged full-load and retained-dataset gates |

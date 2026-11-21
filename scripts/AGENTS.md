@@ -84,10 +84,26 @@ container wiring and configuration.
   `CAPACITY_IDENTITY_CHAOS=1` additionally requires predeclared bounded fault
   windows, confirmed restart/recovery receipts and process-segmented counters;
   `USER_DIRECTORY_TEST_CHAOS=1` selects that opt-in owned driver.
-- Dynamic RBAC capacity remains unavailable: `CAPACITY_RBAC_WORKLOAD=1`
-  fails explicitly instead of falling back to a non-RBAC driver. The default
+- `CAPACITY_RBAC_WORKLOAD=1` selects bounded owned native diagnostics or the
+  strict healthy-alpha runner in `api/readiness` and `namespace/watch`, with
+  `MODE=diagnostic|alpha`; production remains refused rather than falling back
+  to a non-RBAC driver. Alpha requires full 1,800-second Namespace writing,
+  1,860-second ordinary traffic, maximum root preamble, actual SDK bounds,
+  revision-joined percentile gates and independent sealed postflight. Require the
+  private seed/live-topology declarations documented in the capacity README.
+  The default
   test suite covers the local scheduler/oracle contracts; these are not native
   dataset, propagation or fault-recovery evidence.
+  The selected RBAC Go driver has a four-hour outer lifetime for bounded
+  full-geometry setup plus load; individual operations, seed readback,
+  propagation and workload deadlines remain unchanged.
+- `make build TARGET=api|controller|git CAPACITY_BUILD_OUTPUT=<absolute-path>
+  CAPACITY_BUILD_RECEIPT=<absolute-path>` produces private source/artifact
+  receipts from a clean checkout. `CAPACITY_BUILD_KIND=owned-rbac` selects only
+  the existing owned API or controller test host; the default `release` recipe does not bypass
+  production activation. Matching source-identical receipts permit artifact
+  reuse; never adopt or overwrite an unreceipted/live binary. See the capacity
+  README for the complete private deployment/evidence contract.
 - `make chaos CHAOS_RBAC=1` requires an owned target and a predeclared fault
   window of at most 30 seconds. Controller restart also requires an unchanged
   owned peer with non-overlapping writable checkpoint mounts. Journal-source

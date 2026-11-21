@@ -2,7 +2,10 @@
 
 **Feature Branch**: `066-git-backed-rbac`  
 **Created**: 2026-10-06  
-**Status**: Draft  
+**Status**: Closed
+
+**Closed**: 2026-11-21 (correctness-only; production acceptance remains in #451)
+
 **Input**: User description: "let's implement the first production authz provider. The current (proposed) policy file for rbac-local with the k8s inspired envelope is not suitable for a production deployment where policies are granted at runtime. The design should support a git-backed storage group for the following resources - Role - ClusterRole - RoleBinding - ClusterRoleBinding. Design doc 022 contains some initial ideas."
 
 **Depends on**: spec 064 (canonical vocabulary, v1beta1 rule/binding
@@ -81,29 +84,37 @@ ServiceAccounts); spec 065 (groups and profile type from the UserDir).
   directory-username comparison introduced in spec 065; it does not relax
   the existing immutable USER namespace identity or Staff creation policy.
 
+### Session 2026-11-20
+
+- The owner accepts the measured 3.25/3.12-second maximum-root propagation
+  result for feature delivery. The 2-second propagation p95 remains a measured
+  optimization goal, not a blocking acceptance gate for this feature.
+  The 5-second p99 and revocation bounds, provider-call latency, correctness,
+  workload durations, resource limits and recovery requirements remain in force.
+  This decision does not close #451 or change other features' independent
+  alpha/production contracts.
+
 ### Session 2026-11-21
 
 - Feature delivery prioritizes authorization correctness; production
-  performance and capacity acceptance are tracked in #451. This changes
-  feature-closeout dependencies, not the declared production objectives.
+  performance and capacity acceptance are tracked in #451. This supersedes
+  the preceding session's requirement to complete sustained performance
+  gates before closing this feature, not the declared production objectives.
 - Feature closure still requires functional/native-store, concurrent-replica,
-  rolling-upgrade and fault/recovery proofs: no wrong decisions, privilege
+  rolling-upgrade and fault/recovery proofs: no wrong grants, privilege
   escalation, cross-namespace or stale-UID access; complete revision truth;
   fail-closed freshness and the configured revocation bound; bounded work;
   and correct recovery within PR-006's bound. Generator saturation is not
-  itself a wrong authorization decision; a wrong decision cannot be
+  itself a wrong authorization decision, and a wrong decision cannot be
   reclassified as a performance issue.
 - PR-003/PR-005's sustained throughput and percentile acceptance, the
   thirty-minute healthy/fault-load runs and the >=5,000,000-Product peak-push
   interference run move to #451. SC-001's propagation percentiles and SC-007
   remain production objectives, not feature-closeout gates. SC-008 still
   requires correct owner access on both replicas and bounded revocation.
-  Failed or incomplete runs remain failed or incomplete; workload selectors
-  and configured security/resource bounds are unchanged. Feature closure is
-  not production readiness or production activation.
-- The earlier owner acceptance of approximately 3.25/3.12-second maximum-root
-  propagation makes the 2-second p95 a reported, non-blocking optimization
-  goal, not a claimed 2-second pass.
+  Failed or incomplete runs remain failed or incomplete; no threshold or
+  workload selector is relaxed. Feature closure is not production readiness
+  or production activation.
 
 ## Overview
 
@@ -601,10 +612,11 @@ namespace.
 
 ### Production Requirements *(mandatory for core-service or load-bearing changes)*
 
-These remain the production contract. Under the 2026-11-21 delivery decision,
-PR-001/PR-002/PR-004 and PR-006's functional recovery proof remain feature
-gates; PR-003/PR-005's sustained capacity acceptance is deferred to #451.
-This does not defer the configured freshness, revocation or resource bounds.
+The following requirements remain the production contract. Under the
+2026-11-21 delivery decision, PR-001/PR-002/PR-004 and PR-006's functional
+recovery proof remain feature gates; PR-003/PR-005's sustained capacity
+acceptance is deferred to #451. This does not defer the configured freshness,
+revocation or resource bounds.
 
 - **PR-001 Replica Safety**: Every API replica converges on the same RBAC
   snapshot revisions from the watch journal; no correctness depends on
@@ -663,8 +675,9 @@ bound. SC-001's percentile measurements and SC-007's sustained-load latency
 acceptance remain pending production work in #451, not claimed passes.
 
 - **SC-001**: Grants and revocations take effect on every API replica within
-  5 s p99 of admission, with no restarts or file edits. Report p95 against
-  the non-blocking 2 s optimization goal.
+  5 s p99 of admission, with no restarts or file edits. Report p95 against the
+  non-blocking 2 s optimization goal; exceeding that goal alone does not fail
+  feature acceptance.
 - **SC-002**: 0 successful privilege escalations across an escalation test
   matrix covering Roles, ClusterRoles, both binding kinds, Git push and
   GraphQL paths.

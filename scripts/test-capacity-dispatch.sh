@@ -39,17 +39,385 @@ assert_dispatch product lifecycle 'CAPACITY_PROFILE=product-lifecycle'
 assert_dispatch category hierarchy 'CAPACITY_PROFILE=category-hierarchy'
 assert_dispatch scylla soak '_capacity-scylla-soak'
 
-for target_profile in 'api readiness' 'namespace watch' 'repository lifecycle'; do
+rbac_command="$(CAPACITY_RBAC_WORKLOAD=1 make --no-print-directory -n -C "${repo_root}" _capacity-namespace-watch MODE=diagnostic)"
+[[ "${rbac_command}" == *"go test -v -count=1 -timeout=4h -run '^TestNamespaceWatchDeploymentCapacity"* ]] || {
+  echo "RBAC driver must allow bounded full-geometry setup plus the declared workload, not terminate at fifteen minutes" >&2
+  exit 1
+}
+
+for target_profile in 'api readiness' 'namespace watch'; do
   read -r rbac_target rbac_profile <<<"${target_profile}"
-  if CAPACITY_RBAC_WORKLOAD=1 CAPACITY_DRY_RUN=1 "${dispatcher}" "${rbac_target}" "${rbac_profile}" alpha >/dev/null 2>&1; then
-    echo "unimplemented RBAC selection silently dispatched a non-RBAC workload" >&2
+  for mode in diagnostic alpha; do
+    output="$(CAPACITY_RBAC_WORKLOAD=1 CAPACITY_DRY_RUN=1 "${dispatcher}" "${rbac_target}" "${rbac_profile}" "${mode}")"
+    [[ "${output}" == *"_capacity-namespace-watch"* && "${output}" == *"CAPACITY_RBAC_WORKLOAD=1"* ]]
+  done
+  if CAPACITY_RBAC_WORKLOAD=1 CAPACITY_RBAC_SEED_FILE= CAPACITY_RBAC_TOPOLOGY_FILE= \
+    CAPACITY_EVIDENCE_DIR="${test_dir}/rbac-missing-fixture" \
+    "${dispatcher}" "${rbac_target}" "${rbac_profile}" diagnostic >/dev/null 2>&1; then
+    echo "public RBAC load ran without its owned seed and topology preflight" >&2
     exit 1
   fi
 done
+if CAPACITY_RBAC_WORKLOAD=1 CAPACITY_DRY_RUN=1 "${dispatcher}" repository lifecycle diagnostic >/dev/null 2>&1; then
+  echo "unsupported RBAC family fell back to an ordinary driver" >&2
+  exit 1
+fi
+
+for target_profile in 'api readiness' 'namespace watch' 'repository lifecycle'; do
+  read -r rbac_target rbac_profile <<<"${target_profile}"
+  if CAPACITY_RBAC_WORKLOAD=1 CAPACITY_DRY_RUN=1 "${dispatcher}" "${rbac_target}" "${rbac_profile}" production >/dev/null 2>&1; then
+    echo "unsupported production RBAC selection silently dispatched a workload" >&2
+    exit 1
+  fi
+done
+if CAPACITY_RBAC_WORKLOAD=1 CAPACITY_DRY_RUN=1 "${dispatcher}" repository lifecycle alpha >/dev/null 2>&1; then
+  echo "unsupported RBAC alpha family silently dispatched a workload" >&2
+  exit 1
+fi
 if CAPACITY_RBAC_WORKLOAD=invalid CAPACITY_DRY_RUN=1 "${dispatcher}" api readiness alpha >/dev/null 2>&1; then
   echo "invalid RBAC selector unexpectedly succeeded" >&2
   exit 1
 fi
+for mode in diagnostic alpha; do
+  if CAPACITY_RBAC_WORKLOAD=1 MODE="${mode}" \
+    "${repo_root}/tests/capacity/verifiers/api-readiness.sh" "${test_dir}" >/dev/null 2>&1; then
+    echo "incomplete or static RBAC evidence unexpectedly certified capacity" >&2
+    exit 1
+  fi
+done
+
+python3 - "${repo_root}/scripts/capacity-build-receipt.py" "${test_dir}" <<'PY'
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("capacity_build_receipt", sys.argv[1])
+receipt = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(receipt)
+root = Path(sys.argv[2]) / "build-source"
+root.mkdir(mode=0o700)
+for directory in ("gitstore-api", "gitstore-controller-manager", "shared", "docs", "owned"):
+    (root / directory).mkdir(mode=0o700)
+(root / "gitstore-api/go.mod").write_text("module fixture\n")
+(root / "gitstore-controller-manager/go.mod").write_text("module controllerfixture\n")
+source = root / "gitstore-api/main.go"
+source.write_text("package main\n")
+(root / "shared/input.go").write_text("package shared\n")
+(root / "docs/readme.md").write_text("initial documentation\n")
+receipt.git(root, "init", "-q")
+def commit():
+    receipt.git(root, "add", "gitstore-api", "gitstore-controller-manager", "shared", "docs")
+    receipt.git(root, "-c", "core.hooksPath=/dev/null", "-c", "user.name=Capacity test",
+                "-c", "user.email=capacity@example.invalid", "commit", "-qm", "test fixture")
+commit()
+artifact = root / "owned/api"
+artifact.write_bytes(b"synthetic artifact, not a compiled service")
+record_path = root / "owned/api.build.json"
+digest, size = receipt.artifact_digest(artifact)
+record = {
+    "schemaVersion": 1, "role": "api", "sourceRevision": receipt.git(root, "rev-parse", "HEAD").decode().strip(),
+    "sourceInputsSha256": receipt.source_digest(root, "api"), "artifactSha256": digest, "artifactBytes": size,
+    "toolchain": "synthetic test fixture", "profiled": False, "buildKind": "repository-release",
+    "command": ["go", "build", "-trimpath", "-o", str(artifact), "./cmd/server"],
+}
+def write_record(value):
+    record_path.write_text(json.dumps(value))
+    record_path.chmod(0o600)
+def rejected(callback):
+    try:
+        callback()
+    except (ValueError, OSError):
+        return
+    raise AssertionError("altered capacity build evidence was accepted")
+write_record(record)
+# Artifact/receipt files are deliberately ignored, as in a real private build directory.
+(root / ".git/info/exclude").write_text("owned/\n")
+receipt.verify(root, "api", artifact, record_path)
+(root / "docs/readme.md").write_text("new unrelated documentation\n")
+commit()
+assert receipt.git(root, "rev-parse", "HEAD").decode().strip() != record["sourceRevision"]
+receipt.verify(root, "api", artifact, record_path)
+# Existing matching artifacts are verified and reused, never rebuilt or overwritten.
+receipt.build(root, "api", artifact, record_path)
+owned = {**record, "buildKind": "repository-owned-rbac",
+         "command": ["go", "test", "-c", "-trimpath", "-o", str(artifact), "./internal/app"]}
+write_record(owned)
+receipt.verify(root, "api", artifact, record_path)
+receipt.build(root, "api", artifact, record_path, "owned-rbac")
+rejected(lambda: receipt.build(root, "api", artifact, record_path, "release"))
+rejected(lambda: receipt.build(root, "controller", artifact, record_path, "owned-rbac"))
+controller_owned = {
+    **owned, "role": "controller", "sourceInputsSha256": receipt.source_digest(root, "controller"),
+    "command": ["go", "test", "-c", "-trimpath", "-o", str(artifact), "./cmd/controller"],
+}
+write_record(controller_owned)
+receipt.verify(root, "controller", artifact, record_path)
+receipt.build(root, "controller", artifact, record_path, "owned-rbac")
+rejected(lambda: receipt.build(root, "controller", artifact, record_path, "release"))
+write_record({**controller_owned, "command": owned["command"]})
+rejected(lambda: receipt.verify(root, "controller", artifact, record_path))
+rejected(lambda: receipt.build(root, "git", artifact, record_path, "owned-rbac"))
+write_record({**owned, "command": ["go", "test", "-c", "-race", "-o", str(artifact), "./internal/app"]})
+rejected(lambda: receipt.verify(root, "api", artifact, record_path))
+write_record(record)
+original = artifact.read_bytes()
+artifact.write_bytes(original + b"drift")
+rejected(lambda: receipt.verify(root, "api", artifact, record_path))
+artifact.write_bytes(original)
+source.write_text("package changed\n")
+commit()
+rejected(lambda: receipt.verify(root, "api", artifact, record_path))
+source.write_text("package main\n")
+commit()
+receipt.verify(root, "api", artifact, record_path)
+write_record({**record, "profiled": True})
+rejected(lambda: receipt.verify(root, "api", artifact, record_path))
+write_record({**record, "command": ["go", "build", "-race"]})
+rejected(lambda: receipt.verify(root, "api", artifact, record_path))
+write_record(record)
+record_path.chmod(0o644)
+rejected(lambda: receipt.verify(root, "api", artifact, record_path))
+record_path.chmod(0o600)
+receipt.verify(root, "api", artifact, record_path)
+
+# Exercise the producer's fixed owned-host recipe without compiling or starting a service.
+real_run, real_output = receipt.subprocess.run, receipt.subprocess.check_output
+def compiler(command, **kwargs):
+    if command[0] != "go":
+        return real_run(command, **kwargs)
+    assert command == ["go", "test", "-c", "-trimpath", "-o", str(compiled), package]
+    assert kwargs["env"]["GOWORK"] == "off" and kwargs["cwd"] == root / module
+    compiled.write_bytes(b"synthetic compiler output, not a service")
+    return subprocess.CompletedProcess(command, 0)
+def version(command, **kwargs):
+    if command == ["go", "version"]:
+        return b"go version synthetic-test-toolchain"
+    return real_output(command, **kwargs)
+for name in ("GOFLAGS", "GOEXPERIMENT", "RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"):
+    os.environ.pop(name, None)
+for role, module, package in (
+    ("api", "gitstore-api", "./internal/app"),
+    ("controller", "gitstore-controller-manager", "./cmd/controller"),
+):
+    compiled, compiled_receipt = root / ("owned/compiled-" + role), root / ("owned/compiled-" + role + ".json")
+    try:
+        receipt.subprocess.run, receipt.subprocess.check_output = compiler, version
+        receipt.build(root, role, compiled, compiled_receipt, "owned-rbac")
+    finally:
+        receipt.subprocess.run, receipt.subprocess.check_output = real_run, real_output
+    produced = receipt.verify(root, role, compiled, compiled_receipt)
+    assert produced["buildKind"] == "repository-owned-rbac" and not produced["profiled"]
+PY
+
+node - "${repo_root}/tests/capacity/profiles/api-readiness.js" <<'JS'
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const crypto = require('node:crypto');
+const source = fs.readFileSync(process.argv[2], 'utf8')
+  .replace(/^import .*;\r?\n/gm, '')
+  .replace('export const options', 'const options')
+  .replace('export default function ()', 'function runIteration()');
+const cases = Array.from({ length: 10 }, (_, index) => ({
+  subject: `reader-${index}`, namespace: `owned-${index}`,
+  action: index % 2 ? 'role.list' : 'product.list',
+  expected: index < 6 ? 'allow' : index < 9 ? 'deny' : 'isolation',
+  token: 'private-fixture-token',
+}));
+function load(overrides = {}, fixtureCases = cases) {
+  const metrics = {};
+  const requests = [];
+  const failures = [];
+  const receipts = [];
+  const execution = { scenario: { name: 'rbac_0', iterationInTest: 0 } };
+  const fixture = { owner: 'owned-rbac', cases: fixtureCases };
+  let response;
+  const variables = {
+    CAPACITY_BASE_URL: 'http://api-a', CAPACITY_RBAC_WORKLOAD: '1',
+    CAPACITY_API_ENDPOINTS: 'http://api-a,http://api-b',
+    CAPACITY_RBAC_FIXTURE_FILE: 'private-fixture.json',
+    CAPACITY_IDENTITY_FIXTURE_FILE: 'private-identity.json', ...overrides,
+  };
+  const context = {
+    __ENV: variables, execution,
+    crypto: { sha256: (body) => crypto.createHash('sha256').update(body).digest('hex') },
+    console: { error: (message) => receipts.push(JSON.parse(message)) },
+    env: (name) => { assert.ok(variables[name], `missing ${name}`); return variables[name]; },
+    integer: (name, fallback) => variables[name] === undefined ? fallback : Number(variables[name]),
+    open: () => JSON.stringify(fixture),
+    SharedArray: class { constructor(_, create) { return create(); } },
+    Counter: class {
+      constructor(name) { this.name = name; metrics[name] = 0; }
+      add(value) { metrics[this.name] += value; }
+    },
+    check: (_, checks) => {
+      for (const [name, predicate] of Object.entries(checks)) {
+        if (!predicate(_)) failures.push(name);
+      }
+    },
+    http: {
+      post: (url, body, params) => { requests.push({ url, body: JSON.parse(body), params }); return response; },
+      get: (url) => { requests.push({ url }); return { status: 200 }; },
+    },
+  };
+  const profile = vm.runInNewContext(`${source}\n({options, runIteration})`, context);
+  return {
+    ...profile, metrics, requests, failures, execution, receipts,
+    respond(status, body) {
+      response = { status, body: JSON.stringify(body), json: () => body };
+    },
+    rawResponse(value) { response = value; },
+  };
+}
+const workload = load();
+assert.deepEqual(Object.keys(workload.options.scenarios), ['rbac_0', 'rbac_1']);
+for (const scenario of Object.values(workload.options.scenarios)) {
+  assert.equal(scenario.rate, 500);
+  assert.equal(scenario.duration, '30m');
+}
+assert.equal(workload.options.thresholds['rbac_requests{replica:0}'][0], 'count==900000');
+assert.equal(workload.options.thresholds['rbac_completed{replica:1}'][0], 'count==900000');
+for (let replica = 0; replica < 2; replica++) {
+  for (let index = 0; index < cases.length; index++) {
+    const sample = cases[index];
+    const field = sample.action === 'role.list' ? 'roles' : 'products';
+    workload.execution.scenario.name = `rbac_${replica}`;
+    workload.execution.scenario.iterationInTest = index;
+    workload.respond(200, sample.expected === 'allow'
+      ? { data: { [field]: { edges: [] } } }
+      : { data: { [field]: null }, errors: [{ extensions: { code: 'FORBIDDEN' } }] });
+    workload.runIteration();
+    const request = workload.requests.at(-1);
+    assert.equal(request.url, `http://api-${replica ? 'b' : 'a'}/admin/graphql`);
+    assert.equal(request.body.variables.namespace, sample.namespace);
+    assert.equal(request.params.headers.Authorization, `Bearer ${sample.token}`);
+    assert.ok(request.params.headers['X-Request-ID']);
+    assert.equal(request.params.timeout, '5s');
+    assert.equal(request.params.redirects, 0);
+  }
+}
+assert.equal(new Set(workload.requests.map((r) => r.params.headers['X-Request-ID'])).size, 20);
+assert.equal(workload.metrics.rbac_requests, 20);
+assert.equal(workload.metrics.rbac_completed, 20);
+assert.equal(workload.metrics.rbac_allowed, 12);
+assert.equal(workload.metrics.rbac_denied, 6);
+assert.equal(workload.metrics.rbac_isolation, 2);
+const boundary = load({ CAPACITY_DURATION: '6s', CAPACITY_RATE: '30' });
+boundary.respond(200, { errors: [{ extensions: { code: 'FORBIDDEN' } }] });
+boundary.execution.scenario.iterationInTest = 179;
+boundary.runIteration();
+assert.equal(boundary.requests.length, 1);
+boundary.execution.scenario.iterationInTest = 180;
+boundary.runIteration();
+boundary.execution.scenario.iterationInTest = 181;
+boundary.runIteration();
+assert.equal(boundary.requests.length, 1, 'k6 boundary iterations must not introduce undeclared ordinary offers');
+assert.equal(boundary.metrics.rbac_requests, 1);
+assert.equal(boundary.metrics.rbac_completed, 1);
+assert.equal(workload.failures.length, 0);
+assert.equal(workload.receipts.length, 0, 'successful ordinary traffic must not emit response receipts');
+for (const body of [
+  { data: { products: { edges: [] } } },
+  { errors: [{ extensions: { code: 'FORBIDDEN' } }, { extensions: { code: 'AUTHORIZATION_UNAVAILABLE' } }] },
+  { errors: [{ extensions: { code: 'FORBIDDEN' } }], data: { products: { edges: [] } } },
+]) {
+  const denied = load();
+  denied.execution.scenario.iterationInTest = 8;
+  denied.respond(200, body);
+  denied.runIteration();
+  assert.equal(denied.metrics.rbac_wrong, 1);
+  assert.equal(denied.metrics.rbac_denied, 0);
+  assert.equal(denied.failures.length, 1);
+}
+const unavailable = load();
+unavailable.respond(503, {});
+unavailable.runIteration();
+assert.equal(unavailable.metrics.rbac_unavailable, 1);
+assert.equal(unavailable.metrics.rbac_completed, 1);
+assert.equal(unavailable.failures.length, 1);
+assert.equal(unavailable.receipts[0].reason, 'http_status');
+for (const [status, code, reason, classification] of [
+  [200, 'AUTHORIZATION_UNAVAILABLE', 'graphql_authorization_unavailable', 'unavailable'],
+  [200, 'DIRECTORY_UNAVAILABLE', 'graphql_directory_unavailable', 'unavailable'],
+  [200, 'UNAUTHENTICATED', 'graphql_unauthenticated', 'unavailable'],
+  [200, 'INTERNAL_SERVER_ERROR', 'graphql_error', 'wrong'],
+  [200, 'RESOURCE_EXHAUSTED', 'graphql_quota', 'wrong'],
+  [429, 'RATE_LIMITED', 'http_throttled', 'unavailable'],
+]) {
+  const failed = load();
+  failed.execution.scenario.name = 'rbac_1';
+  failed.respond(status, { errors: [{ message: 'Authorization: Bearer private-fixture-token', extensions: { code } }] });
+  failed.runIteration();
+  const receipt = failed.receipts[0];
+  assert.equal(receipt.correlationID, 'owned-rbac-ordinary-1-0');
+  assert.equal(receipt.replica, 1);
+  assert.equal(receipt.action, 'product.list');
+  assert.equal(receipt.namespace, 'owned-0');
+  assert.equal(receipt.reason, reason);
+  assert.equal(receipt.classification, classification);
+  assert.equal(receipt.errorCodes[0], code);
+  assert.match(receipt.responseDigest, /^[0-9a-f]{64}$/);
+  assert.ok(!JSON.stringify(receipt).includes('private-fixture-token'));
+  assert.ok(!JSON.stringify(receipt).includes('Authorization'));
+}
+for (const [response, reason] of [
+  [{ status: 0, body: '', error_code: 1050, error: 'Bearer private-fixture-token',
+    json: () => { throw new Error('transport'); } }, 'transport'],
+  [{ status: 200, body: '{private-fixture-token', json: () => { throw new Error('secret parser detail'); } }, 'invalid_json'],
+  [{ status: 200, body: 'x'.repeat(65537), json: () => { throw new Error('must not parse oversized body'); } }, 'oversized'],
+]) {
+  const failed = load();
+  failed.rawResponse(response);
+  failed.runIteration();
+  assert.equal(failed.receipts[0].reason, reason);
+  assert.ok(!JSON.stringify(failed.receipts[0]).includes('private-fixture-token'));
+  if (reason === 'oversized') assert.equal(failed.receipts[0].responseDigest, null);
+}
+const secretCodes = load();
+secretCodes.respond(200, { errors: Array.from({ length: 20 }, () => ({
+  extensions: { code: 'private-fixture-token' }, message: 'raw private response',
+})) });
+secretCodes.runIteration();
+assert.equal(secretCodes.receipts[0].errorCodes.length, 8);
+assert.ok(secretCodes.receipts[0].errorCodes.every((code) => code === 'UNKNOWN'));
+assert.equal(secretCodes.receipts[0].errorCodesTruncated, true);
+assert.ok(!JSON.stringify(secretCodes.receipts[0]).includes('private-fixture-token'));
+const mixedBeyondCap = load();
+mixedBeyondCap.respond(200, { errors: [
+  ...Array.from({ length: 8 }, () => ({ extensions: { code: 'AUTHORIZATION_UNAVAILABLE' } })),
+  { extensions: { code: 'INTERNAL_SERVER_ERROR' } },
+] });
+mixedBeyondCap.runIteration();
+assert.equal(mixedBeyondCap.receipts[0].classification, 'wrong');
+assert.equal(mixedBeyondCap.receipts[0].reason, 'graphql_error', 'truncated codes must not fabricate a uniform unavailable cause');
+const taintedNamespace = load({}, cases.map((sample) => ({ ...sample, namespace: sample.token })));
+taintedNamespace.respond(503, {});
+taintedNamespace.runIteration();
+assert.equal(taintedNamespace.receipts[0].namespace, '<redacted>');
+assert.ok(JSON.stringify(taintedNamespace.receipts[0]).length < 1400);
+const capped = load();
+capped.respond(503, {});
+for (let index = 0; index < 20; index++) {
+  capped.execution.scenario.iterationInTest = index;
+  capped.runIteration();
+}
+assert.equal(capped.receipts.length, 16);
+assert.equal(capped.metrics.rbac_failure_receipts_suppressed, 4);
+assert.equal(capped.metrics.rbac_unavailable, 20, 'receipt caps must never suppress failed gate accounting');
+assert.throws(() => load({ CAPACITY_IDENTITY_READINESS: '1' }), /RBAC.*identity|identity.*RBAC/i);
+assert.throws(() => load({ CAPACITY_API_ENDPOINTS: 'http://api-a,http://api-a/' }), /distinct/);
+assert.throws(() => load({}, cases.slice(0, 9)), /60\/30\/10|ten|10/);
+assert.throws(() => load({}, cases.map((sample) => ({ ...sample, expected: 'allow' }))), /60\/30\/10/);
+const health = load({ CAPACITY_RBAC_WORKLOAD: '0' });
+health.runIteration();
+assert.deepEqual(health.requests.map((r) => r.url), ['http://api-a/health', 'http://api-a/ready']);
+assert.equal(health.metrics.rbac_requests, 0);
+console.log('RBAC k6 ordinary-request and unchanged health regressions passed');
+JS
 
 secret_output="$(REPOSITORY_CAPACITY_SECRET_SCENARIO=1 CAPACITY_DRY_RUN=1 "${dispatcher}" repository lifecycle production)"
 [[ "${secret_output}" == *"_capacity-repository-lifecycle"* ]]
@@ -547,6 +915,70 @@ run_deployed_capacity() {
     CAPACITY_SCYLLA_AUTH_MODE=local-unauthenticated CAPACITY_DATASTORE_CONTAINERS=scylla-1,scylla-2,scylla-3 \
     "$@"
 }
+
+mkdir -p "${test_dir}/rbac-bin"
+printf '{}\n' >"${test_dir}/rbac-seed.json"
+printf '{}\n' >"${test_dir}/rbac-topology.json"
+write_mock "${test_dir}/rbac-bin/go" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${RBAC_TEST_CAPACITY_VERIFY_K6:-0}" == 1 ]]; then
+  if [[ "${MOCK_RBAC_SKIP_VERDICT:-0}" != 1 ]]; then
+    umask 077
+    jq -n --arg revision "${MOCK_SOURCE_REVISION}" \
+      '{Passed:true,SourceRevision:$revision,Window:{Owner:"owned-rbac",ProfileDigest:("a"*64)}}' \
+      >"${CAPACITY_RBAC_EVIDENCE_DIR}/rbac-alpha-verifier.json"
+  fi
+  if [[ "${MOCK_RBAC_SOURCE_DRIFT:-0}" == 1 ]]; then
+    touch "${MOCK_RBAC_SOURCE_MARKER}"
+  fi
+fi
+MOCK
+write_mock "${test_dir}/rbac-bin/git" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == status && -f "${MOCK_RBAC_SOURCE_MARKER:-}" ]]; then
+  printf ' M fixture-source.go\n'
+else
+  exec "${MOCK_RBAC_BASE_GIT}" "$@"
+fi
+MOCK
+run_rbac_dispatch() {
+  local run_id="$1" target="$2" profile="$3"
+  shift 3
+  env PATH="${test_dir}/rbac-bin:${test_dir}/bin:${PATH}" CAPACITY_RBAC_WORKLOAD=1 \
+    CAPACITY_EVIDENCE_DIR="${test_dir}/rbac-evidence" CAPACITY_RUN_ID="${run_id}" \
+    CAPACITY_CONFIG_MANIFEST="${repo_root}/tests/capacity/examples/config-manifest.json" \
+    CAPACITY_ENVIRONMENT_MANIFEST="${repo_root}/tests/capacity/examples/environment-manifest.json" \
+    CAPACITY_RBAC_SEED_FILE="${test_dir}/rbac-seed.json" CAPACITY_RBAC_TOPOLOGY_FILE="${test_dir}/rbac-topology.json" \
+    MOCK_RBAC_SOURCE_MARKER="${test_dir}/rbac-source-drift" MOCK_RBAC_BASE_GIT="${test_dir}/bin/git" \
+    "$@" "${dispatcher}" "${target}" "${profile}" alpha
+}
+for target_profile in 'api readiness' 'namespace watch'; do
+  read -r rbac_target rbac_profile <<<"${target_profile}"
+  run_rbac_dispatch complete "${rbac_target}" "${rbac_profile}" >/dev/null
+  jq -e '.passed == true and .postflightRequired == true and .postflightExitCode == 0 and
+    .sourceStateUnchanged == true' \
+    "${test_dir}/rbac-evidence/${rbac_target}/${rbac_profile}/alpha/complete/metadata.json" >/dev/null
+  before_digest="$(shasum -a 256 "${test_dir}/rbac-evidence/${rbac_target}/${rbac_profile}/alpha/complete/metadata.json")"
+  if run_rbac_dispatch complete "${rbac_target}" "${rbac_profile}" >/dev/null 2>&1; then
+    echo "RBAC alpha overwrote an existing run directory" >&2
+    exit 1
+  fi
+  [[ "${before_digest}" == "$(shasum -a 256 "${test_dir}/rbac-evidence/${rbac_target}/${rbac_profile}/alpha/complete/metadata.json")" ]]
+  if run_rbac_dispatch missing-domain "${rbac_target}" "${rbac_profile}" MOCK_RBAC_SKIP_VERDICT=1 >/dev/null 2>&1; then
+    echo "RBAC alpha accepted a skipped domain verifier" >&2
+    exit 1
+  fi
+  jq -e '.passed == false and .postflightExitCode == 2' \
+    "${test_dir}/rbac-evidence/${rbac_target}/${rbac_profile}/alpha/missing-domain/metadata.json" >/dev/null
+done
+if run_rbac_dispatch changed-source api readiness MOCK_RBAC_SOURCE_DRIFT=1 >/dev/null 2>&1; then
+  echo "RBAC alpha accepted source drift during the run" >&2
+  exit 1
+fi
+jq -e '.passed == false and .sourceStateUnchanged == false and .sourceStateExitCode == 2' \
+  "${test_dir}/rbac-evidence/api/readiness/alpha/changed-source/metadata.json" >/dev/null
 
 PATH="${test_dir}/bin:${PATH}" CAPACITY_EVIDENCE_DIR="${test_dir}/evidence" CAPACITY_RUN_ID=test-run \
   "${dispatcher}" namespace validation diagnostic >/dev/null
