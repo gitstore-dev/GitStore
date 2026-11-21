@@ -1432,6 +1432,11 @@ impl GitService for GitServiceImpl {
             if !query.r#ref.starts_with("refs/heads/") || query.r#ref.len() > 1024 {
                 return Err(Status::invalid_argument("expected a bounded branch ref"));
             }
+            let _: gix::refs::FullName = query
+                .r#ref
+                .as_str()
+                .try_into()
+                .map_err(|e: gix::refs::name::Error| Status::invalid_argument(e.to_string()))?;
         }
         let data_root = Arc::clone(&self.data_root);
         let repo_locks = Arc::clone(&self.repo_locks);
@@ -1449,9 +1454,21 @@ impl GitService for GitServiceImpl {
                             Ok(_guard) => crate::git::repo::open_repository(&path)
                                 .ok()
                                 .and_then(|repo| {
-                                    resolve_ref_to_commit_id(&repo, &query.r#ref)
+                                    let mut reference =
+                                        repo.find_reference(query.r#ref.as_str()).ok()?;
+                                    if reference.name().as_bstr()
+                                        != gix::bstr::BStr::new(query.r#ref.as_bytes())
+                                    {
+                                        return None;
+                                    }
+                                    reference
+                                        .follow_to_object()
+                                        .ok()?
+                                        .object()
+                                        .ok()?
+                                        .try_into_commit()
                                         .ok()
-                                        .map(|commit| commit.to_string())
+                                        .map(|commit| commit.id.to_string())
                                 })
                                 .unwrap_or_default(),
                             Err(_) => {
@@ -3042,6 +3059,119 @@ mod tests {
         let mut request = Request::new(tokio_stream::iter(chunks));
         *request.metadata_mut() = signed.metadata().clone();
         request
+    }
+
+    #[tokio::test]
+    async fn resolve_refs_rejects_revision_expressions_and_malformed_branch_refs() {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_A);
+        let service = make_test_service(dir.path());
+        for name in [
+            "refs/heads/main~1",
+            "refs/heads/main~1000000000",
+            "refs/heads/main^0",
+            "refs/heads/main^{commit}",
+            "refs/heads/main:products/p1.md",
+            "refs/heads/main@{0}",
+            "refs/heads/main..other",
+            "refs/heads/main.lock",
+            "refs/heads/release//main",
+            "refs/heads/",
+            "refs/tags/v1.0.0",
+            "HEAD",
+        ] {
+            let request = ResolveRefsRequest {
+                refs: vec![RepositoryRef {
+                    repository_id: TEST_REPO_A.into(),
+                    r#ref: name.into(),
+                    authorization: test_authorization(TEST_REPO_A, "repository.contents.read"),
+                }],
+            };
+            assert_eq!(
+                service
+                    .resolve_refs(signed_test_request(request))
+                    .await
+                    .expect_err(name)
+                    .code(),
+                tonic::Code::InvalidArgument,
+                "{name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_refs_returns_only_exact_branch_commit_tips() {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_A);
+        let repo =
+            crate::git::repo::open_repository(&fanout_path(dir.path(), TEST_REPO_A).unwrap())
+                .unwrap();
+        let parent = repo.head_commit().unwrap();
+        let original = parent.id.to_string();
+        let tip = repo
+            .commit_as(
+                parent.author().unwrap(),
+                parent.committer().unwrap(),
+                "refs/heads/main",
+                "advance main",
+                parent.tree_id().unwrap().detach(),
+                [parent.id],
+            )
+            .unwrap()
+            .detach();
+        for (name, id) in [
+            ("refs/heads/release/v1.0", parent.id),
+            ("refs/tags/refs/heads/missing", tip),
+            (
+                "refs/heads/not-a-commit",
+                repo.write_blob(b"not a commit").unwrap().detach(),
+            ),
+        ] {
+            repo.reference(
+                name,
+                id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "fixture",
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            repo.path().join("refs/heads/alias"),
+            "ref: refs/heads/release/v1.0\n",
+        )
+        .unwrap();
+        let names = [
+            "refs/heads/main",
+            "refs/heads/release/v1.0",
+            "refs/heads/alias",
+            "refs/heads/missing",
+            "refs/heads/not-a-commit",
+        ];
+        let refs = names
+            .iter()
+            .map(|name| RepositoryRef {
+                repository_id: TEST_REPO_A.into(),
+                r#ref: (*name).into(),
+                authorization: test_authorization(TEST_REPO_A, "repository.contents.read"),
+            })
+            .collect();
+        let response = make_test_service(dir.path())
+            .resolve_refs(signed_test_request(ResolveRefsRequest { refs }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.proofs.len(), names.len());
+        for ((proof, name), expected) in response.proofs.iter().zip(names).zip([
+            tip.to_string(),
+            original.clone(),
+            original,
+            String::new(),
+            String::new(),
+        ]) {
+            assert_eq!(proof.r#ref, name);
+            assert_eq!(proof.commit_sha, expected, "{name}");
+            assert!(!proof.busy);
+        }
     }
 
     #[tokio::test]
