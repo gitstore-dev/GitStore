@@ -44,7 +44,7 @@ uri = "dns:///localhost:50051"
 [api.auth.static_users]
 users_file = "/etc/gitstore/users.yaml"
 
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "replace-with-strong-random-secret-at-least-32-chars"
 ttl = "24h"
 issuer = "gitstore"

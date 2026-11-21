@@ -123,11 +123,13 @@ func newTestRegistry(t *testing.T) (*auth.ProviderRegistry, *staticusers.StaticU
 	usersFile := filepath.Join(t.TempDir(), "users.yaml")
 	require.NoError(t, os.WriteFile(usersFile, []byte("version: v1\nusers:\n  - username: admin\n    password_hash: \""+string(hash)+"\"\n"), 0600))
 	cfg := config.AuthConfig{
-		StaticUsers: config.StaticUsersConfig{UsersFile: usersFile},
-		JWT: config.JWTConfig{
-			Secret: "dev-secret-change-in-production",
-			Issuer: "gitstore",
-			TTL:    24 * time.Hour,
+		StaticUsers: config.StaticUsersConfig{
+			UsersFile: usersFile,
+			JWT: config.JWTConfig{
+				Secret: "dev-secret-change-in-production",
+				Issuer: "gitstore",
+				TTL:    24 * time.Hour,
+			},
 		},
 	}
 

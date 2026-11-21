@@ -172,7 +172,7 @@ CONFIG_FILE=./config/config.toml docker compose --profile local \
 For non-profile/manual startup, check the active auth settings:
 
 - `api.auth.static_users.users_file` points to a readable users file
-- `GITSTORE_API__AUTH__JWT__SECRET`
+- `GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET`
 
 Inspect logs:
 

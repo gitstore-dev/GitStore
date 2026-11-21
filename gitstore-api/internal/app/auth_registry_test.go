@@ -53,12 +53,14 @@ func TestProviderRegistryReloadPreservesUsableBindingInvariant(t *testing.T) {
 	writePolicy("alice")
 
 	cfg := &config.Config{Api: config.ApiConfig{Auth: config.AuthConfig{
-		StaticUsers: config.StaticUsersConfig{UsersFile: usersPath},
-		JWT:         config.JWTConfig{Secret: "secret", Issuer: "gitstore", TTL: 1 * time.Hour},
-		AuthN:       config.AuthNConfig{Chain: []string{"static-users", "anonymous"}},
-		AuthZ:       config.AuthZConfig{Provider: "rbac-local"},
-		UserDir:     config.UserDirConfig{Provider: "static-users"},
-		RBACLocal:   config.RBACConfig{PolicyFile: policyPath},
+		StaticUsers: config.StaticUsersConfig{
+			UsersFile: usersPath,
+			JWT:       config.JWTConfig{Secret: "secret", Issuer: "gitstore", TTL: 1 * time.Hour},
+		},
+		AuthN:     config.AuthNConfig{Chain: []string{"static-users", "anonymous"}},
+		AuthZ:     config.AuthZConfig{Provider: "rbac-local"},
+		UserDir:   config.UserDirConfig{Provider: "static-users"},
+		RBACLocal: config.RBACConfig{PolicyFile: policyPath},
 	}}}
 	store, err := memdb.New()
 	require.NoError(t, err)

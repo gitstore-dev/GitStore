@@ -30,7 +30,7 @@ func TestRuntimeRoleEnvironmentAndDefault(t *testing.T) {
 func TestStorefrontOnlyDoesNotRequireAuthoringConfiguration(t *testing.T) {
 	defer clearEnv(t)()
 	t.Setenv("GITSTORE_API__ROLES", "storefront")
-	t.Setenv("GITSTORE_API__AUTH__JWT__SECRET", "")
+	t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET", "")
 	t.Setenv("GITSTORE_GRPC_AUTH__HMAC_SECRET", "")
 	t.Setenv("GITSTORE_API__DATASTORE__BACKEND", "unavailable")
 	t.Setenv("GITSTORE_API__GIT_SERVICE__URI", "")

@@ -360,7 +360,7 @@ package staticusers
 
 // Resolved config fields (loaded from Viper paths/env vars by internal/config):
 //   api.auth.static_users.users_file → GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE
-//   api.auth.jwt.secret              → GITSTORE_API__AUTH__JWT__SECRET
+//   api.auth.static_users.jwt.secret              → GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET
 
 type StaticUsersProvider struct {
 	users       map[string]UserEntry
@@ -382,7 +382,7 @@ func (p *StaticUsersProvider) Capabilities() auth.Capability {
 
 func (p *StaticUsersProvider) Authenticate(ctx context.Context, req auth.AuthRequest) (*auth.Principal, auth.Decision, error) {
 	// 1. Extract Authorization: Bearer <jwt>
-	// 2. Parse the JWT (golang-jwt/v5, HS256, using GITSTORE_API__AUTH__JWT__SECRET)
+	// 2. Parse the JWT (golang-jwt/v5, HS256, using GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET)
 	// 3. If parse fails → OutcomeChallenge (not my token, try next provider)
 	// 4. Validate issuer == configured base + "/static-users" (always appended)
 	//    or the exact legacy configured base during rolling upgrade
@@ -1020,10 +1020,10 @@ api.auth.userdir.provider                    GITSTORE_API__AUTH__USERDIR__PROVID
 
 # Local users file
 api.auth.static_users.users_file              GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE     string   "users.yaml"
-api.auth.jwt.secret                          GITSTORE_API__AUTH__JWT__SECRET                 string   (required)
-api.auth.jwt.ttl                        GITSTORE_API__AUTH__JWT__TTL               duration "24h"
-api.auth.jwt.issuer                          GITSTORE_API__AUTH__JWT__ISSUER                 string   "gitstore"
-api.auth.jwt.refresh_grace                   GITSTORE_API__AUTH__JWT__REFRESH_GRACE          duration "60s"
+api.auth.static_users.jwt.secret                          GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET                 string   (required)
+api.auth.static_users.jwt.ttl                        GITSTORE_API__AUTH__STATIC_USERS__JWT__TTL               duration "24h"
+api.auth.static_users.jwt.issuer                          GITSTORE_API__AUTH__STATIC_USERS__JWT__ISSUER                 string   "gitstore"
+api.auth.static_users.jwt.refresh_grace                   GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE          duration "60s"
 
 # Future OIDC JWT provider (Phase 6)
 api.auth.oidc_jwt.issuer_uri                     GITSTORE_API__AUTH__OIDC_JWT__ISSUER_URI            string   "" (required when oidc-jwt chained)
@@ -1045,8 +1045,8 @@ grpc_auth.hmac_secret                    GITSTORE_GRPC_AUTH__HMAC_SECRET        
 # local-fast: no external services required
 GITSTORE_API__AUTH__ADMIN__USERNAME=admin
 GITSTORE_API__AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
-GITSTORE_API__AUTH__JWT__SECRET=dev-secret-change-me
-GITSTORE_API__AUTH__JWT__ISSUER=gitstore
+GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET=dev-secret-change-me
+GITSTORE_API__AUTH__STATIC_USERS__JWT__ISSUER=gitstore
 GITSTORE_API__AUTH__AUTHN__CHAIN=static-users,anonymous
 GITSTORE_API__AUTH__AUTHZ__PROVIDER=allow-all
 GITSTORE_API__AUTH__USERDIR__PROVIDER=none
@@ -1058,8 +1058,8 @@ GITSTORE_GRPC_AUTH__HMAC_SECRET=dev-grpc-secret
 ```text
 GITSTORE_API__AUTH__ADMIN__USERNAME=admin
 GITSTORE_API__AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
-GITSTORE_API__AUTH__JWT__SECRET=local-secure-secret
-GITSTORE_API__AUTH__JWT__ISSUER=gitstore
+GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET=local-secure-secret
+GITSTORE_API__AUTH__STATIC_USERS__JWT__ISSUER=gitstore
 GITSTORE_API__AUTH__AUTHN__CHAIN=oidc-jwt,static-users,anonymous
 GITSTORE_API__AUTH__AUTHZ__PROVIDER=rbac-local
 GITSTORE_API__AUTH__USERDIR__PROVIDER=none
@@ -1075,10 +1075,10 @@ GITSTORE_GRPC_AUTH__HMAC_SECRET=local-grpc-hmac-secret
 ```text
 GITSTORE_API__AUTH__ADMIN__USERNAME=admin
 GITSTORE_API__AUTH__ADMIN__PASSWORD_HASH=$2a$10$...
-GITSTORE_API__AUTH__JWT__SECRET=${JWT_SECRET}
-GITSTORE_API__AUTH__JWT__ISSUER=gitstore
-GITSTORE_API__AUTH__JWT__TTL=1h
-GITSTORE_API__AUTH__JWT__REFRESH_GRACE=60s
+GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET=${JWT_SECRET}
+GITSTORE_API__AUTH__STATIC_USERS__JWT__ISSUER=gitstore
+GITSTORE_API__AUTH__STATIC_USERS__JWT__TTL=1h
+GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE=60s
 GITSTORE_API__AUTH__AUTHN__CHAIN=oidc-jwt,static-users,anonymous
 GITSTORE_API__AUTH__AUTHZ__PROVIDER=opa
 GITSTORE_API__AUTH__USERDIR__PROVIDER=none
@@ -1228,7 +1228,7 @@ before.
 `ChainedAuthN.RefreshSession`; `StaticAdminProvider` blacklist is functional. `Login` resolver migrated away from legacy
 `authMiddleware` stubs — `user.isAdmin` and `user.username` now derived from `Principal`. `IssueSession` added to
 `AuthNProvider` interface. `Principal.TokenID` carries JWT `jti`. `ContextWithRawToken`/`RawTokenFromContext` store the
-raw Bearer string for refresh. `GITSTORE_API__AUTH__JWT__REFRESH_GRACE` (default `60s`) bounds the refresh window.
+raw Bearer string for refresh. `GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE` (default `60s`) bounds the refresh window.
 **Affected packages:** `gitstore-api/internal/auth/types.go`, `gitstore-api/internal/auth/context.go`,
 `gitstore-api/internal/auth/registry.go`, `gitstore-api/internal/auth/provider/staticadmin/`,
 `gitstore-api/internal/auth/provider/anonymous/`, `gitstore-api/internal/middleware/auth.go`,

@@ -101,7 +101,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return runRBAC(args[1:], stdout, stderr)
 
 	case "gen-jwt-secret":
-		return printSecret(stdout, stderr, "GITSTORE_API__AUTH__JWT__SECRET")
+		return printSecret(stdout, stderr, "GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET")
 
 	case "gen-hmac-secret":
 		return printSecret(stdout, stderr, "GITSTORE_GRPC_AUTH__HMAC_SECRET")

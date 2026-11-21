@@ -40,16 +40,18 @@ func newTestConfig(t *testing.T, duration string) config.AuthConfig {
 	ttl, err := time.ParseDuration(duration)
 	require.NoError(t, err)
 	return config.AuthConfig{
-		StaticUsers: config.StaticUsersConfig{UsersFile: func() string {
-			path := filepath.Join(t.TempDir(), "users.yaml")
-			require.NoError(t, os.WriteFile(path, []byte("version: v1\nusers:\n  - username: admin\n    password_hash: \""+mustBcrypt(t, "testpass")+"\"\n"), 0600))
-			return path
-		}()},
-		JWT: config.JWTConfig{
-			Secret:       "test-secret",
-			Issuer:       "gitstore",
-			TTL:          ttl,
-			RefreshGrace: 60 * time.Second,
+		StaticUsers: config.StaticUsersConfig{
+			UsersFile: func() string {
+				path := filepath.Join(t.TempDir(), "users.yaml")
+				require.NoError(t, os.WriteFile(path, []byte("version: v1\nusers:\n  - username: admin\n    password_hash: \""+mustBcrypt(t, "testpass")+"\"\n"), 0600))
+				return path
+			}(),
+			JWT: config.JWTConfig{
+				Secret:       "test-secret",
+				Issuer:       "gitstore",
+				TTL:          ttl,
+				RefreshGrace: 60 * time.Second,
+			},
 		},
 	}
 }

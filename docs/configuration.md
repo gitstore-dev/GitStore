@@ -204,12 +204,16 @@ There is no configuration switch to enable it.
 | Key                             | Env Var                                     | Type     | Default    | Required | Sensitive | Description                                                 |
 |-----------------------------------|------------------------------------------------|----------|------------|----------|-----------|---------------------------------------------------------------|
 | `api.auth.static_users.users_file` | `GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE` | string | users.yaml | When selected | No | YAML file containing local users |
-| `api.auth.jwt.secret`          | `GITSTORE_API__AUTH__JWT__SECRET`          | string   | —          | When `static-users` is selected | **Yes** | JWT signing key (minimum 32 characters)                  |
-| `api.auth.jwt.ttl`             | `GITSTORE_API__AUTH__JWT__TTL`             | duration | `24h`      | No       | No        | JWT token validity                                           |
-| `api.auth.jwt.issuer`          | `GITSTORE_API__AUTH__JWT__ISSUER`          | string   | `gitstore` | No       | No        | JWT `iss` claim value                                       |
-| `api.auth.jwt.refresh_grace`   | `GITSTORE_API__AUTH__JWT__REFRESH_GRACE`   | duration | `60s`      | No       | No        | Window after expiry during which `refreshToken` is accepted |
+| `api.auth.static_users.jwt.secret`          | `GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET`          | string   | —          | When `static-users` is selected | **Yes** | JWT signing key (minimum 32 characters)                  |
+| `api.auth.static_users.jwt.ttl`             | `GITSTORE_API__AUTH__STATIC_USERS__JWT__TTL`             | duration | `24h`      | No       | No        | JWT token validity                                           |
+| `api.auth.static_users.jwt.issuer`          | `GITSTORE_API__AUTH__STATIC_USERS__JWT__ISSUER`          | string   | `gitstore` | No       | No        | JWT `iss` claim value                                       |
+| `api.auth.static_users.jwt.refresh_grace`   | `GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE`   | duration | `60s`      | No       | No        | Window after expiry during which `refreshToken` is accepted |
 
-For config files, local users are selected with `[api.auth.static_users]` and `users_file = "users.yaml"`; JWT keys remain nested under `[api.auth.jwt]`.
+For config files, local users are selected with `[api.auth.static_users]` and
+`users_file = "users.yaml"`; their session token settings belong under
+`[api.auth.static_users.jwt]`. These JWT settings apply only to the `static-users`
+AuthN provider, not to service-account or OIDC tokens. Selecting `static-users`
+only as the user directory does not require a JWT secret.
 
 `static-users` appends `/static-users` to the configured issuer base when
 minting tokens. Production logout and refresh rotation require the shared
@@ -686,7 +690,7 @@ For projection audits, repairs, and their operational safeguards, see the
 ### Example `config.toml`
 
 See the maintained [API configuration example](../gitstore-api/config.toml.example).
-Keep secrets, including the user-file credentials and `api.auth.jwt.secret`,
+Keep secrets, including the user-file credentials and `api.auth.static_users.jwt.secret`,
 outside committed configuration and inject them through your deployment platform.
 
 ## gitstore-git-service
