@@ -28,6 +28,16 @@ The plan is not acceptance evidence. Implementation progress and verified
 boundaries are recorded in the tasks and contracts; production activation
 and final image-size results remain subject to the acceptance gates.
 
+**Delivery scope (owner decision 2026-11-21):** close this feature on
+verified authorization correctness, native-store semantics, concurrent
+replicas, rolling upgrades, bounded work and functional fault recovery.
+Sustained healthy/fault-load throughput and percentile acceptance and the
+large-catalog peak-push interference gate remain pending under #451, not
+passed or waived. Keep fail-closed freshness, configured revocation limits,
+exact revision/UID truth and PR-006's recovery bound. A correctness-only
+feature closeout does not authorize production activation or establish
+production readiness.
+
 Authorized resource-source inspection uses the approved bounded on-demand
 Git-history approach, not persisted per-resource provenance. It follows
 first-parent path-blob changes at the admitted revision; Git authors are
@@ -48,7 +58,7 @@ author/committer database persistence remains deferred.
 **Testing**: Existing Go/Rust suites, race tests, datastore contracts, owned multi-process integration, capacity and chaos runners.
 **Target Platform**: Existing Linux deployment images; macOS development; preserve supported image architectures.
 **Project Type**: Cross-service backend feature, not a new service.
-**Performance Goals**: Decision p99 <=2 ms; admitted grant/revoke propagation p95 <=2 s and p99 <=5 s; recovery <=30 s; 50 RBAC writes/min.
+**Performance Goals**: Production acceptance in #451: decision p99 <=2 ms; admitted grant/revoke propagation p99 <=5 s with a reported, non-blocking p95 <=2 s optimization goal; 50 RBAC writes/min. Functional recovery <=30 s and configured fail-closed/revocation bounds remain feature gates.
 **Constraints**: Fail closed before snapshot/watch readiness; no I/O per ordinary authorization decision; immutable built-ins; bounded rebuilds, payloads and fan-out; no operator Rego.
 **Scale/Scope**: 1,000 namespaces, 10,000 roles, 50,000 bindings. RBAC paths must not scan the 5,000,000-product catalog; sustained catalog push traffic remains part of interference validation.
 **Replica/Scaling Model**: At least two APIs with independent reconstructible OPA caches and two controllers with independent checkpoint volumes. Same-tier resource/projection writes use durable CAS; controllers use duplicate-safe recomputation, not process-local locks as distributed fences.
@@ -58,7 +68,7 @@ Git replacement is stop-before-start. No Git replication, sharding, routing
 or zero-downtime replacement is introduced.
 
 **Authentication/Authorization**: Preserve AuthN/UserDir/AuthZ independence and signed receiver-bound RPCs. Trusted UserDir Staff membership gates personal namespace creation. Every external mutation/read/watch/review is authorized; privileged lifecycle templates are server-validated even for administrators.
-**Load/Backpressure Model**: Defaults in the capacity contract: four global tier rebuild workers, one rebuild per tier, bounded/coalesced work, 30 s validation deadline, 1,000-entry pages, 64 KiB manifests, 4 MiB/256-manifest candidate changes and 64 MiB tier snapshots. Thirty-minute healthy and fault workloads; offered load and completed throughput reported separately.
+**Load/Backpressure Model**: Defaults in the capacity contract: four global tier rebuild workers, one rebuild per tier, bounded/coalesced work, 30 s validation deadline, 1,000-entry pages, 64 KiB manifests, 4 MiB/256-manifest candidate changes and 64 MiB tier snapshots. Bounds remain feature requirements. Thirty-minute healthy/fault-load acceptance is deferred to #451; offered load and completed throughput stay separately accounted.
 **Capacity Profile**: Extend existing `namespace/watch` and `api/readiness MODE=alpha` drivers and selectors. Their current implementations do not yet test RBAC; extensions are implementation prerequisites, not existing acceptance.
 The existing namespace/watch harness now includes the tested bounded scheduler,
 independent committed-vector oracle foundation and bounded native diagnostic
@@ -226,8 +236,9 @@ contracts and [data-model.md](data-model.md).
 | FR-022-024 | Static/dynamic separation, no custom Rego, doc 022 amendment |
 | FR-025-031 | Staff owner template, protected binding, UID-safe lifecycle, cutover and static non-merging |
 | PR-001/002/004 | CAS/UID/replica design, identity matrix and explicit bounds |
-| PR-003/005/006 | Capacity/recovery contract: dataset, offered load, oracle, real replicas and physical faults |
-| SC-001-008 | Healthy/fault gates and test-first matrix in capacity/recovery contract |
+| PR-003/005 | Capacity/recovery contract and #451: unchanged dataset, offered load, oracle and production capacity gates |
+| PR-006 | Native functional fault/recovery proof for feature closure; sustained fault-load acceptance in #451 |
+| SC-001-008 | Test-first correctness matrix; propagation percentiles and sustained-load latency acceptance deferred to #451 |
 
 ## Phase 2: Delivery Planning
 
@@ -240,7 +251,7 @@ This is the input to task generation, not task execution.
 | Provider | US1 | Embedded OPA, readiness, snapshot/watch bridge, bounded rebuilds, exact evaluated revisions; cold-start and revoked-grant regressions |
 | Bootstrap/lifecycle | US4/US6 | Immutable built-ins, once-only initial admin, role/binding finalizers, Staff owner template, UID recreation and concurrent controllers |
 | Inspectability | US5 | Authorized resource Node/connection/watch; transient SubjectAccessReview query input/result, spec/status, revision vector and hypothetical-input semantics |
-| Acceptance | All | Real replica/rolling/fault matrix, declared load, image delta, docs and lifecycle close-out |
+| Acceptance | All | Real replica/rolling/functional-fault matrix, image delta, docs and correctness closeout; sustained capacity remains in #451 |
 
 ### Compatibility and cutover
 
@@ -277,9 +288,11 @@ dynamic revocations. Git replacement, if required, is non-overlapping.
   and index updates in that implementing PR, using the ADR dating rules.
 - Leave ADR-0011/0014/0015/0016/0019/0020 Proposed; this feature does not
   implement their cores.
-- Once every feature acceptance gate is verified, change spec 066 to
-  Closed in the implementing PR. Do not close spec 064's outstanding #451
-  acceptance or claim #487 image-reduction completion.
+- Once every non-deferred feature correctness gate is verified, change
+  spec 066 to Closed in the implementing PR with an explicit
+  correctness-only acceptance summary. Do not close #451's outstanding
+  production acceptance, authorize production activation or claim #487
+  image-reduction completion.
 
 ## Complexity Tracking
 
