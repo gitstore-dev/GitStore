@@ -283,6 +283,11 @@ Serving requires a complete consistent snapshot and verified continuous,
 fresh watch progress; resource update timestamps alone are not freshness
 evidence. Production activation remains gated.
 
+A cold replica requests a bounded rebuild when a namespaced authorization
+snapshot is missing, including for request-scoped authorization captures.
+Requests remain unavailable until the complete snapshot is installed; an
+absent snapshot is never treated as an empty policy.
+
 Background workers alternate queued rebuilds with the oldest due origin checks.
 With at least two workers and installed publications, full Namespace scans leave
 one worker slot for origin checks or shared root replacement. Root rebuilds take
