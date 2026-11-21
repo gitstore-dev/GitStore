@@ -54,22 +54,36 @@ func enrichPrincipal(ctx context.Context, directory UserDirProvider, principal *
 	var groups []string
 	var err error
 	groupCapable := true
-	if actorDirectory, ok := directory.(ActorDirectory); ok {
-		profile, err = actorDirectory.ResolvePrincipal(ctx, principal)
-		if profile != nil {
-			groups = profile.Groups
+	for range 2 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-	} else {
-		profile, err = directory.GetBySubject(ctx, principal.Subject)
-		if err == nil && profile != nil {
-			groups, err = directory.ListGroups(ctx, profile.Subject)
-			if errors.Is(err, ErrNotSupported) {
-				if requireProfile {
-					return nil, ErrDirectoryUnavailable
+		groups, groupCapable = nil, true
+		if actorDirectory, ok := directory.(ActorDirectory); ok {
+			profile, err = actorDirectory.ResolvePrincipal(ctx, principal)
+			if profile != nil {
+				groups = profile.Groups
+			}
+		} else {
+			profile, err = directory.GetBySubject(ctx, principal.Subject)
+			if err == nil && profile != nil {
+				groups, err = directory.ListGroups(ctx, profile.Subject)
+				if errors.Is(err, ErrNotSupported) {
+					if requireProfile {
+						return nil, ErrDirectoryUnavailable
+					}
+					groups, err, groupCapable = nil, nil, false
 				}
-				groups, err, groupCapable = nil, nil, false
 			}
 		}
+		if err != nil || profile == nil || profile.FreshUntil.IsZero() || profile.FreshUntil.After(time.Now()) {
+			break
+		}
+		// A cached lease can expire after lookup; retry once inside the
+		// original budget rather than accepting stale directory facts.
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if errors.Is(err, ErrProfileNotFound) || errors.Is(err, ErrNotSupported) {
 		if requireProfile {
