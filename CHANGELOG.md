@@ -1,5 +1,60 @@
 # Changelog
 
+## [0.1.0-alpha.11](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.10...v0.1.0-alpha.11) (2026-11-21)
+
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** use api.auth.static_users.jwt and GITSTORE_API__AUTH__STATIC_USERS__JWT__*; the old session-token setting path has no compatibility alias.
+* **graphql:** ServiceAccount create, rotate, delete and token issuance reject previously ignored unsupported apiVersion/kind values. Use authentication.gitstore.dev/v1beta1 and the appropriate kind, or omit the GraphQL fields to use defaults. Update explicit clients before deploying the server validation.
+
+### Features
+
+* **api:** compose runtime roles and advertised endpoints ([#581](https://github.com/gitstore-dev/GitStore/issues/581)) ([41975b4](https://github.com/gitstore-dev/GitStore/commit/41975b4483066d2543306e7b84bb91fa27858e2a))
+* **authz:** add opt-in Git-backed RBAC and embedded OPA ([#455](https://github.com/gitstore-dev/GitStore/issues/455)) ([3da5101](https://github.com/gitstore-dev/GitStore/commit/3da5101acc13937d47df2f9e6b9bf6fa376ae40c))
+* **grpc:** add bounded canonical ref and manifest proofs ([#597](https://github.com/gitstore-dev/GitStore/issues/597)) ([d7e39d7](https://github.com/gitstore-dev/GitStore/commit/d7e39d7d77ae5b4b77d264dfcd0fc7186d47913a))
+
+
+### Bug Fixes
+
+* **api:** normalize frontmatter enum boundaries ([#549](https://github.com/gitstore-dev/GitStore/issues/549)) ([260e73e](https://github.com/gitstore-dev/GitStore/commit/260e73e896af421dbb44d45e9d89e45e2acf2982))
+* **auth:** match USER namespace policy to authenticated subject ([#553](https://github.com/gitstore-dev/GitStore/issues/553)) ([1d9eb26](https://github.com/gitstore-dev/GitStore/commit/1d9eb26326be661e2b1ecbce3249bd2c59463053))
+* **auth:** refresh expired directory lookup leases once ([#588](https://github.com/gitstore-dev/GitStore/issues/588)) ([ca8c9dd](https://github.com/gitstore-dev/GitStore/commit/ca8c9ddcab4fc8cd252ca546742dbabf00a10ade))
+* **authz:** preserve bounded policy during tier replacement ([#575](https://github.com/gitstore-dev/GitStore/issues/575)) ([6e54852](https://github.com/gitstore-dev/GitStore/commit/6e5485244b22a41a118ee7ef070a71465fc55853))
+* **authz:** preserve canonical namespace creation denial codes ([#568](https://github.com/gitstore-dev/GitStore/issues/568)) ([dbddf82](https://github.com/gitstore-dev/GitStore/commit/dbddf82c0ed5fd4ec425db0a80646081ef0439c9))
+* **capacity:** preserve independent tier admission clocks ([#577](https://github.com/gitstore-dev/GitStore/issues/577)) ([1c2ec2c](https://github.com/gitstore-dev/GitStore/commit/1c2ec2c06c3e5d65eacb3049252a9a86e9529999))
+* **cdc:** advance quiet streams after completed query windows ([#555](https://github.com/gitstore-dev/GitStore/issues/555)) ([777813b](https://github.com/gitstore-dev/GitStore/commit/777813bdbb2773e4788c14b690249ec30ba0bde8))
+* **config:** remove alpha legacy configuration mappings ([#552](https://github.com/gitstore-dev/GitStore/issues/552)) ([dca7cb2](https://github.com/gitstore-dev/GitStore/commit/dca7cb2b0658df942d13c7b94cb4bc45c8a48f0c))
+* **controller:** defer API outages without poisoning pending work ([#551](https://github.com/gitstore-dev/GitStore/issues/551)) ([9aeea3a](https://github.com/gitstore-dev/GitStore/commit/9aeea3a97c8ad3fbbd33f2eda6414fa020760a6d))
+* **controller:** notify bindings of role lifecycle changes ([#590](https://github.com/gitstore-dev/GitStore/issues/590)) ([408e514](https://github.com/gitstore-dev/GitStore/commit/408e5141506fa697410dc162095864eeb2ee50d3))
+* **controller:** treat empty checkpoint fanout as idle ([#554](https://github.com/gitstore-dev/GitStore/issues/554)) ([5d71e9b](https://github.com/gitstore-dev/GitStore/commit/5d71e9b05267f8371e8370f5a4639bd175bef9e2))
+* **graphql:** align identity resource input conventions ([#586](https://github.com/gitstore-dev/GitStore/issues/586)) ([0b8b505](https://github.com/gitstore-dev/GitStore/commit/0b8b505a7d91cea9be7d1495cdccef88fd5742ec)), closes [#548](https://github.com/gitstore-dev/GitStore/issues/548)
+* **graphql:** return access reviews without mutation payloads ([#589](https://github.com/gitstore-dev/GitStore/issues/589)) ([de194eb](https://github.com/gitstore-dev/GitStore/commit/de194eb1ca247ab3ba8ec7e51363bbc37bb63655))
+* **grpc:** return actual blob sizes in ListFiles ([#587](https://github.com/gitstore-dev/GitStore/issues/587)) ([8ee905d](https://github.com/gitstore-dev/GitStore/commit/8ee905d0815b097a5b846e36121041d9ae9ee77a)), closes [#125](https://github.com/gitstore-dev/GitStore/issues/125)
+* install clone-shared hooks safely from worktrees ([#565](https://github.com/gitstore-dev/GitStore/issues/565)) ([f5912bc](https://github.com/gitstore-dev/GitStore/commit/f5912bcbe1e5917776cf0103a65472437fb0a0b8))
+* **rbac:** expose exact applied revision observations ([#595](https://github.com/gitstore-dev/GitStore/issues/595)) ([bb87651](https://github.com/gitstore-dev/GitStore/commit/bb87651c2a0ce02c5fa91bd2e166d60d41a2c0b6))
+* **rbac:** fence bounded source publication and recovery ([#598](https://github.com/gitstore-dev/GitStore/issues/598)) ([9697908](https://github.com/gitstore-dev/GitStore/commit/9697908f345609de17fa863dbcc56924a4282fbd))
+* **rbac:** preserve origin-check worker capacity ([#578](https://github.com/gitstore-dev/GitStore/issues/578)) ([0df76b9](https://github.com/gitstore-dev/GitStore/commit/0df76b9c93566c939c0c4d4d53e00db51fea5c7d))
+* **rbac:** recover cold namespace captures and prove native faults ([#594](https://github.com/gitstore-dev/GitStore/issues/594)) ([694fa24](https://github.com/gitstore-dev/GitStore/commit/694fa2408ff1a835d524a51386d07381c91f5439))
+* **test:** tolerate incomplete live RBAC source tails ([#591](https://github.com/gitstore-dev/GitStore/issues/591)) ([32b9e1c](https://github.com/gitstore-dev/GitStore/commit/32b9e1cc0cfba3d5ce24dcd4b4e8769c540d06a4))
+* use selected Go toolchains for formatting checks ([#567](https://github.com/gitstore-dev/GitStore/issues/567)) ([a2a0b4d](https://github.com/gitstore-dev/GitStore/commit/a2a0b4db42139dcf720ee78c9565a10ae026d1b4))
+
+
+### Performance Improvements
+
+* **authz:** share translated rules across action indexes ([#570](https://github.com/gitstore-dev/GitStore/issues/570)) ([cbc21ad](https://github.com/gitstore-dev/GitStore/commit/cbc21ade1de2b88c1806cf6f99e8e93efe3fb6fa))
+
+
+### Documentation
+
+* align maintained guides with current runtime ([#556](https://github.com/gitstore-dev/GitStore/issues/556)) ([3d1e011](https://github.com/gitstore-dev/GitStore/commit/3d1e011a10f11d90f79be3502c8a27be6dcf5de0))
+* **rbac:** separate correctness closure from production capacity ([#593](https://github.com/gitstore-dev/GitStore/issues/593)) ([650beab](https://github.com/gitstore-dev/GitStore/commit/650beab4d24434a8dae9ddc5347694ad1e4c8e1b))
+
+
+### Code Refactoring
+
+* **auth:** scope session JWT configuration to static users ([#596](https://github.com/gitstore-dev/GitStore/issues/596)) ([57459dc](https://github.com/gitstore-dev/GitStore/commit/57459dc5fe60786c3b5693b47264d1e58aefa13b))
+
 ## [0.1.0-alpha.10](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.9...v0.1.0-alpha.10) (2026-11-09)
 
 
