@@ -62,6 +62,10 @@ func TestRBACNativeJournalRecovery(t *testing.T) {
 	query := func(api string) gqlResponse {
 		return secretTestGraphQLWithTimeout(t, api, actor.token, list, variables, time.Second)
 	}
+	isUnavailable := func(result gqlResponse) bool {
+		return result.Status == http.StatusServiceUnavailable ||
+			graphqlErrorHasCode(result.Errors, "AUTHORIZATION_UNAVAILABLE")
+	}
 	ready := func() bool {
 		response, err := (&http.Client{Timeout: time.Second}).Get(endpoint + "/ready")
 		if err != nil {
@@ -75,7 +79,7 @@ func TestRBACNativeJournalRecovery(t *testing.T) {
 	for _, api := range append(append([]string{}, fixture.apis...), endpoint) {
 		rbacNativeEventually(t, func() bool {
 			result := query(api)
-			if graphqlErrorHasCode(result.Errors, "AUTHORIZATION_UNAVAILABLE") {
+			if isUnavailable(result) {
 				return false
 			}
 			rbacNativeErrorCode(t, result, "FORBIDDEN")
@@ -95,8 +99,7 @@ func TestRBACNativeJournalRecovery(t *testing.T) {
 	rbacNativeEventually(t, func() bool {
 		for _, api := range append(append([]string{}, fixture.apis...), endpoint) {
 			result := query(api)
-			if graphqlErrorHasCode(result.Errors, "FORBIDDEN") ||
-				graphqlErrorHasCode(result.Errors, "AUTHORIZATION_UNAVAILABLE") {
+			if graphqlErrorHasCode(result.Errors, "FORBIDDEN") || isUnavailable(result) {
 				return false
 			}
 			require.Empty(t, result.Errors)
@@ -114,7 +117,7 @@ func TestRBACNativeJournalRecovery(t *testing.T) {
 	<-resumed
 	rbacNativeEventually(t, func() bool {
 		result := query(endpoint)
-		if graphqlErrorHasCode(result.Errors, "AUTHORIZATION_UNAVAILABLE") {
+		if isUnavailable(result) {
 			return false
 		}
 		require.Empty(t, result.Errors)
@@ -130,6 +133,9 @@ func TestRBACNativeJournalRecovery(t *testing.T) {
 	for _, api := range fixture.apis {
 		rbacNativeEventually(t, func() bool {
 			result := query(api)
+			if isUnavailable(result) {
+				return false
+			}
 			if graphqlErrorHasCode(result.Errors, "FORBIDDEN") {
 				return true
 			}
@@ -157,7 +163,7 @@ func TestRBACNativeJournalRecovery(t *testing.T) {
 			return false
 		}
 		result := query(endpoint)
-		if graphqlErrorHasCode(result.Errors, "AUTHORIZATION_UNAVAILABLE") {
+		if isUnavailable(result) {
 			return false
 		}
 		rbacNativeErrorCode(t, result, "FORBIDDEN")
@@ -190,7 +196,7 @@ func TestRBACNativeJournalRecovery(t *testing.T) {
 			return false
 		}
 		result := query(endpoint)
-		if graphqlErrorHasCode(result.Errors, "AUTHORIZATION_UNAVAILABLE") {
+		if isUnavailable(result) {
 			return false
 		}
 		rbacNativeErrorCode(t, result, "FORBIDDEN")
