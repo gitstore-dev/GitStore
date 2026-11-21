@@ -43,7 +43,7 @@ func TestRBACWatchPreservesResourceVersionsAndRejectsCrossScopeImages(t *testing
 			image := `{"watchResources":{"type":"ADDED","kind":"RoleBinding","namespace":"shop","name":"access","resourceVersion":"journal-11",
 				"object":{"id":"node","kind":"RoleBinding","metadata":{"uid":"binding-uid","namespace":"` + namespace + `","name":"access","resourceVersion":"uid-bound-version"},
 				"spec":{"roleRef":{"kind":"ROLE","name":"reader"},"subjects":[{"kind":"SERVICE_ACCOUNT","name":"ci"}]},
-				"status":{"resolved":{"roleUID":"role-uid","roleKind":"ROLE","roleName":"reader"}}}}}`
+				"status":{"lastAppliedRevision":"main@sha1:applied","resolved":{"roleUID":"role-uid","roleKind":"ROLE","roleName":"reader"}}}}}`
 			sub.data <- json.RawMessage(image)
 			close(sub.data)
 			watch := newResourceWatcher(t.Context(), "RoleBinding", sub)
@@ -61,6 +61,7 @@ func TestRBACWatchPreservesResourceVersionsAndRejectsCrossScopeImages(t *testing
 				require.Equal(t, "Role", event.Object.Spec.RoleRef.Kind)
 				require.Equal(t, "ServiceAccount", event.Object.Spec.Subjects[0].Kind)
 				require.Equal(t, "Role", event.Object.Status.Resolved.RoleKind)
+				require.Equal(t, "main@sha1:applied", event.Object.Status.LastAppliedRevision)
 				_, open := <-watch.Events()
 				require.False(t, open)
 				require.NoError(t, watch.Err())
@@ -223,6 +224,7 @@ func TestRBACStatusUsesDateTimeContractAndDoesNotReattachResolvedUIDs(t *testing
 				require.NoError(t, json.NewDecoder(r.Body).Decode(&request))
 				input := request.Variables["input"]
 				require.Equal(t, "uid-bound-version", input["resourceVersion"])
+				require.Equal(t, "main@sha1:applied", input["lastAppliedRevision"])
 				condition := input["conditions"].([]any)[0].(map[string]any)
 				require.Equal(t, "2026-11-10T12:00:00.123Z", condition["lastTransitionTime"],
 					"the DateTime scalar requires exactly three fractional digits")
@@ -244,7 +246,8 @@ func TestRBACStatusUsesDateTimeContractAndDoesNotReattachResolvedUIDs(t *testing
 				item.Metadata.DeletionTimestamp = &observed
 			}
 			require.NoError(t, client.UpdateStatus(t.Context(), item, StatusUpdate{
-				Resolved: &ResolvedRole{RoleUID: "role-uid", RoleKind: "Role", RoleName: "reader"},
+				LastAppliedRevision: "main@sha1:applied",
+				Resolved:            &ResolvedRole{RoleUID: "role-uid", RoleKind: "Role", RoleName: "reader"},
 				Conditions: []*status.Condition{{Type: "RoleResolved", Status: "TRUE", ObservedGeneration: 1,
 					LastTransitionTime: observed, Reason: "RoleReady", Message: "ready"}},
 			}))

@@ -1721,6 +1721,29 @@ func (ec *executionContext) fieldContext_RBACStatus_observedGeneration(_ context
 	return graphql.NewScalarFieldContext("RBACStatus", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
+func (ec *executionContext) _RBACStatus_lastAppliedRevision(ctx context.Context, field graphql.CollectedField, obj *model.RBACStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_RBACStatus_lastAppliedRevision(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LastAppliedRevision, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_RBACStatus_lastAppliedRevision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("RBACStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _RBACStatus_conditions(ctx context.Context, field graphql.CollectedField, obj *model.RBACStatus) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -6209,6 +6232,8 @@ func (ec *executionContext) _RBACStatus(ctx context.Context, sel ast.SelectionSe
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "lastAppliedRevision":
+			out.Values[i] = ec._RBACStatus_lastAppliedRevision(ctx, field, obj)
 		case "conditions":
 			out.Values[i] = ec._RBACStatus_conditions(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

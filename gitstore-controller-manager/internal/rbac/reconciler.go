@@ -48,7 +48,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 	if resource.Metadata.DeletionTimestamp != nil {
 		return r.finalize(ctx, resource)
 	}
-	update := StatusUpdate{Resolved: resource.Status.Resolved}
+	update := StatusUpdate{Resolved: resource.Status.Resolved, LastAppliedRevision: resource.Metadata.Revision}
 	condition := &status.Condition{Type: "RoleResolved", Status: "TRUE", ObservedGeneration: resource.Metadata.Generation,
 		LastTransitionTime: time.Now().UTC(), Reason: "RoleReady", Message: "role is active"}
 	if strings.HasSuffix(resource.Kind, "Binding") {
@@ -79,7 +79,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		}
 	}
 	update.Conditions = mergeCondition(resource.Status.Conditions, condition)
-	if resource.Status.ObservedGeneration == resource.Metadata.Generation && reflect.DeepEqual(resource.Status.Resolved, update.Resolved) &&
+	if resource.Status.ObservedGeneration == resource.Metadata.Generation &&
+		resource.Status.LastAppliedRevision == update.LastAppliedRevision && reflect.DeepEqual(resource.Status.Resolved, update.Resolved) &&
 		reflect.DeepEqual(resource.Status.Conditions, update.Conditions) {
 		return types.ResultOK()
 	}

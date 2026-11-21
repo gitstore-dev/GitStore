@@ -1514,9 +1514,10 @@ type RBACRuleInput struct {
 
 // Controller-owned observation. A missing resolved link grants no authority.
 type RBACStatus struct {
-	ObservedGeneration int32             `json:"observedGeneration"`
-	Conditions         []*Condition      `json:"conditions"`
-	Resolved           *RBACResolvedRole `json:"resolved,omitempty"`
+	ObservedGeneration  int32             `json:"observedGeneration"`
+	LastAppliedRevision *string           `json:"lastAppliedRevision,omitempty"`
+	Conditions          []*Condition      `json:"conditions"`
+	Resolved            *RBACResolvedRole `json:"resolved,omitempty"`
 }
 
 type RBACSubject struct {

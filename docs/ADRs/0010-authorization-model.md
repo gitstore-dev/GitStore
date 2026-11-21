@@ -358,6 +358,13 @@ revisions and catalog/built-in digests, not whichever publication happens to
 be current at logging time. Namespace name reuse cannot select an old UID's
 grants. Static providers remain independent; their grants are never merged.
 
+Controller observations expose `observedGeneration` and `lastAppliedRevision`
+for all four persisted RBAC kinds. The latter acknowledges the reconciled
+resource's own `metadata.revision`, not a later repository head, and is absent
+until observed. A same-generation authored revision still needs acknowledgement;
+unchanged observations remain no-ops. Status writes retain UID/resourceVersion
+checks and reject acknowledgements for another revision.
+
 Writes and reviews capture authoritative snapshots current at validation
 start, within bounded retries/deadlines. The tier vector is not globally
 atomic. An authorized write may finish after a concurrent cross-repository

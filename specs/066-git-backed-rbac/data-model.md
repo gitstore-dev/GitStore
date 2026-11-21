@@ -10,6 +10,15 @@ fields cannot be forged in pushed YAML. Generation tracks desired-state
 changes; resourceVersion advances for every conditional mutation. Resource
 IDs encode kind and immutable UID using existing Node conventions.
 
+For all four persisted kinds, controller-owned status includes
+`observedGeneration`, `lastAppliedRevision`, conditions and optional resolved
+role identity. `lastAppliedRevision` acknowledges the reconciled resource's
+`metadata.revision`, not the current repository head. A same-generation authored
+revision still requires acknowledgement. Status writes are UID/resourceVersion
+conditional and may only acknowledge that resource's current revision.
+Unobserved resources may omit the field; virtual built-ins have no mutable
+controller observation.
+
 | Kind | Scope | Spec | Canonical path |
 |---|---|---|---|
 | Role | Namespace UID | `rules[]` | `rbac/roles/<name>.yaml` |
