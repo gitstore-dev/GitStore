@@ -84,6 +84,7 @@ type rbacNativeResource struct {
 		Name              string            `json:"name"`
 		Namespace         string            `json:"namespace"`
 		ResourceVersion   string            `json:"resourceVersion"`
+		Revision          string            `json:"revision"`
 		Generation        int64             `json:"generation"`
 		DeletionTimestamp *string           `json:"deletionTimestamp"`
 		Labels            map[string]string `json:"labels"`
@@ -104,7 +105,7 @@ func rbacNativeSelection(kind string) string {
 	if strings.HasSuffix(kind, "Binding") {
 		spec = "roleRef { kind name } subjects { kind name }"
 	}
-	return "id kind metadata { uid name namespace resourceVersion generation deletionTimestamp } status { observedGeneration resolved { roleUID } } spec { " + spec + " }"
+	return "id kind metadata { uid name namespace resourceVersion revision generation deletionTimestamp } status { observedGeneration resolved { roleUID } } spec { " + spec + " }"
 }
 
 func rbacNativeSpec(kind string) map[string]any {
