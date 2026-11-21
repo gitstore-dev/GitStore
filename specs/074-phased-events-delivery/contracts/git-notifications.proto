@@ -1,0 +1,68 @@
+// Proposed message additions, not generated production code.
+// Merge these into the canonical git_service.proto; its existing
+// RequestAuthorization remains the sole authorization contract.
+syntax = "proto3";
+package gitstore.git.v1;
+
+import "gitstore/git/v1/git_service.proto";
+
+message WatchGitEventsRequest {
+  optional string after = 1;
+  uint32 batch_size = 2;
+  RequestAuthorization authorization = 14;
+  string repository_id = 15;
+}
+
+message GitEvent {
+  string cursor = 1;
+  string source_epoch = 2;
+  uint64 source_sequence = 3;
+  oneof payload {
+    GitRefTransition transition = 4;
+    GitSourceBookmark bookmark = 5;
+  }
+  string repository_id = 15;
+}
+
+message GitRefTransition {
+  string mutation_id = 1;
+  uint32 mutation_ref_index = 2;
+  string ref_name = 3;
+  optional string old_object_id = 4;
+  optional string new_object_id = 5;
+  GitRefChangeType change_type = 6;
+  int64 occurred_at_unix_millis = 7;
+  string object_format = 8;
+  optional string operation_id = 9;
+}
+
+enum GitRefChangeType {
+  GIT_REF_CHANGE_TYPE_UNSPECIFIED = 0;
+  GIT_REF_CHANGE_TYPE_CREATED = 1;
+  GIT_REF_CHANGE_TYPE_UPDATED = 2;
+  GIT_REF_CHANGE_TYPE_DELETED = 3;
+}
+
+message GitSourceBookmark {
+  uint64 retained_floor = 1;
+  uint64 high_water = 2;
+}
+
+message ListRepositoryRefsRequest {
+  uint32 first = 1;
+  optional string after = 2;
+  RequestAuthorization authorization = 14;
+  string repository_id = 15;
+}
+
+message GitRefSnapshot {
+  string name = 1;
+  string object_id = 2;
+  string object_format = 3;
+}
+
+message ListRepositoryRefsResponse {
+  repeated GitRefSnapshot refs = 1;
+  optional string end_cursor = 2;
+  bool has_next_page = 3;
+}

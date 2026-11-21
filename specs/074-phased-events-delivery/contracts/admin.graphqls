@@ -1,0 +1,246 @@
+# Proposed additive Admin overlay. Canonical metadata/status/reference owners
+# stay in shared/schemas/admin. No Storefront mounting or generated runtime claim.
+# ResourceNamespacePath matches the shared helper proposed by spec 072; integrate
+# it once in the canonical owner, never duplicate it when those branches meet.
+
+input ResourceNamespacePath { namespace: String!, name: String! }
+extend input CatalogObjectReferenceInput { uid: ID }
+input SecretRefInput { kind: String!, name: String!, key: String, namespace: String }
+
+extend type Query {
+  event(by: EventBy!): Event
+  events(namespace: String!, first: Int, after: String, last: Int, before: String, query: String): EventConnection!
+  auditLog(id: ID!): AuditLog
+  auditLogs(first: Int, after: String, last: Int, before: String, query: String): AuditLogConnection!
+  outboxEvent(id: ID!): OutboxEvent
+  outboxEvents(namespace: String!, first: Int, after: String, last: Int, before: String, query: String): OutboxEventConnection!
+  eventSubscription(by: EventSubscriptionBy!): EventSubscription
+  eventSubscriptions(namespace: String!, first: Int, after: String, last: Int, before: String, query: String): EventSubscriptionConnection!
+  webhookDelivery(id: ID!): WebhookDelivery
+  webhookDeliveries(namespace: String!, first: Int, after: String, last: Int, before: String, query: String): WebhookDeliveryConnection!
+}
+
+extend type Mutation {
+  recordEvent(input: RecordEventInput!): RecordEventPayload!
+  exportAuditLogs(input: ExportAuditLogsInput!): ExportAuditLogsPayload!
+  replayWebhookDelivery(input: ReplayWebhookDeliveryInput!): ReplayWebhookDeliveryPayload!
+}
+
+extend type Subscription {
+  watchEvents(namespace: String, resourceVersion: String, query: String): EventWatchEvent!
+}
+
+input EventBy @oneOf { id: ID, namespacePath: ResourceNamespacePath }
+input EventSubscriptionBy @oneOf { id: ID, namespacePath: ResourceNamespacePath }
+
+enum EventType { NORMAL WARNING }
+type Event implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: EventSpec!
+  status: EventStatus!
+  body: String!
+}
+type EventSpec {
+  type: EventType!
+  reason: String!
+  action: String!
+  regarding: CatalogObjectReference!
+  related: CatalogObjectReference
+  reportRef: CatalogObjectReference
+  reportingController: String!
+  reportingInstance: String!
+  eventTime: DateTime
+}
+type EventStatus {
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [Condition!]!
+  resolved: ResolvedEvent!
+}
+type ResolvedEvent {
+  series: EventSeries!
+  firstObservedTime: DateTime!
+  expiresAt: DateTime!
+  retentionPolicyRevision: String!
+  closed: Boolean!
+}
+type EventSeries { count: Long!, lastObservedTime: DateTime! }
+type EventEdge { cursor: String!, node: Event! }
+type EventConnection { edges: [EventEdge!]!, pageInfo: PageInfo! }
+type EventWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+  event: Event
+}
+input RecordEventInput {
+  apiVersion: String! = "events.gitstore.dev/v1alpha1"
+  kind: String! = "Event"
+  metadata: ObjectMetaInput!
+  spec: EventSpecInput!
+  body: String!
+  idempotencyKey: String!
+}
+input EventSpecInput {
+  type: EventType!
+  reason: String!
+  action: String!
+  regarding: CatalogObjectReferenceInput!
+  related: CatalogObjectReferenceInput
+  reportRef: CatalogObjectReferenceInput
+  reportingController: String!
+  reportingInstance: String!
+  eventTime: DateTime
+}
+type RecordEventPayload { event: Event! }
+
+type AuditLog implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: AuditLogSpec!
+  body: String
+}
+enum AuditStage { AUTHENTICATION AUTHORIZATION INTENT COMPLETION UNCERTAIN }
+enum AuditOutcome { ALLOWED DENIED SUCCEEDED FAILED UNKNOWN }
+type AuditLogSpec {
+  occurredAt: DateTime!
+  receivedAt: DateTime!
+  requestId: String!
+  operationId: String!
+  stage: AuditStage!
+  outcome: AuditOutcome!
+  actorSubject: String
+  actorProviderId: String
+  initiatorSubject: String
+  serviceSubject: String
+  action: String
+  resourceRef: CatalogObjectReference
+  reason: String!
+}
+type AuditLogEdge { cursor: String!, node: AuditLog! }
+type AuditLogConnection { edges: [AuditLogEdge!]!, pageInfo: PageInfo! }
+input ExportAuditLogsInput {
+  from: DateTime!
+  until: DateTime!
+  first: Int = 100
+  after: String
+  idempotencyKey: String!
+}
+type ExportAuditLogsPayload { exportId: ID!, records: [AuditLog!]!, nextCursor: String }
+
+type OutboxEvent implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: OutboxEventSpec!
+  status: OutboxEventStatus!
+  body: String
+}
+type OutboxEventSpec {
+  source: String!
+  sourceCursor: String!
+  eventType: String!
+  schemaVersion: String!
+  occurredAt: DateTime!
+  resourceRef: CatalogObjectReference!
+  data: JSON!
+}
+type OutboxEventStatus {
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [Condition!]!
+  resolved: ResolvedOutboxEvent!
+}
+enum OutboxRoutingPhase { FACT_DURABLE ROUTING ROUTED GAP }
+type ResolvedOutboxEvent { phase: OutboxRoutingPhase!, manifestRevision: String, routedAt: DateTime }
+type OutboxEventEdge { cursor: String!, node: OutboxEvent! }
+type OutboxEventConnection { edges: [OutboxEventEdge!]!, pageInfo: PageInfo! }
+
+type EventSubscription implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: EventSubscriptionSpec!
+  status: EventSubscriptionStatus!
+  body: String
+}
+enum IntegrationSourceDomain { RESOURCE GIT }
+type IntegrationSource {
+  domain: IntegrationSourceDomain!
+  kinds: [String!]!
+  types: [String!]!
+  repositoryRef: CatalogObjectReference
+}
+type EventSubscriptionSpec {
+  sources: [IntegrationSource!]!
+  filter: String
+  sink: WebhookSink!
+  delivery: WebhookDeliveryPolicy!
+  enabled: Boolean!
+}
+type WebhookSink { url: String!, signingSecretRef: SecretRef! }
+# Operator-defined, versioned policy profile resolved against the selected provider.
+# Unsupported guarantees fail activation; arbitrary retry knobs are not portable.
+type WebhookDeliveryPolicy { profile: String! }
+type EventSubscriptionStatus {
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [Condition!]!
+  resolved: ResolvedEventSubscription
+}
+type ResolvedEventSubscription {
+  activationRevision: String!
+  sourceBounds: [SubscriptionSourceBound!]!
+  backlog: Long!
+  deadLettered: Long!
+  observedAt: DateTime!
+}
+type SubscriptionSourceBound { source: String!, startsAfter: String!, endsAt: String }
+type EventSubscriptionEdge { cursor: String!, node: EventSubscription! }
+type EventSubscriptionConnection { edges: [EventSubscriptionEdge!]!, pageInfo: PageInfo! }
+
+type WebhookDelivery implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: WebhookDeliverySpec!
+  status: WebhookDeliveryStatus!
+  body: String
+}
+type WebhookDeliverySpec {
+  eventRef: CatalogObjectReference!
+  subscriptionRef: CatalogObjectReference!
+  activationRevision: String!
+  destinationRevision: String!
+}
+enum WebhookDeliveryPhase { PENDING IN_FLIGHT RETRY_SCHEDULED PAUSED SUCCEEDED DEAD_LETTERED CANCELLED }
+type WebhookDeliveryStatus {
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [Condition!]!
+  resolved: ResolvedWebhookDelivery!
+}
+type ResolvedWebhookDelivery {
+  phase: WebhookDeliveryPhase!
+  observedAt: DateTime
+  attemptCount: Int
+  nextAttemptAt: DateTime
+  completedAt: DateTime
+  lastHttpStatus: Int
+  lastReason: String
+  lastReplay: WebhookReplaySummary
+}
+type WebhookReplaySummary { runId: ID!, phase: WebhookDeliveryPhase!, attemptCount: Int, lastReason: String }
+type WebhookDeliveryEdge { cursor: String!, node: WebhookDelivery! }
+type WebhookDeliveryConnection { edges: [WebhookDeliveryEdge!]!, pageInfo: PageInfo! }
+input ReplayWebhookDeliveryInput { deliveryId: ID!, idempotencyKey: String! }
+type ReplayWebhookDeliveryPayload { delivery: WebhookDelivery!, replayRunId: ID! }
