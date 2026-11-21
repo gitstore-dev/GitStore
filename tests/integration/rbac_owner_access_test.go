@@ -907,6 +907,7 @@ func rbacNativeOwnerControllerRecovery(t *testing.T, admin rbacNativeFixture, su
 			require.True(t, info.IsDir())
 			checkpoints[i] = info
 		}
+		recoveryStarted := time.Now()
 		phase.Store(2)
 		start(0)
 		observe("BindingAdmitted", "TRUE")
@@ -920,6 +921,16 @@ func rbacNativeOwnerControllerRecovery(t *testing.T, admin rbacNativeFixture, su
 			require.NoError(t, err)
 			require.True(t, os.SameFile(checkpoints[i], info), "replacement must retain its original private checkpoint directory")
 		}
+		for _, api := range admin.apis {
+			response := owner.query(t, api,
+				`query($ns:String!){products(namespace:$ns,first:1){edges{node{id}}}}`,
+				map[string]any{"ns": subject})
+			require.Empty(t, response.Errors, "controller recovery must restore actual owner access on both APIs")
+		}
+		recoveredIn := time.Since(recoveryStarted)
+		require.LessOrEqual(t, recoveredIn, 30*time.Second,
+			"native owner authorization recovery must complete within 30 seconds after fault restoration")
+		t.Logf("Native controller replacement restores owner authorization on both APIs; recovery=%s", recoveredIn)
 	}
 	return recover, func(action func()) {
 		t.Helper()
