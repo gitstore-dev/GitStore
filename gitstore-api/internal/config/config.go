@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/mail"
 	"net/url"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -67,6 +68,7 @@ type ApiConfig struct {
 type OPAConfig struct {
 	WritesEnabled       bool          `mapstructure:"writes_enabled"`
 	InitialAdminSubject string        `mapstructure:"initial_admin_subject"`
+	EvidenceDirectory   string        `mapstructure:"evidence_directory"`
 	MaxStaleness        time.Duration `mapstructure:"max_staleness"`
 	ValidationTimeout   time.Duration `mapstructure:"validation_timeout"`
 	RebuildWorkers      int           `mapstructure:"rebuild_workers"`
@@ -79,6 +81,14 @@ type OPAConfig struct {
 }
 
 func (c OPAConfig) ValidateProvider(provider string) error {
+	if c.EvidenceDirectory != "" {
+		if provider != "opa" {
+			return errors.New("api.auth.opa.evidence_directory requires the opa authz provider")
+		}
+		if !filepath.IsAbs(c.EvidenceDirectory) || filepath.Clean(c.EvidenceDirectory) != c.EvidenceDirectory || c.EvidenceDirectory == "/" {
+			return errors.New("api.auth.opa.evidence_directory requires a clean absolute private directory")
+		}
+	}
 	if c.WritesEnabled && provider != "opa" {
 		return errors.New("api.auth.opa.writes_enabled requires the opa authz provider")
 	}
@@ -569,6 +579,7 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("api.auth.authz.provider", "rbac-local")
 	v.SetDefault("api.auth.opa.writes_enabled", false)
 	v.SetDefault("api.auth.opa.initial_admin_subject", "")
+	v.SetDefault("api.auth.opa.evidence_directory", "")
 	v.SetDefault("api.auth.opa.max_staleness", "5s")
 	v.SetDefault("api.auth.opa.validation_timeout", "30s")
 	v.SetDefault("api.auth.opa.rebuild_workers", 4)

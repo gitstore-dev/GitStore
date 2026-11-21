@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
@@ -26,6 +28,114 @@ type rbacRepairStep struct {
 }
 
 func (s *scyllaDatastore) RBACStore() datastore.RBACStore { return s }
+
+func (s *scyllaDatastore) RBACOriginFactsReader() datastore.RBACOriginFactsReader {
+	return s.readRBACOriginFacts
+}
+
+func (s *scyllaDatastore) readRBACOriginFacts(ctx context.Context, lookups []datastore.RBACOriginLookup) ([]datastore.RBACOriginFacts, error) {
+	if len(lookups) < 1 || len(lookups) > datastore.MaxRBACOriginLookups {
+		return nil, datastore.RBACError(rbac.ErrInvalid)
+	}
+	namespaceIDs := make([]gocql.UUID, len(lookups))
+	repositoryIDs := make([]gocql.UUID, len(lookups))
+	names := make([]string, len(lookups))
+	for i, lookup := range lookups {
+		var err error
+		namespaceIDs[i], err = gocql.ParseUUID(lookup.NamespaceUID)
+		if err != nil || lookup.Namespace == "" {
+			return nil, datastore.RBACError(rbac.ErrInvalid)
+		}
+		repositoryIDs[i], err = gocql.ParseUUID(lookup.RepositoryID)
+		if err != nil {
+			return nil, datastore.RBACError(rbac.ErrInvalid)
+		}
+		names[i] = lookup.Namespace
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var namespaces []namespaceRow
+	var repositories []repositoryRow
+	var forward, reverse []namespaceMappingRow
+	reads := []func() error{
+		func() error {
+			return s.session.Query("SELECT * FROM namespaces_by_uid WHERE uid IN ?", nil).
+				WithContext(ctx).Bind(namespaceIDs).SelectRelease(&namespaces)
+		},
+		func() error {
+			return s.session.Query("SELECT * FROM repositories_by_uid WHERE uid IN ?", nil).
+				WithContext(ctx).Bind(repositoryIDs).SelectRelease(&repositories)
+		},
+		func() error {
+			return s.session.Query("SELECT namespace,name,repository_id FROM namespace_mappings WHERE namespace IN ? AND name=?", nil).
+				WithContext(ctx).Bind(names, "gitstore-system").SelectRelease(&forward)
+		},
+		func() error {
+			return s.session.Query("SELECT repository_id,namespace,name FROM namespace_mappings_by_repository WHERE repository_id IN ?", nil).
+				WithContext(ctx).Bind(repositoryIDs).SelectRelease(&reverse)
+		},
+	}
+	readErrors := make([]error, len(reads))
+	var workers sync.WaitGroup
+	for i, read := range reads {
+		workers.Go(func() {
+			readErrors[i] = read()
+			if readErrors[i] != nil {
+				cancel()
+			}
+		})
+	}
+	workers.Wait()
+	if err := errors.Join(append(readErrors, ctx.Err())...); err != nil {
+		return nil, err
+	}
+	namespaceByUID := make(map[string]*datastore.Namespace, len(namespaces))
+	for _, row := range namespaces {
+		if row.WatchCommitted == nil || *row.WatchCommitted {
+			namespaceByUID[row.UID.String()] = fromNamespaceRow(&row)
+		}
+	}
+	repositoryByUID := make(map[string]*datastore.Repository, len(repositories))
+	for _, row := range repositories {
+		repositoryByUID[row.UID.String()] = fromRepositoryRow(&row)
+	}
+	mappingByNamespace := make(map[string]*datastore.NamespaceMapping, len(forward))
+	for _, row := range forward {
+		mappingByNamespace[row.Namespace] = fromNamespaceMappingRow(&row)
+	}
+	reverseByRepository := make(map[string]*datastore.NamespaceMapping, len(reverse))
+	for _, row := range reverse {
+		reverseByRepository[row.RepositoryID.String()] = fromNamespaceMappingRow(&row)
+	}
+	facts := make([]datastore.RBACOriginFacts, len(lookups))
+	for i, lookup := range lookups {
+		namespace := namespaceByUID[lookup.NamespaceUID]
+		repository := repositoryByUID[lookup.RepositoryID]
+		mapping := mappingByNamespace[lookup.Namespace]
+		if namespace == nil || repository == nil || mapping == nil || mapping.RepositoryID != lookup.RepositoryID {
+			continue
+		}
+		path := repositoryPath{namespace: lookup.Namespace, name: "gitstore-system"}
+		if repository.Namespace != path.namespace || repository.Name != path.name {
+			_ = s.repositoryMappingRepairError("lookup_repository", lookup.RepositoryID, "namespace_mappings",
+				path, datastore.FindingStale, fmt.Errorf("authoritative repository path is %s/%s", repository.Namespace, repository.Name))
+			continue
+		}
+		reverse := reverseByRepository[lookup.RepositoryID]
+		if reverse == nil {
+			_ = s.repositoryMappingRepairError("lookup_repository", lookup.RepositoryID, "namespace_mappings_by_repository",
+				path, datastore.FindingMissing, datastore.ErrNotFound)
+			continue
+		}
+		if reverse.Namespace != path.namespace || reverse.Name != path.name {
+			_ = s.repositoryMappingRepairError("lookup_repository", lookup.RepositoryID, "namespace_mappings_by_repository",
+				path, datastore.FindingStale, fmt.Errorf("reverse mapping points to %s/%s", reverse.Namespace, reverse.Name))
+			continue
+		}
+		facts[i] = datastore.RBACOriginFacts{Namespace: namespace, Mapping: mapping, Repository: repository}
+	}
+	return facts, nil
+}
 
 func rbacEntry(key rbac.ResourceKey) string { return string(key.Kind) + "/" + key.Name }
 
@@ -53,6 +163,10 @@ func (s *scyllaDatastore) readRBACTier(ctx context.Context, tier string) (rbac.T
 	if err != nil {
 		return state, nil, err
 	}
+	return decodeRBACTier(state, projection, repair)
+}
+
+func decodeRBACTier(state rbac.TierState, projection, repair []byte) (rbac.TierState, []rbacRepairStep, error) {
 	var steps []rbacRepairStep
 	if len(projection) > 4096 || len(repair) > (rbac.MaxRolesPerTier+rbac.MaxBindingsPerTier)*4096 ||
 		json.Unmarshal(projection, &state.Projection) != nil || (len(repair) > 0 && json.Unmarshal(repair, &steps) != nil) ||
@@ -69,6 +183,104 @@ func (s *scyllaDatastore) ReadRBACTier(ctx context.Context, tier string) (rbac.T
 	}
 	state, _, err := s.readRBACTier(ctx, tier)
 	return state, err
+}
+
+func (s *scyllaDatastore) CaptureRBACSnapshot(ctx context.Context, tier string, maxBytes int64) (rbac.TierState, [][]byte, error) {
+	if !rbac.ValidTier(tier) || maxBytes < 1 || maxBytes > rbac.MaxSnapshotBytes {
+		return rbac.TierState{}, nil, datastore.RBACError(rbac.ErrInvalid)
+	}
+	// Full-size captures are bounded by the tier's stored byte/count limits.
+	// Keep them unpaged so server byte thresholds cannot split the SERIAL read.
+	// Smaller caller budgets retain paging and its before/after revision fence.
+	limit := rbac.MaxRolesPerTier + rbac.MaxBindingsPerTier
+	pageSize := limit + 2
+	if maxBytes == rbac.MaxSnapshotBytes {
+		pageSize = 0
+	}
+	iter := s.session.Session.Query(
+		"SELECT entry,payload,revision,role_count,binding_count,payload_bytes,projection,repair,namespace_retired FROM rbac_resources_by_scope WHERE tier=? LIMIT ?", tier, limit+2,
+	).WithContext(ctx).Consistency(gocql.Serial).PageSize(pageSize).PageState(nil).Iter()
+	state := rbac.TierState{TierID: tier}
+	var payloads [][]byte
+	var size int64
+	header := false
+	for {
+		var entry string
+		var payload, projection, repair []byte
+		row := rbac.TierState{TierID: tier}
+		if !iter.Scan(&entry, &payload, &row.Revision, &row.RoleCount, &row.BindingCount, &row.PayloadBytes, &projection, &repair, &row.NamespaceRetired) {
+			break
+		}
+		if entry == "" {
+			var err error
+			state, _, err = decodeRBACTier(row, projection, repair)
+			if err != nil {
+				_ = iter.Close()
+				return state, nil, err
+			}
+			if header || state.RoleCount < 0 || state.RoleCount > rbac.MaxRolesPerTier ||
+				state.BindingCount < 0 || state.BindingCount > rbac.MaxBindingsPerTier ||
+				state.PayloadBytes < 0 || state.PayloadBytes > maxBytes {
+				_ = iter.Close()
+				return state, nil, datastore.RBACError(rbac.ErrUnavailable)
+			}
+			header = true
+			continue
+		}
+		size += int64(len(payload))
+		if !header || len(payloads) == limit || size > maxBytes {
+			_ = iter.Close()
+			return state, nil, datastore.RBACError(rbac.ErrUnavailable)
+		}
+		payloads = append(payloads, payload)
+	}
+	paged := len(iter.PageState()) > 0
+	if err := iter.Close(); err != nil {
+		return state, nil, err
+	}
+	if paged {
+		return s.capturePagedRBACSnapshot(ctx, tier, maxBytes)
+	}
+	return state, payloads, nil
+}
+
+func (s *scyllaDatastore) capturePagedRBACSnapshot(ctx context.Context, tier string, maxBytes int64) (rbac.TierState, [][]byte, error) {
+	before, err := s.ReadRBACTier(ctx, tier)
+	if err != nil {
+		return before, nil, err
+	}
+	if before.RoleCount < 0 || before.RoleCount > rbac.MaxRolesPerTier ||
+		before.BindingCount < 0 || before.BindingCount > rbac.MaxBindingsPerTier ||
+		before.PayloadBytes < 0 || before.PayloadBytes > maxBytes {
+		return before, nil, datastore.RBACError(rbac.ErrUnavailable)
+	}
+	limit := rbac.MaxRolesPerTier + rbac.MaxBindingsPerTier
+	iter := s.session.Session.Query(
+		"SELECT payload FROM rbac_resources_by_scope WHERE tier=? AND entry>? LIMIT ?", tier, "", limit+1,
+	).WithContext(ctx).Consistency(gocql.Quorum).Iter()
+	var payloads [][]byte
+	var payload []byte
+	var size int64
+	for iter.Scan(&payload) {
+		size += int64(len(payload))
+		if len(payloads) == limit || size > maxBytes {
+			_ = iter.Close()
+			return before, nil, datastore.RBACError(rbac.ErrUnavailable)
+		}
+		payloads = append(payloads, payload)
+		payload = nil
+	}
+	if err := iter.Close(); err != nil {
+		return before, nil, err
+	}
+	after, err := s.ReadRBACTier(ctx, tier)
+	if err != nil {
+		return before, nil, err
+	}
+	if before != after {
+		return before, nil, datastore.RBACError(rbac.ErrConflict)
+	}
+	return before, payloads, nil
 }
 
 func (s *scyllaDatastore) GetRBAC(ctx context.Context, key rbac.ResourceKey) (*rbac.Resource, error) {
@@ -165,6 +377,86 @@ func (s *scyllaDatastore) ListRBAC(ctx context.Context, request rbac.ListRequest
 	return page, nil
 }
 
+const rbacWriteReadBatchSize = 32
+
+func (s *scyllaDatastore) readRBACResources(ctx context.Context, keys []rbac.ResourceKey) (map[rbac.ResourceKey]*rbac.Resource, error) {
+	if len(keys) < 1 || len(keys) > rbacWriteReadBatchSize {
+		return nil, datastore.RBACError(rbac.ErrInvalid)
+	}
+	tier := keys[0].TierID
+	entries := make([]string, len(keys))
+	requested := make(map[string]rbac.ResourceKey, len(keys))
+	for index, key := range keys {
+		if err := rbac.ValidateKey(key); err != nil || key.TierID != tier {
+			return nil, datastore.RBACError(rbac.ErrInvalid)
+		}
+		entries[index] = rbacEntry(key)
+		requested[entries[index]] = key
+	}
+	iter := s.session.Session.Query("SELECT entry,payload FROM rbac_resources_by_scope WHERE tier=? AND entry IN ?", tier, entries).
+		WithContext(ctx).Consistency(gocql.Quorum).PageSize(0).Iter()
+	resources := make(map[rbac.ResourceKey]*rbac.Resource, len(keys))
+	var entry string
+	var data []byte
+	for iter.Scan(&entry, &data) {
+		key, ok := requested[entry]
+		resource, err := decodeRBACResource(tier, data)
+		if !ok || err != nil || resources[key] != nil ||
+			resource.Kind != key.Kind || resource.Metadata.Name != key.Name {
+			_ = iter.Close()
+			return nil, datastore.RBACError(rbac.ErrUnavailable)
+		}
+		resources[key] = resource
+		data = nil
+	}
+	if err := iter.Close(); err != nil {
+		return nil, err
+	}
+	return resources, nil
+}
+
+func readRBACWriteResources(ctx context.Context, write rbac.TierWrite, read func(context.Context, []rbac.ResourceKey) (map[rbac.ResourceKey]*rbac.Resource, error)) (map[rbac.ResourceKey]*rbac.Resource, error) {
+	keys := make([]rbac.ResourceKey, len(write.Changes))
+	current := make(map[rbac.ResourceKey]*rbac.Resource, len(keys))
+	for index, change := range write.Changes {
+		if change.Resource == nil {
+			return nil, datastore.RBACError(rbac.ErrInvalid)
+		}
+		key := rbac.ResourceKey{TierID: write.TierID, Kind: change.Resource.Kind, Name: change.Resource.Metadata.Name}
+		if err := rbac.ValidateKey(key); err != nil {
+			return nil, datastore.RBACError(err)
+		}
+		if _, exists := current[key]; exists {
+			return nil, datastore.RBACError(rbac.ErrInvalid)
+		}
+		keys[index], current[key] = key, nil
+	}
+	batches := slices.Collect(slices.Chunk(keys, rbacWriteReadBatchSize))
+	var mu sync.Mutex
+	err := runRBACSteps(ctx, batches, func(ctx context.Context, batch []rbac.ResourceKey) error {
+		resources, err := read(ctx, batch)
+		if err != nil {
+			return err
+		}
+		for key, resource := range resources {
+			if !slices.Contains(batch, key) || resource == nil ||
+				resource.Kind != key.Kind || resource.Metadata.Name != key.Name {
+				return datastore.RBACError(rbac.ErrUnavailable)
+			}
+		}
+		mu.Lock()
+		for key, resource := range resources {
+			current[key] = resource
+		}
+		mu.Unlock()
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return current, nil
+}
+
 func (s *scyllaDatastore) ApplyRBAC(ctx context.Context, write rbac.TierWrite) (rbac.TierState, error) {
 	write.Actor = datastore.RBACAuditActorFromContext(ctx)
 	if err := rbac.ValidateTierWriteBounds(write); err != nil {
@@ -174,25 +466,19 @@ func (s *scyllaDatastore) ApplyRBAC(ctx context.Context, write rbac.TierWrite) (
 	if err != nil {
 		return state, err
 	}
-	current := make(map[rbac.ResourceKey]*rbac.Resource, len(write.Changes))
-	for _, change := range write.Changes {
-		if change.Resource == nil {
-			return state, datastore.RBACError(rbac.ErrInvalid)
-		}
-		key := rbac.ResourceKey{TierID: write.TierID, Kind: change.Resource.Kind, Name: change.Resource.Metadata.Name}
-		resource, err := s.GetRBAC(ctx, key)
-		if err != nil && !errors.Is(err, datastore.ErrNotFound) {
-			return state, err
-		}
-		current[key] = resource
+	current, err := readRBACWriteResources(ctx, write, s.readRBACResources)
+	if err != nil {
+		return state, err
 	}
 	plan, err := rbac.PlanTierWrite(state, current, write, time.Now())
 	if err != nil {
 		return state, datastore.RBACError(err)
 	}
 	if plan.Replay {
-		if err := s.RepairRBACProjection(ctx, state.TierID, state.Revision); err != nil {
-			return state, err
+		if state.ProjectionPending {
+			if err := s.RepairRBACProjection(ctx, state.TierID, state.Revision); err != nil {
+				return state, err
+			}
 		}
 		state.ProjectionPending = false
 		return state, nil
@@ -244,7 +530,13 @@ func (s *scyllaDatastore) ApplyRBAC(ctx context.Context, write rbac.TierWrite) (
 					change.After.Metadata.UpdateTimestamp, change.After.Metadata.UpdateActor},
 			})
 		}
-		steps = append(steps, step)
+		// Completed prior repair already established unchanged lookup links.
+		// Status/finalizer updates must not create another index-repair gap.
+		if change.Before == nil || change.After == nil ||
+			change.Before.Metadata.UID != change.After.Metadata.UID ||
+			step.BeforeRoleUID != step.AfterRoleUID {
+			steps = append(steps, step)
+		}
 	}
 	projection, _ := json.Marshal(plan.State.Projection)
 	repair, _ := json.Marshal(steps)
@@ -259,9 +551,11 @@ func (s *scyllaDatastore) ApplyRBAC(ctx context.Context, write rbac.TierWrite) (
 	if err := s.executeRBACBatch(batch); err != nil {
 		return state, err
 	}
-	if err := s.RepairRBACProjection(ctx, write.TierID, plan.State.Revision); err != nil {
-		plan.State.ProjectionPending = true
-		return plan.State, fmt.Errorf("scylla: RBAC committed with pending index repair: %w", err)
+	if len(steps) > 0 {
+		if err := s.RepairRBACProjection(ctx, write.TierID, plan.State.Revision); err != nil {
+			plan.State.ProjectionPending = true
+			return plan.State, fmt.Errorf("scylla: RBAC committed with pending index repair: %w", err)
+		}
 	}
 	return plan.State, nil
 }

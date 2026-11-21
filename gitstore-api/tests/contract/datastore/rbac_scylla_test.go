@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,155 @@ import (
 	"github.com/google/uuid"
 	scyllacdc "github.com/scylladb/scylla-cdc-go"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
+
+type retainedRawRBACCapture struct {
+	datastore.RBACStore
+	state    datastore.RBACTierState
+	payloads [][]byte
+}
+
+func (s retainedRawRBACCapture) CaptureRBACSnapshot(context.Context, string, int64) (datastore.RBACTierState, [][]byte, error) {
+	return s.state, s.payloads, nil
+}
+
+func TestRBACNativeRawCaptureRemainsCompleteAfterLaterWrites(t *testing.T) {
+	ds := newScyllaDatastoreInKeyspace(t, newScyllaTestKeyspace(t))
+	store := rbacStore(t, datastore.NewInstrumentedDatastore(ds, "scylla", zap.NewNop()))
+	tier := uuid.NewString()
+	role := rbacRole(tier, "captured")
+	role.Metadata.Annotations = map[string]string{"padding": strings.Repeat("x", 16000)}
+	state, err := store.ApplyRBAC(t.Context(), rbacCreate(tier, rbac.TierState{}, 1, role))
+	require.NoError(t, err)
+	capturer, ok := store.(datastore.RBACSnapshotCapturer)
+	require.True(t, ok)
+	captured, payloads, err := capturer.CaptureRBACSnapshot(t.Context(), tier, rbac.MaxSnapshotBytes)
+	require.NoError(t, err)
+	require.Equal(t, state, captured)
+	current, err := store.GetRBACByUID(t.Context(), role.Metadata.UID)
+	require.NoError(t, err)
+	current.Status = json.RawMessage(`{"observedGeneration":1}`)
+	latest, err := store.ApplyRBAC(t.Context(), rbac.TierWrite{
+		TierID: tier, ExpectedRevision: state.Revision,
+		Changes: []rbac.Change{{Resource: current, ExpectedUID: current.Metadata.UID, ExpectedResourceVersion: current.Metadata.ResourceVersion}},
+	})
+	require.NoError(t, err)
+	require.Greater(t, latest.Revision, captured.Revision)
+	snapshot, err := datastore.ReadRBACSnapshot(t.Context(), retainedRawRBACCapture{state: captured, payloads: payloads}, tier)
+	require.NoError(t, err)
+	require.Equal(t, captured, snapshot.State)
+	require.Len(t, snapshot.Resources, 1)
+	require.Equal(t, fmt.Sprint(captured.Revision), snapshot.Resources[0].Metadata.ResourceVersion)
+	require.Empty(t, snapshot.Resources[0].Status)
+	live, err := datastore.ReadRBACSnapshot(t.Context(), store, tier)
+	require.NoError(t, err)
+	require.Equal(t, latest, live.State)
+	require.JSONEq(t, string(current.Status), string(live.Resources[0].Status))
+	_, _, err = capturer.CaptureRBACSnapshot(t.Context(), tier, 1)
+	require.ErrorIs(t, err, rbac.ErrUnavailable)
+}
+
+func TestRBACNativeRawCaptureDuringReplicaMetadataWrites(t *testing.T) {
+	for _, count := range []int{1, 96} {
+		t.Run(fmt.Sprintf("rows=%d", count), func(t *testing.T) {
+			testRBACNativeRawCaptureDuringReplicaMetadataWrites(t, count)
+		})
+	}
+}
+
+func testRBACNativeRawCaptureDuringReplicaMetadataWrites(t *testing.T, count int) {
+	t.Helper()
+	first, second := newScyllaDatastores(t)
+	writer, reader := rbacStore(t, first), rbacStore(t, second)
+	tier := uuid.NewString()
+	roles := make([]*rbac.Resource, count)
+	for i := range roles {
+		roles[i] = rbacRole(tier, fmt.Sprintf("changing-%03d", i))
+		if count > 1 {
+			roles[i].Metadata.Annotations = map[string]string{"padding": strings.Repeat("x", 16000)}
+		}
+	}
+	role := roles[0]
+	state, err := writer.ApplyRBAC(t.Context(), rbacCreate(tier, rbac.TierState{}, 1, roles...))
+	require.NoError(t, err)
+	capturer, ok := reader.(datastore.RBACSnapshotCapturer)
+	require.True(t, ok)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		for i := range 100 {
+			current, err := writer.GetRBACByUID(ctx, role.Metadata.UID)
+			if err != nil {
+				done <- err
+				return
+			}
+			current.Status = nil
+			if i%2 == 0 {
+				current.Status = json.RawMessage(`{"observedGeneration":1}`)
+			}
+			state, err = writer.ApplyRBAC(ctx, rbac.TierWrite{
+				TierID: tier, ExpectedRevision: state.Revision,
+				Changes: []rbac.Change{{Resource: current, ExpectedUID: current.Metadata.UID, ExpectedResourceVersion: current.Metadata.ResourceVersion}},
+			})
+			if err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	defer func() {
+		cancel()
+		select {
+		case err := <-done:
+			require.True(t, err == nil || errors.Is(err, context.Canceled), "writer: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Error("owned metadata writer did not stop")
+		}
+	}()
+	<-started
+	for range 50 {
+		captured, payloads, err := capturer.CaptureRBACSnapshot(t.Context(), tier, rbac.MaxSnapshotBytes)
+		require.NoError(t, err, "one atomic partition read must not conflict with concurrent metadata updates")
+		snapshot, err := datastore.ReadRBACSnapshot(t.Context(), retainedRawRBACCapture{state: captured, payloads: payloads}, tier)
+		require.NoError(t, err)
+		require.Len(t, snapshot.Resources, count)
+		for _, resource := range snapshot.Resources {
+			if resource.Metadata.UID == role.Metadata.UID {
+				require.Equal(t, fmt.Sprint(captured.Revision), resource.Metadata.ResourceVersion)
+			}
+		}
+	}
+}
+
+func TestRBACNativeRawCaptureWidePartition(t *testing.T) {
+	ds := newScyllaDatastoreInKeyspace(t, newScyllaTestKeyspace(t))
+	store := rbacStore(t, ds)
+	tier := uuid.NewString()
+	roles := make([]*rbac.Resource, 96)
+	for i := range roles {
+		roles[i] = rbacRole(tier, fmt.Sprintf("wide-%03d", i))
+		roles[i].Metadata.Annotations = map[string]string{"padding": strings.Repeat("x", 16000)}
+	}
+	state, err := store.ApplyRBAC(t.Context(), rbacCreate(tier, rbac.TierState{}, 1, roles...))
+	require.NoError(t, err)
+	require.Greater(t, state.PayloadBytes, int64(1<<20))
+	snapshot, err := datastore.ReadRBACSnapshot(t.Context(), store, tier)
+	require.NoError(t, err)
+	require.Equal(t, state, snapshot.State)
+	require.Len(t, snapshot.Resources, len(roles), "server-sized pages must not truncate the captured partition")
+	capturer, ok := store.(datastore.RBACSnapshotCapturer)
+	require.True(t, ok)
+	captured, payloads, err := capturer.CaptureRBACSnapshot(t.Context(), tier, state.PayloadBytes)
+	require.NoError(t, err)
+	require.Equal(t, state, captured)
+	require.Len(t, payloads, len(roles), "smaller caller budgets must retain a complete fenced paginated capture")
+	_, _, err = capturer.CaptureRBACSnapshot(t.Context(), tier, state.PayloadBytes-1)
+	require.ErrorIs(t, err, rbac.ErrUnavailable)
+}
 
 func TestRBACNativeJournalCDC(t *testing.T) {
 	ds := newScyllaDatastoreInKeyspace(t, newScyllaTestKeyspace(t))
@@ -101,6 +250,7 @@ func TestRBACNativeJournalCDC(t *testing.T) {
 	cursor := datastore.ResourceWatchCursor{}
 	observed := map[string]bool{}
 	progress := map[string]uint64{}
+	metadataOnlyRevision := map[string]uint64{}
 	key := func(uid string, eventType datastore.ResourceWatchEventType, version string) string {
 		return uid + "/" + string(eventType) + "/" + version
 	}
@@ -119,6 +269,8 @@ func TestRBACNativeJournalCDC(t *testing.T) {
 					require.Empty(t, event.Name)
 					var state datastore.RBACTierProgress
 					require.NoError(t, json.Unmarshal(event.Payload, &state))
+					require.NotEqual(t, metadataOnlyRevision[state.TierID], state.Revision,
+						"native Role-only metadata frames retain resource events without authorization progress")
 					progress[state.TierID] = max(progress[state.TierID], state.Revision)
 					continue
 				}
@@ -164,6 +316,25 @@ func TestRBACNativeJournalCDC(t *testing.T) {
 	}, 10*time.Second, 100*time.Millisecond, "quiet RBAC readiness must come from its complete native read frontier")
 	stop()
 	stop = nil
+	for uid, resource := range resources {
+		if !resource.Kind.IsRole() {
+			continue
+		}
+		tier := rbac.ClusterTierID
+		if resource.Kind.Namespaced() {
+			tier = namespace
+		}
+		current, err := store.GetRBACByUID(t.Context(), uid)
+		require.NoError(t, err)
+		current.Status = json.RawMessage(`{"observedGeneration":1}`)
+		states[tier], err = store.ApplyRBAC(t.Context(), rbac.TierWrite{
+			TierID: tier, ExpectedRevision: states[tier].Revision,
+			Changes: []rbac.Change{{Resource: current, ExpectedUID: uid, ExpectedResourceVersion: current.Metadata.ResourceVersion}},
+		})
+		require.NoError(t, err)
+		metadataOnlyRevision[tier] = states[tier].Revision
+		expected[key(uid, datastore.ResourceWatchModified, "2")] = true
+	}
 	for tier, state := range states {
 		write := rbac.TierWrite{TierID: tier, ExpectedRevision: state.Revision}
 		for uid, resource := range resources {
@@ -174,7 +345,9 @@ func TestRBACNativeJournalCDC(t *testing.T) {
 			require.NoError(t, err)
 			current.Status = json.RawMessage(`{"observedGeneration":1}`)
 			write.Changes = append(write.Changes, rbac.Change{Resource: current, ExpectedUID: uid, ExpectedResourceVersion: current.Metadata.ResourceVersion})
-			expected[key(uid, datastore.ResourceWatchModified, "2")] = true
+			version, err := strconv.ParseUint(current.Metadata.ResourceVersion, 10, 64)
+			require.NoError(t, err)
+			expected[key(uid, datastore.ResourceWatchModified, fmt.Sprint(version+1))] = true
 		}
 		states[tier], err = store.ApplyRBAC(t.Context(), write)
 		require.NoError(t, err)
@@ -224,15 +397,18 @@ func TestRBACNativeRepairAfterIndexFailure(t *testing.T) {
 	require.NoError(t, session.Query("DROP TABLE "+keyspace+".rbac_resources_by_id").Exec())
 	require.NoError(t, session.AwaitSchemaAgreement(t.Context()))
 	tier := uuid.NewString()
-	role := rbacRole(tier, "repair")
-	write := rbacCreate(tier, rbac.TierState{}, 1, role)
+	roles := make([]*rbac.Resource, 9)
+	for index := range roles {
+		roles[index] = rbacRole(tier, fmt.Sprintf("repair-%02d", index))
+	}
+	write := rbacCreate(tier, rbac.TierState{}, 1, roles...)
 	state, err := store.ApplyRBAC(t.Context(), write)
 	require.Error(t, err)
 	require.True(t, state.ProjectionPending)
 	require.EqualValues(t, 1, state.Revision)
 	snapshot, err := datastore.ReadRBACSnapshot(t.Context(), store, tier)
 	require.NoError(t, err, "lookup failure cannot partially publish the authoritative candidate")
-	require.Len(t, snapshot.Resources, 1)
+	require.Len(t, snapshot.Resources, len(roles))
 	_, err = store.ApplyRBAC(t.Context(), rbacCreate(tier, state, 2, rbacRole(tier, "blocked")))
 	require.ErrorIs(t, err, datastore.ErrProjectionNotReady)
 	raw, err := migrations.Files.ReadFile("014_rbac.cql")
@@ -246,13 +422,23 @@ func TestRBACNativeRepairAfterIndexFailure(t *testing.T) {
 	}
 	require.True(t, restored)
 	require.NoError(t, session.AwaitSchemaAgreement(t.Context()))
-	require.NoError(t, store.RepairRBACProjection(t.Context(), tier, state.Revision))
+	other := rbacStore(t, newScyllaDatastoreInKeyspace(t, keyspace))
+	results := make(chan error, 2)
+	for _, replica := range []rbac.Store{store, other} {
+		go func() { results <- replica.RepairRBACProjection(t.Context(), tier, state.Revision) }()
+	}
+	for range 2 {
+		require.NoError(t, <-results)
+	}
 	replayed, err := store.ApplyRBAC(t.Context(), write)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, replayed.Revision)
 	require.False(t, replayed.ProjectionPending)
-	_, err = store.GetRBACByUID(t.Context(), role.Metadata.UID)
-	require.NoError(t, err)
+	for _, role := range roles {
+		repaired, err := other.GetRBACByUID(t.Context(), role.Metadata.UID)
+		require.NoError(t, err)
+		require.Equal(t, role.Metadata.Name, repaired.Metadata.Name)
+	}
 }
 
 func TestRBACNativeFullCDCImages(t *testing.T) {

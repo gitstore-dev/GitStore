@@ -353,10 +353,33 @@ func (r *mutationResolver) updateRBACStatusGeneric(ctx context.Context, input mo
 	if err := protection.StatusChange(before, after); err != nil {
 		return nil, rbacLifecycleError(err)
 	}
-	state, err := store.ReadRBACTier(ctx, key.TierID)
-	if err == nil {
-		_, err = store.ApplyRBAC(ctx, rbac.TierWrite{TierID: key.TierID, ExpectedRevision: state.Revision,
+	for attempt := range 3 {
+		var state rbac.TierState
+		state, err = store.ReadRBACTier(ctx, key.TierID)
+		if err != nil {
+			break
+		}
+		state, err = store.ApplyRBAC(ctx, rbac.TierWrite{TierID: key.TierID, ExpectedRevision: state.Revision,
 			Changes: []rbac.Change{{Resource: after, ExpectedUID: before.Metadata.UID, ExpectedResourceVersion: before.Metadata.ResourceVersion}}})
+		if err == nil || attempt == 2 || !(errors.Is(err, rbac.ErrConflict) ||
+			errors.Is(err, rbac.ErrUnavailable) && state.ProjectionPending) {
+			break
+		}
+		current, readErr := store.GetRBAC(ctx, key)
+		if readErr != nil {
+			err = readErr
+			break
+		}
+		if current.Metadata.UID != before.Metadata.UID || current.Metadata.ResourceVersion != before.Metadata.ResourceVersion {
+			break
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, rbacLifecycleError(ctx.Err())
+		case <-timer.C:
+		}
 	}
 	if err != nil {
 		return nil, rbacLifecycleError(err)

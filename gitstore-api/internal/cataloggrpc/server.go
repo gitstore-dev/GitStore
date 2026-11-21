@@ -88,10 +88,11 @@ type Server struct {
 	celEnv *cel.Env // shared, constructed once; nil means CEL unavailable (skip rather than reject)
 	chain  *admission.Chain
 
-	namespacePolicy  namespaceadmission.PolicyEvaluator
-	namespaceMetrics *namespaceadmission.Metrics
-	rbacValidator    *admission.RBACValidator
-	rbacGit          rbac.OriginGitReader
+	namespacePolicy   namespaceadmission.PolicyEvaluator
+	namespaceMetrics  *namespaceadmission.Metrics
+	rbacValidator     *admission.RBACValidator
+	rbacGit           rbac.OriginGitReader
+	rbacOriginDigests *rbac.OriginDigestCache
 }
 
 // ServerDeps contains dependencies for the CatalogService gRPC server.
@@ -112,6 +113,7 @@ type ServerDeps struct {
 	NamespaceMetrics         *namespaceadmission.Metrics
 	RBACValidator            *admission.RBACValidator
 	RBACGitReader            rbac.OriginGitReader
+	RBACOriginDigests        *rbac.OriginDigestCache
 }
 
 // newCELEnv constructs a CEL environment for syntax-checking price eligibility expressions.
@@ -191,6 +193,7 @@ func NewServer(deps ServerDeps) (*Server, error) {
 		namespaceMetrics:      namespaceMetrics,
 		rbacValidator:         deps.RBACValidator,
 		rbacGit:               rbacGit,
+		rbacOriginDigests:     deps.RBACOriginDigests,
 	}, nil
 }
 

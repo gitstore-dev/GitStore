@@ -44,6 +44,62 @@ func TestManifestTreeDigestTracksOnlyLiveAuthorContent(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTierWriteWithdrawalCandidateBytes(t *testing.T) {
+	for _, remove := range []bool{false, true} {
+		t.Run(fmt.Sprintf("remove=%t", remove), func(t *testing.T) {
+			now := time.Now().UTC()
+			state := TierState{TierID: ClusterTierID, Revision: 7, RoleCount: MaxCandidateResources}
+			current := map[ResourceKey]*Resource{}
+			write := TierWrite{TierID: ClusterTierID, ExpectedRevision: state.Revision}
+			for index := range MaxCandidateResources {
+				resource := &Resource{APIVersion: APIVersion, Kind: ClusterRole,
+					Metadata: Metadata{Name: fmt.Sprintf("withdraw-%03d", index), UID: fmt.Sprintf("uid-%d", index),
+						Generation: 1, ResourceVersion: "1",
+						Annotations: map[string]string{"example.com/padding": strings.Repeat("x", MaxCandidateBytes/MaxCandidateResources)}},
+					Spec: json.RawMessage(`{"rules":[{"resources":["product"],"verbs":["read"]}]}`)}
+				if remove {
+					resource.Metadata.DeletionTimestamp = &now
+				} else {
+					resource.Metadata.Finalizers = []string{LifecycleFinalizer}
+				}
+				body, err := json.Marshal(resource)
+				require.NoError(t, err)
+				state.PayloadBytes += int64(len(body))
+				current[ResourceKey{TierID: ClusterTierID, Kind: resource.Kind, Name: resource.Metadata.Name}] = resource
+				write.Changes = append(write.Changes, Change{Resource: resource, Remove: remove, Terminate: !remove,
+					ExpectedUID: resource.Metadata.UID, ExpectedResourceVersion: resource.Metadata.ResourceVersion})
+			}
+			planWrite := PlanAuthorCandidate
+			if remove {
+				planWrite = PlanTierWrite
+			}
+			plan, err := planWrite(state, current, write, now)
+			require.NoError(t, err)
+			require.Len(t, plan.Changes, MaxCandidateResources)
+			if remove {
+				require.Zero(t, plan.State.RoleCount)
+				require.Zero(t, plan.State.PayloadBytes)
+				for _, change := range plan.Changes {
+					require.Nil(t, change.After)
+				}
+			} else {
+				for _, change := range plan.Changes {
+					require.NotNil(t, change.After.Metadata.DeletionTimestamp)
+					require.Nil(t, change.Before.Metadata.DeletionTimestamp)
+				}
+			}
+			write.Changes[0].Remove, write.Changes[0].Terminate = false, false
+			_, err = PlanAuthorCandidate(state, current, write, now)
+			require.NoError(t, err, "only the proposed manifest in a mixed withdrawal consumes candidate bytes")
+			for index := range write.Changes {
+				write.Changes[index].Remove, write.Changes[index].Terminate = false, false
+			}
+			_, err = PlanAuthorCandidate(state, current, write, now)
+			require.ErrorIs(t, err, ErrInvalid, "proposed manifests must retain the aggregate candidate bound")
+		})
+	}
+}
+
 func modelFixture(t *testing.T) []map[string]any {
 	t.Helper()
 	data, err := os.ReadFile("testdata/model-v1.json")

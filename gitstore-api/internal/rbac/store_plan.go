@@ -24,9 +24,36 @@ type PlannedChange struct {
 }
 
 type TierPlan struct {
-	State   TierState
-	Changes []PlannedChange
-	Replay  bool
+	State               TierState
+	Changes             []PlannedChange
+	Replay              bool
+	RolePolicyUnchanged bool
+}
+
+// RolePolicyUnchanged includes physical cleanup after termination has already
+// removed the Role from authorization. Binding status can change authority.
+func RolePolicyUnchanged(before, after *Resource) bool {
+	if before == nil || !before.Kind.IsRole() || len(before.Status) > 0 && !json.Valid(before.Status) {
+		return false
+	}
+	if after == nil {
+		return before.Metadata.DeletionTimestamp != nil && !before.Metadata.DeletionTimestamp.IsZero() &&
+			len(before.Metadata.Finalizers) == 0
+	}
+	if len(after.Status) > 0 && !json.Valid(after.Status) {
+		return false
+	}
+	left, right := *before, *after
+	for _, resource := range []*Resource{&left, &right} {
+		resource.Status = nil
+		resource.ManifestBytes = 0
+		resource.Metadata.ResourceVersion = ""
+		resource.Metadata.UpdateTimestamp = nil
+		resource.Metadata.UpdateActor = ""
+		resource.Metadata.Finalizers = nil
+		resource.Metadata.OwnerReferences = nil
+	}
+	return reflect.DeepEqual(left, right)
 }
 
 func ValidTier(tier string) bool {
@@ -174,7 +201,9 @@ func planTierWrite(state TierState, current map[ResourceKey]*Resource, write Tie
 				return plan, ErrInvalid
 			}
 		}
-		candidate = append(candidate, input)
+		if !change.Remove && !change.Terminate {
+			candidate = append(candidate, input)
+		}
 		if change.Remove {
 			if before.Metadata.DeletionTimestamp == nil || len(before.Metadata.Finalizers) != 0 {
 				return plan, ErrConflict
@@ -269,6 +298,11 @@ func planTierWrite(state TierState, current map[ResourceKey]*Resource, write Tie
 	if plan.State.RoleCount > MaxRolesPerTier || plan.State.BindingCount > MaxBindingsPerTier ||
 		plan.State.PayloadBytes+int64(len(header)+plan.State.RoleCount+plan.State.BindingCount+64) > MaxSnapshotBytes {
 		return plan, ErrQuota
+	}
+	plan.RolePolicyUnchanged = write.Projection == nil && !state.NamespaceRetired &&
+		!write.RetireNamespace && len(plan.Changes) > 0
+	for _, change := range plan.Changes {
+		plan.RolePolicyUnchanged = plan.RolePolicyUnchanged && RolePolicyUnchanged(change.Before, change.After)
 	}
 	return plan, nil
 }

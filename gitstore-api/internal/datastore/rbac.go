@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -186,6 +187,29 @@ type RBACNamespaceCleanupPage struct {
 	Next string
 }
 
+const MaxRBACOriginLookups = 32
+
+type RBACOriginLookup struct {
+	NamespaceUID string
+	Namespace    string
+	RepositoryID string
+}
+
+type RBACOriginFacts struct {
+	Namespace  *Namespace
+	Mapping    *NamespaceMapping
+	Repository *Repository
+}
+
+// RBACOriginFactsReader reads bounded live facts in request order. Missing facts
+// are empty; callers still validate identity and lifecycle before proving refs.
+// Errors invalidate the whole read.
+type RBACOriginFactsReader func(context.Context, []RBACOriginLookup) ([]RBACOriginFacts, error)
+
+type RBACOriginFactsCapable interface {
+	RBACOriginFactsReader() RBACOriginFactsReader
+}
+
 type RBACStore interface {
 	GetRBAC(context.Context, RBACResourceKey) (*RBACResource, error)
 	GetRBACByUID(context.Context, string) (*RBACResource, error)
@@ -205,6 +229,53 @@ type RBACStore interface {
 type RBACSnapshot struct {
 	State     RBACTierState   `json:"state"`
 	Resources []*RBACResource `json:"resources"`
+}
+
+// RBACSnapshotCapturer fences bounded raw rows with identical tier state before
+// and after source I/O. Decoding and validation can then run on that immutable
+// capture without extending the optimistic read window.
+type RBACSnapshotCapturer interface {
+	CaptureRBACSnapshot(context.Context, string, int64) (RBACTierState, [][]byte, error)
+}
+
+type capturedRBACTier struct {
+	RBACStore
+	state    RBACTierState
+	payloads [][]byte
+}
+
+func (s *capturedRBACTier) ReadRBACTier(ctx context.Context, _ string) (RBACTierState, error) {
+	return s.state, ctx.Err()
+}
+
+func (s *capturedRBACTier) ListRBAC(ctx context.Context, request RBACListRequest) (RBACPage, error) {
+	if err := ctx.Err(); err != nil {
+		return RBACPage{}, err
+	}
+	start := 0
+	if request.After != "" {
+		var err error
+		start, err = strconv.Atoi(request.After)
+		if err != nil || start < 0 || start > len(s.payloads) {
+			return RBACPage{}, RBACError(ErrRBACUnavailable)
+		}
+	}
+	end := min(start+request.Limit, len(s.payloads))
+	page := RBACPage{Revision: s.state.Revision}
+	for _, payload := range s.payloads[start:end] {
+		var resource RBACResource
+		if json.Unmarshal(payload, &resource) != nil {
+			return RBACPage{}, RBACError(ErrRBACUnavailable)
+		}
+		if resource.Kind.Namespaced() {
+			resource.NamespaceUID = s.state.TierID
+		}
+		page.Resources = append(page.Resources, &resource)
+	}
+	if end < len(s.payloads) {
+		page.Next = strconv.Itoa(end)
+	}
+	return page, nil
 }
 
 // ReadRBACSnapshot never installs a mixture of tier revisions. Git and parent
@@ -230,6 +301,26 @@ func ReadRBACSnapshotAttempt(ctx context.Context, store RBACStore, tier string) 
 func ReadRBACSnapshotAttemptWithLimit(ctx context.Context, store RBACStore, tier string, maxBytes int64) (RBACSnapshot, bool, error) {
 	if maxBytes < 1 || maxBytes > 64<<20 {
 		return RBACSnapshot{}, false, RBACError(ErrRBACUnavailable)
+	}
+	if capturer, ok := store.(RBACSnapshotCapturer); ok {
+		state, payloads, err := capturer.CaptureRBACSnapshot(ctx, tier, maxBytes)
+		if errors.Is(err, ErrRBACConflict) {
+			return RBACSnapshot{}, true, nil
+		}
+		if err != nil {
+			return RBACSnapshot{}, false, err
+		}
+		if len(payloads) > 5500 {
+			return RBACSnapshot{}, false, RBACError(ErrRBACUnavailable)
+		}
+		var size int64
+		for _, payload := range payloads {
+			size += int64(len(payload))
+			if size > maxBytes {
+				return RBACSnapshot{}, false, RBACError(ErrRBACUnavailable)
+			}
+		}
+		store = &capturedRBACTier{RBACStore: store, state: state, payloads: payloads}
 	}
 	before, err := store.ReadRBACTier(ctx, tier)
 	if err != nil {

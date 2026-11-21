@@ -22,10 +22,10 @@ type pinnedEvaluation struct {
 }
 
 func (e *Engine) PinAuthorization(ctx context.Context, model auth.AuthorizationModel) (auth.PinnedAuthorization, error) {
-	return e.pinAuthorization(ctx, model, nil)
+	return e.pinAuthorization(ctx, model, nil, nil)
 }
 
-func translateAuthorizationTier(source auth.AuthorizationTier, builtins *rbac.BuiltinSet, reserve func(int) bool) (*Translation, error) {
+func translateAuthorizationTier(source auth.AuthorizationTier, builtins *rbac.BuiltinSet, reserve func(int) bool, cache *rbac.ManifestValidationCache) (*Translation, error) {
 	content, err := hex.DecodeString(source.ContentDigest)
 	if err != nil || len(content) != 32 || source.CatalogDigest != auth.AuthorizationCatalogDigest() ||
 		source.BuiltinDigest != builtins.Digest() || !source.Active || source.NamespaceVersion == "" ||
@@ -36,10 +36,10 @@ func translateAuthorizationTier(source auth.AuthorizationTier, builtins *rbac.Bu
 	if tier.ID == rbac.ClusterTierID {
 		tier.Builtins = builtins
 	}
-	return translate(tier, reserve)
+	return translate(tier, reserve, cache)
 }
 
-func (e *Engine) pinAuthorization(ctx context.Context, model auth.AuthorizationModel, reserve func(int) bool) (*pinnedEvaluation, error) {
+func (e *Engine) pinAuthorization(ctx context.Context, model auth.AuthorizationModel, reserve func(int) bool, cache *rbac.ManifestValidationCache) (*pinnedEvaluation, error) {
 	if e == nil || e.digest == "" || model.ModelVersion != rbac.ModelVersion ||
 		model.Cluster.State.TierID != rbac.ClusterTierID || ctx.Err() != nil {
 		return nil, ErrUnavailable
@@ -48,7 +48,7 @@ func (e *Engine) pinAuthorization(ctx context.Context, model auth.AuthorizationM
 	if err != nil {
 		return nil, ErrUnavailable
 	}
-	cluster, err := translateAuthorizationTier(model.Cluster, builtins, reserve)
+	cluster, err := translateAuthorizationTier(model.Cluster, builtins, reserve, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +58,7 @@ func (e *Engine) pinAuthorization(ctx context.Context, model auth.AuthorizationM
 		if model.Namespace.State.TierID == rbac.ClusterTierID {
 			return nil, ErrUnavailable
 		}
-		result.namespace, err = translateAuthorizationTier(*model.Namespace, builtins, reserve)
+		result.namespace, err = translateAuthorizationTier(*model.Namespace, builtins, reserve, cache)
 		if err != nil {
 			return nil, err
 		}

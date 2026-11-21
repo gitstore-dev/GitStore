@@ -4,6 +4,7 @@
 package scylla
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -22,6 +23,12 @@ type rbacCDCImage struct {
 	Tier, Entry, UID string
 	Payload          []byte
 	Revision         int64
+	Projection       []byte
+	Repair           []byte
+	RoleCount        int
+	BindingCount     int
+	Retired          bool
+	CompleteState    bool
 }
 
 func rbacCDCChanges(stream string, change scyllacdc.Change) ([]watchjournal.Change, error) {
@@ -43,6 +50,19 @@ func rbacCDCChanges(stream string, change scyllacdc.Change) ([]watchjournal.Chan
 			assignCDC(row, "uid", &image.UID)
 			assignCDC(row, "payload", &image.Payload)
 			assignCDC(row, "revision", &image.Revision)
+			if image.Entry == "" {
+				image.CompleteState = true
+				for _, column := range []string{"projection", "repair", "role_count", "binding_count", "namespace_retired"} {
+					if _, present := row.GetValue(column); !present {
+						image.CompleteState = false
+					}
+				}
+				assignCDC(row, "projection", &image.Projection)
+				assignCDC(row, "repair", &image.Repair)
+				assignCDC(row, "role_count", &image.RoleCount)
+				assignCDC(row, "binding_count", &image.BindingCount)
+				assignCDC(row, "namespace_retired", &image.Retired)
+			}
 			if _, present := row.GetValue("entry"); !present {
 				return nil, rbacCDCDiscontinuity("missing clustering key")
 			}
@@ -134,6 +154,8 @@ func rbacCDCFrameChanges(stream string, at gocql.UUID, before, after []*rbacCDCI
 	}
 	slices.Sort(keys)
 	changes := make([]watchjournal.Change, 0, len(keys)+1)
+	policyUnchanged := len(keys) > 0
+	var purged []rbacRepairStep
 	prefix := "RBAC:" + stream + ":" + at.String() + ":" + tier + ":"
 	for _, entry := range keys {
 		pair := images[entry]
@@ -160,6 +182,13 @@ func rbacCDCFrameChanges(stream string, at gocql.UUID, before, after []*rbacCDCI
 		if old != nil && current != nil && (old.Metadata.UID != current.Metadata.UID || old.Metadata.Namespace != current.Metadata.Namespace) {
 			return nil, rbacCDCDiscontinuity("resource identity changed")
 		}
+		policyUnchanged = policyUnchanged && rbac.RolePolicyUnchanged(old, current)
+		if old != nil && old.Kind.IsRole() && current == nil {
+			purged = append(purged, rbacRepairStep{
+				Key: rbac.ResourceKey{TierID: tier, Kind: old.Kind, Name: old.Metadata.Name},
+				UID: old.Metadata.UID, Removed: true,
+			})
+		}
 		change, err := watchjournal.RBACChange(old, current)
 		if err != nil {
 			return nil, rbacCDCDiscontinuity("resource serialization failed")
@@ -168,7 +197,8 @@ func rbacCDCFrameChanges(stream string, at gocql.UUID, before, after []*rbacCDCI
 		change.DeduplicationKey = prefix + entry
 		changes = append(changes, change)
 	}
-	if sentinel.before == nil || sentinel.before.Revision != sentinel.after.Revision {
+	policyUnchanged = policyUnchanged && rbacCDCPolicyStateUnchanged(sentinel.before, sentinel.after, purged)
+	if !policyUnchanged && (sentinel.before == nil || sentinel.before.Revision != sentinel.after.Revision) {
 		changes = append(changes, watchjournal.Change{
 			Kind: "RBAC", StreamID: stream, Position: at.Bytes(), At: at.Time().UTC(),
 			DeduplicationKey: prefix + "progress",
@@ -176,4 +206,48 @@ func rbacCDCFrameChanges(stream string, at gocql.UUID, before, after []*rbacCDCI
 		})
 	}
 	return changes, nil
+}
+
+func rbacCDCPolicyStateUnchanged(before, after *rbacCDCImage, purged []rbacRepairStep) bool {
+	if before == nil || after == nil || !before.CompleteState || !after.CompleteState ||
+		before.Revision+1 != after.Revision || before.Retired || after.Retired ||
+		before.RoleCount < 1 || before.BindingCount < 0 ||
+		after.RoleCount < 0 || before.RoleCount-len(purged) != after.RoleCount || before.BindingCount != after.BindingCount ||
+		len(before.Projection) == 0 || len(before.Projection) > 4096 ||
+		!bytes.Equal(before.Projection, after.Projection) || !json.Valid(before.Projection) {
+		return false
+	}
+	var projection rbac.ProjectionIdentity
+	if json.Unmarshal(before.Projection, &projection) != nil || projection.RepositoryID == "" ||
+		projection.GitRef == "" || projection.GitRevision == "" || projection.TreeDigest == "" || projection.Actor == "" {
+		return false
+	}
+	if len(before.Repair) > 0 && !bytes.Equal(before.Repair, []byte("null")) && !bytes.Equal(before.Repair, []byte("[]")) {
+		return false
+	}
+	if len(purged) == 0 {
+		return len(after.Repair) == 0 || bytes.Equal(after.Repair, []byte("null")) || bytes.Equal(after.Repair, []byte("[]"))
+	}
+	if len(after.Repair) > len(purged)*4096 {
+		return false
+	}
+	var steps []rbacRepairStep
+	if json.Unmarshal(after.Repair, &steps) != nil || len(steps) != len(purged) {
+		return false
+	}
+	canonical, err := json.Marshal(steps)
+	if err != nil || !bytes.Equal(canonical, after.Repair) {
+		return false
+	}
+	expected := make(map[rbac.ResourceKey]rbacRepairStep, len(purged))
+	for _, step := range purged {
+		expected[step.Key] = step
+	}
+	for _, step := range steps {
+		if want, found := expected[step.Key]; !found || step != want {
+			return false
+		}
+		delete(expected, step.Key)
+	}
+	return len(expected) == 0
 }

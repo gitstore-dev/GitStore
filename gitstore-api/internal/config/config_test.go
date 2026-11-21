@@ -173,6 +173,27 @@ func TestDynamicRBACBoundedOverrides(t *testing.T) {
 	require.False(t, cfg.Api.Auth.OPA.WritesEnabled)
 }
 
+func TestRBACPrivateEvidenceConfigurationIsExplicit(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Empty(t, cfg.Api.Auth.OPA.EvidenceDirectory)
+	directory := t.TempDir()
+	t.Setenv("GITSTORE_API__AUTH__OPA__EVIDENCE_DIRECTORY", directory)
+	_, err = Load()
+	require.ErrorContains(t, err, "evidence_directory requires the opa")
+	t.Setenv("GITSTORE_API__AUTH__AUTHZ__PROVIDER", "opa")
+	cfg, err = Load()
+	require.NoError(t, err)
+	require.Equal(t, directory, cfg.Api.Auth.OPA.EvidenceDirectory)
+	for _, invalid := range []string{"relative", directory + "/../alias"} {
+		t.Setenv("GITSTORE_API__AUTH__OPA__EVIDENCE_DIRECTORY", invalid)
+		_, err = Load()
+		require.ErrorContains(t, err, "clean absolute private directory")
+	}
+}
+
 func TestOPAConfigurationFileUsesProviderNamespaceAndEntryCount(t *testing.T) {
 	defer clearEnv(t)()
 	setRequiredAuth(t)

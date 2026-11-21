@@ -30,7 +30,10 @@ import (
 
 type pendingRuntimeStore struct {
 	datastore.RBACStore
-	pending atomic.Bool
+	pending      atomic.Bool
+	indexRepairs atomic.Uint64
+	failRepair   atomic.Bool
+	failures     atomic.Uint64
 }
 
 func (s *pendingRuntimeStore) ReadRBACTier(ctx context.Context, tier string) (rbac.TierState, error) {
@@ -39,15 +42,32 @@ func (s *pendingRuntimeStore) ReadRBACTier(ctx context.Context, tier string) (rb
 	return state, err
 }
 
+func (s *pendingRuntimeStore) RepairRBACProjection(ctx context.Context, tier string, revision uint64) error {
+	if s.failRepair.Load() {
+		s.failures.Add(1)
+		return rbac.ErrUnavailable
+	}
+	if err := s.RBACStore.RepairRBACProjection(ctx, tier, revision); err != nil {
+		return err
+	}
+	s.indexRepairs.Add(1)
+	s.pending.Store(false)
+	return nil
+}
+
 func TestRBACApplicationReadinessRequiresSourceProofAndCompleteResync(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		repairs     uint64
 		observation bool
+		repairFails bool
+		deferred    bool
 	}{
 		{name: "complete"},
 		{name: "committed-index-repair", repairs: 1},
+		{name: "committed-index-repair-retry", repairs: 1, repairFails: true},
 		{name: "source-observation-before-publication", observation: true},
+		{name: "composed-publication-origin-fence", deferred: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, err := memdb.New()
@@ -57,6 +77,7 @@ func TestRBACApplicationReadinessRequiresSourceProofAndCompleteResync(t *testing
 			rbacStore := store.(datastore.RBACCapable).RBACStore()
 			snapshotStore := &pendingRuntimeStore{RBACStore: rbacStore}
 			snapshotStore.pending.Store(tc.repairs != 0)
+			snapshotStore.failRepair.Store(tc.repairFails)
 			builtins, err := rbac.ReleaseBuiltins()
 			require.NoError(t, err)
 			identity := rbac.ProjectionIdentity{RepositoryID: uuid.NewString(), GitRef: "refs/heads/main",
@@ -75,6 +96,18 @@ func TestRBACApplicationReadinessRequiresSourceProofAndCompleteResync(t *testing
 					}
 					return origin, nil
 				}}
+			var authoritativeChecks, publicationChecks atomic.Uint64
+			var allowAuthoritative, blockPublication atomic.Bool
+			blockPublication.Store(tc.deferred)
+			if tc.deferred {
+				reader.CheckOrigin = func(context.Context, string, rbac.SnapshotOrigin) error {
+					authoritativeChecks.Add(1)
+					if !allowAuthoritative.Load() {
+						return rbac.ErrUnavailable
+					}
+					return nil
+				}
+			}
 			limits := config.OPAConfig{MaxStaleness: 5 * time.Second, ValidationTimeout: 30 * time.Second,
 				RebuildWorkers: 1, DirtyQueueCapacity: 8, SnapshotRetries: 1, SnapshotMemorySize: "16MiB", RebuildMemorySize: "1MiB"}
 			var observationFailed atomic.Bool
@@ -94,7 +127,8 @@ func TestRBACApplicationReadinessRequiresSourceProofAndCompleteResync(t *testing
 				}
 			}
 			runtime, err := newRBACRuntime(t.Context(), store, journal, reader, limits, func(_ context.Context, _ string, expected rbac.SnapshotOrigin) error {
-				if fail.Load() || expected != origin {
+				publicationChecks.Add(1)
+				if fail.Load() || blockPublication.Load() || expected != origin {
 					return rbac.ErrUnavailable
 				}
 				return nil
@@ -131,6 +165,18 @@ func TestRBACApplicationReadinessRequiresSourceProofAndCompleteResync(t *testing
 			for _, name := range []string{"Namespace", "Repository", "RBAC", "ServiceAccount"} {
 				source(name, time.Now())
 			}
+			if tc.deferred {
+				require.Eventually(t, func() bool { return publicationChecks.Load() > 0 }, time.Second, 5*time.Millisecond)
+				require.Error(t, runtime.Ready(t.Context()), "a candidate must not bypass the final publication proof")
+				require.Zero(t, authoritativeChecks.Load(), "publication must not repeat the reader's earlier final proof")
+				blockPublication.Store(false)
+			}
+			if tc.repairFails {
+				require.Eventually(t, func() bool { return snapshotStore.failures.Load() > 0 }, time.Second, 5*time.Millisecond)
+				require.Error(t, runtime.Ready(t.Context()), "failed index repair must not publish the pending source")
+				require.Zero(t, repairs.Load(), "failed index repair must not fall back to another complete Git-tree scan")
+				snapshotStore.failRepair.Store(false)
+			}
 			if tc.observation {
 				require.Eventually(t, func() bool { return observations.Load() > 0 }, time.Second, 5*time.Millisecond)
 				require.Error(t, runtime.Ready(t.Context()), "an unrecorded source model must not become publishable")
@@ -139,7 +185,8 @@ func TestRBACApplicationReadinessRequiresSourceProofAndCompleteResync(t *testing
 			ctx, cancelReady := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancelReady()
 			require.NoError(t, waitRBACReady(ctx, runtime))
-			require.Equal(t, tc.repairs, repairs.Load(), "repair only proven pending indexes before publishing the current snapshot")
+			require.Equal(t, tc.repairs, snapshotStore.indexRepairs.Load(), "repair proven pending indexes at the captured revision")
+			require.Zero(t, repairs.Load(), "a current committed projection needs no additional complete Git-tree repair scan")
 			require.Equal(t, http.StatusOK, status("/ready"))
 			masters := &auth.Principal{Subject: "fixture-admin", AuthMethod: "static-users", Groups: []string{"system:masters"}}
 			decision, err := runtime.provider.Authorize(t.Context(), masters, "namespace.read", auth.ResourceContext{Kind: "namespace"})
@@ -151,6 +198,12 @@ func TestRBACApplicationReadinessRequiresSourceProofAndCompleteResync(t *testing
 			_, err = capture.Begin(t.Context(), masters, "")
 			require.ErrorIs(t, err, rbac.ErrUnavailable, "authoritative capture must share the runtime's scratch budget")
 			reservation.Close()
+			if tc.deferred {
+				_, err = capture.Begin(t.Context(), masters, "")
+				require.ErrorIs(t, err, rbac.ErrUnavailable, "authoritative validation retains its own live origin fence")
+				require.Positive(t, authoritativeChecks.Load())
+				allowAuthoritative.Store(true)
+			}
 			validation, err := capture.Begin(t.Context(), masters, "")
 			require.NoError(t, err)
 			validation.Close()
@@ -163,7 +216,8 @@ func TestRBACApplicationReadinessRequiresSourceProofAndCompleteResync(t *testing
 			require.Never(t, func() bool { return runtime.Ready(t.Context()) == nil }, 200*time.Millisecond, 5*time.Millisecond)
 			fail.Store(false)
 			require.Eventually(t, func() bool { return status("/ready") == http.StatusOK }, 3*time.Second, 5*time.Millisecond)
-			require.Equal(t, tc.repairs, repairs.Load(), "unavailable canonical source must not trigger a projection repair scan")
+			require.Equal(t, tc.repairs, snapshotStore.indexRepairs.Load(), "unavailable canonical source must not trigger additional index repair")
+			require.Zero(t, repairs.Load(), "unavailable canonical source must not trigger a projection repair scan")
 			runtime.Shutdown()
 			require.Equal(t, http.StatusServiceUnavailable, status("/ready"))
 		})

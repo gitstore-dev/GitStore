@@ -466,6 +466,12 @@ query ListRepositories($namespace: String!) {
 
 `Product` is the non-sellable parent descriptor. SKU, pricing, and inventory are on `ProductVariant`.
 
+Product and ProductVariant reads and lists accept either the ordinary or the
+corresponding management capability; neither requires both. With Git-backed
+authorization, these alternative checks use one captured serving model for the
+authorization operation. A policy publication between them cannot change that
+operation's verdict; a later request captures the current model.
+
 ```graphql
 query GetProduct {
   product(
@@ -1250,6 +1256,16 @@ it does not promise every API has already consumed it. A committed write with
 projection failure returns partial-outcome diagnostics rather than pretending
 to roll Git back.
 
+Annotation metadata counts toward manifest and snapshot limits even when
+unchanged root-manifest validation is reused. Validation reuse never caches
+authorization decisions or bypasses current source identity, lifecycle,
+controller status or publication-revision checks.
+
+Binding resolution uses the controller's local Role projection. When independent
+kind watches deliver a binding before its Role, the controller confirms the
+missing reference with a single scoped API lookup instead of waiting for the
+Role watch to catch up. Lookup failures remain retryable; a resolved binding
+never switches to a recreated Role with the same name.
 Role UID and termination-state changes schedule durable reconciliation of
 dependent bindings. Status-only Role updates do not trigger this fan-out.
 

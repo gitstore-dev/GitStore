@@ -352,13 +352,15 @@ func TestLifecycleAndUIDSuppression(t *testing.T) {
 	engine, err := NewEngine(t.Context())
 	require.NoError(t, err)
 	for _, cluster := range []bool{true, false} {
-		for _, change := range []string{"none", "terminating-role", "terminating-binding", "unresolved", "recreated-role", "recreated-namespace", "terminating-namespace"} {
+		for _, change := range []string{"none", "terminating-role", "purged-role", "terminating-binding", "unresolved", "recreated-role", "recreated-namespace", "terminating-namespace"} {
 			t.Run(strconv.FormatBool(cluster)+"/"+change, func(t *testing.T) {
 				tier := readTier(t, cluster)
 				now := time.Now()
 				switch change {
 				case "terminating-role":
 					tier.Resources[0].Metadata.DeletionTimestamp = &now
+				case "purged-role":
+					tier.Resources = tier.Resources[1:]
 				case "terminating-binding":
 					tier.Resources[1].Metadata.DeletionTimestamp = &now
 				case "unresolved":
@@ -467,7 +469,8 @@ func TestTranslationIsImmutableDeterministicAndConcurrent(t *testing.T) {
 }
 
 func TestTranslationRejectsInvalidOrOversizedModels(t *testing.T) {
-	for _, invalid := range []string{"inactive-cluster", "unknown-spec", "duplicate-uid", "wrong-tier", "oversized-expansion"} {
+	for _, invalid := range []string{"inactive-cluster", "unknown-spec", "duplicate-uid", "wrong-tier", "oversized-expansion",
+		"invalid-annotation-value", "invalid-annotation-key", "blank-annotation-key", "oversized-annotations"} {
 		t.Run(invalid, func(t *testing.T) {
 			tier := readTier(t, true)
 			switch invalid {
@@ -479,6 +482,14 @@ func TestTranslationRejectsInvalidOrOversizedModels(t *testing.T) {
 				tier.Resources[1].Metadata.UID = tier.Resources[0].Metadata.UID
 			case "wrong-tier":
 				tier.Resources[0].NamespaceUID = testUID("unexpected-namespace")
+			case "invalid-annotation-value":
+				tier.Resources[0].Metadata.Annotations = map[string]string{"note": "\xff"}
+			case "invalid-annotation-key":
+				tier.Resources[0].Metadata.Annotations = map[string]string{"\xff": "note"}
+			case "blank-annotation-key":
+				tier.Resources[0].Metadata.Annotations = map[string]string{" \t": "note"}
+			case "oversized-annotations":
+				tier.Resources[0].Metadata.Annotations = map[string]string{"padding": strings.Repeat("x", rbac.MaxManifestBytes)}
 			case "oversized-expansion":
 				names := make([]string, 128)
 				for index := range names {
@@ -493,8 +504,21 @@ func TestTranslationRejectsInvalidOrOversizedModels(t *testing.T) {
 						Metadata: rbac.Metadata{Name: "role-" + strconv.Itoa(index), UID: testUID(strconv.Itoa(index))}, Spec: spec})
 				}
 			}
+
 			_, err := Translate(tier)
 			require.ErrorIs(t, err, ErrUnavailable)
 		})
 	}
+}
+
+func TestTranslationPreservesAnnotatedSourceWithoutChangingGrants(t *testing.T) {
+	tier := readTier(t, true)
+	first, err := Translate(tier)
+	require.NoError(t, err)
+	padding := strings.Repeat("x", 16000)
+	tier.Resources[0].Metadata.Annotations = map[string]string{"padding": padding}
+	second, err := Translate(tier)
+	require.NoError(t, err)
+	require.Equal(t, first.digest, second.digest)
+	require.Equal(t, padding, tier.Resources[0].Metadata.Annotations["padding"])
 }

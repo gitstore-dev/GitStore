@@ -5,6 +5,7 @@ package rbac
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -22,6 +23,22 @@ type ValidationCapture struct {
 }
 
 var validationScratch = NewMemoryBudget(rebuildWorkers * RebuildScratchLimit)
+
+type validationCaptureError struct {
+	stage string
+	cause error
+}
+
+func (e *validationCaptureError) Error() string { return e.cause.Error() }
+func (e *validationCaptureError) Unwrap() error { return e.cause }
+
+func ValidationFailureStage(err error) string {
+	var failure *validationCaptureError
+	if errors.As(err, &failure) {
+		return failure.stage
+	}
+	return "validation"
+}
 
 type Validation struct {
 	mu         sync.RWMutex
@@ -83,7 +100,7 @@ func (c ValidationCapture) Begin(ctx context.Context, principal *auth.Principal,
 	}
 	cluster, err := c.Reader.Read(ctx, ClusterTierID)
 	if err != nil {
-		return fail(err)
+		return fail(&validationCaptureError{stage: "cluster-snapshot", cause: err})
 	}
 	result.snapshots[ClusterTierID] = cluster
 	tier := func(source Snapshot) auth.AuthorizationTier {
@@ -104,7 +121,7 @@ func (c ValidationCapture) Begin(ctx context.Context, principal *auth.Principal,
 		}
 		namespace, err := c.Reader.Read(ctx, namespaceUID)
 		if err != nil {
-			return fail(err)
+			return fail(&validationCaptureError{stage: "namespace-snapshot", cause: err})
 		}
 		result.snapshots[namespaceUID] = namespace
 		value := tier(namespace)
@@ -112,7 +129,7 @@ func (c ValidationCapture) Begin(ctx context.Context, principal *auth.Principal,
 	}
 	result.evaluation, err = auth.PinAuthorization(ctx, selected, model)
 	if err != nil {
-		return fail(err)
+		return fail(&validationCaptureError{stage: "authorization-pin", cause: err})
 	}
 	if err := result.check(ctx); err != nil {
 		return fail(err)

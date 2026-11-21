@@ -80,10 +80,10 @@ func subjectKey(kind, name string) string { return kind + "\x00" + name }
 // Translate builds a private, deterministic subject/action-indexed model once
 // per tier rebuild. Unresolved or terminating resources contribute no grant.
 func Translate(tier Tier) (*Translation, error) {
-	return translate(tier, nil)
+	return translate(tier, nil, nil)
 }
 
-func translate(tier Tier, reserveAllocation func(int) bool) (*Translation, error) {
+func translate(tier Tier, reserveAllocation func(int) bool, cache *rbac.ManifestValidationCache) (*Translation, error) {
 	cluster := tier.ID == rbac.ClusterTierID
 	if !rbac.ValidTier(tier.ID) || cluster != (tier.Namespace == "") || cluster && !tier.Active ||
 		len(tier.Resources) > rbac.MaxRolesPerTier+rbac.MaxBindingsPerTier {
@@ -148,24 +148,25 @@ func translate(tier Tier, reserveAllocation func(int) bool) (*Translation, error
 		if decoder.Decode(spec) != nil || decoder.Decode(new(any)) != io.EOF {
 			return nil, ErrUnavailable
 		}
-		encoded, err := rbac.CanonicalManifest(resource)
-		if err != nil {
-			return nil, ErrUnavailable
+		parsed := resource
+		wireBytes := 0
+		if builtin {
+			encoded, err := rbac.CanonicalManifest(resource)
+			if err != nil {
+				return nil, ErrUnavailable
+			}
+			wireBytes = len(encoded)
+		} else {
+			spec, size, err := cache.Validate(resource, rbac.RepositoryScope{Root: cluster, Namespace: tier.Namespace, NamespaceUID: tier.ID})
+			if err != nil {
+				return nil, ErrUnavailable
+			}
+			parsed = &rbac.Resource{Kind: resource.Kind, Spec: spec}
+			wireBytes = size
 		}
-		total += len(encoded) + len(resource.Status)
+		total += wireBytes + len(resource.Status)
 		if total > rbac.MaxSnapshotBytes {
 			return nil, ErrUnavailable
-		}
-		parsed := resource
-		if !builtin {
-			path, err := rbac.CanonicalPath(resource.Kind, resource.Metadata.Name)
-			if err != nil {
-				return nil, ErrUnavailable
-			}
-			parsed, err = rbac.ParseManifest(encoded, path, rbac.RepositoryScope{Root: cluster, Namespace: tier.Namespace, NamespaceUID: tier.ID})
-			if err != nil {
-				return nil, ErrUnavailable
-			}
 		}
 		if resource.Kind.IsRole() {
 			if !builtin {
