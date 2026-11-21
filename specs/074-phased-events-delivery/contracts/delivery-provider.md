@@ -1,0 +1,45 @@
+# Delivery Provider Contract (Proposed)
+
+The API owns the internal Go `DeliveryProvider` interface, registry/configuration and asynchronous handoff/status reconciliation. Follow the repository's provider pattern (for example `internal/auth/types.go`), without extending authentication interfaces. Provide `dev` for development/tests and `svix` for production. Neither adapter adds webhook execution fields to GraphQL, a controller-manager sender or a second API/controller transport. Public subscription management, delivery inspection and authorized replay retain their existing owners.
+
+## Responsibilities and interface
+
+GitStore owns source capture, immutable outbox facts, approved CloudEvents envelope, safe serialization, source-position routing, authorization, subscription revisions, logical delivery identity and audit/replay provenance. The provider owns accepted-message queueing, HTTP attempts, signing, retry scheduling, delivery outcomes and redelivery. GitStore does not run another HTTP retry scheduler for messages already accepted by Svix.
+
+The internal interface uses context deadlines and bounded typed requests/results (<=16 concurrent calls/API, queue <=256, <=5 s call deadline, <=100 status records/1 MiB per page, <=256 due candidates/scan). Persist bounded exponential retry scheduling for provider API failures, capped by the verified deduplication/reconciliation horizon; never spin indefinitely in a request handler. These are Go contracts, not GraphQL DTOs:
+
+| Operation | Required semantics |
+| --- | --- |
+| Capabilities | Versioned support/limits for payload and content type, idempotency window/reconciliation, destination isolation, signing/key rotation, retry/age/concurrency policy, ordering, status, cancellation and replay retention. Unsupported values are explicit. |
+| EnsureDestination | Idempotently bind a namespace/subscription UID and immutable activation/destination revision to an isolated provider destination; validate the approved URL, signing binding, policy and tenant routing. Return an opaque private reference. |
+| Submit | Bind stable submission identity, immutable envelope/digest and pinned destination/policy to provider acceptance. Return Accepted with provider receipt, DefinitelyRejected, or Unknown; a network timeout is not definite rejection or successful receiver delivery. |
+| ReconcileSubmission | Resolve the same identity after an ambiguous call without blindly recreating the message. A provider's finite idempotency window bounds safe automatic resubmission. |
+| ReadDelivery | Bounded, cursor-based reconciliation of message/endpoint attempts and terminal outcomes with observation/version identity. Unknown data remains unknown. |
+| Redeliver | Idempotently request a retained message's redelivery to its original destination under a GitStore replay-run identity. Preserve CloudEvent identity/content and original run outcome. Resolve ambiguous redelivery before issuing another request. |
+| SetDestinationEnabled | Reconcile disable/revocation/deletion and report whether pending delivery is stopped or cancellation remains unconfirmed. Never claim to recall transmitted requests. |
+
+Capabilities are internal adapter contracts. Spec072 may advertise implemented public subsets when available; its discovery endpoint is not a prerequisite. Operator-owned versioned delivery profiles map to the selected adapter's effective retry schedule, finite maximum age/attempt policy, concurrency/rate limits and replay retention. `EventSubscription.spec.delivery.profile` selects a profile; activation records its resolved immutable revision. Reject an unknown profile or unsupported guarantee with existing diagnostics/UNSUPPORTED_CAPABILITY and leave activation unready. Do not emulate unavailable Svix features with a second production sender.
+
+## Development implementation
+
+Use Go HTTP/TLS/crypto and existing shared/secretmaterial, with an in-process bounded queue, controllable clock and receiver fixtures. Defaults: <=256 queued deliveries, <=8 send workers and <=2 concurrent requests/destination, <=5 s total attempt (<=2 s HTTP), <=8 KiB response, <=12 attempts/24 h, full jitter from 5 s capped at 1 h and bounded Retry-After. Admission/backpressure must reject before local acceptance when full. Retain <=12 summaries/run and <=10 replay runs/delivery. Never block the synchronous resource mutation path on receiver I/O.
+
+Expose the same envelope/signature/status semantics and explicit capabilities, but advertise process-local durability and no multi-replica delivery guarantee. A restart may lose accepted local queue state; retain GitStore handoff records and report the resulting uncertainty rather than claim production recovery. Production mode rejects `dev`; tests of production replica/failure semantics use the Svix adapter and a controlled external service/contract fixture. Do not build Scylla send permits or a distributed development queue.
+
+## Svix production implementation
+
+Use the official Go SDK or bounded HTTP client; pin the selected version during implementation and add its license/dependency checks. Operator configuration owns the Svix service URL and credential SecretRef. Resolve credentials through existing secretmaterial; never forward GitStore bearer credentials. Tenant/application/channel/endpoint mappings are private and must prevent cross-namespace fan-out. Use an immutable endpoint binding per destination revision (or an equivalently proven isolation mechanism); an endpoint edit must not redirect previously accepted messages. Provider references never replace public GitStore resource IDs or CloudEvent IDs.
+
+Submit the complete approved CloudEvent as Svix `payload`, map its type to `eventType`, and use a stable application-scoped submission identity as `eventId` plus the supported idempotency mechanism. Include the delivery/run identity in the private submission key, since one event may have multiple destinations. The body received by clients is the CloudEvent, without a Svix wrapper. No payload transformations or template expansion. Confirm `application/cloudevents+json`, semantic JSON preservation, signing-key provisioning/rotation, destination isolation and replay behavior in adapter conformance tests before activation.
+
+Svix owns post-acceptance retries, rate/concurrency controls, signing and redelivery. Its retry schedule need not equal the dev schedule, and serial receiver delivery is not a baseline guarantee. Qualify the actual deployment/version/account limits; record them in the resolved policy profile. Require bounded authenticated polling for status reconciliation; optional provider callbacks are hints only, require verification and cannot bypass provider/tenant/message binding or terminal-state guards. No callback is required for correctness.
+
+GitStore retains local replay payload/configuration for seven days after terminal outcome, but an advertised Svix replay promise also requires the corresponding provider message/destination to remain retained. Expired provider material produces REPLAY_EXPIRED; do not manufacture a new message under the old transport identity. Unknown attempt counts/times are nullable, not zero or invented. Provider acceptance maps to pending external completion, never Succeeded. Retain bounded normalized summaries and provider observation receipts; do not copy an unbounded vendor log into GitStore.
+
+Disable/revocation stops new GitStore submissions immediately at the guarded boundary and reconciles provider state for accepted messages. Already accepted/in-flight work may still arrive until the provider confirms stopping it. Activation must reject a policy requiring stronger cancellation guarantees than the adapter supports. No automatic provider failover/rebinding for pending work: drain or explicitly reconcile and audit migration, preserving original identities and uncertainty.
+
+## Required conformance evidence
+
+Both adapters must preserve the approved envelope/type/source/id/data and verify signatures over actual transmitted bytes. Production qualification additionally covers two API replicas, accepted-but-response-lost submission, idempotency-window expiry, provider outage, duplicate/out-of-order status, replay ambiguity, credential rotation, immutable destination routing, namespace isolation, disable propagation and rolling adapter versions. Persist provider binding and contract/profile versions with every accepted run; replacements must resume that binding or stay unavailable.
+
+Sources: [Svix message payload/eventId](https://www.svix.com/guides/sending/send-webhooks-with-typescript/), [official Go SDK message API](https://pkg.go.dev/github.com/svix/svix-webhooks/v2/go), [Standard Webhooks verification](https://docs.svix.com/receiving/verifying-payloads/how), [retry behavior](https://www.svix.com/resources/glossary/webhook-retry/). These establish candidate adapter behavior, not proof of compatibility with every configured GitStore policy; implementation must pin and verify the actual production service contract.
