@@ -208,6 +208,11 @@ func fixtureCommandOutput(ctx context.Context, dir string, env, secrets []string
 }
 
 func fixtureCommandRun(ctx context.Context, dir string, env, secrets []string, stdoutOnly bool, args ...string) ([]byte, error) {
+	output, _, err := fixtureCommandRunResult(ctx, dir, env, secrets, stdoutOnly, args...)
+	return output, err
+}
+
+func fixtureCommandRunResult(ctx context.Context, dir string, env, secrets []string, stdoutOnly bool, args ...string) ([]byte, *os.ProcessState, error) {
 	// Credentials supplied through Git configuration can also appear without a header.
 	secrets = append([]string{}, secrets...)
 	for _, value := range append(append([]string{}, env...), args...) {
@@ -236,7 +241,7 @@ func fixtureCommandRun(ctx context.Context, dir string, env, secrets []string, s
 		}
 		err = &fixtureCommandError{cause: err, message: redactFixtureCommand(fmt.Sprintf("command %v failed: %v", args, err), secrets)}
 	}
-	return []byte(redactFixtureCommand(string(output), secrets)), err
+	return []byte(redactFixtureCommand(string(output), secrets)), command.ProcessState, err
 }
 
 func TestPushHelperCommitsResources(t *testing.T) {

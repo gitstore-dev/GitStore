@@ -69,13 +69,79 @@ or zero-downtime replacement is introduced.
 
 **Authentication/Authorization**: Preserve AuthN/UserDir/AuthZ independence and signed receiver-bound RPCs. Trusted UserDir Staff membership gates personal namespace creation. Every external mutation/read/watch/review is authorized; privileged lifecycle templates are server-validated even for administrators.
 **Load/Backpressure Model**: Defaults in the capacity contract: four global tier rebuild workers, one rebuild per tier, bounded/coalesced work, 30 s validation deadline, 1,000-entry pages, 64 KiB manifests, 4 MiB/256-manifest candidate changes and 64 MiB tier snapshots. Bounds remain feature requirements. Thirty-minute healthy/fault-load acceptance is deferred to #451; offered load and completed throughput stay separately accounted.
-**Capacity Profile**: Extend existing `namespace/watch` and `api/readiness MODE=alpha` drivers and selectors. Their current implementations do not yet test RBAC; extensions are implementation prerequisites, not existing acceptance.
+**Capacity Profile**: Existing `namespace/watch` and `api/readiness` families
+select bounded owned RBAC diagnostics with `CAPACITY_RBAC_WORKLOAD=1
+MODE=diagnostic`, or the strict healthy runner with `MODE=alpha`. Alpha requires
+the full dataset, 1,800-second mixed Namespace mutation schedule,
+1,860-second ordinary window, maximum root preamble, repository-generated
+source/artifact receipts, actual SDK memory/queue/process observations and
+independently replayed provider/propagation percentile gates. Both families
+require sealed domain postflight; production selection stays refused.
+Runner integration (T092) is verified by dispatch and capacity-contract race
+regressions; it is not sustained native acceptance. T102's separate
+quickstart-validation gate is retired. T096/T098 and T097's sustained fault-load
+portion remain pending in #451. T097's native functional recovery proof and
+T103's correctness-only feature closeout remain required.
 The existing namespace/watch harness now includes the tested bounded scheduler,
 independent committed-vector oracle foundation and bounded native diagnostic
-seeding with source/root/client joins. Full native scale, dynamic committed-policy
-history, sustained decision/propagation drivers and live domain-verifier wiring
-remain pending; local contracts do not certify the declared dataset or topology.
+seeding with source/root/client joins. It also executes the existing k6 profile's
+ordinary RBAC path and independently replays every scheduled source vector
+within its actual process/capture window. Static diagnostic parity cannot
+substitute for the complete alpha declaration and observations.
+Public RBAC preflight verifies live owned processes,
+epochs, executable digests, independent checkpoints and native topology before
+seeding; they reverify unchanged epochs and independently replay the real k6
+source receipts afterward. Native counts and complete independent source parity
+now cover all 1,000 Namespaces, 10,000 Roles and 50,000 bindings on both APIs.
+The unchanged shared 30-second source-readiness gate completes in 19.43 seconds.
+The subsequent 500-second, 20,000-offer ordinary rotation at 40 requests/s passes
+with exactly 12,000 allowed, 6,000 denied and 2,000 isolation denials and zero
+wrong, dropped or unavailable decisions. This closes the native fixture/static
+oracle prerequisite, not sustained acceptance. A later public full-geometry
+diagnostic on source `466f99a2` completes all 36,000 ordinary offers in 36 seconds
+at 1,000 requests/s total, with exact 60/30/10 outcomes and zero wrong,
+unavailable or dropped requests. Twenty general Role resource/verb/condition
+edits alternate Git and GraphQL admissions at 50/minute across four tiers;
+all source/generation/HTTP joins, four forward restorations and sealed replay
+pass. Both APIs' provider-call p99 is below 563 microseconds and propagation
+p95/p99 below 1.542/1.546 seconds. Explicit finite allocations include the
+existing directory cache/concurrency defaults without changing identity
+freshness, deadlines or acceptance gates. This closes the public selector
+prerequisite, not root-under-load, maximum-batch or sustained acceptance;
+the thirty-minute healthy/fault and large-catalog gates remain pending.
+A later full-duration attempt on the same source fails early with a correlated
+Namespace-origin authorization outage. Bounded cleanup verifies the original
+policy state on both replicas; this failed attempt does not inherit the short
+diagnostic's pass or establish sustained stability. Decision logs now distinguish
+missing, unverified, expired and future-dated origin proofs without exposing
+tier identities. A subsequent full-geometry attempt identifies expired Namespace
+proofs on unchanged tiers of both APIs. Live input collection now uses at most
+four concurrent identities per batch, retaining all three authoritative reads,
+ordered signed proofs, the 32-ref bound and pre-I/O clocks. Targeted race tests
+prove the parallelism bound and unchanged identity/proof checks; a native
+comparison still expires Namespace proofs after 186 admissions, despite safe
+completed cleanup. The input optimization is not an availability repair.
+A receiver regression separately proves cross-repository head-of-line blocking
+behind a write lock. Its proof-only nonblocking lock admission withholds the
+busy repository's result rather than aging unrelated proofs; signed bounds,
+lock protection and freshness remain intact. Native full-window comparison is
+still required, not inferred from these local tests.
+Private source/decision evidence is now runtime-configured, not a test-only
+snapshot observer. Its exclusive bounded streams preserve actual capture clocks
+and unsampled individual receipts while default operational logging stays
+sampled. The production activation refusal remains unchanged.
+The bounded authored root oracle also covers custom unconditional ClusterRole
+rule grant/revoke/restore/removal. It independently canonicalizes rule content,
+pins Role mutation generations and retains each binding's original immutable
+reference generation. Later newly unresolved root references cannot reinterpret
+earlier live references. Conditional mutable root histories and the sustained
+companion remain outside this diagnostic proof.
 **Fault Profile**: Reuse owned `api-restart`/controller restart facilities; extend the existing runner for a bounded, owned watch-journal interruption. Verify domain recovery and process epochs, not just injector exit.
+**Measured Implementation Cost**: T095's actual same-platform binary/image,
+paired health-warmed process heap/RSS, prepared-decision component and SDK
+telemetry regressions are recorded in `research.md`. The static-provider
+release-runtime pair does not measure active RBAC cache cost; the separate
+full-geometry diagnostic is not thirty-minute or peak-memory acceptance.
 
 ## Constitution Check
 

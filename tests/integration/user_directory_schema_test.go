@@ -43,6 +43,9 @@ type directoryTestRuntime struct {
 	postgresVolume                                  string
 	issuerURI                                       string
 	initialAPIBinary                                string
+	initialAPIHasUserDirectory                      bool
+	apiFixtureDirectory                             string
+	scyllaReactorBackend                            string
 	currentAPIBinary                                string
 	currentAPIPolicy                                string
 }
@@ -262,7 +265,11 @@ func startDirectoryTestRuntime(t *testing.T, enableMail ...bool) *directoryTestR
 
 func (r *directoryTestRuntime) command(t *testing.T, input io.Reader, args ...string) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	timeout := 2 * time.Minute
+	if len(args) != 0 && args[0] == "build" {
+		timeout = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Env = append(os.Environ(),

@@ -119,14 +119,540 @@ validation is a two-helper-process soak, not a released API deployment.
 `CAPACITY_PROFILE` is now only an internal k6 dispatch detail.
 The dispatcher is the only public capacity entry point.
 
-Dynamic RBAC capacity is not yet a supported deployed scenario.
-`CAPACITY_RBAC_WORKLOAD=1` fails explicitly; it never falls back to health-only
-readiness or ordinary Namespace watch load. Default health-only and identity
+`CAPACITY_RBAC_WORKLOAD=1` selects bounded native RBAC diagnostics or the strict
+healthy-alpha runner through `api/readiness` or `namespace/watch`, with
+`MODE=diagnostic` or `MODE=alpha`. Production remains refused pending separate
+larger-catalog interference and fault/recovery acceptance. Selection never falls
+back to health-only readiness or ordinary Namespace watch load. Default health-only and identity
 readiness selections are unchanged. Local regressions in the default test suite
 cover exact offered/completed/dropped accounting, bounded scheduling/drain,
 independent committed-revision expectations, private fixtures, topology
 constraints and process-epoch counters. These checks do not certify native
 dataset counts, replica propagation, fault recovery or sustained acceptance.
+The shared local scheduler accepts a one-second or one-minute rate period;
+an omitted period retains requests/second. The per-minute path schedules
+50 writes/minute at original 1.2-second due times without integer rounding,
+bursting or changing queue/drain bounds. Local driver tests do not establish a
+sustained native pass.
+
+Healthy alpha requires the full native dataset (1,000 Namespaces, 10,000 Roles
+and 50,000 bindings), complete 60-resource imports, two APIs, two independent
+controllers, one Git process and shared Scylla. Its private declaration requires
+`Plan.GeneralRoleMutations: true`, `Plan.MaximumRootBatch: true`,
+`K6Workload.RootUnderLoad: true`, `K6Workload.Rate: 500` per API and
+`K6Workload.Duration: 1860000000000` (1,860 seconds). The mixed Git/GraphQL
+mutation schedule must write for `1800000000000` nanoseconds (1,800 seconds),
+at 50 writes/minute total across four hot tiers, using its bounded serialized
+writer. Read-only retained verification, standalone propagation, partial
+imports, smaller catalogs and shortened windows cannot select alpha.
+Every offered ordinary request must complete with the exact per-API 60/30/10
+mix, zero wrong/unavailable/dropped outcomes and independently joined captured
+source/decision evidence. Existing five-second admission propagation deadlines
+and all cleanup fences still apply.
+
+The mutation startup wait rechecks both its monotonic deadline and the sealed
+wall-clock boundary after timer wakes. Writes cannot start before the fixed
+48-second root preamble ends, even if those clocks drift, and startup stops
+when the ordinary workload exits or its context is cancelled. Replay retains
+the exact boundary without clock-skew tolerance.
+
+Namespace replay retains at most 1,508 original admissions: 1,500 mutations,
+four baselines and four forward restorations. Source aliases preserve their
+original clocks even at that bound; additional admissions are rejected.
+
+`Plan.Owner` identifies the authored dataset's resource labels; the topology's
+`Owner` identifies the deployment task and must match every declared process
+and the live Scylla task label. These independent ownership domains need not
+have the same value. Alpha seals both declarations and verifies live process
+epochs, executables and ownership without relabeling retained resources.
+
+Client-side Git fetches use consecutive common-history negotiation, including
+the working clone's known parent. Mixed-write synchronization still verifies
+the exact acknowledged remote revision before forward-only authoring; it does
+not disable negotiation and repeatedly transfer the complete retained history.
+
+`TestRBACNativeJournalRecovery` is an opt-in functional test, not a capacity
+selector or sustained-load pass. Set `RBAC_TEST_JOURNAL_RECOVERY_RUN=1` only
+with an explicitly owned native fixture, two healthy APIs, two native
+controllers and singleton Git. Its additional fault-target API requires
+four distinct unused listener ports, a fresh disposable RF1 keyspace with
+four-second journal retention and the unchanged five-second OPA freshness
+bound. Never shorten a retained fixture's retention.
+
+Alongside the existing private actor/admin credentials and controller endpoints,
+set `RBAC_TEST_API_BINARY`, `RBAC_TEST_JOURNAL_CONFIG`, `RBAC_TEST_JOURNAL_API`,
+`RBAC_TEST_JOURNAL_SCYLLA_ADDRESS`, `RBAC_TEST_JOURNAL_OWNERSHIP` and
+`RBAC_TEST_PROCESS_LOG_DIR`. The receipt must identify a freshly created
+`gitstore_rbac_owner_` keyspace with `freshDatabaseNotRestoredOldFixture=true`;
+logs and sealed source models require a private directory. Use
+`GITSTORE_RBAC_NATIVE_TEST_SCYLLA_NAT=1` with one explicit loopback Scylla address
+so discovered topology cannot bypass the bounded fault proxy.
+
+Success requires healthy-peer grant/revocation correctness, trusted-admin
+fail-closed behavior, actual expired-cursor rejection, complete post-restoration
+source models, denial at independently read canonical revisions, recovery within
+30 seconds and a physical API restart that cannot restore the revoked grant.
+The test preserves logs and never replaces an existing API or the Git service.
+
+Before provisioning the explicitly owned native fixture, build attributable
+artifacts from a clean checkout into an existing private directory:
+
+```sh
+make build TARGET=api CAPACITY_BUILD_KIND=owned-rbac \
+  CAPACITY_BUILD_OUTPUT=/absolute/private/api.test \
+  CAPACITY_BUILD_RECEIPT=/absolute/private/api.build.json
+make build TARGET=controller CAPACITY_BUILD_KIND=owned-rbac \
+  CAPACITY_BUILD_OUTPUT=/absolute/private/controller.test \
+  CAPACITY_BUILD_RECEIPT=/absolute/private/controller.build.json
+make build TARGET=git \
+  CAPACITY_BUILD_OUTPUT=/absolute/private/git-service \
+  CAPACITY_BUILD_RECEIPT=/absolute/private/git.build.json
+```
+
+The owned API and controller recipes compile their existing
+`TestRBACNativeProcess` test hosts without race/profiling flags; they do not
+activate the production OPA constructor or production RBAC controllers.
+Start them only through the existing explicitly owned fixture contract.
+The default `release` recipe builds the ordinary service executable;
+it does not bypass production activation gates. Each non-Scylla topology process
+must specify `BuildReceipt` alongside its existing executable digest. Receipts
+bind artifact hashes to tracked component/shared source inputs and the fixed
+repository build recipe. Matching artifacts can be reused after source-identical
+test/documentation revisions; changed source or artifact bytes fail verification.
+The builder neither adopts unreceipted executables nor overwrites existing ones.
+Live checks also match the hashed file to the process's running executable:
+Linux requires `/proc/<pid>/exe`; macOS requires `lsof` text-mapping device/inode
+identity. Missing identity evidence or an atomically replaced pathname fails
+verification, even if its replacement has a valid build receipt.
+Do not run profilers concurrently; live alpha preflight also refuses Go test
+CPU/heap/block/mutex/trace profile flags.
+
+For either supported family, select `MODE=alpha` with the same private seed and
+topology inputs used by diagnostics, plus `CAPACITY_CONFIG_MANIFEST` and
+`CAPACITY_ENVIRONMENT_MANIFEST` describing configuration and hardware/runtime.
+The seed's `ReceiptDirectory` must exactly equal the selected run directory:
+`<CAPACITY_EVIDENCE_DIR>/<TARGET>/<PROFILE>/alpha/<CAPACITY_RUN_ID>`, where the
+public `CAPACITY_EVIDENCE_DIR` names the evidence **root**. Keep the checkout
+clean and unchanged throughout setup, workload and independent postflight.
+Alpha requires a fresh run directory and refuses to overwrite an earlier run.
+All ordinary credentials and the separate personal-owner and holdout credentials
+remain mandatory. Raw private run directories include credentials and must not
+be published; prepare a separately redacted report.
+
+Alpha captures actual SDK metrics from both APIs immediately before and after
+the complete ordinary process window. Immutable process identity/epoch and
+monotonic high-water counters must bracket it. Observed snapshot reservations
+must stay within 512 MiB/API; rebuild scratch within four buffers of at most
+64 MiB each; and the dirty-tier queue within 1,024 entries. Missing observations,
+counter resets, unavailability increases and an unbounded end-of-window
+goroutine increase fail. RSS/heap/process costs are reported separately, not
+substituted for translated-reservation budgets. Independently replayed provider
+p99 must be at most 2 ms; Namespace and root propagation each require p99 at
+most 5 seconds on both APIs, from original ACKs to matching HTTP responses at
+exact admitted revisions. Propagation p95 is reported against a non-blocking
+2-second optimization goal; exceeding that goal alone does not fail RBAC
+acceptance. The 5-second observation and revocation bounds remain enforced.
+This does not change other scenarios' independent latency contracts.
+Requested limits and receipt latency summaries are not measurements. Both
+public families require the independent sealed domain verifier and a matching successful verdict;
+preflight, subprocess exit or a k6 summary alone cannot pass.
+
+This implements the healthy-alpha runner, not a successful deployed acceptance
+result. Sustained native validation, larger-catalog interference and recovery
+evidence remain required; production selection stays gated.
+
+The opt-in native fixture also exercises bounded ordinary requests and
+independently authored Namespace and root binding grant/revoke/restore/removal
+histories. Its initial unresolved root reference is an explicitly inactive
+transition, never a ready source or permission grant; every admission still
+needs a complete verified source under its original acknowledgement deadline.
+The bounded root diagnostic now also edits an independently authored custom
+ClusterRole's unconditional list permission, retaining the binding UID,
+generation and original immutable role reference while the Role generation
+changes. It verifies root rule grant/revoke/restore/removal alongside binding
+subject and Namespace histories. It never edits immutable release built-ins.
+New unresolved root references retain the earlier authored deny truth; earlier
+live references cannot be reclassified as pending. Standalone short diagnostics
+are not sustained acceptance or mutable conditional ClusterRole acceptance.
+Canonical recovery can scope immutable file reads
+to one validated repository mapping per tree scan, but still rechecks live
+identity after the scan. It does not cache live facts across scans or change
+concurrency, memory or freshness bounds.
+
+The same native fixture can select `K6Workload` to run the existing readiness
+profile against its two direct APIs with independently enrolled ordinary
+principals. Its private working set comes from the authored request plan,
+not administrator credentials or health/introspection substitutions. The
+connected diagnostic verifies every offered request's root/Namespace source
+vector, actual process/capture clocks and exact per-API 60/30/10 outcomes.
+Receipt tracking uses a bounded bitmap rather than a full-window request map.
+The independent readiness verifier replays the sealed private declaration,
+counts, source streams and k6 results. Alpha additionally requires the full
+changing-policy workload and SDK/build/timing evidence described above;
+static diagnostic evidence cannot certify it.
+`Plan.Subjects` supports four to 128 distinct ordinary principals, and
+`K6Workload.GroupMembers` declares their independently verified Group subset.
+For wider load, optional `Plan.IsolationSubjects` declares up to 128 additional
+unbound principals, disjoint from the ordinary readers, Group, personal owner
+and mutation holdout. Isolation offers rotate across this cohort instead of
+concentrating on the personal owner's credential. Every declared reader and
+visitor requires its own enrolled identity and private `PrincipalTokenFiles`
+entry; the separate personal-owner credential still provisions the USER
+Namespace. Omitting the visitor cohort preserves the owner-based isolation
+probes. No quota exemption or synthetic issuer rotation is introduced; declare
+enough real principals and Group members for the existing per-subject budgets.
+This declaration alone does not certify sustainable full-rate throughput.
+When the seed selects `DecisionWorkload.PropagationDiagnostic`, it also seals
+the individual HTTP probes and authored histories for four Namespace and eight
+root mutation phases. Independent replay requires every phase on both APIs,
+original acknowledgement clocks, immutable identities and the exact declared
+mutation recipe. Missing probes, altered declarations and aggregate success
+flags cannot substitute for source/decision joins. Root probe stages remain
+bounded separately, and later root captures cannot rewrite the earlier
+fixed-root Namespace phase. These private receipts remain replayable after
+the owned processes stop; this does not certify sustained propagation percentiles.
+`Plan.ConditionalRoot: true` selects a conditional variant of the custom
+ClusterRole phases: product-list permission remains fixed while one Namespace
+equality condition is revoked and restored. The default variant changes verbs.
+Both retain original binding identities and reference generations, and remove
+their owned custom Role and binding afterward. Conditional root intent without
+an explicitly selected sequential or under-load propagation diagnostic is refused before seeding; unmodeled
+condition operators or attributes are not accepted by this bounded recipe.
+
+`K6Workload.Mutation` selects a bounded concurrent companion instead of the
+original-seed sequential propagation diagnostic. It requires at least five
+seeded Namespaces, a separately enrolled groupless
+`<plan-prefix>-filler-mutation` subject and its private `TokenFile`.
+Its `Schedule` uses `Rate: 50`, `Period: 60000000000`, `Workers: 1`,
+`Pending: 1`, a `Duration` that is a multiple of 12 seconds and no longer than
+30 minutes, and at most five seconds of
+`Drain` (duration values are nanoseconds in the private JSON declaration).
+The ordinary k6 window must extend at least two seconds beyond the schedule
+and remain at most 31 minutes, with at most 500 ordinary requests/second
+per API and 200 VUs per API. Combining this selection with
+`DecisionWorkload.PropagationDiagnostic` is refused before seeding.
+Summary replay derives exact aggregate and per-API counts from that validated
+window rather than applying the short static diagnostic's 3,000-offer ceiling.
+The extended declaration retains its duration/rate bounds, exact outcome mix
+and zero-error requirements.
+Native RBAC Git commands taking at least 100 ms record only their bounded
+command verb, elapsed time, success flag and OS-accounted user/system CPU time
+in the verifier log. `cpu_known` distinguishes an unavailable process state
+from a measured zero. CPU accounting covers the exited client process and its
+children, not the Git service; elapsed time includes local command preparation
+and transport. Their difference does not identify disk, network or scheduler
+delay. These records contain no arguments, command output or authentication
+headers.
+
+Optional `K6Workload.RootUnderLoad: true` runs the eight root phases before the
+Namespace mutation schedule, using that companion's disjoint holdout and untouched
+ORGANIZATION Namespace index five (at least six seeded Namespaces are required).
+Both the subject and token must be absent from every ordinary/cohort case.
+Root writes wait for actual source-joined ordinary decisions from both APIs,
+not merely a started k6 process, and initial HTTP probes must establish denial.
+Startup polling samples its upper clock bound after reading the matching
+decision, retaining the original startup deadline and rejecting pre-start,
+future-dated or unjoined evidence.
+The authenticated full-history root clone is prepared before ordinary traffic,
+like the four Namespace clones; its tip is rechecked against the live canonical
+ref before root authoring. Clone setup retains the existing command deadlines
+and does not consume the mutation preamble.
+Live and sealed root replay retain that untouched Namespace's original seed
+acknowledgement, all 60 resource generation pins and all 50 original binding
+reference-generation pins. An advanced mutation baseline cannot replace it.
+The entire root preamble, including readbacks and source joins, must finish
+within 48 seconds of ordinary process start. Namespace scheduling starts no
+earlier than that fixed boundary. Declare at least 60 seconds beyond the full
+mutation schedule: a 1,800-second writer therefore requires a 1,860-second
+ordinary window, preserving the existing 31-minute maximum and all rate, mix,
+error, latency and resource gates. Exceeding the preamble fails; it never
+shortens the writer or extends the ordinary duration.
+Eligible source frames must be fully sealed and carry a nonzero, nonfuture
+capture clock no later than five seconds after the original admission ACK.
+UID readbacks and subsequent replay do not restart that clock or turn a late
+capture into a pass. Both replicas still require independently eligible source
+before the writer advances; HTTP response deadlines and the fixed preamble
+remain unchanged.
+
+`Plan.MaximumRootBatch: true` expands the custom root creation to exactly
+256 changed manifests and exactly 4 MiB of committed manifest bytes, with each
+manifest at most 64 KiB. The existing authoring helper writes JSON into
+`.yaml` paths; sizing and cleanup compare that exact serialization, not
+re-encoded YAML or semantically equivalent JSON.
+Withdrawals still count toward the 256-change limit, but contribute no proposed
+manifest bytes to the 4 MiB aggregate. Re-encoding old stored content must not
+prevent deletion; per-resource lifecycle checks and complete-tier quotas remain.
+The extra 254 owned ClusterRoles are unbound fillers, not additional grants;
+all are UID-pinned and removed with the custom Role and binding. Replay checks
+the exact recipe, pending-creation source aliases, original acknowledgement
+clocks, every phase and ordinary source joins on both APIs. The repeated maximum
+batch history has a private 32 MiB receipt bound. Decision replay derives its
+finite byte envelope from the declared per-API ordinary count, the existing
+16,384 companion-probe maximum and at most 409 root probes, budgeting 4 KiB
+per decision plus 128 MiB of auxiliary receipts; it cannot exceed the existing
+8 GiB k6 ceiling. Source-capture guards are unchanged. Failure cleanup stops and joins k6 before any
+root restoration, refuses canonical-ref/ownership drift, and preserves pending
+candidates, restoration receipts and cleanup errors. These runner contracts
+do not establish a deployed acceptance result.
+
+The serialized writer rotates the total 50 writes/minute across four owned
+ORGANIZATION Namespaces, changing only binding04's subjects by default.
+Setting `Plan.MutationSubject` to the same separately enrolled holdout selects
+conditional Role mutations instead: binding04 retains that subject and its
+original Role reference, while Role04 alternates between a false Namespace
+condition and the owned Namespace condition. This selection requires the
+concurrent companion before seeding; other Roles and bindings remain unchanged.
+Optional `K6Workload.Mutation.Transport: "mixed"` alternates native Git pushes
+and CAS-protected GraphQL updates, rotating both transports through all four
+tiers and both APIs. Omit it for the original Git-only schedule. Each GraphQL
+admission is submitted once with the pinned UID, generation and live resource
+version; an error or uncertain acknowledgement fails rather than retrying.
+Its successful-response clock precedes canonical-ref fetch/fast-forward and
+all propagation observations. Only the subsequent read-only canonical-ref
+capture may retry, within the original five-second acknowledgement deadline;
+it never resubmits the write or renews the propagation clock. `ReferenceReads`
+records its attempts. An acknowledged write whose ref remains unverified retains
+that distinct recovery state rather than being labeled unacknowledged.
+The journal pins the resulting canonical Git revision and selected transport;
+sealed replay refuses a missing or changed
+transport. This remains a diagnostic companion, not an alpha-mode exemption.
+Ordinary
+principals and their exact 60/30/10 mix remain unchanged. Journals pin every
+actual revision, per-Namespace generation, immutable reference and original
+acknowledgement; independent replay verifies both ordinary and holdout HTTP
+decisions against captured sources. After the ordinary process stops, remaining
+holdout grants are restored to the selected original specs through new commits
+and generations. Bounded idempotent cleanup also runs on process, evidence-write
+or assertion failure; it never rewinds refs or overwrites failed evidence.
+Unsafe cleanup retains exact private recovery pins rather than reporting a pass.
+Each restoration starts in a separate worktree at the exact admitted canonical
+commit. A rejected local candidate is preserved, never reused as the restoration
+base or pushed as a retry; cleanup authors a new forward commit from the
+verified remote state.
+Cleanup may wait up to five seconds for an older projection to reach the
+journal-pinned generation; it refuses changed identities, references or newer
+generations without writing. This read-only cleanup deadline never replaces
+an original propagation acknowledgement clock.
+New schedule receipts retain the original monotonic dispatch offset alongside
+the wall-clock timestamp. Exact offered cadence is verified against that
+captured offset, so a wall-clock correction cannot turn an on-time offer into
+an early admission. Existing wall-clock-only receipts keep their original
+verification and failed runs are not retroactively relabeled.
+
+The extended declaration is bounded to 1,500 scheduled admissions. Independent
+replay reads at most 16 MiB for its journal and private working set, tracks at
+most 16,384 holdout probes per API and streams at most 8 GiB of decision traces
+per API. Ordinary credential/config readers retain their one-MiB bound, and
+sequential probe stages retain their 128-probe/one-GiB bounds. Source and
+ordinary-decision history joins use Namespace/revision indexes rather than
+rescanning the journal for every decision. Dynamic propagation replay indexes
+root and Namespace source aliases independently and combines only each
+observed vector, without materializing a history cross-product. Both tiers
+retain their original admission and supersession clocks.
+Baseline, mutation and restoration probes share one 16,384-probe per-API bound
+and one decision-stream pass. Duplicate request IDs across phases are refused;
+the verifier does not reread the entire multi-gigabyte trace for each of the
+1,500 admissions. Ordinary k6 decisions retain their separate stream pass.
+The ten scheduled-mutation probes per API adapt their timing within the
+unchanged five-second deadline. While a response differs from the intended
+verdict, the remaining probes spread toward 4.5 seconds from the original
+acknowledgement; matching responses resume 100 ms spacing to release the four
+bounded observer slots promptly. This is only a sampling heuristic, not proof
+of convergence. Probe counts, observer concurrency and request budgets are
+unchanged.
+When all four observer slots are occupied, the serialized writer waits within
+its existing scheduler context rather than failing immediately. The original
+offered cadence, one pending offer and five-second acknowledgement deadlines
+remain unchanged; missed offers, timeouts and failed observations still fail.
+Propagation replay requires a matching verdict at the exact admitted Namespace
+Git revision for every admission on each API. It reports nearest-rank p95/p99
+from the original acknowledgement to the first matching client HTTP response,
+including sampling delay. An older same-verdict publication cannot start that
+clock, and incomplete coverage fails instead of producing percentiles over
+only the observed subset.
+Superseded background rebuilds and origin proofs retain their publication
+fences but do not impose a failed-I/O cooldown on a newer queued generation.
+Actual source/read/preparation failures retain their existing retry delay;
+worker, queue, scratch-memory and freshness limits are unchanged.
+Physical cleanup of an already-terminating, finalizer-free Role retains its
+durable deletion event without invalidating unchanged authority. Scylla requires
+exact complete-header count/projection and UID-key repair evidence; uncertain
+frames, termination and binding changes still trigger policy recovery. Real
+deletion guards, index repair and source freshness bounds are not bypassed.
+Within a snapshot read, row-capture retries may reuse verified immutable tree
+proof only after the existing live-origin probe rereads Namespace, mapping,
+Repository and canonical-ref facts. A failed probe consumes an attempt and
+requires fresh origin discovery. Stores without that probe retain full origin
+reads per retry. The shared three-attempt budget, exact raw tier-state fences
+and final publication-origin checks remain unchanged.
+Pre-workload readiness may reissue only a probe whose successful decision
+still references an independently unverified source, retaining all original
+attempts in the decision stream. Already joined probes remain pinned; every
+selected readiness decision must join a complete source before load starts,
+within the same shared 30-second deadline. This handles a valid older
+publication while the final binding-status snapshot is being installed;
+ordinary offers and mutation clocks are never retried or restarted.
+Source replay rehashes every framed snapshot, including repeated vectors,
+before reusing independent policy checks. Resource proof caches are isolated
+by Namespace and admitted Git revision, bounded to one digest per authored
+resource slot, and invalidated by changed or reordered content. Duplicate
+verified vectors retain their earliest actual capture clock; incomplete
+projections and sources outside a selected capture window remain unverified.
+Initial static probes use a source-capture cutoff recorded after those probes
+and before k6 starts. Later root mutations cannot reinterpret that bootstrap
+phase; ordinary k6 replay still independently verifies the full authored history.
+GraphQL mutation acknowledgement reads the exact remote `main` ref without
+transferring objects or updating a working clone. A subsequent Git mutation
+fetches and verifies that admitted revision before a fast-forward; restoration
+fetches the same exact admitted revision before creating its isolated worktree.
+Reference-read retries remain bounded by the original acknowledgement clock,
+and synchronization stays inside the original scheduled Git admission, not
+its propagation observation.
+Explicit read-only retained verification also accepts the seed's separately
+declared conditional Role holdout. This does not enable propagation writes,
+root mutations or k6 mutation workloads against a retained fixture.
+To continue a complete seed with a separately selected mutation
+companion, declare `ResumeSeedDirectory` and a distinct new `ReceiptDirectory`
+in the private seed configuration. The driver copies original admission
+inputs exclusively, records their aggregate digest in `.retained-seed.json`,
+and still requires the complete native receipt and fresh two-API source
+readiness checks before any workload mutation. Original seed receipts and
+failed-run results are not overwritten or converted into a pass. This mode
+does not convert earlier runs into acceptance and cannot be combined with
+read-only retained verification. Alpha continuation must independently satisfy
+the complete healthy-alpha declaration, fresh preflight and all new-run gates;
+production remains refused.
+After a previous owned mutation has been fully restored, its canonical ref and
+generation may have advanced even though the original policy and resource UIDs
+are unchanged. Declare `ResumeBaselines` explicitly for those mutation tiers,
+using the original seed ref, restored ref, restored generation and actual
+restoration acknowledgement from retained evidence. At most the four authored
+mutation Namespaces may advance; personal/root policy and resource incarnations
+cannot be substituted. Original import receipts remain unchanged. Both APIs
+must still independently capture and verify the complete original policy at
+the declared current refs before another workload starts. The declaration
+does not convert the preceding run into a pass or reset new mutation clocks.
+The mutation companion checks the ordinary process's bounded private log
+before its first write and each subsequent offer. Already reported failed
+responses, exhausted VUs or executor errors stop further policy admissions
+without converting the failed ordinary workload into a pass. Existing
+admissions still require the same bounded, forward-only owned restoration.
+The selected deployment's finite ingress budgets, bounded directory lookup
+concurrency/cache and load generator's bounded VU allocation must support the
+declared offered rate and principal working set. Record those allocations;
+do not extend identity freshness to hide directory pressure. HTTP throttling,
+directory unavailability and dropped offers remain failures, not authorization
+denials. Both request drivers classify `DIRECTORY_UNAVAILABLE` as unavailable;
+bounded redacted failure receipts retain that code without response messages.
+For a seed with the separate Role mutation holdout, explicitly select
+`Plan.GeneralRoleMutations` to replace its conditioned multi-resource read/list
+rule with an unconditional Product-list rule on each grant. Revocations and
+forward restorations recover the complete original rule. This changes
+resources, verbs and conditions, not only a condition value. It preserves
+original seed identities and ordinary 60/30/10 intent, uses the same bounded
+mixed Git/GraphQL schedule, and requires complete source/generation/HTTP replay.
+Leaving it unset preserves the separately declared condition-only workload.
+Ordinary requests interleave Namespace/case pairs rather than issuing all ten
+cases for one Namespace consecutively. At 1,000 Namespaces and 500 requests/s
+per API, each Namespace is revisited about every two seconds instead of
+disappearing for twenty seconds between bursts. Each ten-offer group retains
+the exact 60/30/10 mix, and a complete rotation still includes every
+Namespace/case pair on both APIs.
+Each joined ordinary receipt must also retain its nonnegative integer
+`latency_ns` provider-call measurement. Replay reports exact nearest-rank p99
+and maximum over every scheduled ordinary decision on each API; missing or
+malformed timing fails rather than reporting only the timed subset.
+This is the existing server-side provider-call clock, not client HTTP latency.
+The validated extended window bounds retained timings to at most 930,000
+eight-byte values per API; the ordinary evidence stream keeps its existing
+eight-GiB read bound.
+A long diagnostic window is not
+acceptance: full native geometry, general changing Role/root histories,
+measured propagation distributions, process costs and fault/interference
+gates remain separate requirements.
+The RBAC Go driver has a bounded four-hour outer test lifetime so full-geometry
+fixture preparation does not consume a short workload's fifteen-minute test
+budget. Per-command and seed-readback deadlines, workload durations,
+propagation deadlines and all acceptance limits remain unchanged. Other
+capacity selections retain their existing lifetimes.
+
+Wrong/unavailable k6 responses now emit redacted failed-response receipts into
+the existing private workload log: correlation, replica, action, Namespace,
+HTTP classification, up to eight allowlisted GraphQL error codes and a bounded
+response-body digest. Tokens, headers, messages and raw bodies are excluded.
+Capture is limited to 16 receipts per VU; suppressed receipts are counted
+without suppressing failures or relaxing the zero-error gate. Concurrent
+diagnostics do not establish single-Namespace hot-spot correctness, four-writer
+concurrency, full native scale or sustained acceptance.
+
+The public diagnostic requires `CAPACITY_RBAC_SEED_FILE` and
+`CAPACITY_RBAC_TOPOLOGY_FILE` as private regular files in private directories,
+plus the existing explicitly owned native fixture settings: `RBAC_TEST_OWNED_DEPLOYMENT=1`,
+`RBAC_TEST_API_A/B`, `RBAC_TEST_GIT_URL`, `RBAC_TEST_NAMESPACE` and private
+`RBAC_TEST_TOKEN_FILE`. The seed declaration must select `K6Workload`, declare
+both source-model and decision-log streams, and contain actual separately
+enrolled ordinary-principal token files. It retains the native fixture's
+existing authored-plan/count/import and private receipt-directory fields.
+
+```bash
+make capacity TARGET=api PROFILE=readiness MODE=diagnostic \
+  CAPACITY_RBAC_WORKLOAD=1 \
+  CAPACITY_RBAC_SEED_FILE=/private/owned-fixture/seed-config.json \
+  CAPACITY_RBAC_TOPOLOGY_FILE=/private/owned-fixture/deployment-topology.json
+```
+
+Use `TARGET=namespace PROFILE=watch` for the other existing family. Both execute
+the same native seeding, actual k6 and independent source verifier with a finite
+15-minute test deadline. The topology declaration identifies two APIs, two
+controllers, singleton Git and shared owned Scylla, exact intended
+count/count-times-ten/count-times-fifty geometry, and a `GitSmartHTTP` URL
+matching the native push endpoint. Native process IDs are `native:<PID>`,
+with actual `ps lstart` epochs, private executable paths/SHA-256 digests and
+direct health endpoints; controllers also declare independent private checkpoint
+directories. Git's endpoint is its native gRPC `host:port`, not the API
+smart-HTTP URL. Scylla uses `docker:<full-container-ID>`, its actual start epoch
+and matching `dev.gitstore.task` owner label. Preflight verifies live ownership,
+epochs, binaries, health/listening and checkpoint separation before writes.
+It does not certify configured counts; the native driver enumerates exact
+resources on both APIs, then verifies unchanged process epochs and independently
+replays every k6 receipt. Native seeding errors, unavailability, mismatched source
+joins, missing receipts and drops fail the command.
+
+Source production is now part of the runtime composition, selected by
+`api.auth.opa.evidence_directory` (or
+`GITSTORE_API__AUTH__OPA__EVIDENCE_DIRECTORY`) on each owned API. Precreate a
+separate private directory per API/process epoch; the runtime exclusively opens
+`source-models.jsonl` (1-GiB bound) and `decisions.jsonl` (8-GiB bound).
+Declare those exact private paths as the seed's source/decision streams.
+The decision sink captures unsampled receipts without disabling sampling of
+normal operational logs. Capture selection requires a controlled restart;
+failed streams never resume or overwrite earlier evidence. Empty selection
+creates no files and preserves default logging.
+
+Live readers distinguish an unfinished JSON record at the unterminated end of
+an appended source stream from malformed committed records. Unfinished tails
+register no source model; complete records still require the original count,
+digest and acknowledgement-deadline checks.
+
+Production OPA activation remains gated, so current owned native acceptance
+still uses the explicit API test composition, but requires no test-only
+snapshot injection or global sampling override. This diagnostic is not the
+sustained mutation companion, full native working set, or a 30-minute acceptance
+pass.
+
+Native fixture seeding declares `ImportBatchSize` as 10 or 60. Diagnostics
+default to ten-manifest imports; full-count seeding defaults to one complete
+import of at most 60 manifests per Namespace. This remains below the existing
+256-manifest/4-MiB admission limits. Receipts retain the actual successful-push
+acknowledgement and both APIs must enumerate every authored resource and
+resolved immutable reference. The shared four-second per-API readback pacing
+and 30-second readback deadline are unchanged; fewer imports remove repeated
+readback work rather than accelerate or suppress its checks.
+When source and decision streams are selected, ordinary-principal probes also
+wait for independently verified complete serving snapshots on both APIs.
+Datastore readback alone does not prove that the serving manager has consumed
+every resolution update. This uses the existing bounded readiness check;
+warm-up does not reset admission or propagation clocks.
 
 `TestRBACNativeJournalRecovery` is an opt-in functional test, not a capacity
 selector or sustained-load pass. Set `RBAC_TEST_JOURNAL_RECOVERY_RUN=1` only

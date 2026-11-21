@@ -679,9 +679,23 @@ func rbacNativeOwnerControllerRecovery(t *testing.T, admin rbacNativeFixture, su
 	t.Helper()
 	binary := os.Getenv("RBAC_TEST_CONTROLLER_BINARY")
 	require.NotEmpty(t, binary)
+	replacementBinary := os.Getenv("RBAC_TEST_CONTROLLER_REPLACEMENT_BINARY")
+	if replacementBinary == "" {
+		replacementBinary = binary
+	}
 	configs := []string{os.Getenv("RBAC_TEST_CONTROLLER_CONFIG_A"), os.Getenv("RBAC_TEST_CONTROLLER_CONFIG_B")}
 	endpoints := []string{os.Getenv("RBAC_TEST_CONTROLLER_A"), os.Getenv("RBAC_TEST_CONTROLLER_B")}
-	directories := []string{t.TempDir(), t.TempDir()}
+	directories := []string{os.Getenv("RBAC_TEST_CONTROLLER_CHECKPOINT_DIR_A"), os.Getenv("RBAC_TEST_CONTROLLER_CHECKPOINT_DIR_B")}
+	for i, directory := range directories {
+		if directory == "" {
+			directories[i] = t.TempDir()
+			continue
+		}
+		require.True(t, filepath.IsAbs(directory))
+		entries, err := os.ReadDir(directory)
+		require.NoError(t, err)
+		require.Empty(t, entries, "never adopt an existing controller checkpoint directory")
+	}
 	for i, endpoint := range endpoints {
 		require.NotEmpty(t, configs[i])
 		parsed, err := url.Parse(endpoint)
@@ -907,6 +921,7 @@ func rbacNativeOwnerControllerRecovery(t *testing.T, admin rbacNativeFixture, su
 			require.True(t, info.IsDir())
 			checkpoints[i] = info
 		}
+		binary = replacementBinary
 		recoveryStarted := time.Now()
 		phase.Store(2)
 		start(0)
