@@ -129,6 +129,8 @@ type ProjectionSnapshot struct {
 	Authoritative             []AuthoritativeResource          `json:"authoritative"`
 	Projections               []ProjectionRecord               `json:"projections"`
 	NamespaceRepositoryFences []NamespaceRepositoryFenceRepair `json:"namespaceRepositoryFences,omitempty"`
+	retiredTargets            map[string]bool
+	retiredTargetRows         []AuthoritativeResource
 }
 
 type NamespaceRepositoryFenceRepair struct {
@@ -159,12 +161,14 @@ type RepairAction struct {
 	ResourceCreationTimestamp time.Time         `json:"resourceCreationTimestamp,omitempty"`
 	ExpectedResourceVersion   string            `json:"expectedResourceVersion,omitempty"`
 	RequireAbsentResource     bool              `json:"requireAbsentResource,omitempty"`
+	RequireRetiredTargetUID   bool              `json:"requireRetiredTargetUid,omitempty"`
 	Before                    *ProjectionRecord `json:"before,omitempty"`
 	After                     *ProjectionRecord `json:"after,omitempty"`
 }
 
 type RepairPlan struct {
 	ServiceAccountEnrollments []AuthoritativeResource          `json:"serviceAccountEnrollments,omitempty"`
+	RetiredTargetRows         []AuthoritativeResource          `json:"retiredTargetRows,omitempty"`
 	Findings                  []ProjectionFinding              `json:"findings"`
 	Actions                   []RepairAction                   `json:"actions"`
 	NamespaceRepositoryFences []NamespaceRepositoryFenceRepair `json:"namespaceRepositoryFences,omitempty"`
@@ -188,6 +192,27 @@ type projectionRepairStore interface {
 
 type ProjectionRepairService struct {
 	store projectionRepairStore
+}
+
+// Translation repairs use serialized source/index coordinators, never generic
+// snapshot actions that could overwrite concurrent source or binding authority.
+func (s *ProjectionRepairService) translationAuditStore() (*scyllaDatastore, error) {
+	if s == nil {
+		return nil, errors.New("projection repair service is not initialized")
+	}
+	store, ok := s.store.(*scyllaProjectionRepairStore)
+	if !ok || store == nil || store.session.Session == nil {
+		return nil, errors.New("projection repair store cannot audit Translations")
+	}
+	return &scyllaDatastore{session: store.session, mutations: newMutationExecutor(nil)}, nil
+}
+
+func (s *ProjectionRepairService) RepairTranslationAuditTurn(ctx context.Context, namespace string, limit int) (datastore.TranslationAuditProgress, error) {
+	store, err := s.translationAuditStore()
+	if err != nil {
+		return datastore.TranslationAuditProgress{}, err
+	}
+	return store.RepairTranslationAuditTurn(ctx, namespace, limit)
 }
 
 func OpenProjectionRepairService(cfg config.ScyllaConfig) (*ProjectionRepairService, error) {
@@ -262,8 +287,20 @@ func (s *ProjectionRepairService) Apply(ctx context.Context, plan RepairPlan) (R
 		return RepairResult{}, err
 	}
 	result := RepairResult{
-		PlannedActions:          len(plan.Actions),
+		PlannedActions:          len(plan.Actions) + len(plan.RetiredTargetRows),
 		PlannedRepositoryFences: len(plan.NamespaceRepositoryFences),
+	}
+	if len(plan.RetiredTargetRows) > 0 {
+		cleaner, ok := s.store.(interface {
+			CleanupRetiredTargetRows(context.Context, []AuthoritativeResource) error
+		})
+		if !ok {
+			return result, errors.New("repair store cannot clean retired target rows")
+		}
+		if err := cleaner.CleanupRetiredTargetRows(ctx, plan.RetiredTargetRows); err != nil {
+			return result, err
+		}
+		result.AppliedActions += len(plan.RetiredTargetRows)
 	}
 	for _, action := range plan.Actions {
 		resource, err := s.store.LookupResource(ctx, action)
@@ -386,7 +423,18 @@ func BuildRepairPlan(snapshot ProjectionSnapshot) (RepairPlan, error) {
 		actualByKey[key] = projection
 	}
 
-	plan := RepairPlan{NamespaceRepositoryFences: fences}
+	plan := RepairPlan{
+		NamespaceRepositoryFences: fences,
+		RetiredTargetRows:         append([]AuthoritativeResource(nil), snapshot.retiredTargetRows...),
+	}
+	for _, row := range plan.RetiredTargetRows {
+		actual := ProjectionRecord{
+			Table: authoritativeTable(row.Kind), UID: row.UID, Namespace: row.Namespace,
+			Name: row.Name, CreationTimestamp: row.CreationTimestamp, ResourceVersion: row.ResourceVersion,
+		}
+		plan.Findings = append(plan.Findings, finding(FindingDangling, row.Kind, row.UID,
+			ProjectionRecord{}, actual, true, "authoritative row belongs to a permanently retired target UID"))
+	}
 	for _, resource := range snapshot.Authoritative {
 		if resource.Kind == "ServiceAccount" && resource.EnrollmentIncomplete {
 			plan.ServiceAccountEnrollments = append(plan.ServiceAccountEnrollments, resource)
@@ -446,14 +494,20 @@ func BuildRepairPlan(snapshot ProjectionSnapshot) (RepairPlan, error) {
 		kind := actual.resourceKind()
 		resource, exists := resources[resourceKey(kind, actual.UID)]
 		if !exists {
-			repairable := projectionDeleteRepairable(actual.Table) && actual.Table != productsByNamespaceShard
+			retired := snapshot.retiredTargets[resourceKey(kind, actual.UID)]
+			repairable := retired || (projectionDeleteRepairable(actual.Table) && actual.Table != productsByNamespaceShard)
 			reason := "projection owner has no authoritative row"
+			if retired {
+				reason = "projection owner UID is permanently retired"
+			}
 			if !repairable {
 				reason = "projection may be an in-flight write reservation and cannot be deleted safely online"
 			}
 			plan.Findings = append(plan.Findings, finding(FindingDangling, kind, actual.UID, ProjectionRecord{}, actual, repairable, reason))
 			if repairable {
-				plan.Actions = append(plan.Actions, deleteAction(AuthoritativeResource{Kind: kind, UID: actual.UID}, false, actual))
+				action := deleteAction(AuthoritativeResource{Kind: kind, UID: actual.UID}, false, actual)
+				action.RequireRetiredTargetUID = retired
+				plan.Actions = append(plan.Actions, action)
 			}
 			continue
 		}
@@ -502,6 +556,14 @@ func BuildRepairPlan(snapshot ProjectionSnapshot) (RepairPlan, error) {
 }
 
 func ValidateRepairPlan(plan RepairPlan) error {
+	for _, row := range plan.RetiredTargetRows {
+		if authoritativeTable(row.Kind) == "" || row.Namespace == "" || row.CreationTimestamp.IsZero() {
+			return errors.New("invalid retired target row cleanup")
+		}
+		if _, err := gocql.ParseUUID(row.UID); err != nil {
+			return err
+		}
+	}
 	for _, account := range plan.ServiceAccountEnrollments {
 		if account.Kind != "ServiceAccount" || account.Name == "" || account.ResourceVersion == "" || account.CreationTimestamp.IsZero() || !account.EnrollmentIncomplete {
 			return errors.New("invalid ServiceAccount enrollment repair")
@@ -542,6 +604,9 @@ func ValidateRepairPlan(plan RepairPlan) error {
 		if !action.RequireAbsentResource && action.ExpectedResourceVersion == "" {
 			return fmt.Errorf("action %d requires an expected resource version", i)
 		}
+		if action.RequireRetiredTargetUID && (action.Type != RepairDelete || !action.RequireAbsentResource || authoritativeTable(action.Kind) == "") {
+			return fmt.Errorf("action %d requires a retired catalog target and an absent-resource delete", i)
+		}
 		switch action.Type {
 		case RepairInsert:
 			if action.After == nil || action.Before != nil {
@@ -569,7 +634,7 @@ func ValidateRepairPlan(plan RepairPlan) error {
 		if projection == nil || !knownProjectionTable(projection.Table) {
 			return fmt.Errorf("action %d has an invalid projection table", i)
 		}
-		if action.Type == RepairDelete && !projectionDeleteRepairable(projection.Table) {
+		if action.Type == RepairDelete && !projectionDeleteRepairable(projection.Table) && !action.RequireRetiredTargetUID {
 			return fmt.Errorf("action %d cannot delete reservation projection %s safely online", i, projection.Table)
 		}
 		if projection.UID != action.UID {
@@ -1009,30 +1074,60 @@ func (s *scyllaProjectionRepairStore) Close() {
 }
 
 type auditRow struct {
-	EnrollmentComplete         bool       `db:"enrollment_complete"`
-	Kind                       string     `db:"kind"`
-	UID                        gocql.UUID `db:"uid"`
-	RepositoryID               gocql.UUID `db:"repository_id"`
-	Namespace                  string     `db:"namespace"`
-	Name                       string     `db:"name"`
-	ResourceVersion            string     `db:"resource_version"`
-	CreationTimestamp          time.Time  `db:"creation_timestamp"`
-	Bucket                     string     `db:"bucket"`
-	SKU                        string     `db:"sku"`
-	ProductRefName             string     `db:"product_ref_name"`
-	Status                     string     `db:"status"`
-	Ancestor                   string     `db:"ancestor"`
-	Depth                      int8       `db:"depth"`
-	Descendant                 string     `db:"descendant"`
-	DescendantUID              gocql.UUID `db:"descendant_uid"`
-	CategoryUID                string     `db:"category_uid"`
-	Shard                      int8       `db:"shard"`
-	RepositoryCreationEpoch    *int64     `db:"repository_creation_epoch"`
-	PendingRepositoryCreations *int64     `db:"pending_repository_creations"`
+	TranslationRetired             *bool      `db:"translation_retired"`
+	TranslationCoordinationVersion string     `db:"translation_coordination_version"`
+	TranslationProjectionRetired   *bool      `db:"translation_projection_retired"`
+	EnrollmentComplete             bool       `db:"enrollment_complete"`
+	Kind                           string     `db:"kind"`
+	UID                            gocql.UUID `db:"uid"`
+	RepositoryID                   gocql.UUID `db:"repository_id"`
+	Namespace                      string     `db:"namespace"`
+	Name                           string     `db:"name"`
+	ResourceVersion                string     `db:"resource_version"`
+	CreationTimestamp              time.Time  `db:"creation_timestamp"`
+	Bucket                         string     `db:"bucket"`
+	SKU                            string     `db:"sku"`
+	ProductRefName                 string     `db:"product_ref_name"`
+	Status                         string     `db:"status"`
+	Ancestor                       string     `db:"ancestor"`
+	Depth                          int8       `db:"depth"`
+	Descendant                     string     `db:"descendant"`
+	DescendantUID                  gocql.UUID `db:"descendant_uid"`
+	CategoryUID                    string     `db:"category_uid"`
+	Shard                          int8       `db:"shard"`
+	RepositoryCreationEpoch        *int64     `db:"repository_creation_epoch"`
+	PendingRepositoryCreations     *int64     `db:"pending_repository_creations"`
 }
 
 func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionSnapshot, error) {
 	var snapshot ProjectionSnapshot
+	var retiredTargets []struct {
+		Kind    string     `db:"kind"`
+		UID     gocql.UUID `db:"uid"`
+		Retired *bool      `db:"retired"`
+	}
+	if err := s.session.Query("SELECT kind,uid,retired FROM translation_target_tombstones_by_uid", nil).
+		WithContext(ctx).SelectRelease(&retiredTargets); err != nil {
+		return ProjectionSnapshot{}, fmt.Errorf("audit retired target UIDs: %w", err)
+	}
+	retiredUIDs := make(map[string]bool, len(retiredTargets))
+	for _, target := range retiredTargets {
+		if authoritativeTable(target.Kind) == "" {
+			return ProjectionSnapshot{}, fmt.Errorf("%w: invalid retired target kind %q", datastore.ErrRepairRequired, target.Kind)
+		}
+		retired := target.Retired == nil || *target.Retired
+		if !retired {
+			var err error
+			retired, err = translationTargetUIDRetired(ctx, s.session.Session, target.Kind, target.UID)
+			if err != nil {
+				return ProjectionSnapshot{}, err
+			}
+		}
+		if retired {
+			retiredUIDs[resourceKey(target.Kind, target.UID.String())] = true
+		}
+	}
+	snapshot.retiredTargets = retiredUIDs
 	authoritative := []struct {
 		kind      string
 		table     string
@@ -1041,11 +1136,11 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 		{"ServiceAccount", "service_accounts_by_cluster_name", "enrollment_complete,"},
 		{"Namespace", "namespaces_by_uid", "repository_creation_epoch,pending_repository_creations,"},
 		{"Repository", "repositories_by_uid", "namespace,"},
-		{"Product", "products_by_key", "namespace,status,repository_id,"},
-		{"CategoryTaxonomy", "category_taxonomies_by_namespace", "namespace,status,repository_id,"},
-		{"Collection", "collections_by_namespace", "namespace,repository_id,"},
-		{"ProductVariant", "product_variants_by_namespace", "namespace,sku,product_ref_name,repository_id,"},
-		{"File", "files_by_namespace", "namespace,repository_id,"},
+		{"Product", "products_by_key", "namespace,status,repository_id,translation_retired,"},
+		{"CategoryTaxonomy", "category_taxonomies_by_namespace", "namespace,status,repository_id,translation_retired,"},
+		{"Collection", "collections_by_namespace", "namespace,repository_id,translation_retired,"},
+		{"ProductVariant", "product_variants_by_namespace", "namespace,sku,product_ref_name,repository_id,translation_retired,"},
+		{"File", "files_by_namespace", "namespace,repository_id,translation_retired,"},
 	}
 	for _, source := range authoritative {
 		statement := fmt.Sprintf(
@@ -1057,6 +1152,27 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 			return ProjectionSnapshot{}, fmt.Errorf("audit authoritative table %s: %w", source.table, err)
 		}
 		for _, row := range rows {
+			if row.TranslationRetired != nil {
+				proven, err := translationTargetPrimaryRetired(ctx, s.session.Session, AuthoritativeResource{
+					Kind: source.kind, UID: row.UID.String(), Namespace: row.Namespace, CreationTimestamp: row.CreationTimestamp,
+				})
+				if err != nil {
+					return ProjectionSnapshot{}, err
+				}
+				if !proven {
+					return ProjectionSnapshot{}, datastore.ErrRepairRequired
+				}
+				retiredUIDs[resourceKey(source.kind, row.UID.String())] = true
+			}
+		}
+		for _, row := range rows {
+			if retiredUIDs[resourceKey(source.kind, row.UID.String())] {
+				snapshot.retiredTargetRows = append(snapshot.retiredTargetRows, AuthoritativeResource{
+					Kind: source.kind, UID: row.UID.String(), Namespace: row.Namespace, Name: row.Name,
+					CreationTimestamp: row.CreationTimestamp, ResourceVersion: row.ResourceVersion,
+				})
+				continue
+			}
 			resource := AuthoritativeResource{
 				EnrollmentIncomplete: source.kind == "ServiceAccount" && !row.EnrollmentComplete,
 				Kind:                 source.kind, UID: row.UID.String(), Namespace: row.Namespace, Name: row.Name,
@@ -1156,7 +1272,7 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 		columns string
 		uid     func(auditRow) gocql.UUID
 	}{
-		{repositoryResourcesTable, "repository_id,shard,kind,uid,namespace,name,creation_timestamp", rowUID},
+		{repositoryResourcesTable, "repository_id,shard,kind,uid,namespace,name,creation_timestamp,translation_coordination_version,translation_projection_retired", rowUID},
 		{"files_by_name", "namespace,name,uid,creation_timestamp", rowUID},
 		{"service_accounts_by_cluster_uid", "uid,name,creation_timestamp", rowUID},
 		{"service_accounts_by_cluster_bucket", "bucket,uid,name,creation_timestamp", rowUID},
@@ -1188,6 +1304,19 @@ func (s *scyllaProjectionRepairStore) Snapshot(ctx context.Context) (ProjectionS
 			return ProjectionSnapshot{}, fmt.Errorf("audit projection table %s: %w", source.table, err)
 		}
 		for _, row := range rows {
+			if source.table == repositoryResourcesTable {
+				if row.Kind == "" && row.TranslationCoordinationVersion != "" {
+					if _, err := datastore.AdvanceTranslationIndexVersion(row.TranslationCoordinationVersion); err != nil || row.TranslationProjectionRetired == nil {
+						return ProjectionSnapshot{}, datastore.ErrRepairRequired
+					}
+					continue
+				}
+				if row.Kind == "Translation" {
+					// Translation owns source-coordinated repair; generic writes
+					// cannot safely bypass its retained retry fences.
+					continue
+				}
+			}
 			uid := source.uid(row)
 			record := ProjectionRecord{
 				Table: source.table, UID: uid.String(), Namespace: row.Namespace, Name: row.Name,
@@ -1243,6 +1372,16 @@ func rowRepositoryID(row auditRow) gocql.UUID {
 }
 
 func (s *scyllaProjectionRepairStore) LookupResource(ctx context.Context, action RepairAction) (*AuthoritativeResource, error) {
+	if action.RequireRetiredTargetUID {
+		retired, err := translationTargetUIDRetired(ctx, s.session.Session, action.Kind, mustRepairUUID(action.UID))
+		if err != nil {
+			return nil, err
+		}
+		if !retired {
+			return nil, fmt.Errorf("%w: target UID retirement proof is missing", datastore.ErrRepairRequired)
+		}
+		return nil, nil
+	}
 	var rows []auditRow
 	var statement string
 	var args []any
@@ -1303,6 +1442,24 @@ func (s *scyllaProjectionRepairStore) LookupResource(ctx context.Context, action
 	}
 	for _, row := range rows {
 		if row.UID.String() == action.UID {
+			if authoritativeTable(action.Kind) != "" {
+				primaryRetired, err := translationTargetPrimaryRetired(ctx, s.session.Session, AuthoritativeResource{
+					Kind: action.Kind, UID: action.UID, Namespace: row.Namespace, CreationTimestamp: row.CreationTimestamp,
+				})
+				if err != nil {
+					return nil, err
+				}
+				if primaryRetired {
+					return nil, nil
+				}
+				retired, err := translationTargetUIDRetired(ctx, s.session.Session, action.Kind, row.UID)
+				if err != nil {
+					return nil, err
+				}
+				if retired {
+					return nil, nil
+				}
+			}
 			return &AuthoritativeResource{
 				Kind: action.Kind, UID: action.UID, Namespace: row.Namespace, Name: row.Name,
 				ResourceVersion: row.ResourceVersion, CreationTimestamp: row.CreationTimestamp,

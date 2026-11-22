@@ -154,6 +154,11 @@ func rbacNativeGraphQLSpec(t *testing.T, spec any) map[string]any {
 
 func (f rbacNativeFixture) query(t *testing.T, api, query string, variables map[string]any) gqlResponse {
 	t.Helper()
+	return f.queryBounded(t, api, query, variables, 1<<20)
+}
+
+func (f rbacNativeFixture) queryBounded(t *testing.T, api, query string, variables map[string]any, limit int64) gqlResponse {
+	t.Helper()
 	if input, ok := variables["input"].(map[string]any); ok && input["spec"] != nil &&
 		(input["kind"] == "RoleBinding" || input["kind"] == "ClusterRoleBinding") {
 		input = maps.Clone(input)
@@ -163,7 +168,7 @@ func (f rbacNativeFixture) query(t *testing.T, api, query string, variables map[
 	}
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		response := secretTestGraphQLWithTimeout(t, api, f.token, query, variables, 35*time.Second)
+		response := secretTestGraphQLWithHeadersBounded(t, api, f.token, query, variables, 35*time.Second, nil, limit)
 		retryable := response.Status == 503 && len(response.Data) == 0 && len(response.Errors) == 1 &&
 			string(response.Errors[0]) == `{"message":"non-GraphQL HTTP failure"}`
 		if len(response.Errors) == 1 {
@@ -418,7 +423,10 @@ func (g rbacNativeGit) reject(t *testing.T, reason string) string {
 	for {
 		output, err := g.command(t, "push", "origin", "HEAD:refs/heads/main")
 		require.Error(t, err, "the entire native receive must be rejected")
-		message = strings.ReplaceAll(string(output), g.fixture.token, "[redacted]")
+		message = string(output)
+		if g.fixture.token != "" {
+			message = strings.ReplaceAll(message, g.fixture.token, "[redacted]")
+		}
 		retryable := strings.Contains(message, "validation service unavailable") ||
 			strings.Contains(message, "returned error: 503") || strings.Contains(message, "returned error: 403")
 		if !retryable || time.Now().After(deadline) {

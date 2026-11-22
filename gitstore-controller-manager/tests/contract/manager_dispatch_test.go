@@ -27,6 +27,90 @@ type countingReconciler struct {
 	calls atomic.Int64
 }
 
+func TestDiskManagerCompletionLagExcludesSupersededWork(t *testing.T) {
+	for _, tracked := range []bool{false, true} {
+		kind := "LegacyRepairLag"
+		var options []checkpoint.DiskOption
+		if tracked {
+			kind = "TrackedRepairLag"
+			options = append(options, checkpoint.WithPendingAge())
+		}
+		t.Run(kind, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			store, err := checkpoint.OpenDiskStore(t.TempDir(), kind, options...)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			releaseFirst, releaseSecond := make(chan struct{}), make(chan struct{})
+			var calls atomic.Int64
+			r := &funcReconciler{fn: func(ctx context.Context, _ types.WorkItemKey) types.ReconcileResult {
+				release := releaseSecond
+				if calls.Add(1) == 1 {
+					release = releaseFirst
+				}
+				select {
+				case <-ctx.Done():
+					return types.ResultTransient(ctx.Err())
+				case <-release:
+					return types.ResultOK()
+				}
+			}}
+			mgr := manager.New()
+			key := types.WorkItemKey{Kind: kind, Name: "pending"}
+			require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+				Kind: kind, Reconciler: r, Cache: newSyncedCache(), Disk: store, WorkerCount: 1,
+			}))
+			require.NoError(t, mgr.Enqueue(key))
+			origin, err := store.WorkSchedule(ctx, key)
+			require.NoError(t, err)
+			done := make(chan error, 1)
+			go func() { done <- mgr.Start(ctx) }()
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("manager did not stop")
+				}
+			})
+			require.Eventually(t, func() bool { return calls.Load() >= 1 }, time.Second, time.Millisecond)
+			require.NoError(t, mgr.Enqueue(key))
+			close(releaseFirst)
+			require.Eventually(t, func() bool { return calls.Load() >= 2 }, time.Second, time.Millisecond)
+			age := "unknown"
+			if tracked {
+				age = "known"
+			}
+			labels := map[string]string{"kind": kind, "age": age}
+			require.Zero(t, observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_work_completions_total", labels),
+				"successful reconciliation with a stale lease is not completed repair")
+			close(releaseSecond)
+			require.Eventually(t, func() bool {
+				return observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_work_completions_total", labels) == 1
+			}, time.Second, time.Millisecond)
+			require.Zero(t, store.Counts().Pending)
+			families, err := sdkTestMetrics.Gather()
+			require.NoError(t, err)
+			found := false
+			for _, family := range families {
+				if family.GetName() != "gitstore_controller_work_completion_lag_seconds" {
+					continue
+				}
+				for _, sample := range family.Metric {
+					if len(sample.Label) != 1 || sample.Label[0].GetName() != "kind" || sample.Label[0].GetValue() != kind {
+						continue
+					}
+					found = true
+					require.EqualValues(t, 1, sample.GetHistogram().GetSampleCount())
+					require.GreaterOrEqual(t, sample.GetHistogram().GetSampleSum(), 0.0)
+					require.LessOrEqual(t, sample.GetHistogram().GetSampleSum(), time.Since(origin.QueuedAt).Seconds()+0.1)
+				}
+			}
+			require.Equal(t, tracked, found, "unknown origins must not fabricate a zero-duration completion")
+		})
+	}
+}
+
 func TestRecoveryHealthUsesProgressWithoutAcknowledgingWork(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -47,6 +131,8 @@ func TestRecoveryHealthUsesProgressWithoutAcknowledgingWork(t *testing.T) {
 		stats := mgr.KindStats()[key.Kind]
 		require.True(t, stats.Recovering)
 		require.False(t, stats.Stalled)
+		require.Zero(t, observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_kind_ready",
+			map[string]string{"kind": key.Kind}), "active recovery gates readiness even while progressing")
 		time.Sleep(20 * time.Millisecond)
 	}
 	require.Zero(t, r.calls.Load())

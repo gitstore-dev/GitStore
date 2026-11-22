@@ -259,13 +259,15 @@ validate_scylla_deployment() {
 case "${target}/${profile}" in
   namespace/validation)
     jq -e '.schemaVersion == 1 and .services.api.replicas == 2' "${config}" >/dev/null || {
-      echo "namespace/validation evidence requires a config manifest declaring its two in-process API replicas" >&2
+      echo "namespace/validation evidence requires a config manifest declaring its two validation helper processes" >&2
       exit 2
     }
     [[ "$(jq -r '.topology.apiReplicas' "${environment}")" == "2" ]] || {
-      echo "namespace/validation environment manifest must declare its two in-process API replicas" >&2
+      echo "namespace/validation environment manifest must declare its two validation helper processes" >&2
       exit 2
     }
+    MODE="${mode}" CAPACITY_SCENARIO=validation \
+      "$(dirname "${BASH_SOURCE[0]}")/../tests/capacity/preflight/namespace-admission.sh" "${evidence_dir}"
     ;;
   namespace/watch|namespace/recovery|repository/lifecycle)
     if [[ "${profile}" == "watch" && "${NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT:-0}" == "1" ]]; then

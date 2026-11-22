@@ -7,6 +7,7 @@ set -euo pipefail
 output="${1:?output file is required}"
 targets_csv="${2:?comma-separated Prometheus targets are required}"
 controller_targets_csv="${3:-}"
+[[ "${targets_csv}" != *, ]] || { echo "empty API scrape target" >&2; exit 2; }
 IFS=',' read -r -a targets <<<"${targets_csv}"
 validation_targets=("${targets[@]}")
 if [[ -n "${controller_targets_csv}" ]]; then

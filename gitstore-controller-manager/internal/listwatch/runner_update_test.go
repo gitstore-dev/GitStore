@@ -5,7 +5,9 @@ package listwatch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,336 @@ type updatePolicyItem struct {
 	Name       string
 	Generation int64
 	Version    string
+}
+
+type updatePolicyPages struct {
+	longRetryListWatch
+	items []updatePolicyItem
+}
+
+func (pages updatePolicyPages) ListPages(_ context.Context, visit func([]updatePolicyItem) error) (string, error) {
+	if err := visit(pages.items); err != nil {
+		return "", err
+	}
+	return "journal@two", nil
+}
+
+func TestDiskObserverRetainsProjectionAndHandoffWithoutOwnWork(t *testing.T) {
+	store, err := checkpoint.OpenDiskStore(t.TempDir(), "Collection")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	handoffs := 0
+	runner := Runner[updatePolicyItem]{Kind: "Collection", Disk: store, Cache: cache.New[updatePolicyItem](),
+		DisableReplay: true,
+		KeyFunc: func(item updatePolicyItem) types.WorkItemKey {
+			return types.WorkItemKey{Kind: "Collection", Namespace: "shop", Name: item.Name}
+		},
+		RevisionFunc: func(item updatePolicyItem) string { return item.Version },
+		BeforeDiskChange: func(context.Context, *updatePolicyItem, *updatePolicyItem) error {
+			handoffs++
+			return nil
+		}}
+	runner.applyDefaults()
+	check := func() {
+		t.Helper()
+		if counts := store.Counts(); counts.Pending != 0 || counts.Poison != 0 {
+			t.Fatalf("observer generated its own reconciliation work: %+v", counts)
+		}
+	}
+	initial := updatePolicyItem{Name: "collection", Generation: 1, Version: "1"}
+	if err := runner.listToDisk(t.Context(), updatePolicyPages{items: []updatePolicyItem{initial}}); err != nil {
+		t.Fatal(err)
+	}
+	check()
+	next := initial
+	next.Version = "2"
+	if err := runner.applyDiskEvent(t.Context(), WatchEvent[updatePolicyItem]{Type: Modified, Object: next, ResourceVersion: "journal@three"}); err != nil {
+		t.Fatal(err)
+	}
+	check()
+	if err := runner.listToDisk(t.Context(), updatePolicyPages{}); err != nil {
+		t.Fatal(err)
+	}
+	check()
+	if handoffs != 3 {
+		t.Fatalf("observer handoffs=%d, want creation, update and cold-relist removal", handoffs)
+	}
+}
+
+func TestDiskUnchangedVersionCanCarryDurableRevalidation(t *testing.T) {
+	for _, requeue := range []bool{false, true} {
+		t.Run(fmt.Sprintf("requeue=%t", requeue), func(t *testing.T) {
+			dir := t.TempDir()
+			store, err := checkpoint.OpenDiskStore(dir, "Translation")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+			source := updatePolicyItem{Name: "de-title", Version: "4", Generation: 2}
+			key := types.WorkItemKey{Kind: "Translation", Namespace: "shop", Name: source.Name}
+			runner := Runner[updatePolicyItem]{Kind: "Translation", Disk: store, Cache: cache.New[updatePolicyItem](),
+				RequeueUnchanged: requeue,
+				KeyFunc:          func(updatePolicyItem) types.WorkItemKey { return key },
+				RevisionFunc:     func(item updatePolicyItem) string { return item.Version }}
+			runner.applyDefaults()
+			generation, err := store.BeginSnapshot(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.FinishSnapshot(t.Context(), generation, "journal@zero"); err != nil {
+				t.Fatal(err)
+			}
+			if err := runner.applyDiskEvent(t.Context(), WatchEvent[updatePolicyItem]{Type: Added, Object: source, ResourceVersion: "journal@one"}); err != nil {
+				t.Fatal(err)
+			}
+			work, err := store.Pending(t.Context(), "", 1)
+			if err != nil || len(work) != 1 {
+				t.Fatalf("initial work=%v, err=%v", work, err)
+			}
+			if _, err := store.Acknowledge(t.Context(), key, work[0].Token); err != nil {
+				t.Fatal(err)
+			}
+			if err := runner.applyDiskEvent(t.Context(), WatchEvent[updatePolicyItem]{Type: Modified, Object: source, ResourceVersion: "journal@two"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = checkpoint.OpenDiskStore(dir, "Translation")
+			if err != nil {
+				t.Fatal(err)
+			}
+			work, err = store.Pending(t.Context(), "", 1)
+			if err != nil || (len(work) == 1) != requeue {
+				t.Fatalf("replacement pending=%v, requeue=%t, err=%v", work, requeue, err)
+			}
+			_, cursor, err := store.Active(t.Context())
+			if err != nil || cursor != "journal@two" {
+				t.Fatalf("cursor=%q, err=%v", cursor, err)
+			}
+			if requeue && work[0].Token == 0 {
+				t.Fatal("revalidation must retain a real acknowledgement token")
+			}
+		})
+	}
+}
+
+func TestDiskRelistDependencyHandoffPrecedesSnapshotPublication(t *testing.T) {
+	for _, kind := range []string{"Product", "ProductVariant", "Category", "Collection", "File"} {
+		for _, restart := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/restart=%t", kind, restart), func(t *testing.T) {
+				dir := t.TempDir()
+				store, err := checkpoint.OpenDiskStore(dir, kind)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if store != nil {
+						if err := store.Close(); err != nil {
+							t.Error(err)
+						}
+					}
+				})
+				runner := Runner[updatePolicyItem]{
+					Kind: kind, Disk: store, Cache: cache.New[updatePolicyItem](),
+					KeyFunc: func(item updatePolicyItem) types.WorkItemKey {
+						return types.WorkItemKey{Kind: kind, Namespace: "tenant", Name: item.Name}
+					},
+					RevisionFunc: func(item updatePolicyItem) string { return item.Version },
+				}
+				runner.applyDefaults()
+				generation, err := store.BeginSnapshot(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				var originals []checkpoint.DiskItem
+				for _, name := range []string{"changed", "removed", "unchanged"} {
+					item, err := runner.diskItem(updatePolicyItem{Name: name, Generation: 1, Version: "1"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					originals = append(originals, item)
+				}
+				if err := store.PutSnapshotPage(t.Context(), generation, originals); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.FinishSnapshot(t.Context(), generation, "journal@one"); err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				injected, seen := false, make(map[string]bool)
+				runner.BeforeDiskChange = func(ctx context.Context, previous, current *updatePolicyItem) error {
+					_, cursor, err := store.Active(ctx)
+					if err != nil || cursor != "journal@one" {
+						t.Fatalf("snapshot published before dependency handoff: cursor=%q err=%v", cursor, err)
+					}
+					var name string
+					if current != nil {
+						name = current.Name
+					} else {
+						name = previous.Name
+					}
+					switch name {
+					case "added":
+						if previous != nil || current.Version != "2" {
+							t.Fatalf("incorrect creation handoff: previous=%+v current=%+v", previous, current)
+						}
+					case "changed":
+						if previous == nil || previous.Version != "1" || current.Version != "2" {
+							t.Fatalf("incorrect update handoff: previous=%+v current=%+v", previous, current)
+						}
+					case "removed":
+						if previous == nil || previous.Version != "1" || current != nil {
+							t.Fatalf("incorrect deletion handoff: previous=%+v current=%+v", previous, current)
+						}
+					default:
+						t.Fatalf("unchanged resource produced a dependency change: %q", name)
+					}
+					if !injected {
+						injected = true
+						if restart {
+							cancel()
+						}
+						return errors.New("injected dependency checkpoint failure")
+					}
+					seen[name] = true
+					return nil
+				}
+				pages := updatePolicyPages{items: []updatePolicyItem{
+					{Name: "added", Generation: 2, Version: "2"},
+					{Name: "changed", Generation: 2, Version: "2"},
+					{Name: "unchanged", Generation: 1, Version: "1"},
+				}}
+				err = runner.listToDisk(ctx, pages)
+				if restart {
+					if !errors.Is(err, context.Canceled) || runner.Cache.HasSynced() {
+						t.Fatalf("failed handoff published the snapshot: synced=%t err=%v", runner.Cache.HasSynced(), err)
+					}
+					if err := store.Close(); err != nil {
+						t.Fatal(err)
+					}
+					store = nil
+					store, err = checkpoint.OpenDiskStore(dir, kind)
+					if err != nil {
+						t.Fatal(err)
+					}
+					runner.Disk = store
+					err = runner.listToDisk(t.Context(), pages)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, cursor, err := store.Active(t.Context())
+				if err != nil || cursor != "journal@two" || !injected || len(seen) != 3 || !runner.Cache.HasSynced() {
+					t.Fatalf("relist lost dependency handoffs: cursor=%q injected=%t seen=%v err=%v",
+						cursor, injected, seen, err)
+				}
+			})
+		}
+	}
+}
+
+func TestDiskDependencyHandoffPrecedesProjectionAndCursor(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		event   EventType
+		version string
+	}{
+		{"created", Added, "2"}, {"modified", Modified, "2"},
+		{"deleted", Deleted, "2"}, {"reused-source-version", Modified, "1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			eventType := test.event
+			ctx := t.Context()
+			store, err := checkpoint.OpenDiskStore(t.TempDir(), "Product")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := store.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			key := types.WorkItemKey{Kind: "Product", Namespace: "tenant", Name: "target"}
+			original := updatePolicyItem{Name: key.Name, Generation: 1, Version: "1"}
+			generation, err := store.BeginSnapshot(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if eventType != Added {
+				if err := store.PutSnapshotPage(ctx, generation, []checkpoint.DiskItem{{
+					Key: key, Version: "1", Value: json.RawMessage(`{"Name":"target","Generation":1,"Version":"1"}`),
+				}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.FinishSnapshot(ctx, generation, "journal@one"); err != nil {
+				t.Fatal(err)
+			}
+			blocked := errors.New("dependency checkpoint unavailable")
+			fail, calls := true, 0
+			runner := Runner[updatePolicyItem]{
+				Kind: "Product", Disk: store,
+				KeyFunc:      func(updatePolicyItem) types.WorkItemKey { return key },
+				RevisionFunc: func(item updatePolicyItem) string { return item.Version },
+				BeforeDiskChange: func(_ context.Context, previous, current *updatePolicyItem) error {
+					calls++
+					if eventType == Added {
+						if previous != nil {
+							t.Fatalf("new target unexpectedly had prior state: %+v", previous)
+						}
+					} else if previous == nil || *previous != original {
+						t.Fatalf("handoff lost authoritative prior projection: %+v", previous)
+					}
+					if (current == nil) != (eventType == Deleted) {
+						t.Fatalf("incorrect deletion handoff: %+v", current)
+					}
+					if current != nil && current.Generation != 2 {
+						t.Fatalf("handoff lost the incoming target change: %+v", current)
+					}
+					if fail {
+						return blocked
+					}
+					return nil
+				},
+			}
+			value := updatePolicyItem{Name: key.Name, Generation: 2, Version: test.version}
+			if eventType == Deleted {
+				value = updatePolicyItem{Name: key.Name}
+			}
+			event := WatchEvent[updatePolicyItem]{Type: eventType, Object: value, ResourceVersion: "journal@two"}
+			if err := runner.applyDiskEvent(ctx, event); !errors.Is(err, blocked) {
+				t.Fatalf("handoff failure was not propagated: %v", err)
+			}
+			_, cursor, err := store.Active(ctx)
+			if err != nil || cursor != "journal@one" {
+				t.Fatalf("failed handoff advanced cursor: %q, %v", cursor, err)
+			}
+			item, found, _, err := store.Read(ctx, key)
+			if err != nil || found != (eventType != Added) || found && item.Version != "1" {
+				t.Fatalf("failed handoff changed source projection: %+v, found=%v, err=%v", item, found, err)
+			}
+			fail = false
+			if err := runner.applyDiskEvent(ctx, event); err != nil {
+				t.Fatal(err)
+			}
+			_, cursor, err = store.Active(ctx)
+			if err != nil || cursor != "journal@two" || calls != 2 {
+				t.Fatalf("successful retry did not commit once: cursor=%q calls=%d err=%v", cursor, calls, err)
+			}
+			item, found, _, err = store.Read(ctx, key)
+			if err != nil || found != (eventType != Deleted) || found && item.Version != test.version {
+				t.Fatalf("successful handoff lost projection transition: %+v, found=%v, err=%v", item, found, err)
+			}
+		})
+	}
 }
 
 func TestWatchStopUnblocksBackpressuredOutput(t *testing.T) {

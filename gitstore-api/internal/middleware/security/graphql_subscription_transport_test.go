@@ -54,6 +54,8 @@ func TestCanonicalWatchesDeniedThroughWebSocket(t *testing.T) {
 		{"Namespace", "namespace", "watchNamespaces"},
 		{"Repository", "repository", "watchRepositories"},
 		{"Product", "product", "watchProducts"},
+		{"ProductVariant", "productVariant", "watchProductVariants"},
+		{"Collection", "collection", "watchCollections"},
 		{"CategoryTaxonomy", "categoryTaxonomy", "watchCategories"},
 		{"File", "file", "watchFiles"},
 	} {

@@ -62,6 +62,10 @@ type ComplexityRoot struct {
 		Actor func(childComplexity int) int
 	}
 
+	BindTranslationTargetPayload struct {
+		Binding func(childComplexity int) int
+	}
+
 	CatalogObjectReference struct {
 		APIVersion      func(childComplexity int) int
 		FieldPath       func(childComplexity int) int
@@ -209,6 +213,14 @@ type ComplexityRoot struct {
 		LastAppliedRevision func(childComplexity int) int
 		ObservedGeneration  func(childComplexity int) int
 		Resolved            func(childComplexity int) int
+	}
+
+	CollectionWatchEvent struct {
+		Collection      func(childComplexity int) int
+		Name            func(childComplexity int) int
+		Namespace       func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		Type            func(childComplexity int) int
 	}
 
 	CompleteCategoryDeletionPayload struct {
@@ -390,6 +402,16 @@ type ComplexityRoot struct {
 		Value     func(childComplexity int) int
 	}
 
+	FileConnection struct {
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
+	}
+
+	FileEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
+	}
+
 	FileImageProcessing struct {
 		Variants func(childComplexity int) int
 	}
@@ -476,6 +498,7 @@ type ComplexityRoot struct {
 
 	Mutation struct {
 		AssignUserGroup                    func(childComplexity int, input model.AssignUserGroupInput) int
+		BindTranslationTarget              func(childComplexity int, input model.BindTranslationTargetInput) int
 		CompleteCategoryDeletion           func(childComplexity int, input model.CompleteCategoryDeletionInput) int
 		CompleteClusterRoleBindingDeletion func(childComplexity int, input model.CompleteClusterRoleBindingDeletionInput) int
 		CompleteClusterRoleDeletion        func(childComplexity int, input model.CompleteClusterRoleDeletionInput) int
@@ -532,6 +555,7 @@ type ComplexityRoot struct {
 		UpdateResourceStatus               func(childComplexity int, input model.UpdateResourceStatusInput) int
 		UpdateRole                         func(childComplexity int, input model.UpdateRoleInput) int
 		UpdateRoleBinding                  func(childComplexity int, input model.UpdateRoleBindingInput) int
+		UpdateTranslationStatus            func(childComplexity int, input model.UpdateTranslationStatusInput) int
 		UpdateUser                         func(childComplexity int, input model.UpdateUserInput) int
 	}
 
@@ -735,6 +759,14 @@ type ComplexityRoot struct {
 		Resolved            func(childComplexity int) int
 	}
 
+	ProductVariantWatchEvent struct {
+		Name            func(childComplexity int) int
+		Namespace       func(childComplexity int) int
+		ProductVariant  func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		Type            func(childComplexity int) int
+	}
+
 	ProductWatchEvent struct {
 		Name            func(childComplexity int) int
 		Namespace       func(childComplexity int) int
@@ -757,33 +789,40 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		AccessReview        func(childComplexity int, input model.AccessReviewInput) int
-		Actor               func(childComplexity int, by model.ActorBy) int
-		Actors              func(childComplexity int, first *int32, after *string, last *int32, before *string) int
-		Categories          func(childComplexity int, namespace string, filter *model.CategoryFilterInput, first *int32, after *string, last *int32, before *string) int
-		Category            func(childComplexity int, by model.CategoryBy) int
-		ClusterRole         func(childComplexity int, by model.ClusterRoleBy) int
-		ClusterRoleBinding  func(childComplexity int, by model.ClusterRoleBindingBy) int
-		ClusterRoleBindings func(childComplexity int, first *int32, after *string, selector *model.LabelSelectorInput) int
-		ClusterRoles        func(childComplexity int, first *int32, after *string, selector *model.LabelSelectorInput) int
-		Collection          func(childComplexity int, by model.CollectionBy) int
-		Collections         func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
-		File                func(childComplexity int, by model.FileBy) int
-		Namespace           func(childComplexity int, by model.NamespaceBy) int
-		Namespaces          func(childComplexity int, first *int32, after *string, last *int32, before *string) int
-		Node                func(childComplexity int, id string) int
-		Nodes               func(childComplexity int, ids []string) int
-		Product             func(childComplexity int, by model.ProductBy) int
-		ProductVariant      func(childComplexity int, by model.ProductVariantBy) int
-		ProductVariants     func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
-		Products            func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
-		Repositories        func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
-		Repository          func(childComplexity int, by model.RepositoryBy) int
-		Role                func(childComplexity int, by model.RoleBy) int
-		RoleBinding         func(childComplexity int, by model.RoleBindingBy) int
-		RoleBindings        func(childComplexity int, namespace string, first *int32, after *string, selector *model.LabelSelectorInput) int
-		Roles               func(childComplexity int, namespace string, first *int32, after *string, selector *model.LabelSelectorInput) int
-		ServiceAccounts     func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+		AccessReview                  func(childComplexity int, input model.AccessReviewInput) int
+		Actor                         func(childComplexity int, by model.ActorBy) int
+		Actors                        func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+		Categories                    func(childComplexity int, namespace string, filter *model.CategoryFilterInput, first *int32, after *string, last *int32, before *string) int
+		Category                      func(childComplexity int, by model.CategoryBy) int
+		ClusterRole                   func(childComplexity int, by model.ClusterRoleBy) int
+		ClusterRoleBinding            func(childComplexity int, by model.ClusterRoleBindingBy) int
+		ClusterRoleBindings           func(childComplexity int, first *int32, after *string, selector *model.LabelSelectorInput) int
+		ClusterRoles                  func(childComplexity int, first *int32, after *string, selector *model.LabelSelectorInput) int
+		Collection                    func(childComplexity int, by model.CollectionBy) int
+		Collections                   func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		File                          func(childComplexity int, by model.FileBy) int
+		Files                         func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		Namespace                     func(childComplexity int, by model.NamespaceBy) int
+		Namespaces                    func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+		Node                          func(childComplexity int, id string) int
+		Nodes                         func(childComplexity int, ids []string) int
+		Product                       func(childComplexity int, by model.ProductBy) int
+		ProductVariant                func(childComplexity int, by model.ProductVariantBy) int
+		ProductVariants               func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		Products                      func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		Repositories                  func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
+		Repository                    func(childComplexity int, by model.RepositoryBy) int
+		Role                          func(childComplexity int, by model.RoleBy) int
+		RoleBinding                   func(childComplexity int, by model.RoleBindingBy) int
+		RoleBindings                  func(childComplexity int, namespace string, first *int32, after *string, selector *model.LabelSelectorInput) int
+		Roles                         func(childComplexity int, namespace string, first *int32, after *string, selector *model.LabelSelectorInput) int
+		ScanTranslationDependents     func(childComplexity int, target model.TranslationDependencyInput, limit *int32, continuation *string) int
+		ServiceAccounts               func(childComplexity int, first *int32, after *string, last *int32, before *string) int
+		Translation                   func(childComplexity int, by model.TranslationBy) int
+		TranslationBinding            func(childComplexity int, namespace string, name string) int
+		TranslationTargetObservation  func(childComplexity int, namespace string, apiVersion string, kind string, name string) int
+		TranslationValidationSnapshot func(childComplexity int, namespace string, name string, sourceID string, sourceVersion string) int
+		Translations                  func(childComplexity int, namespace string, first *int32, after *string, last *int32, before *string) int
 	}
 
 	RBACAttributeCondition struct {
@@ -977,6 +1016,12 @@ type ComplexityRoot struct {
 		StoragePath  func(childComplexity int) int
 	}
 
+	ResolvedTranslation struct {
+		CanonicalLocale     func(childComplexity int) int
+		Target              func(childComplexity int) int
+		ValidatedFieldPaths func(childComplexity int) int
+	}
+
 	ResourceOwner struct {
 		Kind func(childComplexity int) int
 		Name func(childComplexity int) int
@@ -1153,13 +1198,16 @@ type ComplexityRoot struct {
 		WatchCategories          func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchClusterRoleBindings func(childComplexity int, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchClusterRoles        func(childComplexity int, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchCollections         func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchFiles               func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchNamespaces          func(childComplexity int, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchProductVariants     func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchProducts            func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchRepositories        func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchResources           func(childComplexity int, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchRoleBindings        func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 		WatchRoles               func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
+		WatchTranslations        func(childComplexity int, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) int
 	}
 
 	SuspendUserPayload struct {
@@ -1195,6 +1243,113 @@ type ComplexityRoot struct {
 
 	TransferNamespaceOwnerPayload struct {
 		Namespace func(childComplexity int) int
+	}
+
+	Translation struct {
+		APIVersion func(childComplexity int) int
+		Body       func(childComplexity int) int
+		ID         func(childComplexity int) int
+		Kind       func(childComplexity int) int
+		Metadata   func(childComplexity int) int
+		Spec       func(childComplexity int) int
+		Status     func(childComplexity int) int
+	}
+
+	TranslationBinding struct {
+		BindingVersion func(childComplexity int) int
+		BoundUID       func(childComplexity int) int
+		NamespaceUID   func(childComplexity int) int
+		ReferenceEpoch func(childComplexity int) int
+		SourceVersion  func(childComplexity int) int
+		TranslationID  func(childComplexity int) int
+	}
+
+	TranslationConnection struct {
+		Edges    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
+	}
+
+	TranslationDependent struct {
+		ReferenceEpoch func(childComplexity int) int
+		SourceVersion  func(childComplexity int) int
+		TranslationID  func(childComplexity int) int
+	}
+
+	TranslationDependentScan struct {
+		Continuation func(childComplexity int) int
+		Items        func(childComplexity int) int
+	}
+
+	TranslationEdge struct {
+		Cursor func(childComplexity int) int
+		Node   func(childComplexity int) int
+	}
+
+	TranslationPatch struct {
+		FieldPath   func(childComplexity int) int
+		Translation func(childComplexity int) int
+	}
+
+	TranslationSpec struct {
+		Locale    func(childComplexity int) int
+		Patches   func(childComplexity int) int
+		TargetRef func(childComplexity int) int
+	}
+
+	TranslationStatus struct {
+		Conditions          func(childComplexity int) int
+		LastAppliedRevision func(childComplexity int) int
+		ObservedGeneration  func(childComplexity int) int
+		Resolved            func(childComplexity int) int
+	}
+
+	TranslationTargetEvidence struct {
+		APIVersion      func(childComplexity int) int
+		ContentDigest   func(childComplexity int) int
+		Generation      func(childComplexity int) int
+		Kind            func(childComplexity int) int
+		Name            func(childComplexity int) int
+		Namespace       func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		Revision        func(childComplexity int) int
+		UID             func(childComplexity int) int
+	}
+
+	TranslationTargetObservation struct {
+		Evidence     func(childComplexity int) int
+		NamespaceUID func(childComplexity int) int
+	}
+
+	TranslationValidationObservation struct {
+		Conditions          func(childComplexity int) int
+		LastAppliedRevision func(childComplexity int) int
+		ObservedGeneration  func(childComplexity int) int
+		Resolved            func(childComplexity int) int
+	}
+
+	TranslationValidationSnapshot struct {
+		Binding       func(childComplexity int) int
+		NamespaceUID  func(childComplexity int) int
+		Observation   func(childComplexity int) int
+		SourceDigest  func(childComplexity int) int
+		SourceID      func(childComplexity int) int
+		SourceVersion func(childComplexity int) int
+		Target        func(childComplexity int) int
+	}
+
+	TranslationValidationTarget struct {
+		Evidence  func(childComplexity int) int
+		Fields    func(childComplexity int) int
+		Namespace func(childComplexity int) int
+	}
+
+	TranslationWatchEvent struct {
+		Historical      func(childComplexity int) int
+		Name            func(childComplexity int) int
+		Namespace       func(childComplexity int) int
+		ResourceVersion func(childComplexity int) int
+		Translation     func(childComplexity int) int
+		Type            func(childComplexity int) int
 	}
 
 	UpdateCategoryPayload struct {
@@ -1248,6 +1403,10 @@ type ComplexityRoot struct {
 
 	UpdateRolePayload struct {
 		Role func(childComplexity int) int
+	}
+
+	UpdateTranslationStatusPayload struct {
+		Translation func(childComplexity int) int
 	}
 
 	UpdateUserPayload struct {
@@ -1346,6 +1505,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.AssignUserGroupPayload.Actor(childComplexity), true
+
+	case "BindTranslationTargetPayload.binding":
+		if e.ComplexityRoot.BindTranslationTargetPayload.Binding == nil {
+			break
+		}
+
+		return e.ComplexityRoot.BindTranslationTargetPayload.Binding(childComplexity), true
 
 	case "CatalogObjectReference.apiVersion":
 		if e.ComplexityRoot.CatalogObjectReference.APIVersion == nil {
@@ -1938,6 +2104,41 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.CollectionStatus.Resolved(childComplexity), true
 
+	case "CollectionWatchEvent.collection":
+		if e.ComplexityRoot.CollectionWatchEvent.Collection == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionWatchEvent.Collection(childComplexity), true
+
+	case "CollectionWatchEvent.name":
+		if e.ComplexityRoot.CollectionWatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionWatchEvent.Name(childComplexity), true
+
+	case "CollectionWatchEvent.namespace":
+		if e.ComplexityRoot.CollectionWatchEvent.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionWatchEvent.Namespace(childComplexity), true
+
+	case "CollectionWatchEvent.resourceVersion":
+		if e.ComplexityRoot.CollectionWatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionWatchEvent.ResourceVersion(childComplexity), true
+
+	case "CollectionWatchEvent.type":
+		if e.ComplexityRoot.CollectionWatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.CollectionWatchEvent.Type(childComplexity), true
+
 	case "CompleteCategoryDeletionPayload.id":
 		if e.ComplexityRoot.CompleteCategoryDeletionPayload.ID == nil {
 			break
@@ -2435,6 +2636,34 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.FileChecksum.Value(childComplexity), true
 
+	case "FileConnection.edges":
+		if e.ComplexityRoot.FileConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileConnection.Edges(childComplexity), true
+
+	case "FileConnection.pageInfo":
+		if e.ComplexityRoot.FileConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileConnection.PageInfo(childComplexity), true
+
+	case "FileEdge.cursor":
+		if e.ComplexityRoot.FileEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileEdge.Cursor(childComplexity), true
+
+	case "FileEdge.node":
+		if e.ComplexityRoot.FileEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FileEdge.Node(childComplexity), true
+
 	case "FileImageProcessing.variants":
 		if e.ComplexityRoot.FileImageProcessing.Variants == nil {
 			break
@@ -2698,6 +2927,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.AssignUserGroup(childComplexity, args["input"].(model.AssignUserGroupInput)), true
+
+	case "Mutation.bindTranslationTarget":
+		if e.ComplexityRoot.Mutation.BindTranslationTarget == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_bindTranslationTarget_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.BindTranslationTarget(childComplexity, args["input"].(model.BindTranslationTargetInput)), true
 
 	case "Mutation.completeCategoryDeletion":
 		if e.ComplexityRoot.Mutation.CompleteCategoryDeletion == nil {
@@ -3365,6 +3606,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.UpdateRoleBinding(childComplexity, args["input"].(model.UpdateRoleBindingInput)), true
+
+	case "Mutation.updateTranslationStatus":
+		if e.ComplexityRoot.Mutation.UpdateTranslationStatus == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_updateTranslationStatus_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.UpdateTranslationStatus(childComplexity, args["input"].(model.UpdateTranslationStatusInput)), true
 
 	case "Mutation.updateUser":
 		if e.ComplexityRoot.Mutation.UpdateUser == nil {
@@ -4195,6 +4448,41 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ProductVariantStatus.Resolved(childComplexity), true
 
+	case "ProductVariantWatchEvent.name":
+		if e.ComplexityRoot.ProductVariantWatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantWatchEvent.Name(childComplexity), true
+
+	case "ProductVariantWatchEvent.namespace":
+		if e.ComplexityRoot.ProductVariantWatchEvent.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantWatchEvent.Namespace(childComplexity), true
+
+	case "ProductVariantWatchEvent.productVariant":
+		if e.ComplexityRoot.ProductVariantWatchEvent.ProductVariant == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantWatchEvent.ProductVariant(childComplexity), true
+
+	case "ProductVariantWatchEvent.resourceVersion":
+		if e.ComplexityRoot.ProductVariantWatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantWatchEvent.ResourceVersion(childComplexity), true
+
+	case "ProductVariantWatchEvent.type":
+		if e.ComplexityRoot.ProductVariantWatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ProductVariantWatchEvent.Type(childComplexity), true
+
 	case "ProductWatchEvent.name":
 		if e.ComplexityRoot.ProductWatchEvent.Name == nil {
 			break
@@ -4402,6 +4690,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.File(childComplexity, args["by"].(model.FileBy)), true
 
+	case "Query.files":
+		if e.ComplexityRoot.Query.Files == nil {
+			break
+		}
+
+		args, err := ec.field_Query_files_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.Files(childComplexity, args["namespace"].(string), args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
+
 	case "Query.namespace":
 		if e.ComplexityRoot.Query.Namespace == nil {
 			break
@@ -4570,6 +4870,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Query.Roles(childComplexity, args["namespace"].(string), args["first"].(*int32), args["after"].(*string), args["selector"].(*model.LabelSelectorInput)), true
 
+	case "Query.scanTranslationDependents":
+		if e.ComplexityRoot.Query.ScanTranslationDependents == nil {
+			break
+		}
+
+		args, err := ec.field_Query_scanTranslationDependents_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ScanTranslationDependents(childComplexity, args["target"].(model.TranslationDependencyInput), args["limit"].(*int32), args["continuation"].(*string)), true
+
 	case "Query.serviceAccounts":
 		if e.ComplexityRoot.Query.ServiceAccounts == nil {
 			break
@@ -4581,6 +4893,66 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.ServiceAccounts(childComplexity, args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
+
+	case "Query.translation":
+		if e.ComplexityRoot.Query.Translation == nil {
+			break
+		}
+
+		args, err := ec.field_Query_translation_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.Translation(childComplexity, args["by"].(model.TranslationBy)), true
+
+	case "Query.translationBinding":
+		if e.ComplexityRoot.Query.TranslationBinding == nil {
+			break
+		}
+
+		args, err := ec.field_Query_translationBinding_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.TranslationBinding(childComplexity, args["namespace"].(string), args["name"].(string)), true
+
+	case "Query.translationTargetObservation":
+		if e.ComplexityRoot.Query.TranslationTargetObservation == nil {
+			break
+		}
+
+		args, err := ec.field_Query_translationTargetObservation_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.TranslationTargetObservation(childComplexity, args["namespace"].(string), args["apiVersion"].(string), args["kind"].(string), args["name"].(string)), true
+
+	case "Query.translationValidationSnapshot":
+		if e.ComplexityRoot.Query.TranslationValidationSnapshot == nil {
+			break
+		}
+
+		args, err := ec.field_Query_translationValidationSnapshot_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.TranslationValidationSnapshot(childComplexity, args["namespace"].(string), args["name"].(string), args["sourceID"].(string), args["sourceVersion"].(string)), true
+
+	case "Query.translations":
+		if e.ComplexityRoot.Query.Translations == nil {
+			break
+		}
+
+		args, err := ec.field_Query_translations_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.Translations(childComplexity, args["namespace"].(string), args["first"].(*int32), args["after"].(*string), args["last"].(*int32), args["before"].(*string)), true
 
 	case "RBACAttributeCondition.attr":
 		if e.ComplexityRoot.RBACAttributeCondition.Attr == nil {
@@ -5268,6 +5640,27 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.ResolvedRepositoryDefinition.StoragePath(childComplexity), true
 
+	case "ResolvedTranslation.canonicalLocale":
+		if e.ComplexityRoot.ResolvedTranslation.CanonicalLocale == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedTranslation.CanonicalLocale(childComplexity), true
+
+	case "ResolvedTranslation.target":
+		if e.ComplexityRoot.ResolvedTranslation.Target == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedTranslation.Target(childComplexity), true
+
+	case "ResolvedTranslation.validatedFieldPaths":
+		if e.ComplexityRoot.ResolvedTranslation.ValidatedFieldPaths == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ResolvedTranslation.ValidatedFieldPaths(childComplexity), true
+
 	case "ResourceOwner.kind":
 		if e.ComplexityRoot.ResourceOwner.Kind == nil {
 			break
@@ -5941,6 +6334,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.Subscription.WatchClusterRoles(childComplexity, args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
 
+	case "Subscription.watchCollections":
+		if e.ComplexityRoot.Subscription.WatchCollections == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchCollections_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchCollections(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
 	case "Subscription.watchFiles":
 		if e.ComplexityRoot.Subscription.WatchFiles == nil {
 			break
@@ -5964,6 +6369,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.WatchNamespaces(childComplexity, args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
+	case "Subscription.watchProductVariants":
+		if e.ComplexityRoot.Subscription.WatchProductVariants == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchProductVariants_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchProductVariants(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
 
 	case "Subscription.watchProducts":
 		if e.ComplexityRoot.Subscription.WatchProducts == nil {
@@ -6024,6 +6441,18 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Subscription.WatchRoles(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
+
+	case "Subscription.watchTranslations":
+		if e.ComplexityRoot.Subscription.WatchTranslations == nil {
+			break
+		}
+
+		args, err := ec.field_Subscription_watchTranslations_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Subscription.WatchTranslations(childComplexity, args["namespace"].(*string), args["selector"].(*model.LabelSelectorInput), args["resourceVersion"].(*string)), true
 
 	case "SuspendUserPayload.actor":
 		if e.ComplexityRoot.SuspendUserPayload.Actor == nil {
@@ -6144,6 +6573,440 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.TransferNamespaceOwnerPayload.Namespace(childComplexity), true
 
+	case "Translation.apiVersion":
+		if e.ComplexityRoot.Translation.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Translation.APIVersion(childComplexity), true
+
+	case "Translation.body":
+		if e.ComplexityRoot.Translation.Body == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Translation.Body(childComplexity), true
+
+	case "Translation.id":
+		if e.ComplexityRoot.Translation.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Translation.ID(childComplexity), true
+
+	case "Translation.kind":
+		if e.ComplexityRoot.Translation.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Translation.Kind(childComplexity), true
+
+	case "Translation.metadata":
+		if e.ComplexityRoot.Translation.Metadata == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Translation.Metadata(childComplexity), true
+
+	case "Translation.spec":
+		if e.ComplexityRoot.Translation.Spec == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Translation.Spec(childComplexity), true
+
+	case "Translation.status":
+		if e.ComplexityRoot.Translation.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Translation.Status(childComplexity), true
+
+	case "TranslationBinding.bindingVersion":
+		if e.ComplexityRoot.TranslationBinding.BindingVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationBinding.BindingVersion(childComplexity), true
+
+	case "TranslationBinding.boundUID":
+		if e.ComplexityRoot.TranslationBinding.BoundUID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationBinding.BoundUID(childComplexity), true
+
+	case "TranslationBinding.namespaceUID":
+		if e.ComplexityRoot.TranslationBinding.NamespaceUID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationBinding.NamespaceUID(childComplexity), true
+
+	case "TranslationBinding.referenceEpoch":
+		if e.ComplexityRoot.TranslationBinding.ReferenceEpoch == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationBinding.ReferenceEpoch(childComplexity), true
+
+	case "TranslationBinding.sourceVersion":
+		if e.ComplexityRoot.TranslationBinding.SourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationBinding.SourceVersion(childComplexity), true
+
+	case "TranslationBinding.translationID":
+		if e.ComplexityRoot.TranslationBinding.TranslationID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationBinding.TranslationID(childComplexity), true
+
+	case "TranslationConnection.edges":
+		if e.ComplexityRoot.TranslationConnection.Edges == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationConnection.Edges(childComplexity), true
+
+	case "TranslationConnection.pageInfo":
+		if e.ComplexityRoot.TranslationConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationConnection.PageInfo(childComplexity), true
+
+	case "TranslationDependent.referenceEpoch":
+		if e.ComplexityRoot.TranslationDependent.ReferenceEpoch == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationDependent.ReferenceEpoch(childComplexity), true
+
+	case "TranslationDependent.sourceVersion":
+		if e.ComplexityRoot.TranslationDependent.SourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationDependent.SourceVersion(childComplexity), true
+
+	case "TranslationDependent.translationID":
+		if e.ComplexityRoot.TranslationDependent.TranslationID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationDependent.TranslationID(childComplexity), true
+
+	case "TranslationDependentScan.continuation":
+		if e.ComplexityRoot.TranslationDependentScan.Continuation == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationDependentScan.Continuation(childComplexity), true
+
+	case "TranslationDependentScan.items":
+		if e.ComplexityRoot.TranslationDependentScan.Items == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationDependentScan.Items(childComplexity), true
+
+	case "TranslationEdge.cursor":
+		if e.ComplexityRoot.TranslationEdge.Cursor == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationEdge.Cursor(childComplexity), true
+
+	case "TranslationEdge.node":
+		if e.ComplexityRoot.TranslationEdge.Node == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationEdge.Node(childComplexity), true
+
+	case "TranslationPatch.fieldPath":
+		if e.ComplexityRoot.TranslationPatch.FieldPath == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationPatch.FieldPath(childComplexity), true
+
+	case "TranslationPatch.translation":
+		if e.ComplexityRoot.TranslationPatch.Translation == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationPatch.Translation(childComplexity), true
+
+	case "TranslationSpec.locale":
+		if e.ComplexityRoot.TranslationSpec.Locale == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationSpec.Locale(childComplexity), true
+
+	case "TranslationSpec.patches":
+		if e.ComplexityRoot.TranslationSpec.Patches == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationSpec.Patches(childComplexity), true
+
+	case "TranslationSpec.targetRef":
+		if e.ComplexityRoot.TranslationSpec.TargetRef == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationSpec.TargetRef(childComplexity), true
+
+	case "TranslationStatus.conditions":
+		if e.ComplexityRoot.TranslationStatus.Conditions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationStatus.Conditions(childComplexity), true
+
+	case "TranslationStatus.lastAppliedRevision":
+		if e.ComplexityRoot.TranslationStatus.LastAppliedRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationStatus.LastAppliedRevision(childComplexity), true
+
+	case "TranslationStatus.observedGeneration":
+		if e.ComplexityRoot.TranslationStatus.ObservedGeneration == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationStatus.ObservedGeneration(childComplexity), true
+
+	case "TranslationStatus.resolved":
+		if e.ComplexityRoot.TranslationStatus.Resolved == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationStatus.Resolved(childComplexity), true
+
+	case "TranslationTargetEvidence.apiVersion":
+		if e.ComplexityRoot.TranslationTargetEvidence.APIVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationTargetEvidence.APIVersion(childComplexity), true
+
+	case "TranslationTargetEvidence.contentDigest":
+		if e.ComplexityRoot.TranslationTargetEvidence.ContentDigest == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationTargetEvidence.ContentDigest(childComplexity), true
+
+	case "TranslationTargetEvidence.generation":
+		if e.ComplexityRoot.TranslationTargetEvidence.Generation == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationTargetEvidence.Generation(childComplexity), true
+
+	case "TranslationTargetEvidence.kind":
+		if e.ComplexityRoot.TranslationTargetEvidence.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationTargetEvidence.Kind(childComplexity), true
+
+	case "TranslationTargetEvidence.name":
+		if e.ComplexityRoot.TranslationTargetEvidence.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationTargetEvidence.Name(childComplexity), true
+
+	case "TranslationTargetEvidence.namespace":
+		if e.ComplexityRoot.TranslationTargetEvidence.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationTargetEvidence.Namespace(childComplexity), true
+
+	case "TranslationTargetEvidence.resourceVersion":
+		if e.ComplexityRoot.TranslationTargetEvidence.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationTargetEvidence.ResourceVersion(childComplexity), true
+
+	case "TranslationTargetEvidence.revision":
+		if e.ComplexityRoot.TranslationTargetEvidence.Revision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationTargetEvidence.Revision(childComplexity), true
+
+	case "TranslationTargetEvidence.uid":
+		if e.ComplexityRoot.TranslationTargetEvidence.UID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationTargetEvidence.UID(childComplexity), true
+
+	case "TranslationTargetObservation.evidence":
+		if e.ComplexityRoot.TranslationTargetObservation.Evidence == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationTargetObservation.Evidence(childComplexity), true
+
+	case "TranslationTargetObservation.namespaceUID":
+		if e.ComplexityRoot.TranslationTargetObservation.NamespaceUID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationTargetObservation.NamespaceUID(childComplexity), true
+
+	case "TranslationValidationObservation.conditions":
+		if e.ComplexityRoot.TranslationValidationObservation.Conditions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationValidationObservation.Conditions(childComplexity), true
+
+	case "TranslationValidationObservation.lastAppliedRevision":
+		if e.ComplexityRoot.TranslationValidationObservation.LastAppliedRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationValidationObservation.LastAppliedRevision(childComplexity), true
+
+	case "TranslationValidationObservation.observedGeneration":
+		if e.ComplexityRoot.TranslationValidationObservation.ObservedGeneration == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationValidationObservation.ObservedGeneration(childComplexity), true
+
+	case "TranslationValidationObservation.resolved":
+		if e.ComplexityRoot.TranslationValidationObservation.Resolved == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationValidationObservation.Resolved(childComplexity), true
+
+	case "TranslationValidationSnapshot.binding":
+		if e.ComplexityRoot.TranslationValidationSnapshot.Binding == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationValidationSnapshot.Binding(childComplexity), true
+
+	case "TranslationValidationSnapshot.namespaceUID":
+		if e.ComplexityRoot.TranslationValidationSnapshot.NamespaceUID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationValidationSnapshot.NamespaceUID(childComplexity), true
+
+	case "TranslationValidationSnapshot.observation":
+		if e.ComplexityRoot.TranslationValidationSnapshot.Observation == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationValidationSnapshot.Observation(childComplexity), true
+
+	case "TranslationValidationSnapshot.sourceDigest":
+		if e.ComplexityRoot.TranslationValidationSnapshot.SourceDigest == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationValidationSnapshot.SourceDigest(childComplexity), true
+
+	case "TranslationValidationSnapshot.sourceID":
+		if e.ComplexityRoot.TranslationValidationSnapshot.SourceID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationValidationSnapshot.SourceID(childComplexity), true
+
+	case "TranslationValidationSnapshot.sourceVersion":
+		if e.ComplexityRoot.TranslationValidationSnapshot.SourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationValidationSnapshot.SourceVersion(childComplexity), true
+
+	case "TranslationValidationSnapshot.target":
+		if e.ComplexityRoot.TranslationValidationSnapshot.Target == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationValidationSnapshot.Target(childComplexity), true
+
+	case "TranslationValidationTarget.evidence":
+		if e.ComplexityRoot.TranslationValidationTarget.Evidence == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationValidationTarget.Evidence(childComplexity), true
+
+	case "TranslationValidationTarget.fields":
+		if e.ComplexityRoot.TranslationValidationTarget.Fields == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationValidationTarget.Fields(childComplexity), true
+
+	case "TranslationValidationTarget.namespace":
+		if e.ComplexityRoot.TranslationValidationTarget.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationValidationTarget.Namespace(childComplexity), true
+
+	case "TranslationWatchEvent.historical":
+		if e.ComplexityRoot.TranslationWatchEvent.Historical == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationWatchEvent.Historical(childComplexity), true
+
+	case "TranslationWatchEvent.name":
+		if e.ComplexityRoot.TranslationWatchEvent.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationWatchEvent.Name(childComplexity), true
+
+	case "TranslationWatchEvent.namespace":
+		if e.ComplexityRoot.TranslationWatchEvent.Namespace == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationWatchEvent.Namespace(childComplexity), true
+
+	case "TranslationWatchEvent.resourceVersion":
+		if e.ComplexityRoot.TranslationWatchEvent.ResourceVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationWatchEvent.ResourceVersion(childComplexity), true
+
+	case "TranslationWatchEvent.translation":
+		if e.ComplexityRoot.TranslationWatchEvent.Translation == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationWatchEvent.Translation(childComplexity), true
+
+	case "TranslationWatchEvent.type":
+		if e.ComplexityRoot.TranslationWatchEvent.Type == nil {
+			break
+		}
+
+		return e.ComplexityRoot.TranslationWatchEvent.Type(childComplexity), true
+
 	case "UpdateCategoryPayload.category":
 		if e.ComplexityRoot.UpdateCategoryPayload.Category == nil {
 			break
@@ -6242,6 +7105,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.UpdateRolePayload.Role(childComplexity), true
 
+	case "UpdateTranslationStatusPayload.translation":
+		if e.ComplexityRoot.UpdateTranslationStatusPayload.Translation == nil {
+			break
+		}
+
+		return e.ComplexityRoot.UpdateTranslationStatusPayload.Translation(childComplexity), true
+
 	case "UpdateUserPayload.actor":
 		if e.ComplexityRoot.UpdateUserPayload.Actor == nil {
 			break
@@ -6323,6 +7193,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputAccessReviewInput,
 		ec.unmarshalInputActorBy,
 		ec.unmarshalInputAssignUserGroupInput,
+		ec.unmarshalInputBindTranslationTargetInput,
 		ec.unmarshalInputCatalogObjectReferenceInput,
 		ec.unmarshalInputCategoryBy,
 		ec.unmarshalInputCategoryFilterInput,
@@ -6404,6 +7275,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputResolvedCategoryRefInput,
 		ec.unmarshalInputResolvedCategoryTaxonomyInput,
 		ec.unmarshalInputResolvedProductStatusInput,
+		ec.unmarshalInputResolvedTranslationInput,
 		ec.unmarshalInputResourceOwnerInput,
 		ec.unmarshalInputRoleBindingBy,
 		ec.unmarshalInputRoleBindingSpecInput,
@@ -6418,6 +7290,10 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputSuspendUserInput,
 		ec.unmarshalInputTokenRequestSpecInput,
 		ec.unmarshalInputTransferNamespaceOwnerInput,
+		ec.unmarshalInputTranslationBy,
+		ec.unmarshalInputTranslationDependencyInput,
+		ec.unmarshalInputTranslationNamespacePath,
+		ec.unmarshalInputTranslationTargetEvidenceInput,
 		ec.unmarshalInputUpdateCategoryInput,
 		ec.unmarshalInputUpdateCategoryStatusInput,
 		ec.unmarshalInputUpdateClusterRoleBindingInput,
@@ -6431,6 +7307,7 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputUpdateResourceStatusInput,
 		ec.unmarshalInputUpdateRoleBindingInput,
 		ec.unmarshalInputUpdateRoleInput,
+		ec.unmarshalInputUpdateTranslationStatusInput,
 		ec.unmarshalInputUpdateUserInput,
 	)
 	first := true
@@ -7073,6 +7950,26 @@ extend type Query {
   ): CollectionConnection!
 }
 
+extend type Subscription {
+  """
+  Durable Collection changes, resumable across API replicas within journal
+  retention. Capture the shared bootstrap bookmark before listing current state.
+  """
+  watchCollections(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): CollectionWatchEvent!
+}
+
+type CollectionWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+  collection: Collection
+}
+
 """
 A Collection is a namespace-scoped catalog resource that groups products via
 a declarative label selector. Defined by git push; mutations are not supported.
@@ -7251,6 +8148,27 @@ extend type Query {
   This does not subscribe to events.
   """
   file(by: FileBy!): File
+
+  """
+  List persisted Files in a namespace with Relay cursor-based pagination.
+  """
+  files(
+    namespace: String!
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): FileConnection!
+}
+
+type FileConnection {
+  edges: [FileEdge!]!
+  pageInfo: PageInfo!
+}
+
+type FileEdge {
+  cursor: String!
+  node: File!
 }
 
 """
@@ -8120,6 +9038,26 @@ extend type Query {
     last: Int
     before: String
   ): ProductVariantConnection!
+}
+
+extend type Subscription {
+  """
+  Durable ProductVariant changes, resumable across API replicas within journal
+  retention. Capture the shared bootstrap bookmark before listing current state.
+  """
+  watchProductVariants(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): ProductVariantWatchEvent!
+}
+
+type ProductVariantWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+  productVariant: ProductVariant
 }
 
 """
@@ -9516,7 +10454,8 @@ type Mutation {
 type Subscription {
   """
   Generic list-then-watch entry point for every kind with a durable watch
-  journal source: Namespace, Repository, CategoryTaxonomy, Product and File
+  journal source: Namespace, Repository, CategoryTaxonomy, Product,
+  ProductVariant, Collection and File
   today, and CRD-defined kinds once they register a source. Core kinds SHOULD prefer their dedicated per-kind subscription
   (e.g. watchCategories) for compile-time-typed payloads. A kind without a
   journal source is rejected with an UNSUPPORTED_KIND extension error
@@ -9525,8 +10464,8 @@ type Subscription {
   Behavior:
   - resourceVersion omitted/empty: no implicit "list" is performed —
     subscriptions deliver only a stream. Callers obtain the initial
-    list via the kind's existing list query and then open this
-    subscription with the resourceVersion returned by that list.
+    list via the kind's existing paginated query. Capture the shared bootstrap
+    bookmark before listing, then resume the subscription from that bookmark.
   - resourceVersion present but expired (older than server retention):
     the subscription terminates immediately with a WATCH_EXPIRED
     extension error instead of silently resuming from scratch.
@@ -9601,6 +10540,11 @@ input UpdateResourceStatusInput {
   kind: String!
   name: String!
   namespace: String!
+  """
+  Source lifetime UID, required and enforced for Translation. Other kinds
+  retain their existing status preconditions.
+  """
+  uid: ID
   resourceVersion: String!
   observedGeneration: Int
   lastAppliedRevision: String
@@ -10018,6 +10962,263 @@ extend type Mutation {
   deleteServiceAccount(input: DeleteServiceAccountInput!): DeleteServiceAccountPayload!
 }
 `, BuiltIn: false},
+	{Name: "../../../../../shared/schemas/admin/translation.graphqls", Input: `"""
+A Git-authored translation document. Validation never applies its text to the
+target. Runtime operations remain unavailable until admission is activated.
+"""
+type Translation implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: TranslationSpec!
+  body: String
+  status: TranslationStatus
+}
+
+type TranslationSpec {
+  locale: String!
+  targetRef: CatalogObjectReference!
+  patches: [TranslationPatch!]!
+}
+
+type TranslationPatch {
+  fieldPath: String!
+  translation: String!
+}
+
+"""
+Guarded current status. lastAppliedRevision identifies the Translation source
+successfully reconciled, including unresolved observations, not target changes.
+"""
+type TranslationStatus {
+  observedGeneration: Int!
+  lastAppliedRevision: String!
+  conditions: [Condition!]!
+  resolved: ResolvedTranslation
+}
+
+type ResolvedTranslation {
+  canonicalLocale: String
+  target: TranslationTargetEvidence
+  validatedFieldPaths: [String!]!
+}
+
+type TranslationTargetEvidence {
+  apiVersion: String!
+  kind: String!
+  namespace: String!
+  name: String!
+  uid: ID!
+  generation: Int!
+  revision: String!
+  resourceVersion: String!
+  contentDigest: String!
+}
+
+input TranslationBy @oneOf {
+  id: ID
+  namespacePath: TranslationNamespacePath
+}
+
+input TranslationNamespacePath {
+  namespace: String!
+  name: String!
+}
+
+type TranslationEdge {
+  cursor: String!
+  node: Translation!
+}
+
+type TranslationConnection {
+  edges: [TranslationEdge!]!
+  pageInfo: PageInfo!
+}
+
+type TranslationWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+  translation: Translation
+  historical: Boolean!
+}
+
+extend type Subscription {
+  """Durable changes. Historical payloads do not advertise current Ready."""
+  watchTranslations(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): TranslationWatchEvent!
+}
+
+input UpdateTranslationStatusInput {
+  name: String!
+  namespace: String!
+  """The source lifetime UID returned by Translation metadata."""
+  uid: ID!
+  resourceVersion: String!
+  observedGeneration: Int!
+  lastAppliedRevision: String!
+  conditions: [ConditionInput!]!
+  resolved: ResolvedTranslationInput
+}
+
+input ResolvedTranslationInput {
+  canonicalLocale: String
+  descriptorDigest: String!
+  sourceDigest: String!
+  target: TranslationTargetEvidenceInput
+  validatedFieldPaths: [String!]!
+}
+
+input TranslationTargetEvidenceInput {
+  apiVersion: String!
+  kind: String!
+  namespace: String!
+  name: String!
+  uid: ID!
+  generation: Int!
+  revision: String!
+  resourceVersion: String!
+  contentDigest: String!
+}
+
+type UpdateTranslationStatusPayload {
+  translation: Translation
+}
+
+"""Controller-only sticky reference state, separate from public status."""
+type TranslationBinding {
+  translationID: ID!
+  sourceVersion: String!
+  bindingVersion: String!
+  referenceEpoch: String!
+  namespaceUID: ID!
+  boundUID: ID
+}
+
+input BindTranslationTargetInput {
+  namespace: String!
+  name: String!
+  translationID: ID!
+  sourceVersion: String!
+  bindingVersion: String!
+  referenceEpoch: String!
+  targetUID: ID!
+}
+
+type BindTranslationTargetPayload {
+  binding: TranslationBinding!
+}
+
+input TranslationDependencyInput {
+  namespace: String!
+  namespaceUID: ID!
+  apiVersion: String!
+  kind: String!
+  name: String!
+  uid: ID
+}
+
+type TranslationDependent {
+  translationID: ID!
+  sourceVersion: String!
+  referenceEpoch: String!
+}
+
+"""One bounded controller scan turn, not a Relay resource connection."""
+type TranslationDependentScan {
+  items: [TranslationDependent!]!
+  """Opaque scan progress. Continue even when items is empty; null means exhausted."""
+  continuation: String
+}
+
+"""Controller-only source and target evidence from one bounded validation turn."""
+type TranslationValidationSnapshot {
+  sourceID: ID!
+  sourceVersion: String!
+  sourceDigest: String!
+  namespaceUID: ID!
+  binding: TranslationBinding!
+  target: TranslationValidationTarget
+  """Stored observation for controller convergence, not a claim of current target validity."""
+  observation: TranslationValidationObservation
+}
+
+"""Controller-only stored common status, including private validation fingerprints."""
+type TranslationValidationObservation {
+  observedGeneration: Int!
+  lastAppliedRevision: String!
+  conditions: [Condition!]!
+  resolved: JSON
+}
+
+type TranslationValidationTarget {
+  namespace: String!
+  evidence: TranslationTargetEvidence!
+  """Authorized raw spec fields with authored names; absent and null leaves are preserved."""
+  fields: JSON!
+}
+
+"""Controller-only thin material proof for classifying invalidation hints."""
+type TranslationTargetObservation {
+  namespaceUID: ID!
+  evidence: TranslationTargetEvidence!
+}
+
+extend type Query {
+  """Read a Translation by global ID or namespace and name."""
+  translation(by: TranslationBy!): Translation
+
+  """Namespace-bound paging, default 100 and maximum 256 per page."""
+  translations(
+    namespace: String!
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): TranslationConnection!
+
+  """Controller-only point observation without reading target spec or body."""
+  translationTargetObservation(
+    namespace: String!
+    apiVersion: String!
+    kind: String!
+    name: String!
+  ): TranslationTargetObservation!
+
+  """Controller-only source/version-fenced binding observation."""
+  translationBinding(namespace: String!, name: String!): TranslationBinding!
+
+  """Controller-only validation input; unavailable proof is an error, never target absence."""
+  translationValidationSnapshot(
+    namespace: String!
+    name: String!
+    sourceID: ID!
+    sourceVersion: String!
+  ): TranslationValidationSnapshot!
+
+  """Controller-only reverse-reference scan; hints are not authority or proof of target existence."""
+  scanTranslationDependents(
+    target: TranslationDependencyInput!
+    """Scan row budget, default and maximum 256; minimum 1. Probe limits also bound each turn."""
+    limit: Int
+    """Resume the same target and Namespace lifetime using the previous turn's continuation."""
+    continuation: String
+  ): TranslationDependentScan!
+}
+
+extend type Mutation {
+  """Bind the current reference epoch once, without changing source or status."""
+  bindTranslationTarget(input: BindTranslationTargetInput!): BindTranslationTargetPayload!
+
+  """Controller-only observation CAS; the response always uses the read guard."""
+  updateTranslationStatus(input: UpdateTranslationStatusInput!): UpdateTranslationStatusPayload!
+}
+`, BuiltIn: false},
 	{Name: "../../../../../shared/schemas/admin/user.graphqls", Input: `"""Shared identity and contact fields for externally managed human users."""
 interface User implements Actor & Node {
   id: ID!
@@ -10225,6 +11426,14 @@ func (ec *executionContext) childFields_AssignUserGroupPayload(ctx context.Conte
 		return ec.fieldContext_AssignUserGroupPayload_actor(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type AssignUserGroupPayload", field.Name)
+}
+
+func (ec *executionContext) childFields_BindTranslationTargetPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "binding":
+		return ec.fieldContext_BindTranslationTargetPayload_binding(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type BindTranslationTargetPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_CatalogObjectReference(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -10523,6 +11732,22 @@ func (ec *executionContext) childFields_CollectionStatus(ctx context.Context, fi
 		return ec.fieldContext_CollectionStatus_resolved(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type CollectionStatus", field.Name)
+}
+
+func (ec *executionContext) childFields_CollectionWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_CollectionWatchEvent_type(ctx, field)
+	case "namespace":
+		return ec.fieldContext_CollectionWatchEvent_namespace(ctx, field)
+	case "name":
+		return ec.fieldContext_CollectionWatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_CollectionWatchEvent_resourceVersion(ctx, field)
+	case "collection":
+		return ec.fieldContext_CollectionWatchEvent_collection(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type CollectionWatchEvent", field.Name)
 }
 
 func (ec *executionContext) childFields_CompleteCategoryDeletionPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -10851,6 +12076,26 @@ func (ec *executionContext) childFields_FileChecksum(ctx context.Context, field 
 		return ec.fieldContext_FileChecksum_value(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type FileChecksum", field.Name)
+}
+
+func (ec *executionContext) childFields_FileConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "edges":
+		return ec.fieldContext_FileConnection_edges(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_FileConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FileConnection", field.Name)
+}
+
+func (ec *executionContext) childFields_FileEdge(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "cursor":
+		return ec.fieldContext_FileEdge_cursor(ctx, field)
+	case "node":
+		return ec.fieldContext_FileEdge_node(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type FileEdge", field.Name)
 }
 
 func (ec *executionContext) childFields_FileImageProcessing(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -11421,6 +12666,22 @@ func (ec *executionContext) childFields_ProductVariantStatus(ctx context.Context
 	return nil, fmt.Errorf("no field named %q was found under type ProductVariantStatus", field.Name)
 }
 
+func (ec *executionContext) childFields_ProductVariantWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_ProductVariantWatchEvent_type(ctx, field)
+	case "namespace":
+		return ec.fieldContext_ProductVariantWatchEvent_namespace(ctx, field)
+	case "name":
+		return ec.fieldContext_ProductVariantWatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_ProductVariantWatchEvent_resourceVersion(ctx, field)
+	case "productVariant":
+		return ec.fieldContext_ProductVariantWatchEvent_productVariant(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ProductVariantWatchEvent", field.Name)
+}
+
 func (ec *executionContext) childFields_ProductWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "type":
@@ -11845,6 +13106,18 @@ func (ec *executionContext) childFields_ResolvedRepositoryDefinition(ctx context
 	return nil, fmt.Errorf("no field named %q was found under type ResolvedRepositoryDefinition", field.Name)
 }
 
+func (ec *executionContext) childFields_ResolvedTranslation(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "canonicalLocale":
+		return ec.fieldContext_ResolvedTranslation_canonicalLocale(ctx, field)
+	case "target":
+		return ec.fieldContext_ResolvedTranslation_target(ctx, field)
+	case "validatedFieldPaths":
+		return ec.fieldContext_ResolvedTranslation_validatedFieldPaths(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type ResolvedTranslation", field.Name)
+}
+
 func (ec *executionContext) childFields_ResourceOwner(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "kind":
@@ -12259,6 +13532,220 @@ func (ec *executionContext) childFields_TransferNamespaceOwnerPayload(ctx contex
 	return nil, fmt.Errorf("no field named %q was found under type TransferNamespaceOwnerPayload", field.Name)
 }
 
+func (ec *executionContext) childFields_Translation(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_Translation_id(ctx, field)
+	case "apiVersion":
+		return ec.fieldContext_Translation_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_Translation_kind(ctx, field)
+	case "metadata":
+		return ec.fieldContext_Translation_metadata(ctx, field)
+	case "spec":
+		return ec.fieldContext_Translation_spec(ctx, field)
+	case "body":
+		return ec.fieldContext_Translation_body(ctx, field)
+	case "status":
+		return ec.fieldContext_Translation_status(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type Translation", field.Name)
+}
+
+func (ec *executionContext) childFields_TranslationBinding(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "translationID":
+		return ec.fieldContext_TranslationBinding_translationID(ctx, field)
+	case "sourceVersion":
+		return ec.fieldContext_TranslationBinding_sourceVersion(ctx, field)
+	case "bindingVersion":
+		return ec.fieldContext_TranslationBinding_bindingVersion(ctx, field)
+	case "referenceEpoch":
+		return ec.fieldContext_TranslationBinding_referenceEpoch(ctx, field)
+	case "namespaceUID":
+		return ec.fieldContext_TranslationBinding_namespaceUID(ctx, field)
+	case "boundUID":
+		return ec.fieldContext_TranslationBinding_boundUID(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TranslationBinding", field.Name)
+}
+
+func (ec *executionContext) childFields_TranslationConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "edges":
+		return ec.fieldContext_TranslationConnection_edges(ctx, field)
+	case "pageInfo":
+		return ec.fieldContext_TranslationConnection_pageInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TranslationConnection", field.Name)
+}
+
+func (ec *executionContext) childFields_TranslationDependent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "translationID":
+		return ec.fieldContext_TranslationDependent_translationID(ctx, field)
+	case "sourceVersion":
+		return ec.fieldContext_TranslationDependent_sourceVersion(ctx, field)
+	case "referenceEpoch":
+		return ec.fieldContext_TranslationDependent_referenceEpoch(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TranslationDependent", field.Name)
+}
+
+func (ec *executionContext) childFields_TranslationDependentScan(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "items":
+		return ec.fieldContext_TranslationDependentScan_items(ctx, field)
+	case "continuation":
+		return ec.fieldContext_TranslationDependentScan_continuation(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TranslationDependentScan", field.Name)
+}
+
+func (ec *executionContext) childFields_TranslationEdge(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "cursor":
+		return ec.fieldContext_TranslationEdge_cursor(ctx, field)
+	case "node":
+		return ec.fieldContext_TranslationEdge_node(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TranslationEdge", field.Name)
+}
+
+func (ec *executionContext) childFields_TranslationPatch(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "fieldPath":
+		return ec.fieldContext_TranslationPatch_fieldPath(ctx, field)
+	case "translation":
+		return ec.fieldContext_TranslationPatch_translation(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TranslationPatch", field.Name)
+}
+
+func (ec *executionContext) childFields_TranslationSpec(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "locale":
+		return ec.fieldContext_TranslationSpec_locale(ctx, field)
+	case "targetRef":
+		return ec.fieldContext_TranslationSpec_targetRef(ctx, field)
+	case "patches":
+		return ec.fieldContext_TranslationSpec_patches(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TranslationSpec", field.Name)
+}
+
+func (ec *executionContext) childFields_TranslationStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "observedGeneration":
+		return ec.fieldContext_TranslationStatus_observedGeneration(ctx, field)
+	case "lastAppliedRevision":
+		return ec.fieldContext_TranslationStatus_lastAppliedRevision(ctx, field)
+	case "conditions":
+		return ec.fieldContext_TranslationStatus_conditions(ctx, field)
+	case "resolved":
+		return ec.fieldContext_TranslationStatus_resolved(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TranslationStatus", field.Name)
+}
+
+func (ec *executionContext) childFields_TranslationTargetEvidence(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "apiVersion":
+		return ec.fieldContext_TranslationTargetEvidence_apiVersion(ctx, field)
+	case "kind":
+		return ec.fieldContext_TranslationTargetEvidence_kind(ctx, field)
+	case "namespace":
+		return ec.fieldContext_TranslationTargetEvidence_namespace(ctx, field)
+	case "name":
+		return ec.fieldContext_TranslationTargetEvidence_name(ctx, field)
+	case "uid":
+		return ec.fieldContext_TranslationTargetEvidence_uid(ctx, field)
+	case "generation":
+		return ec.fieldContext_TranslationTargetEvidence_generation(ctx, field)
+	case "revision":
+		return ec.fieldContext_TranslationTargetEvidence_revision(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_TranslationTargetEvidence_resourceVersion(ctx, field)
+	case "contentDigest":
+		return ec.fieldContext_TranslationTargetEvidence_contentDigest(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TranslationTargetEvidence", field.Name)
+}
+
+func (ec *executionContext) childFields_TranslationTargetObservation(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "namespaceUID":
+		return ec.fieldContext_TranslationTargetObservation_namespaceUID(ctx, field)
+	case "evidence":
+		return ec.fieldContext_TranslationTargetObservation_evidence(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TranslationTargetObservation", field.Name)
+}
+
+func (ec *executionContext) childFields_TranslationValidationObservation(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "observedGeneration":
+		return ec.fieldContext_TranslationValidationObservation_observedGeneration(ctx, field)
+	case "lastAppliedRevision":
+		return ec.fieldContext_TranslationValidationObservation_lastAppliedRevision(ctx, field)
+	case "conditions":
+		return ec.fieldContext_TranslationValidationObservation_conditions(ctx, field)
+	case "resolved":
+		return ec.fieldContext_TranslationValidationObservation_resolved(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TranslationValidationObservation", field.Name)
+}
+
+func (ec *executionContext) childFields_TranslationValidationSnapshot(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "sourceID":
+		return ec.fieldContext_TranslationValidationSnapshot_sourceID(ctx, field)
+	case "sourceVersion":
+		return ec.fieldContext_TranslationValidationSnapshot_sourceVersion(ctx, field)
+	case "sourceDigest":
+		return ec.fieldContext_TranslationValidationSnapshot_sourceDigest(ctx, field)
+	case "namespaceUID":
+		return ec.fieldContext_TranslationValidationSnapshot_namespaceUID(ctx, field)
+	case "binding":
+		return ec.fieldContext_TranslationValidationSnapshot_binding(ctx, field)
+	case "target":
+		return ec.fieldContext_TranslationValidationSnapshot_target(ctx, field)
+	case "observation":
+		return ec.fieldContext_TranslationValidationSnapshot_observation(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TranslationValidationSnapshot", field.Name)
+}
+
+func (ec *executionContext) childFields_TranslationValidationTarget(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "namespace":
+		return ec.fieldContext_TranslationValidationTarget_namespace(ctx, field)
+	case "evidence":
+		return ec.fieldContext_TranslationValidationTarget_evidence(ctx, field)
+	case "fields":
+		return ec.fieldContext_TranslationValidationTarget_fields(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TranslationValidationTarget", field.Name)
+}
+
+func (ec *executionContext) childFields_TranslationWatchEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "type":
+		return ec.fieldContext_TranslationWatchEvent_type(ctx, field)
+	case "namespace":
+		return ec.fieldContext_TranslationWatchEvent_namespace(ctx, field)
+	case "name":
+		return ec.fieldContext_TranslationWatchEvent_name(ctx, field)
+	case "resourceVersion":
+		return ec.fieldContext_TranslationWatchEvent_resourceVersion(ctx, field)
+	case "translation":
+		return ec.fieldContext_TranslationWatchEvent_translation(ctx, field)
+	case "historical":
+		return ec.fieldContext_TranslationWatchEvent_historical(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type TranslationWatchEvent", field.Name)
+}
+
 func (ec *executionContext) childFields_UpdateCategoryPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "category":
@@ -12363,6 +13850,14 @@ func (ec *executionContext) childFields_UpdateRolePayload(ctx context.Context, f
 		return ec.fieldContext_UpdateRolePayload_role(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UpdateRolePayload", field.Name)
+}
+
+func (ec *executionContext) childFields_UpdateTranslationStatusPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "translation":
+		return ec.fieldContext_UpdateTranslationStatusPayload_translation(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UpdateTranslationStatusPayload", field.Name)
 }
 
 func (ec *executionContext) childFields_UpdateUserPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {

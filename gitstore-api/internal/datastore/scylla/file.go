@@ -16,30 +16,32 @@ import (
 )
 
 type fileRow struct {
-	Namespace         string            `db:"namespace"`
-	CreationTimestamp time.Time         `db:"creation_timestamp"`
-	UID               gocql.UUID        `db:"uid"`
-	Name              string            `db:"name"`
-	APIVersion        string            `db:"api_version"`
-	Kind              string            `db:"kind"`
-	Generation        int64             `db:"generation"`
-	ResourceVersion   string            `db:"resource_version"`
-	Revision          string            `db:"revision"`
-	CreationActor     string            `db:"creation_actor"`
-	UpdateTimestamp   time.Time         `db:"update_timestamp"`
-	UpdateActor       string            `db:"update_actor"`
-	Labels            map[string]string `db:"labels"`
-	Annotations       map[string]string `db:"annotations"`
-	OwnerReferences   string            `db:"owner_references"`
-	Finalizers        []string          `db:"finalizers"`
-	DeletionTimestamp *time.Time        `db:"deletion_timestamp"`
-	RepositoryID      *gocql.UUID       `db:"repository_id"`
-	SourcePath        string            `db:"source_path"`
-	GitCommitSHA      string            `db:"git_commit_sha"`
-	GitRef            string            `db:"git_ref"`
-	Spec              string            `db:"spec"`
-	Body              string            `db:"body"`
-	Status            string            `db:"status"`
+	TranslationSourceIdentity string            `db:"translation_source_identity"`
+	TranslationRetired        *bool             `db:"translation_retired"`
+	Namespace                 string            `db:"namespace"`
+	CreationTimestamp         time.Time         `db:"creation_timestamp"`
+	UID                       gocql.UUID        `db:"uid"`
+	Name                      string            `db:"name"`
+	APIVersion                string            `db:"api_version"`
+	Kind                      string            `db:"kind"`
+	Generation                int64             `db:"generation"`
+	ResourceVersion           string            `db:"resource_version"`
+	Revision                  string            `db:"revision"`
+	CreationActor             string            `db:"creation_actor"`
+	UpdateTimestamp           time.Time         `db:"update_timestamp"`
+	UpdateActor               string            `db:"update_actor"`
+	Labels                    map[string]string `db:"labels"`
+	Annotations               map[string]string `db:"annotations"`
+	OwnerReferences           string            `db:"owner_references"`
+	Finalizers                []string          `db:"finalizers"`
+	DeletionTimestamp         *time.Time        `db:"deletion_timestamp"`
+	RepositoryID              *gocql.UUID       `db:"repository_id"`
+	SourcePath                string            `db:"source_path"`
+	GitCommitSHA              string            `db:"git_commit_sha"`
+	GitRef                    string            `db:"git_ref"`
+	Spec                      string            `db:"spec"`
+	Body                      string            `db:"body"`
+	Status                    string            `db:"status"`
 }
 
 type fileIndexRow struct {
@@ -77,20 +79,31 @@ func (s *scyllaDatastore) createFile(ctx context.Context, f *datastore.File) err
 		f.CreationTimestamp = time.Now().UTC().Truncate(time.Millisecond)
 	}
 	row := toFileRow(f)
-	applied, err := s.insertAuthoritative(ctx, s.fileByNamespaceTable, row)
+	if err := s.freezeTranslationTargetBirth(ctx, row); err != nil {
+		return err
+	}
+	nameReserved, err := s.reserveNameOwned(ctx, "File", "files_by_name", row.Namespace, row.Name, uid, row.CreationTimestamp)
 	if err != nil {
 		return err
 	}
-	if !applied {
-		return datastore.ErrAlreadyExists
-	}
-	if err := s.reserveName(ctx, "File", "files_by_name", row.Namespace, row.Name, uid, row.CreationTimestamp); err != nil {
-		_ = s.deleteFileAuthoritative(ctx, row, row.ResourceVersion)
+	uidReserved, err := s.reserveUIDOwned(ctx, "File", "files_by_uid", row.Namespace, uid, row.CreationTimestamp)
+	if err != nil {
+		if nameReserved {
+			_ = s.releaseName(ctx, "files_by_name", row.Namespace, row.Name, uid)
+		}
 		return err
 	}
-	if err := s.reserveUID(ctx, "File", "files_by_uid", row.Namespace, uid, row.CreationTimestamp); err != nil {
-		_ = s.releaseName(ctx, "files_by_name", row.Namespace, row.Name, uid)
-		_ = s.deleteFileAuthoritative(ctx, row, row.ResourceVersion)
+	applied, err := s.insertAuthoritative(ctx, s.fileByNamespaceTable, row)
+	if err != nil || !applied {
+		if uidReserved {
+			_ = s.releaseUID(ctx, "files_by_uid", row.Namespace, uid, row.CreationTimestamp)
+		}
+		if nameReserved {
+			_ = s.releaseName(ctx, "files_by_name", row.Namespace, row.Name, uid)
+		}
+		if err == nil {
+			return datastore.ErrAlreadyExists
+		}
 		return err
 	}
 	if err := s.syncOwnerReferenceDependents(ctx, f.Namespace, f.RepositoryID, "File", f.UID, f.Name, f.ResourceVersion, nil, f.OwnerReferences); err != nil {
@@ -132,15 +145,22 @@ func (s *scyllaDatastore) getFileByKey(ctx context.Context, ns string, created t
 	cols := strings.Join(s.fileByNamespaceTable.Metadata().Columns, ", ")
 	stmt := fmt.Sprintf("SELECT %s FROM files_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=?", cols)
 	var row fileRow
-	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(ns, created, uid).GetRelease(&row); err != nil {
+	if err := s.session.Query(stmt, nil).WithContext(ctx).Consistency(gocql.Serial).Bind(ns, created, uid).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, datastore.ErrNotFound
 		}
 		return nil, err
 	}
+	if err := s.checkLiveTranslationTargetUID(ctx, "File", uid, row.TranslationRetired); err != nil {
+		return nil, err
+	}
 	return fromFileRow(&row), nil
 }
 func (s *scyllaDatastore) ListFiles(ctx context.Context, ns string, page datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
+	page, err := page.BoundedProductPage()
+	if err != nil {
+		return nil, err
+	}
 	pq := buildPaginatedSelect(s.fileByNamespaceTable, page, "namespace", ns, namespaceClusterKeys, nil, nil)
 	var rows []fileRow
 	if err := s.session.Query(pq.Stmt, nil).WithContext(ctx).Bind(pq.Args...).SelectRelease(&rows); err != nil {
@@ -148,6 +168,9 @@ func (s *scyllaDatastore) ListFiles(ctx context.Context, ns string, page datasto
 	}
 	items := make([]*datastore.File, len(rows))
 	for i := range rows {
+		if err := s.checkTranslationTargetPageUID(ctx, "File", rows[i].UID, rows[i].TranslationRetired); err != nil {
+			return nil, err
+		}
 		items[i] = fromFileRow(&rows[i])
 	}
 	return buildPageResult(items, page.Limit(), page), nil
@@ -205,7 +228,7 @@ func (s *scyllaDatastore) deleteFileWithResourceVersion(ctx context.Context, f *
 func (s *scyllaDatastore) deleteFileFenced(ctx context.Context, f *datastore.File, expectedResourceVersion string) error {
 	uid := f.UID
 	parsed := mustParseUUID(uid)
-	if err := s.deleteFileAuthoritative(ctx, toFileRow(f), expectedResourceVersion); err != nil {
+	if err := s.retireTranslationTargetAuthoritative(ctx, "File", f.Namespace, f.CreationTimestamp, uid, expectedResourceVersion, nil); err != nil {
 		return err
 	}
 	if err := s.syncOwnerReferenceDependents(ctx, f.Namespace, f.RepositoryID, "File", f.UID, f.Name, f.ResourceVersion, f.OwnerReferences, nil); err != nil {
@@ -223,23 +246,50 @@ func (s *scyllaDatastore) UpdateFileStatus(ctx context.Context, ns, name string,
 	if err := datastore.ApplyFileStatusPatch(f, p); err != nil {
 		return nil, err
 	}
-	if err := s.UpdateFile(ctx, f, p.ResourceVersion); err != nil {
+	err = s.catalogMutation(ctx, "File", f.Namespace, f.RepositoryID, f.UID, false, func() error {
+		return s.mutations.executeUpdate(ctx, f.ResourceVersion, mutationAction{
+			Step: catalogueStep("update-status", "File", f.UID, "files_by_namespace", f.UID, "update-authoritative"),
+			Apply: func(ctx context.Context) error {
+				applied, err := s.session.Query(
+					"UPDATE files_by_namespace SET resource_version=?,status=? WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=? AND translation_retired=null", nil,
+				).WithContext(ctx).Consistency(gocql.Quorum).SerialConsistency(gocql.Serial).
+					Bind(f.ResourceVersion, string(f.Status), f.Namespace, f.CreationTimestamp, mustParseUUID(f.UID), p.ResourceVersion).ExecCASRelease()
+				if err != nil {
+					return err
+				}
+				if !applied {
+					return datastore.ErrConflict
+				}
+				return nil
+			},
+		}, mutationAction{
+			Step: catalogueStep("update-status", "File", f.UID, ownerReferenceDependentsTable, f.UID, "converge-owner-references"),
+			Apply: func(ctx context.Context) error {
+				return s.syncOwnerReferenceDependents(ctx, f.Namespace, f.RepositoryID, "File", f.UID, f.Name, f.ResourceVersion, f.OwnerReferences, f.OwnerReferences)
+			},
+		})
+	})
+	if err != nil {
 		return nil, err
 	}
 	return f, nil
 }
 
 func (s *scyllaDatastore) updateFileAuthoritative(ctx context.Context, row *fileRow, expected string) error {
-	stmt := "UPDATE files_by_namespace SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?,creation_actor=?,update_timestamp=?,update_actor=?,labels=?,annotations=?,owner_references=?,finalizers=?,deletion_timestamp=?,repository_id=?,source_path=?,git_commit_sha=?,git_ref=?,spec=?,body=?,status=? WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
-	applied, err := s.session.Query(stmt, nil).WithContext(ctx).Bind(row.Name, row.APIVersion, row.Kind, row.Generation, row.ResourceVersion, row.Revision, row.CreationActor, row.UpdateTimestamp, row.UpdateActor, row.Labels, row.Annotations, row.OwnerReferences, row.Finalizers, row.DeletionTimestamp, row.RepositoryID, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status, row.Namespace, row.CreationTimestamp, row.UID, expected).ExecCASRelease()
+	previousIdentity, err := s.prepareTranslationTargetSourceIdentity(ctx, row, false)
 	if err != nil {
 		return err
 	}
-	if !applied {
-		return datastore.ErrConflict
+	pending, err := s.beginProvenTranslationTargetUpdate(ctx, row, previousIdentity, expected)
+	if err != nil {
+		return err
 	}
-	return nil
+	stmt := "UPDATE files_by_namespace SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?,creation_actor=?,update_timestamp=?,update_actor=?,labels=?,annotations=?,owner_references=?,finalizers=?,deletion_timestamp=?,repository_id=?,source_path=?,git_commit_sha=?,git_ref=?,spec=?,body=?,status=?,translation_source_identity=? WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=? AND translation_retired=null AND translation_source_identity=?"
+	applied, err := s.executeTranslationTargetCAS(ctx, translationTargetRowMutation(row, previousIdentity, false, pending), func() (bool, error) {
+		return s.session.Query(stmt, nil).WithContext(ctx).Consistency(gocql.Quorum).SerialConsistency(gocql.Serial).Bind(row.Name, row.APIVersion, row.Kind, row.Generation, row.ResourceVersion, row.Revision, row.CreationActor, row.UpdateTimestamp, row.UpdateActor, row.Labels, row.Annotations, row.OwnerReferences, row.Finalizers, row.DeletionTimestamp, row.RepositoryID, row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status, row.TranslationSourceIdentity, row.Namespace, row.CreationTimestamp, row.UID, expected, previousIdentity).ExecCASRelease()
+	})
+	return s.finishTranslationTargetSourceUpdate(ctx, row, pending, applied, err)
 }
 func (s *scyllaDatastore) deleteFileAuthoritative(ctx context.Context, row *fileRow, expected string) error {
-	return s.deleteAuthoritative(ctx, "DELETE FROM files_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?", row.Namespace, row.CreationTimestamp, row.UID, expected)
+	return s.rollbackTranslationTargetCreation(ctx, row, expected)
 }

@@ -9,6 +9,9 @@ package cataloggrpc
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -81,6 +84,8 @@ type Server struct {
 	registry              *auth.ProviderRegistry
 	serviceSecret         string
 	serviceSecretPrevious string
+	translationActivation TranslationActivation
+	translationMetrics    *translationMetrics
 
 	parser ResourceParser
 	clock  apiruntime.Clock
@@ -112,6 +117,7 @@ type ServerDeps struct {
 	NamespaceMetrics         *namespaceadmission.Metrics
 	RBACValidator            *admission.RBACValidator
 	RBACGitReader            rbac.OriginGitReader
+	TranslationActivation    TranslationActivation
 }
 
 // newCELEnv constructs a CEL environment for syntax-checking price eligibility expressions.
@@ -131,6 +137,9 @@ func NewServer(deps ServerDeps) (*Server, error) {
 	}
 	if deps.Logger == nil {
 		return nil, fmt.Errorf("cataloggrpc: logger is required")
+	}
+	if err := deps.TranslationActivation.Validate(); err != nil {
+		return nil, err
 	}
 	if deps.RBACValidator != nil && deps.RBACValidator.Capture.Registry != deps.Registry {
 		return nil, fmt.Errorf("cataloggrpc: RBAC validator must use the selected provider registry")
@@ -179,6 +188,8 @@ func NewServer(deps ServerDeps) (*Server, error) {
 		registry:              deps.Registry,
 		serviceSecret:         deps.ServiceSecret,
 		serviceSecretPrevious: deps.ServiceSecretPrevious,
+		translationActivation: deps.TranslationActivation,
+		translationMetrics:    defaultTranslationMetrics,
 		store:                 deps.Store,
 		git:                   git,
 		log:                   deps.Logger,
@@ -241,6 +252,12 @@ func (s *Server) ValidateRBACReceive(ctx context.Context, req *catalogv1.Validat
 // validateResources is shared by authenticated callbacks and in-process
 // GraphQL preflight. Both require live semantic authorization below.
 func (s *Server) validateResources(ctx context.Context, req *catalogv1.ValidateResourcesRequest) (*catalogv1.ValidateResourcesResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, grpcstatus.FromContextError(err).Err()
+	}
+	if err := s.validateTranslationActivation(req.GetTrees()); err != nil {
+		return nil, err
+	}
 	filtered, rbacErrors, err := s.validateRBACChanges(ctx, req)
 	if err != nil {
 		return nil, err
@@ -256,8 +273,17 @@ func (s *Server) validateResources(ctx context.Context, req *catalogv1.ValidateR
 	}
 	for _, tree := range req.GetTrees() {
 		allErrors = append(allErrors, s.validateResourceBlobs(ctx, req.RepositoryId, tree.GetProposedBlobs())...)
-		allErrors = append(allErrors, s.validateImmutableResourceChanges(tree.GetOldBlobs(), tree.GetProposedBlobs())...)
+		if err := ctx.Err(); err != nil {
+			return nil, grpcstatus.FromContextError(err).Err()
+		}
+		allErrors = append(allErrors, s.validateImmutableResourceChanges(ctx, tree.GetOldBlobs(), tree.GetProposedBlobs())...)
+		if err := ctx.Err(); err != nil {
+			return nil, grpcstatus.FromContextError(err).Err()
+		}
 		deletionErrors, err := s.validateRepositoryDeletions(ctx, req.RepositoryId, tree.GetOldBlobs(), tree.GetProposedBlobs())
+		if ctx.Err() != nil {
+			return nil, grpcstatus.FromContextError(ctx.Err()).Err()
+		}
 		if err != nil {
 			return nil, grpcstatus.Error(codes.Unavailable, "repository deletion validation unavailable")
 		}
@@ -273,12 +299,19 @@ func (s *Server) validateResources(ctx context.Context, req *catalogv1.ValidateR
 	}
 
 	policyStarted := time.Now()
-	if err := s.authorizeValidationTrees(ctx, req.GetRepositoryId(), req.GetTrees()); err != nil {
+	translationErrors, err := s.validateAuthorizedTrees(ctx, req.GetRepositoryId(), req.GetTrees())
+	if err != nil {
 		return nil, err
+	}
+	if len(translationErrors) != 0 {
+		return &catalogv1.ValidateResourcesResponse{Accepted: false, Errors: translationErrors}, nil
 	}
 	policyErrors, evaluated, err := s.validateNamespacePolicies(ctx, req)
 	if evaluated {
 		s.namespaceMetrics.ObserveValidationDuration(namespaceadmission.StagePolicy, time.Since(policyStarted))
+	}
+	if ctx.Err() != nil {
+		return nil, grpcstatus.FromContextError(ctx.Err()).Err()
 	}
 	if err != nil {
 		return nil, grpcstatus.Errorf(codes.Internal, "namespace policy evaluation failed")
@@ -307,13 +340,22 @@ func (s *Server) validateNamespacePolicies(
 	appendCandidates := func(oldBlobs, proposedBlobs []*catalogv1.ResourceBlob, correlateOperation bool) {
 		oldNamesByPath := make(map[string]string, len(oldBlobs))
 		for _, blob := range oldBlobs {
+			if ctx.Err() != nil {
+				return
+			}
 			parsed, _, err := s.parser.ParseResource(bytes.NewReader(blob.GetContent()))
 			if err == nil && parsed != nil && parsed.Namespace != nil {
 				oldNamesByPath[blob.GetPath()] = parsed.Namespace.Metadata.Name
 			}
 		}
 		for _, blob := range proposedBlobs {
+			if ctx.Err() != nil {
+				return
+			}
 			parsed, _, err := s.parser.ParseResource(bytes.NewReader(blob.GetContent()))
+			if ctx.Err() != nil {
+				return
+			}
 			if err != nil || parsed == nil || parsed.Namespace == nil {
 				continue
 			}
@@ -341,8 +383,14 @@ func (s *Server) validateNamespacePolicies(
 	hasNamespaces := false
 	for _, tree := range req.GetTrees() {
 		appendCandidates(tree.GetOldBlobs(), tree.GetProposedBlobs(), true)
-		oldEntries := namespaceEntriesByPath(s.parser, tree.GetOldBlobs())
-		proposed := namespaceEntriesByPath(s.parser, tree.GetProposedBlobs())
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		oldEntries := namespaceEntriesByPath(ctx, s.parser, tree.GetOldBlobs())
+		proposed := namespaceEntriesByPath(ctx, s.parser, tree.GetProposedBlobs())
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
 		hasNamespaces = hasNamespaces || len(oldEntries) > 0 || len(proposed) > 0
 		remaining := map[string]bool{}
 		for _, entry := range proposed {
@@ -416,13 +464,21 @@ func (s *Server) validateResourceBlobs(ctx context.Context, repositoryID string,
 	var allErrors []*catalogv1.ValidationError
 	seenIdentities := make(map[string]string)
 	for _, blob := range blobs {
+		if ctx.Err() != nil {
+			break
+		}
 		// Opt-in: blobs not starting with `---` are not product resources.
 		trimmed := bytes.TrimLeft(blob.Content, " \t\r\n")
 		if !bytes.HasPrefix(trimmed, []byte("---")) {
 			continue
 		}
 
+		started := time.Now()
 		parsed, body, err := s.parser.ParseResource(bytes.NewReader(blob.Content))
+		if ctx.Err() != nil {
+			s.translationMetrics.observeSource(ctx, started, parsed, err)
+			break
+		}
 		if err == nil && parsed != nil {
 			if entry, ok, entryErr := newParsedEntry(blob.Path, parsed, body, ""); entryErr != nil {
 				err = entryErr
@@ -457,7 +513,12 @@ func (s *Server) validateResourceBlobs(ctx context.Context, repositoryID string,
 				}
 			}
 		}
+		s.translationMetrics.observeSource(ctx, started, parsed, err)
 		if err == nil {
+			continue
+		}
+		if findings, ok := validate.TranslationValidationErrors(blob.Path, err); ok {
+			allErrors = append(allErrors, findings...)
 			continue
 		}
 
@@ -524,9 +585,9 @@ func isNamespaceFrontmatter(content []byte) bool {
 // validateImmutableResourceChanges compares only old/proposed Git blobs. It
 // deliberately performs no datastore reads: pre-receive must remain bounded
 // and must reject before an immutable update can advance the ref.
-func (s *Server) validateImmutableResourceChanges(oldBlobs, proposedBlobs []*catalogv1.ResourceBlob) []*catalogv1.ValidationError {
-	oldNamespacesByPath := namespaceEntriesByPath(s.parser, oldBlobs)
-	proposedNamespacesByPath := namespaceEntriesByPath(s.parser, proposedBlobs)
+func (s *Server) validateImmutableResourceChanges(ctx context.Context, oldBlobs, proposedBlobs []*catalogv1.ResourceBlob) []*catalogv1.ValidationError {
+	oldNamespacesByPath := namespaceEntriesByPath(ctx, s.parser, oldBlobs)
+	proposedNamespacesByPath := namespaceEntriesByPath(ctx, s.parser, proposedBlobs)
 	var errorsOut []*catalogv1.ValidationError
 	for path, proposed := range proposedNamespacesByPath {
 		old, found := oldNamespacesByPath[path]
@@ -541,8 +602,8 @@ func (s *Server) validateImmutableResourceChanges(oldBlobs, proposedBlobs []*cat
 		})
 		s.namespaceMetrics.ObserveRejection(namespaceadmission.ReasonImmutableName)
 	}
-	oldRepositoriesByPath := repositoryEntriesByPath(s.parser, oldBlobs)
-	proposedRepositoriesByPath := repositoryEntriesByPath(s.parser, proposedBlobs)
+	oldRepositoriesByPath := repositoryEntriesByPath(ctx, s.parser, oldBlobs)
+	proposedRepositoriesByPath := repositoryEntriesByPath(ctx, s.parser, proposedBlobs)
 	for path, proposed := range proposedRepositoriesByPath {
 		old, found := oldRepositoriesByPath[path]
 		if !found {
@@ -568,8 +629,8 @@ func (s *Server) validateImmutableResourceChanges(oldBlobs, proposedBlobs []*cat
 		}
 	}
 
-	oldCategoriesByPath := categoryEntriesByPath(s.parser, oldBlobs)
-	for path, proposed := range categoryEntriesByPath(s.parser, proposedBlobs) {
+	oldCategoriesByPath := categoryEntriesByPath(ctx, s.parser, oldBlobs)
+	for path, proposed := range categoryEntriesByPath(ctx, s.parser, proposedBlobs) {
 		old, found := oldCategoriesByPath[path]
 		if !found {
 			continue
@@ -589,8 +650,8 @@ func (s *Server) validateImmutableResourceChanges(oldBlobs, proposedBlobs []*cat
 		}
 	}
 
-	oldEntries := immutableEntries(s.parser, oldBlobs)
-	proposedEntries := immutableEntries(s.parser, proposedBlobs)
+	oldEntries := immutableEntries(ctx, s.parser, oldBlobs)
+	proposedEntries := immutableEntries(ctx, s.parser, proposedBlobs)
 	for key, proposed := range proposedEntries {
 		old, found := oldEntries[key]
 		if !found {
@@ -603,10 +664,19 @@ func (s *Server) validateImmutableResourceChanges(oldBlobs, proposedBlobs []*cat
 	return errorsOut
 }
 
-func categoryEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
+func categoryEntriesByPath(ctx context.Context, parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
+	if ctx.Err() != nil {
+		return nil
+	}
 	entries := make(map[string]*parsedEntry, len(blobs))
 	for _, blob := range blobs {
+		if ctx.Err() != nil {
+			return nil
+		}
 		parsed, body, err := parser.ParseResource(bytes.NewReader(blob.GetContent()))
+		if ctx.Err() != nil {
+			return nil
+		}
 		if err != nil || parsed == nil || parsed.CategoryTaxonomy == nil {
 			continue
 		}
@@ -618,10 +688,19 @@ func categoryEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceBlo
 	return entries
 }
 
-func repositoryEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
+func repositoryEntriesByPath(ctx context.Context, parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
+	if ctx.Err() != nil {
+		return nil
+	}
 	entries := make(map[string]*parsedEntry, len(blobs))
 	for _, blob := range blobs {
+		if ctx.Err() != nil {
+			return nil
+		}
 		parsed, body, err := parser.ParseResource(bytes.NewReader(blob.GetContent()))
+		if ctx.Err() != nil {
+			return nil
+		}
 		if err != nil || parsed == nil || parsed.Repository == nil {
 			continue
 		}
@@ -634,10 +713,13 @@ func repositoryEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceB
 }
 
 func (s *Server) validateRepositoryDeletions(ctx context.Context, repositoryID string, oldBlobs, proposedBlobs []*catalogv1.ResourceBlob) ([]*catalogv1.ValidationError, error) {
-	oldEntries := repositoryEntriesByPath(s.parser, oldBlobs)
+	oldEntries := repositoryEntriesByPath(ctx, s.parser, oldBlobs)
 	proposedIdentities := make(map[string]struct{})
-	for _, entry := range repositoryEntriesByPath(s.parser, proposedBlobs) {
+	for _, entry := range repositoryEntriesByPath(ctx, s.parser, proposedBlobs) {
 		proposedIdentities[entry.identity.key()] = struct{}{}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	var validationErrors []*catalogv1.ValidationError
 	for path, entry := range oldEntries {
@@ -680,10 +762,19 @@ func (s *Server) validateRepositoryDeletions(ctx context.Context, repositoryID s
 	return validationErrors, nil
 }
 
-func namespaceEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
+func namespaceEntriesByPath(ctx context.Context, parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
+	if ctx.Err() != nil {
+		return nil
+	}
 	entries := make(map[string]*parsedEntry, len(blobs))
 	for _, blob := range blobs {
+		if ctx.Err() != nil {
+			return nil
+		}
 		parsed, body, err := parser.ParseResource(bytes.NewReader(blob.GetContent()))
+		if ctx.Err() != nil {
+			return nil
+		}
 		if err != nil || parsed == nil || parsed.Namespace == nil {
 			continue
 		}
@@ -695,10 +786,19 @@ func namespaceEntriesByPath(parser ResourceParser, blobs []*catalogv1.ResourceBl
 	return entries
 }
 
-func immutableEntries(parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
+func immutableEntries(ctx context.Context, parser ResourceParser, blobs []*catalogv1.ResourceBlob) map[string]*parsedEntry {
+	if ctx.Err() != nil {
+		return nil
+	}
 	entries := make(map[string]*parsedEntry, len(blobs))
 	for _, blob := range blobs {
+		if ctx.Err() != nil {
+			return nil
+		}
 		parsed, body, err := parser.ParseResource(bytes.NewReader(blob.GetContent()))
+		if ctx.Err() != nil {
+			return nil
+		}
 		if err != nil || parsed == nil {
 			continue
 		}
@@ -753,6 +853,9 @@ func (s *Server) ValidateResourceDeletions(
 	if req.GetRepositoryId() == "" {
 		return nil, grpcstatus.Error(codes.InvalidArgument, "repository_id is required")
 	}
+	if err := s.validateTranslationActivation(req.GetTrees()); err != nil {
+		return nil, err
+	}
 	namespace, err := s.resolveNamespaceIdentifier(ctx, req.GetRepositoryId())
 	if err != nil {
 		s.log.Error("validate_category_taxonomy_deletion: cannot resolve namespace for repository",
@@ -762,12 +865,18 @@ func (s *Server) ValidateResourceDeletions(
 	}
 
 	for _, tree := range req.GetTrees() {
-		oldEntries, err := s.parseDeletionTreeEntries(tree.GetOldBlobs(), namespace)
+		oldEntries, err := s.parseDeletionTreeEntries(ctx, tree.GetOldBlobs(), namespace)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, grpcstatus.FromContextError(ctx.Err()).Err()
+			}
 			return nil, grpcstatus.Errorf(codes.InvalidArgument, "invalid old resource tree: %v", err)
 		}
-		proposedEntries, err := s.parseDeletionTreeEntries(tree.GetProposedBlobs(), namespace)
+		proposedEntries, err := s.parseDeletionTreeEntries(ctx, tree.GetProposedBlobs(), namespace)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, grpcstatus.FromContextError(ctx.Err()).Err()
+			}
 			return nil, grpcstatus.Errorf(codes.InvalidArgument, "invalid proposed resource tree: %v", err)
 		}
 
@@ -937,10 +1046,19 @@ func proposedProductVariantReleasesParent(entries []*parsedEntry, dependent data
 	return false
 }
 
-func (s *Server) parseDeletionTreeEntries(blobs []*catalogv1.ResourceBlob, defaultNamespace string) ([]*parsedEntry, error) {
+func (s *Server) parseDeletionTreeEntries(ctx context.Context, blobs []*catalogv1.ResourceBlob, defaultNamespace string) ([]*parsedEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	entries := make([]*parsedEntry, 0, len(blobs))
 	for _, blob := range blobs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		parsed, body, err := s.parser.ParseResource(bytes.NewReader(blob.GetContent()))
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", blob.GetPath(), err)
 		}
@@ -951,6 +1069,9 @@ func (s *Server) parseDeletionTreeEntries(blobs []*catalogv1.ResourceBlob, defau
 		if ok {
 			entries = append(entries, entry)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return entries, nil
 }
@@ -1190,15 +1311,30 @@ func (s *Server) isAdmissionEntryCurrent(ctx context.Context, admCtx AdmissionCo
 }
 
 func (s *Server) currentAdmissionCommit(ctx context.Context, repositoryID, refName, commitSHA string) (string, bool) {
+	current, ok, _ := s.resolveAdmissionCommit(ctx, repositoryID, refName, commitSHA)
+	return current, ok
+}
+
+func (s *Server) admissionDenialApplies(ctx context.Context, admCtx AdmissionContext) bool {
+	// A proven stale denial is complete; an unavailable fence still needs retry.
+	current, ok, err := s.resolveAdmissionCommit(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA)
+	if err != nil {
+		admCtx.markSuperseded()
+		return false
+	}
+	return ok && (current == "" || current == admCtx.CommitSHA)
+}
+
+func (s *Server) resolveAdmissionCommit(ctx context.Context, repositoryID, refName, commitSHA string) (string, bool, error) {
 	if refName == "" {
-		return commitSHA, true
+		return commitSHA, true, nil
 	}
 	current, err := s.git.ResolveRef(ctx, repositoryID, refName)
-	for errors.Is(err, auth.ErrAuthorizationUnavailable) &&
-		auth.ServingAuthorizationCaptureFromContext(ctx) != nil && ctx.Err() == nil {
+	for attempt := 1; attempt < 3 && errors.Is(err, auth.ErrAuthorizationUnavailable) &&
+		auth.ServingAuthorizationCaptureFromContext(ctx) != nil && ctx.Err() == nil; attempt++ {
 		select {
 		case <-ctx.Done():
-			return "", false
+			return "", false, ctx.Err()
 		case <-time.After(200 * time.Millisecond):
 		}
 		current, err = s.git.ResolveRef(ctx, repositoryID, refName)
@@ -1210,23 +1346,23 @@ func (s *Server) currentAdmissionCommit(ctx context.Context, repositoryID, refNa
 					zap.String("repository_id", repositoryID),
 					zap.String("ref_name", refName),
 					zap.String("new_commit_sha", commitSHA))
-				return "", false
+				return "", false, nil
 			}
-			return "", true
+			return "", true, nil
 		}
 		s.log.Error("admit_resources: resolve ref failed",
 			zap.String("repository_id", repositoryID),
 			zap.String("ref_name", refName),
 			zap.String("new_commit_sha", commitSHA),
 			zap.Error(err))
-		return "", false
+		return "", false, err
 	}
-	return current, true
+	return current, true, nil
 }
 
 // AdmitResources fetches, parses, and stores catalog resources from an accepted push commit.
-// Called fire-and-forget from the post-receive hook. Each product is processed independently;
-// failures are logged and do not block remaining products (FR-011).
+// Called asynchronously from the post-receive hook. Transient dependency or
+// convergence failures remain retryable instead of acknowledging completion.
 func (s *Server) AdmitResources(
 	ctx context.Context,
 	req *catalogv1.AdmitResourcesRequest,
@@ -1273,7 +1409,7 @@ func (s *Server) AdmitResources(
 		s.log.Error("admit_resources: cannot resolve namespace for repository",
 			zap.String("repository_id", req.RepositoryId),
 			zap.Error(err))
-		return &catalogv1.AdmitResourcesResponse{}, nil
+		return nil, grpcstatus.Errorf(codes.Unavailable, "resolve admission namespace: %v", err)
 	}
 
 	now := s.clock.Now().UTC()
@@ -1284,7 +1420,19 @@ func (s *Server) AdmitResources(
 
 	branch := strings.TrimPrefix(req.RefName, "refs/heads/")
 	for range namespaceadmission.AdmissionWriteAttempts {
-		currentCommit, ok := s.currentAdmissionCommit(ctx, req.RepositoryId, req.RefName, newCommit)
+		currentCommit, ok, err := s.resolveAdmissionCommit(ctx, req.RepositoryId, req.RefName, newCommit)
+		if err != nil {
+			if errors.Is(err, gitclient.ErrAuthorizationDenied) || grpcstatus.Code(err) == codes.PermissionDenied {
+				return nil, grpcstatus.Error(codes.PermissionDenied, "admission ref read forbidden")
+			}
+			if grpcstatus.Code(err) == codes.Unauthenticated {
+				return nil, err
+			}
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return nil, grpcstatus.FromContextError(err).Err()
+			}
+			return nil, grpcstatus.Errorf(codes.Unavailable, "resolve admission ref: %v", err)
+		}
 		if !ok {
 			return &catalogv1.AdmitResourcesResponse{}, nil
 		}
@@ -1376,10 +1524,14 @@ func (s *Server) AdmitResources(
 		zap.String("repository_id", req.RepositoryId),
 		zap.String("ref_name", req.RefName),
 		zap.String("requested_commit_sha", newCommit))
-	return &catalogv1.AdmitResourcesResponse{}, nil
+	return nil, grpcstatus.Error(codes.Aborted, "admission convergence exhausted")
 }
 
 func (s *Server) loadParsedEntries(ctx context.Context, repositoryID, ref, namespace string, changedPaths []string) ([]*parsedEntry, error) {
+	return s.loadParsedEntriesFrom(ctx, s.git, repositoryID, ref, namespace, changedPaths)
+}
+
+func (s *Server) loadParsedEntriesFrom(ctx context.Context, reader GitReader, repositoryID, ref, namespace string, changedPaths []string) ([]*parsedEntry, error) {
 	if ref == "" || isZeroOID(ref) {
 		return nil, nil
 	}
@@ -1397,7 +1549,7 @@ func (s *Server) loadParsedEntries(ctx context.Context, repositoryID, ref, names
 		sort.Strings(paths)
 	} else {
 		var err error
-		paths, err = s.git.ListFiles(ctx, repositoryID, "", ref)
+		paths, err = reader.ListFiles(ctx, repositoryID, "", ref)
 		if err != nil {
 			return nil, fmt.Errorf("list files at %s: %w", ref, err)
 		}
@@ -1405,7 +1557,7 @@ func (s *Server) loadParsedEntries(ctx context.Context, repositoryID, ref, names
 	entries := make([]*parsedEntry, 0, len(paths))
 	var readableFiles map[string]bool
 	for _, path := range paths {
-		content, err := s.git.ReadFile(ctx, repositoryID, path, ref)
+		content, err := reader.ReadFile(ctx, repositoryID, path, ref)
 		if grpcstatus.Code(err) == codes.NotFound {
 			continue
 		}
@@ -1413,7 +1565,7 @@ func (s *Server) loadParsedEntries(ctx context.Context, repositoryID, ref, names
 			// A blob-to-tree replacement is a removed manifest. Establish that from
 			// a readable tree; unavailable repositories/refs must not imply deletion.
 			if readableFiles == nil {
-				files, listErr := s.git.ListFiles(ctx, repositoryID, "", ref)
+				files, listErr := reader.ListFiles(ctx, repositoryID, "", ref)
 				if listErr != nil {
 					return nil, fmt.Errorf("verify non-file path %s at %s: %w", path, ref, listErr)
 				}
@@ -1429,8 +1581,14 @@ func (s *Server) loadParsedEntries(ctx context.Context, repositoryID, ref, names
 		if err != nil {
 			return nil, fmt.Errorf("read %s at %s: %w", path, ref, err)
 		}
+		if err := s.translationInactive(content); err != nil {
+			return nil, err
+		}
 		parsed, body, err := s.parser.ParseResource(bytes.NewReader(content))
 		if err != nil || parsed == nil {
+			if validate.IsTranslationDocument(content) {
+				return nil, fmt.Errorf("invalid Translation snapshot at %s", path)
+			}
 			if err != nil {
 				s.log.Error("admit_resources: parse failed",
 					zap.String("path", path),
@@ -1441,6 +1599,9 @@ func (s *Server) loadParsedEntries(ctx context.Context, repositoryID, ref, names
 		}
 		entry, ok, err := newParsedEntry(path, parsed, body, namespace)
 		if err != nil {
+			if parsed.Kind == "Translation" {
+				return nil, fmt.Errorf("invalid Translation identity at %s", path)
+			}
 			s.log.Error("admit_resources: hash resource failed",
 				zap.String("path", path),
 				zap.String("commit_sha", ref),
@@ -1486,6 +1647,12 @@ func (s *Server) applyResourceOperations(ctx context.Context, ops []resourceAdmi
 		}
 	}
 	for _, op := range deletes {
+		if op.identity.Kind == "Translation" {
+			if err := s.deleteTranslation(ctx, op, admCtx); err != nil {
+				return err
+			}
+			continue
+		}
 		sourcePath := ""
 		if op.oldEntry != nil {
 			sourcePath = op.oldEntry.path
@@ -1593,17 +1760,31 @@ func (s *Server) admitParsedEntries(
 		if e.parsed.Kind == "CategoryTaxonomy" {
 			continue // handled in the topo loop above
 		}
+		started := time.Now()
 		op, existing, err := s.operationForEntry(ctx, e, explicitOps)
 		if err != nil {
+			if e.parsed.Kind == "Translation" {
+				s.translationMetrics.observeAdmission(ctx, started, admission.EntryDecision{Outcome: admission.EntryFailed, Err: err})
+			}
 			return decisions, err
 		}
 		entryCtx := admCtx.forEntry(e)
 		entryCtx.createOnly = explicitOps[e.identity.key()].createOnly
 		if entryCtx.createOnly && !reflectNil(existing) {
 			decisions = append(decisions, admission.EntryDecision{Kind: e.identity.Kind, Namespace: e.identity.Namespace, Name: e.identity.Name, Path: e.path, Outcome: admission.EntryNoOp})
+			if e.parsed.Kind == "Translation" {
+				s.translationMetrics.observeAdmission(ctx, started, decisions[len(decisions)-1])
+			}
 			continue
 		}
 		switch e.parsed.Kind {
+		case "Translation":
+			decision := s.admitTranslation(ctx, e, entryCtx, existing)
+			s.translationMetrics.observeAdmission(ctx, started, decision)
+			decisions = append(decisions, decision)
+			if decision.Outcome == admission.EntryFailed {
+				return decisions, decision.Err
+			}
 		case "Product":
 			decisions = append(decisions, s.admitProduct(ctx, e.parsed.Product, e.body, entryCtx, e.path, op, existing))
 		case "Collection":
@@ -1677,6 +1858,12 @@ func (s *Server) lookupOperationForEntry(
 
 func (s *Server) lookupResourceByIdentity(ctx context.Context, id resourceIdentity) (any, error) {
 	switch id.Kind {
+	case "Translation":
+		capable, ok := s.store.(datastore.TranslationCapable)
+		if !ok || capable.TranslationStore() == nil {
+			return nil, fmt.Errorf("translation source datastore unavailable")
+		}
+		return capable.TranslationStore().GetTranslationByName(ctx, id.Namespace, id.Name)
 	case "Product":
 		return s.store.GetProductByName(ctx, id.Namespace, id.Name)
 	case "CategoryTaxonomy":
@@ -1900,6 +2087,59 @@ func (s *Server) markPushedInfrastructureDeletion(ctx context.Context, resource 
 		return err
 	}
 	return admission.MarkInfrastructureDeletion(ctx, s.store, resource, now, actor)
+}
+
+func (s *Server) deleteTranslation(ctx context.Context, operation resourceAdmissionOperation, admCtx AdmissionContext, preimage ...*datastore.Translation) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	old := operation.oldEntry
+	if old == nil || old.parsed == nil || old.identity != operation.identity || admCtx.guardCommitSHA() == "" || admCtx.RefName == "" {
+		return fmt.Errorf("%w: Translation removal requires an accepted source snapshot", datastore.ErrInvalidArgument)
+	}
+	existing, err := s.lookupResourceByIdentity(ctx, operation.identity)
+	if err == nil || errors.Is(err, datastore.ErrNotFound) {
+		if authErr := s.authorizeOperation(ctx, operation.identity, admission.OperationDelete, nil, existing); authErr != nil {
+			return authErr
+		}
+	}
+	if errors.Is(err, datastore.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	source, ok := existing.(*datastore.Translation)
+	if !ok || source == nil {
+		return datastore.ErrRepairRequired
+	}
+	if len(preimage) > 0 && (preimage[0] == nil || preimage[0].UID != source.UID || preimage[0].ResourceVersion != source.ResourceVersion) {
+		return datastore.ErrConflict
+	}
+	if source.RepositoryID != admCtx.RepositoryID || source.GitRef != admCtx.RefName || source.SourcePath != old.path {
+		return nil
+	}
+	verified, supported, err := newParsedEntry(old.path, old.parsed, old.body, source.Namespace)
+	if err != nil {
+		return err
+	}
+	if !supported || verified.identity != old.identity || verified.contentHash != old.contentHash ||
+		!committedResourceMatches(source, admission.CommittedManifestRequest{
+			RepositoryID: admCtx.RepositoryID, RefName: admCtx.RefName, Path: old.path, Namespace: source.Namespace,
+		}, old, true) {
+		return datastore.ErrConflict
+	}
+	if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.guardCommitSHA()) {
+		admCtx.markSuperseded()
+		return nil
+	}
+	capable, ok := s.store.(datastore.TranslationCapable)
+	if !ok || capable.TranslationStore() == nil {
+		return fmt.Errorf("translation source datastore unavailable")
+	}
+	// The snapshot check fences callback order; UID/version CAS additionally
+	// protects a newer projection or replacement racing after that check.
+	return capable.TranslationStore().DeleteTranslation(ctx, source.UID, source.ResourceVersion)
 }
 
 func (s *Server) deleteResource(ctx context.Context, id resourceIdentity, repositoryID, refName, sourcePath, actor string, removed ...*parsedEntry) error {
@@ -2684,6 +2924,148 @@ func existingSpecContentType(raw []byte) string {
 	return spec.ContentType
 }
 
+// Accepted source projection deliberately leaves target validation observations
+// to reconciliation; a mutable target cannot erase an already accepted document.
+func (s *Server) admitTranslation(ctx context.Context, entry *parsedEntry, admCtx AdmissionContext, rawExisting any) admission.EntryDecision {
+	decision := admission.EntryDecision{Kind: "Translation", Path: entry.path, Namespace: entry.identity.Namespace, Name: entry.identity.Name}
+	failed := func(err error) admission.EntryDecision {
+		decision.Outcome, decision.Err = admission.EntryFailed, err
+		return decision
+	}
+	if err := ctx.Err(); err != nil {
+		return failed(err)
+	}
+	parsed, body, _, err := validateTranslationManifestSnapshot(ctx, s.parser, entry.parsed.RawSource, admCtx.Namespace, nil)
+	if err != nil {
+		return failed(err)
+	}
+	verified, supported, err := newParsedEntry(entry.path, parsed, body, admCtx.Namespace)
+	if err != nil {
+		return failed(err)
+	}
+	if !supported || verified.identity != entry.identity || verified.contentHash != entry.contentHash ||
+		!bytes.Equal(body, entry.body) {
+		return failed(fmt.Errorf("%w: Translation source does not match its accepted entry", datastore.ErrInvalidArgument))
+	}
+	resource := parsed.Translation
+	capable, ok := s.store.(datastore.TranslationCapable)
+	if !ok || capable.TranslationStore() == nil {
+		return failed(fmt.Errorf("translation source datastore unavailable"))
+	}
+	namespace, err := s.store.GetNamespaceByName(ctx, verified.identity.Namespace)
+	if err != nil {
+		return failed(fmt.Errorf("resolve Translation namespace: %w", err))
+	}
+	if namespace == nil || namespace.UID == "" || namespace.DeletionTimestamp != nil {
+		return failed(datastore.ErrNamespaceNotActive)
+	}
+	existing, _ := rawExisting.(*datastore.Translation)
+	if existing != nil && (existing.NamespaceID != namespace.UID || existing.Namespace != namespace.Name ||
+		existing.Name != resource.Metadata.Name || existing.RepositoryID != admCtx.RepositoryID || existing.DeletionTimestamp != nil) {
+		return failed(datastore.ErrConflict)
+	}
+	if admCtx.createOnly && existing != nil {
+		decision.Outcome = admission.EntryNoOp
+		return decision
+	}
+	specJSON, err := json.Marshal(resource.Spec)
+	if err != nil {
+		return failed(err)
+	}
+	var oldReferences json.RawMessage
+	op := admission.OperationCreate
+	if existing != nil {
+		oldReferences = existing.OwnerReferences
+		op = admission.OperationUpdate
+	}
+	ownerReferences, err := s.withRepositoryOwnerReference(ctx, admCtx.RepositoryID, oldReferences)
+	if err != nil {
+		return failed(err)
+	}
+	var oldObject any
+	if existing != nil {
+		oldObject = existing
+	}
+	if denied, ok := s.chain.Admit(ctx, admission.AdmissionRequest{
+		Object: resource, OldObject: oldObject, Kind: resource.Kind, Name: resource.Metadata.Name,
+		Namespace: namespace.Name, Operation: op, Trigger: admission.TriggerGitPush, Now: admCtx.Now,
+		GitContext: &admission.GitAdmissionContext{
+			RepositoryID: admCtx.RepositoryID, CommitSHA: admCtx.CommitSHA, RefName: admCtx.RefName, Revision: admCtx.Revision,
+		},
+	}).(admission.Denied); ok {
+		decision.Outcome = admission.EntryDenied
+		decision.Diagnostics = []admission.Diagnostic{{Reason: "POLICY_DENIED", Message: denied.Reason, Level: admission.LevelFailure, File: entry.path, Field: denied.Field}}
+		return decision
+	}
+	if !s.isAdmissionEntryCurrent(ctx, admCtx) {
+		admCtx.markSuperseded()
+		decision.Outcome = admission.EntryNoOp
+		return decision
+	}
+	framed := append([]byte(fmt.Sprintf("blob %d\x00", len(parsed.RawSource))), parsed.RawSource...)
+	var blobOID string
+	if _, err := hex.DecodeString(admCtx.CommitSHA); err != nil {
+		return failed(fmt.Errorf("%w: invalid accepted commit OID", datastore.ErrInvalidArgument))
+	}
+	switch len(admCtx.CommitSHA) {
+	case sha1.Size * 2:
+		sum := sha1.Sum(framed)
+		blobOID = hex.EncodeToString(sum[:])
+	case sha256.Size * 2:
+		sum := sha256.Sum256(framed)
+		blobOID = hex.EncodeToString(sum[:])
+	default:
+		return failed(fmt.Errorf("%w: unsupported accepted commit OID", datastore.ErrInvalidArgument))
+	}
+	digest := sha256.Sum256(parsed.RawSource)
+	sourceDigest := hex.EncodeToString(digest[:])
+	changedSpecBody := existing == nil || specBodyChanged(existing.Spec, existing.Body, specJSON, body)
+	if existing != nil && !changedSpecBody && bytes.Equal(existing.RawSource, parsed.RawSource) &&
+		existing.APIVersion == resource.APIVersion && existing.Kind == resource.Kind &&
+		maps.Equal(existing.Labels, resource.Metadata.Labels) && maps.Equal(existing.Annotations, resource.Metadata.Annotations) &&
+		bytes.Equal(existing.OwnerReferences, ownerReferences) && existing.RepositoryID == admCtx.RepositoryID &&
+		existing.SourcePath == entry.path && existing.GitRef == admCtx.RefName &&
+		existing.SourceDigest == sourceDigest && existing.SourceBlobOID == blobOID {
+		decision.Outcome = admission.EntryNoOp
+		return decision
+	}
+	var next datastore.Translation
+	if existing == nil {
+		uid, ok := s.newUID(resource.Kind, resource.Metadata.Name)
+		if !ok {
+			return failed(fmt.Errorf("generate Translation UID"))
+		}
+		next = datastore.Translation{
+			UID: uid, Generation: 1, ResourceVersion: "1",
+			CreationTimestamp: admCtx.Now, CreationActor: admCtx.ActorSubject,
+		}
+	} else {
+		next = *existing
+		next.ResourceVersion = nextResourceVersion(existing.ResourceVersion)
+		if changedSpecBody {
+			next.Generation++
+		}
+	}
+	next.APIVersion, next.Kind = resource.APIVersion, resource.Kind
+	next.Namespace, next.NamespaceID, next.Name = namespace.Name, namespace.UID, resource.Metadata.Name
+	next.Labels, next.Annotations = maps.Clone(resource.Metadata.Labels), maps.Clone(resource.Metadata.Annotations)
+	next.OwnerReferences = ownerReferences
+	next.UpdateTimestamp, next.UpdateActor, next.Revision = admCtx.Now, admCtx.ActorSubject, admCtx.Revision
+	next.RepositoryID, next.SourcePath, next.GitCommitSHA, next.GitRef = admCtx.RepositoryID, entry.path, admCtx.CommitSHA, admCtx.RefName
+	next.SourceBlobOID, next.SourceDigest, next.RawSource = blobOID, sourceDigest, parsed.RawSource
+	next.Spec, next.Body = specJSON, string(body)
+	if existing == nil {
+		err = capable.TranslationStore().CreateTranslation(ctx, &next)
+	} else {
+		err = capable.TranslationStore().UpdateTranslation(ctx, &next, existing.ResourceVersion)
+	}
+	if err != nil {
+		return failed(fmt.Errorf("project Translation source: %w", err))
+	}
+	decision.Outcome = admission.EntryAccepted
+	return decision
+}
+
 func (s *Server) admitProduct(
 	ctx context.Context,
 	resource *catalog.ProductResource,
@@ -2867,8 +3249,7 @@ func (s *Server) admitProduct(
 func (s *Server) recordProductAdmissionDenied(ctx context.Context, existing *datastore.Product, diagnostics []admission.Diagnostic, admCtx AdmissionContext) {
 	current := existing
 	for range maxRepositoryAdmissionUpdateAttempts {
-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
-			admCtx.markSuperseded()
+		if !s.admissionDenialApplies(ctx, admCtx) {
 			return
 		}
 		var status catalog.ProductStatus
@@ -3530,8 +3911,7 @@ func (s *Server) admitCategoryTaxonomyWithContext(
 func (s *Server) recordCategoryAdmissionDenied(ctx context.Context, existing *datastore.CategoryTaxonomy, diagnostics []admission.Diagnostic, admCtx AdmissionContext) {
 	current := existing
 	for range maxRepositoryAdmissionUpdateAttempts {
-		if !s.isAdmissionCommitCurrent(ctx, admCtx.RepositoryID, admCtx.RefName, admCtx.CommitSHA) {
-			admCtx.markSuperseded()
+		if !s.admissionDenialApplies(ctx, admCtx) {
 			return
 		}
 		var status catalog.CategoryTaxonomyStatus

@@ -6,6 +6,27 @@ extend type Query {
   This does not subscribe to events.
   """
   file(by: FileBy!): File
+
+  """
+  List persisted Files in a namespace with Relay cursor-based pagination.
+  """
+  files(
+    namespace: String!
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): FileConnection!
+}
+
+type FileConnection {
+  edges: [FileEdge!]!
+  pageInfo: PageInfo!
+}
+
+type FileEdge {
+  cursor: String!
+  node: File!
 }
 
 """

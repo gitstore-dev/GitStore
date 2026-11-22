@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.gitstore.dev/i18n.gitstore.dev/v1beta1/translation.schema.json",
+  "title": "GitStore Translation",
+  "description": "Internal authored-frontmatter contract; public admission remains disabled. Markdown after the closing delimiter is a separate, byte-preserved body channel. The server additionally checks BCP 47 grammar, path conflicts, namespace authority, target capabilities and text constraints. At least one patch or meaningful body is required; that body-dependent rule cannot be expressed by this frontmatter-only schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "i18n.gitstore.dev/v1beta1" },
+    "kind": { "const": "Translation" },
+    "metadata": { "$ref": "#/$defs/ObjectMeta" },
+    "spec": { "$ref": "#/$defs/TranslationSpec" }
+  },
+  "$defs": {
+    "NonblankString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "ObjectMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "$ref": "#/$defs/NonblankString" },
+        "namespace": {
+          "$ref": "#/$defs/NonblankString",
+          "description": "Defaults to the owning repository namespace and must match it."
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "maxLength": 63 }
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "TargetReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "name"],
+      "properties": {
+        "apiVersion": { "$ref": "#/$defs/NonblankString" },
+        "kind": { "$ref": "#/$defs/NonblankString" },
+        "name": { "$ref": "#/$defs/NonblankString" },
+        "namespace": { "$ref": "#/$defs/NonblankString" },
+        "uid": { "$ref": "#/$defs/NonblankString" },
+        "resourceVersion": { "$ref": "#/$defs/NonblankString" }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "apiVersion": { "const": "catalog.gitstore.dev/v1beta1" },
+            "kind": { "enum": ["Product", "ProductVariant", "CategoryTaxonomy", "Collection"] }
+          }
+        },
+        {
+          "properties": {
+            "apiVersion": { "const": "storage.gitstore.dev/v1beta1" },
+            "kind": { "const": "File" }
+          }
+        }
+      ]
+    },
+    "Patch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fieldPath", "translation"],
+      "properties": {
+        "fieldPath": {
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^spec\\.[A-Za-z_][A-Za-z0-9_]*(\\{[A-Za-z0-9_-]+\\})?(\\.[A-Za-z_][A-Za-z0-9_]*(\\{[A-Za-z0-9_-]+\\})?){0,15}$",
+          "description": "ASCII, at most eight named selectors. Descriptor eligibility and overlap are checked by the server."
+        },
+        "translation": {
+          "type": "string",
+          "description": "May be empty only when the target field permits empty text."
+        }
+      }
+    },
+    "TranslationSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["locale", "targetRef"],
+      "properties": {
+        "locale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[A-Za-z]{1,8}(-[A-Za-z0-9]{1,8})*$",
+          "description": "Well-formed BCP 47. Registry membership is not required. The server validates complete grammar and preserves this authored spelling."
+        },
+        "targetRef": { "$ref": "#/$defs/TargetReference" },
+        "patches": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/Patch" }
+        }
+      }
+    }
+  }
+}

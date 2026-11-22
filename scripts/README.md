@@ -2,6 +2,10 @@
 
 Utility scripts for GitStore development and demonstration.
 
+The default `make test` and `make pr-ready` suites run the local Translation
+authoring, read/watch and evidence-oracle regressions alongside existing checks.
+They do not enable native deployment, capacity or fault workloads.
+
 ## run-infrastructure.sh
 
 Runs the DigitalOcean OpenTofu configuration through the root command interface:
@@ -29,6 +33,43 @@ Makefile:
 make capacity TARGET=api PROFILE=readiness MODE=diagnostic CAPACITY_BASE_URL=http://localhost:4000
 ```
 
+`CAPACITY_TRANSLATION_READINESS=1` selects protected, authenticated exact-source
+read diagnostics on the same `api/readiness` selector, never health-only
+fallback. It requires an explicitly owned deployment, two API endpoints,
+a fresh run and a private ten-namespace source fixture.
+`CAPACITY_TRANSLATION_PUSHES=1` additionally starts the bounded native companion
+and synchronizes real Git pushes with those public reads. Connected receipts
+verify exact source/watch/current-status joins and unchanged target/Product
+material and retained history. A bounded thirty-second read warmup includes
+twenty verified pushes; fifteen seconds of read cooldown keep the final resource
+scrape within steady offered traffic. Preparation has separate counters and
+source joins, never extends the measured window or dilutes measured latency,
+and uses the existing bounded client pool. Requests follow absolute offer
+timestamps after executor initialization; completion waits for the entire
+cooldown boundary. Bounded failure-reason counters distinguish schedule errors
+from source/status mismatches without exposing response content.
+Both modes currently reject alpha/production
+selection and never certify sustained or fault acceptance.
+An explicit `services.translationTopology` manifest block adds live immutable
+image/PID/endpoint/ownership/storage/ceiling checks on an exclusively owned
+container cohort. With Prometheus, original-scrape timestamps and completed-GC
+live-heap signals support fault-free full-window resource checks. Native
+`process_start_time_seconds` must match live preflight throughout those scrapes;
+missing, changed or stale evidence fails closed unless an independently declared
+physical replacement joins original-scrape per-process resource baselines and
+one bounded `services.translationResourceGaps` entry. The API/controller
+replacement verifier requires immutable target and unchanged same-role peer
+captures; controller captures additionally retain independent checkpoint
+storage across replacement. These checks still retain diagnostic-only results.
+`CAPACITY_TRANSLATION_CALLBACK_STAGE=callback-loss|reply-loss` adds one declared
+simulated boundary to a 20-to-30-second connected diagnostic using the existing
+owned callback proxy and Catalog route. Exact interception/replay, unchanged
+references and five seconds of native both-API source reads must join the
+acknowledged measured commit; it does not enable physical or sustained claims.
+See the [capacity guide](../tests/capacity/README.md)
+for fixture and receipt requirements. Identity mode remains independently
+selectable and cannot be combined with Translation mode.
+
 ## run-chaos.sh
 
 Runs an explicitly confirmed, allowlisted Pumba fault profile against one
@@ -37,6 +78,15 @@ GitStore container and records before/after inspection evidence:
 ```bash
 make chaos CHAOS_PROFILE=api-pause-5s CHAOS_TARGET=gitstore-api CHAOS_CONFIRM=1
 ```
+
+For owned API/controller restart or journal interruption, select exactly one of
+`CHAOS_RBAC=1` and `CHAOS_TRANSLATION=1`, with an explicit owner and predeclared
+window of at most 30 seconds. Controller peers need independent retained
+checkpoints; Translation API restart also requires an unchanged owned API peer.
+Both controller checkpoint mounts must survive replacement unchanged; their
+sanitized before/after identities are retained in protected captures.
+Physical injector/restoration receipts never certify domain recovery. See
+[the chaos guide](../tests/chaos/README.md) for the complete ownership contract.
 
 For normal repository checks, run the licence scripts through the root Make target:
 

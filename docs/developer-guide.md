@@ -641,7 +641,7 @@ start a second copy alongside PR validation. A newer PR run cancels an older
 run for the same workflow and PR, without cancelling another PR, main or a
 merge group.
 
-The three shared Go modules run sequentially in one job, each with its pinned
+The four shared Go modules run sequentially in one job, each with its pinned
 toolchain, dependency cache and `GOWORK=off` checks. Required API, controller,
 Git service and PR-title check names are unchanged. Git service formatting,
 Clippy, builds and tests still run on every core CI event; the optional Rust
@@ -651,6 +651,542 @@ their existing event coverage.
 These settings reduce redundant jobs, not the account-wide runner limit.
 Repository merge-queue concurrency and GitHub-managed CodeQL scheduling are
 configured separately.
+
+Translation locale, field-path and target-descriptor validation lives in
+`shared/translation`, independently of service authorization and storage.
+Descriptors digest their field constraints, stable list identities, reference
+boundaries and target-work limits. Snapshot validation observes caller
+cancellation and returns an operational failure when target work exceeds its
+budget; it does not treat an unavailable snapshot as missing or valid.
+Source decoding enforces a 1-MiB document ceiling and validates at most 65,536
+YAML nodes at depth 64 before constructing the typed resource. The existing
+Catalog RPC in-flight limit rejects saturation immediately; there is no
+Translation-specific waiting queue. Cancellation stops subsequent candidate,
+immutable-field, deletion and namespace-policy parses, and no validation
+response is published after the request is canceled.
+The dormant shared push/manifest preflight authorizes all source changes before
+checking changed Translations against the complete proposed tree. Proposed
+creates/updates/deletes and unchanged candidate targets override stored fields
+independently of file order. Unchanged Translations are not retroactively
+rejected when a target changes; reconciliation must update their observations.
+Target-read authorization uses thin serialized Namespace and target ownership
+facts before fetching stored target content by its proved UID. Content digests
+and final metadata checks reject stale material and changed lifetimes.
+A proposal may retain a proved existing UID, never an old version as a future
+allocation. An unchanged candidate may use the current opaque version only
+when its exact material matches the proof. Status-only target churn is harmless
+without a version pin; explicit version pins remain strict.
+True absence requires current target coverage and matching serialized
+missing/vacant head observations. Missing permitted targets and unallocated
+pins remain unresolved; pending proof, provider and storage failures do not
+become absence. Namespace isolation, common bounded diagnostics and
+all-or-nothing field/body validation apply before any result is returned.
+Pre-receive and single-manifest rejection reuse the common admission diagnostic
+mapping, including invalid UTF-8. Rejection preserves the previously accepted
+source revision, generation and controller observations as well as target
+authored and resolved content. A target-read denial has the same response
+whether the target exists or not.
+Stored JSON field names map through declared catalog YAML tags without
+case-folding identities, values or locales. Missing/null text is not invented
+as an empty leaf; ambiguous aliases and excessive node/depth/byte work fail
+closed. Startup still rejects activation; dormant preflight wiring does not
+enable public receive/replay or Admin routes.
+An internal accepted-source projector retains the exact document and body,
+Git blob identity, source digest and accepted attribution. It preserves UID,
+creation metadata and controller observations; formatting-only changes advance
+the source version without changing generation. Duplicate projection is a
+no-op, and source/status CAS protects concurrent observations. Removal requires
+matching raw source, repository/ref/path, current commit and UID/version proof.
+Projection never rewrites target source or resolved content and does not
+revalidate an accepted document against a subsequently changed target.
+Translation admission, deletion validation, committed replay and generated
+Admin routes remain unavailable. Internal storage components are not a complete
+production capability or a deployment fault-recovery guarantee.
+
+`api.translation.enabled` defaults to `false`; this build rejects `true` at
+startup for every API role. An optional `api.translation.descriptor_digest`
+must match the binary's target-descriptor digest. Environment overrides use
+`GITSTORE_API__TRANSLATION__ENABLED` and
+`GITSTORE_API__TRANSLATION__DESCRIPTOR_DIGEST`. These checks run before datastore,
+provider or listener construction; a matching digest does not certify rollout
+readiness or enable Translation operations.
+
+The shared Git post-receive callback makes at most three RPC attempts for
+transient failures, with a 30-second limit per attempt and 100/200-ms backoff. Each
+attempt preserves the accepted repository/ref/commit/actor/path snapshot but
+uses a fresh receiver-bound signature. Authorization and input/precondition
+rejections are not retried. An already-started ref transaction retains its
+repository write lock through completion even if the request is canceled;
+successful commits retain their delivery work. Canonical and revision-guarded
+file writes, plus tag creation, likewise
+retain their write locks inside blocking mutation work; canceled guarded file
+writes preserve their exact-source receipts. Production receive delivery is
+asynchronous and persisted across non-overlapping Git-service replacement.
+Exhausted or terminal attempts retain the receipt for later replay rather than
+discarding accepted work.
+The API returns retryable errors for transient namespace/ref lookup failures
+and exhausted projection convergence instead of acknowledging completion.
+Authorization denials remain terminal; cancellation and deadlines retain their
+error codes. A genuinely removed ref, superseded branch deletion or proven
+stale policy denial still skips stale work without changing newer status.
+
+The native receive path retains immutable repository,
+receive, actor and full accepted-ref snapshots using the existing protobuf.
+It bounds retained work to 128 receipts of at most 1 MiB each, one in-flight
+temporary file and 32-item metadata pages. Prepared/committed transitions and
+acknowledgements are fsynced; exclusive ownership prevents overlapping users of
+the retained queue. Corrupt or unknown records fail closed without eviction.
+After validation, accepted loose objects or pack/index files and their
+directory chain are synced before receipt preparation. The bounded small-pack
+loose-object optimization remains intact, including already-packed objects.
+Preparation requires the exact repository and every original
+ref preimage, rejecting preexisting native ref locks. Under uninterrupted
+repository exclusion, or replacement before serving mutations, its recovery
+core finishes only old/new-matching ref outcomes and preserves divergent
+evidence. Completed receipts cannot undo later ref changes. Recovery retains
+each distinct nonzero old/new object with an internal Git ref before publishing
+public refs. These pins survive branch deletion, ref packing and garbage
+collection. A durable acknowledgement phase permits interrupted pin cleanup
+to resume without replaying completed delivery. Beginning cleanup rejects
+preexisting native locks; prepared work and interrupted cleanup must both
+fence subsequent repository mutations. A bounded metadata index is rebuilt
+from validated records at open and updated conservatively at phase changes.
+Every native mutation path settles pending preparation/cleanup under the same
+owned repository guard. Retained work also prevents repository removal or
+recreation after storage loss until delivery is resolved.
+Replay awaits every applicable ref callback before
+acknowledging a committed receipt. Prepared work, unavailable repositories,
+missing retained commit/root-tree objects and failed delivery retain the
+receipt. Replacement replay preserves the original actor/receive and may
+redeliver an already acknowledged ref when another ref failed. It takes the
+caller's repository write lock only for cleanup, not while calling the API;
+older cleanup cannot cross a newer unresolved receive.
+The receipt also retains the accepted catalog-routing subset, so replacement
+branch-pattern changes neither discard accepted delivery nor expand its scope.
+Records without routing evidence fail closed and are preserved; drain an older
+private-format queue with its originating binary before upgrading.
+Startup validates retained repository lifetimes and recovers pending work
+before binding the RPC listener. A single worker then consumes bounded pages,
+waking on accepted publication with a one-second fallback for recovery/retry.
+One failed delivery does not discard or prevent processing unrelated receipts.
+Shutdown cancels delivery without deleting unacknowledged work; blocking
+recovery/cleanup retains its owned guard. These native guarantees do not enable
+Translation admission or establish connected/deployed fault acceptance.
+
+Dormant Translation projection preserves the complete accepted document and
+rejects malformed Translation snapshots before writing any entry. An invalid
+patch cannot be mistaken for manifest removal or partially update its body.
+Signed callback tests cover lost create/update/delete responses, delayed
+replay and delete/recreate identity changes, with exact source bytes and
+unchanged targets across all five target kinds. These are internal component
+tests: public construction still rejects enabled Translation configurations.
+
+Dormant named, Node and paginated source reads preserve authored locale, ordered
+patches, exact body bytes, optional target pins and the accepted source revision.
+Namespace-bound opaque cursors support bounded forward/backward scans, including
+empty continuation pages. Source authorization never grants target access.
+Every status-bearing read uses the bounded current-evidence guard. Committed
+removal requires the original source identity/provenance,
+current ref tip and confirmed path absence; a replacement source is not deleted.
+
+Dormant typed and generic status writes use the same source-version CAS and
+require observations to match the accepted generation and revision. Generic
+patches preserve omitted status fields; condition enums retain their explicit
+GraphQL/catalog conversion. Typed and generic watches reuse the shared durable
+journal and mark replayed source payloads as historical. Watch permission alone
+cannot expose a read-denied source, and no response exposes unguarded current
+observations or private validation fingerprints.
+
+Internal source-audit discovery uses bounded metadata pages independently of
+namespace anchors and UID locators. Recovery verifies source scope, lifetime,
+versions and phase, then reuses serialized source recovery and accepted index
+allocations. Lost native live UID authority fails closed rather than inventing
+frozen name-vacancy metadata. A retained retired source can conditionally restore
+its retired UID locator without overwriting conflicting lifetimes or replacement
+name ownership. Per-source recovery does not certify a complete audit or publish
+a mutation-watermarked deployment capability. Absence-only source-audit hints
+cannot retire a UID or release its name claim; missing source authority requires
+explicit repair.
+
+Source-audit recovery invalidates any earlier private repair watermark before
+work begins and publishes a new one only against the unchanged source
+coordinator version after successful recovery. Source, status, binding and
+retirement transitions invalidate that watermark. Bounded recovery turns
+validate the entire discovery page before repairs and recheck all published
+versions before returning its continuation; failed or raced work returns no
+accepted page. These are per-source repair observations, not a namespace-wide
+completeness or activation certificate.
+
+The internal reservation auditor separately visits bounded source-index
+allocation pages. It retires obsolete allocations using their original
+slot/token fences, including after confirmed source retirement; missing source
+alone never authorizes removal. Its cursors cannot resume source scans.
+Reservation coverage does not establish coverage of thin cells with missing
+allocation records or a complete namespace audit.
+
+The declared `TranslationStatus` follows the common resource shape:
+`observedGeneration`, `lastAppliedRevision`, `conditions` and `resolved`.
+Kind-specific results (`canonicalLocale`, `target`, `validatedFieldPaths`) live
+under `resolved`, without a separate freshness field, check timestamp or
+historical status copy. `Condition.lastTransitionTime` remains the time of a
+condition transition, not the time of each freshness check.
+
+The private freshness service compares recorded validation fingerprints and
+authorized target material metadata, then rechecks the source UID, namespace
+incarnation, lifetime and version. It retries a changed source version once,
+using at most ten metadata reads including the original source read. Target
+authorization shares the same thin observation rather than fetching content
+or consulting derived name/UID lookups. Failed checks mask conditions and
+redact resolved evidence without changing stored status. Named, Node, list and
+typed/generic status-mutation responses use this guard. Lists share initial
+target proof only within their bounded page; source-version retries obtain
+fresh proof. Masked observations request durable revalidation without changing
+the public resource.
+
+Live typed and generic watches guard status only while the event still matches
+the current source lifetime and version. If the source changes, they retain the
+original event body/version, mark it historical and omit status rather than
+substituting a newer resource. Initial replay is always historical and carries
+no current-validation claim. Condition statuses retain GraphQL `TRUE`, `FALSE`
+and `UNKNOWN`; YAML spellings are not accepted as GraphQL inputs. These dormant
+routes do not bypass the production activation gate.
+
+The internal controller transport reuses the shared authenticated Admin
+HTTP/WebSocket client. It obtains a journal bookmark before streaming bounded
+namespace pages, waits for each page visitor before fetching another, and
+keeps source CAS versions separate from journal cursors. Typed observation
+writes preserve the authored revision separately from the reconciled revision;
+condition statuses accept only GraphQL enum spellings.
+Translation status writes additionally require the source metadata UID,
+including on the common status mutation. A delayed worker cannot update a
+replacement source by reproducing its name, generation, revision and version.
+Both status paths also require the currently enrolled controller ServiceAccount;
+a policy grant alone does not make a human or stale enrollment a controller.
+The shipped local policy and built-in roles include Translation source grants
+for author/viewer roles. Controller additions grant Translation read/list/watch
+and status writes plus read/list/watch for all five target kinds, not additional
+target source writes.
+
+Other resource kinds retain their existing status preconditions.
+Private binding and dependent operations require the live enrolled controller
+and scoped source permissions. Binding reads/writes additionally authorize
+target ownership from serialized thin metadata, without fetching target
+content. First binding fences the source UID/version, binding version and
+reference epoch; historical bindings stay server-owned. Dependent pages carry
+source hints rather than target authority, so invalidation can continue after
+target deletion without claiming target existence. This transport is not yet
+registered as a running reconciler.
+
+The unregistered validation-only reconciler core consumes authorized source/
+target snapshots and the shared pure validator for all five target kinds.
+It preserves binding and source-lifetime fences, materializes only validation
+evidence and common status, and never modifies target content. Transport or
+work-budget failures remain retryable rather than becoming invalid-content
+observations. Its no-op comparison uses the version-fenced stored observation
+from the controller-only snapshot, including private fingerprints; it does not
+rely on public status that may be absent or masked. The controller-only
+snapshot transport checks source and namespace lifetimes, scoped target
+authorization and exact material evidence around a bounded raw-spec read.
+Namespace checks use serialized name-reservation/UID metadata, not ordinary
+lookup projections. A missing target becomes a negative snapshot only with
+current Namespace-bound target coverage and matching missing/vacant heads;
+target-read permission and final source/Namespace fences still apply.
+An observed eligible UID is bound even if its fields are invalid, so a later
+same-name replacement cannot silently make that Translation valid.
+It preserves absent/null fields and reuses admission's authored-name
+normalization. Raw target JSON value/depth limits and duplicate-member checks
+run before full decoding; cancellation stops further validation work and is not
+reported as invalid content. Ordinary Translation reads and their guard do not fetch target
+content. Missing target proof remains unavailable, not an asserted absence.
+Component contracts exercise independent disk-v2 replicas through the real
+GraphQL client and manager: conflicts and retry deadlines survive replacement,
+watch refresh settles retained work even with masked public status, and
+persisted fan-out work resumes. Controller imports and container wiring include
+the shared validator and are verified without a workspace. Runtime registration
+is gated and production startup still leaves Translation disabled.
+
+Native validation forwarding uses the same raw corpus, including CRLF/Unicode
+bodies, invalid UTF-8 and deferred targets, without adding a Rust semantic
+parser. Rejection formatting shares the API's golden fixtures; transport tests
+do not establish connected or deployed ingestion support.
+
+Internal Translation invalidation handoff reuses disk-v2's durable range
+requests and 256-item fan-out pages. Namespace/GVK-scoped name and UID indexes
+separate material changes from version-pin-only notifications; unknown material
+identity invalidates conservatively. The disk runner can stop a target event
+before its projection/cursor commit when dependency persistence fails. Coalesced
+invalidations preserve the current sweep and persist a follow-up sweep for
+changes behind its cursor. A durable round-robin cursor prevents a continuously
+changing target from starving another target. Ordinary range requests retain
+their existing restart behavior unless coalescing has been requested.
+Cold relists stream new, changed and removed projections through the same
+dependency handoff before publishing their snapshot or journal cursor.
+Callbacks hold no checkpoint lock; failed or interrupted handoffs remain
+replayable on retry or process replacement.
+
+ProductVariant and Collection typed/generic watches share the existing durable
+journal. Their authoritative tables enable full-image CDC in the additive
+schema bundle; memdb publishes committed changes in source order. File now has
+a namespace-scoped Relay list alongside its existing typed watch. The controller
+uses the same bounded list/watch transport for Translation and metadata-only
+ProductVariant, Collection and File adapters, preserving page backpressure,
+bootstrap bookmarks and separate object/journal versions. Product and
+CategoryTaxonomy continue to use their existing runners. Metadata-only target
+projections are invalidation hints, never material proof. Matching controller-only
+binding observations supply raw Namespace and sticky target UIDs; public status
+and opaque Relay IDs do not supply that authority. Namespace/name aliases keep
+invalidation conservative when binding proof is unavailable. An enrolled,
+target-authorized metadata endpoint provides fresh serialized material proof
+without reading spec or body. Bounded, durable hint records classify invalidation
+only, never current Ready; fan-out requests are durable before those records
+or a target cursor can advance. Missing or denied proof and target termination
+invalidate conservatively. Namespace lifetime changes also invalidate retained
+old-incarnation dependencies. All five hooks and independent observer/source
+checkpoints are wired in the gated runtime factory. Metadata-only observers
+do not create their own reconciliation work. Production startup remains
+disabled; these components do not activate Translation operations.
+
+The internal read guard checks only thin target material and unchanged source
+identity/version, with at most two attempts and ten metadata reads per resource.
+Page-scoped observations are deduplicated across a bounded eight-worker pool
+only after all initial source rows have been fetched. A newer-source retry
+always obtains fresh target proof; observations never carry across requests.
+Denied or unavailable target proof remains isolated and redacted. Cancellation
+stops both in-flight checks and queued work.
+
+Masked stale, forbidden or unavailable observations request a durable,
+source-lifetime/version-fenced revalidation hint. One private marker coalesces
+requests per source version; public metadata, authored content, stored status
+and binding history remain unchanged. The existing shared journal delivers the
+unchanged source, and the Translation runner atomically persists reconciliation
+work with its new journal cursor even when the object version is unchanged.
+Superseded-source hints are unnecessary; other persistence failures fail the
+read closed. This adds one bounded conditional metadata write, not target
+content resolution or an in-memory queue. Guard and transport components have
+local/native recovery coverage. Public construction still rejects activation
+until the remaining admission, provider and deployment readiness gates pass.
+
+The internal target-read protocol checks a stable name fence, thin authoritative
+source metadata and the unchanged fence, with no retries or cross-request cache.
+It requires private namespace/token/digest agreement, the same source lifetime
+and explicitly proved active lifecycle. Status-only resourceVersion advances
+retain material identity; missing or contradictory proof fails closed rather
+than claiming target absence. Memdb/native adapters supply all five kinds'
+authoritative metadata without fetching target content; native reads use one
+SERIAL point query, and datastore instrumentation preserves the operation.
+Both backends and instrumentation expose this sequence through the internal
+`ReadTargetEvidence` operation. It is not a deployment-capability or backfill
+certificate: watermarked backfill and public read-guard integration remain
+incomplete, and admission remains disabled.
+An independent bounded target-source audit visits all five authoritative
+layouts without name/UID lookup projections or content reads. Scope-bound
+cursors count foreign rows against the page budget. Recovery rechecks source
+lifetime/version before the serialized evidence protocol, reloads observations
+after pending-write recovery and preserves unproved legacy ownership. This
+discovery/verification component does not backfill missing birth authority or
+certify a mutation-watermarked deployment cut.
+Whole-page recovery validates every hint before starting work, then rechecks
+each original source observation before returning the continuation. Failed or
+raced work returns no accepted page; an empty sparse page is not completion.
+
+Memdb maintains source/status, sticky binding history and thin indexes in one
+transaction. Scylla uses resource-sized authoritative keys, durable per-source
+coordination and recoverable creation/update/deletion intents. Pending source
+reads fail closed. Private binding and hint-repair work does not change public
+source versions or emit resource events. Retained UID, name-vacancy and index
+retirement fences prevent delayed workers from resurrecting removed identities.
+Binding history has finite epoch/byte budgets and is never reset implicitly.
+Namespace discovery anchors remain fixed across updates. Namespace and reverse
+index pages scan at most 256 cells and probe at most 16 heads/segments per turn;
+callers must follow advancing continuations even for empty pages. Namespace
+ordering is shard/segment ascending, then creation timestamp/UID descending.
+Maintenance can restore missing thin cells from accepted allocations; missing
+allocation heads, retired accepted placements or contradictory evidence fail
+closed rather than inventing capacity or history. Scylla's shared catalog CDC
+runner publishes only final public source transitions and resumes through
+durable checkpoints; provisional, binding-only and tombstone-compaction writes
+remain progress-only. Accepted sources block repository finalization and
+participate in blocking-owner queries. Scylla co-partitions retained private
+retry markers with these projections; one conditional batch advances the marker
+and changes the live row, fencing delayed retarget/delete workers. Empty-kind
+markers are excluded from existence queries without scanning retired history.
+Stable source maintenance can restore missing ownership and membership hints.
+An internal metadata-only source audit pager can discover live and retained
+retired sources without namespace anchors or UID lookup projections. Each turn
+scans at most 256 records, including other namespaces, so empty pages can carry
+continuations. Cursors are namespace/backend-bound and cannot certify a complete
+audit. Discovery alone does not repair lost authority or publish a repair
+watermark; the separate fenced recovery operation does.
+Independent bounded scans also visit reservation authority and each physical
+namespace/name/UID cell layout. Missing or contradictory reservation authority
+fails closed, and an unowned Preparing allocation is preserved for explicit
+repair rather than guessed cancellation. Recovery retires obsolete allocations
+through their existing slot/token fences, including permanently retired sources.
+Server-owned per-namespace progress traverses Sources, Reservations, Cells and
+VerifySources before recording Scanned. Failed pages do not accept a continuation;
+an uncertain database response requires rereading persisted progress. Scanned is
+traversal history, not mutation-fenced completeness or permission to activate.
+
+The existing `gitctl scylla-projection-audit` and
+`gitctl scylla-projection-repair` commands accept `--kind Translation` with a
+canonical `--namespace-uid`, `--page-size 1..256` and positive `--timeout`.
+Audit and repair `--dry-run` inspect the next bounded discovery page without
+initializing progress, repairing records or publishing watermarks; they are not
+a complete consistency verdict. Repair `--confirm` performs exactly one
+server-resumed turn, ignoring any earlier inspection as mutation authority.
+The default `--audit-scope indexes` preserves the source/index traversal:
+repeat confirmed turns to reach Scanned; the next turn starts a fresh traversal.
+`--audit-scope targets` instead traverses all five authoritative target layouts
+through Repairing and Verifying to Verified. Its independent persisted progress
+uses full-preimage CAS, survives replacement processes and binds the verification
+pass to one namespace coverage epoch and descriptor digest. Unproved or
+invalidating source writes restart repair; canonical fenced births, proved
+material updates and retirement preserve coverage. Verification checks
+recoverable heads without requiring material versions to remain stationary or
+canceling proved writers. Verified is usable only while a fresh coverage-epoch
+observation still matches. Neither a
+saved Verified result nor a bare cursor establishes current coverage.
+These maintenance operations do not enable public Translation admission or
+certify deployment readiness.
+Generic projection repair leaves Translation-owned rows to their fenced
+source-maintenance path. The internal target write-fence store retains bounded
+Git/source intents, exact authoritative creation timestamps and non-reused
+STABLE/UPDATING tokens. It supports idempotent replacement-worker retries,
+including resourceVersion advances caused by status-only writes, without
+replacing the resource writer's own CAS. These metadata operations alone are
+not proof of current target content. Target deletion retains a kind-scoped UID
+claim; the UUID bytes can still identify a different resource kind. Native
+deletion first freezes the authoritative key in that claim, then records
+retirement in the source row's expected-version CAS. Permanent UID retirement
+is published before physical source cleanup. A failed CAS leaves the existing
+source live, not retired. Native point reads consult serialized source and UID
+evidence, rejecting a retired UID even before publication or if a delayed writer
+reintroduces a resource row. Updates and creation compensation cannot clear the
+source retirement proof. The shared CDC runner publishes deletion at the
+retirement transition and keeps subsequent physical compaction silent.
+Namespace pages for all five target kinds reject negative sizes and cap each
+direction at 250 items. Native raw pages fail closed if a retained row belongs
+to a retired UID instead of returning it or inventing a continuation. The
+projection auditor identifies these physical rows. Repair rechecks permanent
+retirement or the exact source's private retirement marker with a SERIAL read.
+It publishes permanent UID retirement before removing the exact authoritative
+key and cleaning lookup reservations, including after interrupted publication.
+Saved plans cannot replace current proof; UID claims are never removed.
+For canonical memdb envelopes, source creation and advancing-version material
+updates commit namespace UID, exact spec/body digest, non-reused write token
+and name-fence evidence together. Status-only changes preserve the material
+token; ordinary DTO clones and JSON/YAML serialization omit private proof.
+The source fingerprint uses framed GVK/spec/body bytes, a combined 100 MiB
+budget and cancellation checks every 32 KiB. It is an identity check, not
+target-content validation. Deletion or name movement vacates the old name in
+the same transaction. Legacy envelopes, name moves and unsupported File material
+updates cannot inherit positive proof. An unprovable update of a previously
+proved source revokes owned name evidence atomically and cannot bypass a pending
+owner. Existing CRUD semantics remain available without claiming current
+Translation readiness.
+Native target source inserts and material updates persist namespace ownership
+and exact-material digest in the same source CAS. Updates condition on the
+previous nullable private identity as well as resourceVersion and retirement;
+a paused writer cannot replace an intervening ownership marker even if the
+public version did not change. Legacy rows do not acquire today's namespace
+identity through ordinary mutation. Unproved material writes also use a fresh
+private mutation ID: restoring equal-version content cannot restore an older
+paused writer's CAS authority. Malformed or oversized private identity
+fails closed. Creation without a Namespace row remains available without
+inventing namespace ownership. Each create freezes the Namespace incarnation
+before writing projections and rejects a different incarnation at source
+publication; a paused legacy create cannot adopt a newly created Namespace.
+Native source writes use a separate namespace-name-scoped mutation clock,
+including repository-less and unowned legacy CRUD. Arbitration by name covers
+operations begun before Namespace birth or recreation; it does not assign birth
+authority. Source records retain their original namespace UID, including
+absence, and epoch observations are bound to the live namespace UID. Each durable
+grant covers one conditional source write, not a business callback; later
+compensation acquires a new grant. Recovery revokes the frozen grant and
+conditionally cancels its source operation or recognizes committed material
+before releasing it. Waiting may trigger recovery, but expiry alone cannot
+release authority. The bounded private owner record is separate from the
+catalog lifecycle reservation; source recovery never clears that reservation.
+Mutation-epoch observations reject pending or malformed grants. Memdb updates
+its epoch atomically with source publication and retirement, including
+incomplete new envelopes whose namespace birth is known. Bounded source-audit
+turns compare epochs around discovery and verification, rejecting continuation
+when another source changes even if every observed page member is unchanged.
+These per-turn checks alone do not certify a complete namespace scan, backfill
+missing birth authority or authorize activation.
+Source-audit recovery can initialize material proof for all five target kinds
+when the source already retains its original namespace birth UID and now has
+canonical metadata. It preserves the complete public envelope, including body,
+status and resourceVersion. Memdb commits source proof and name evidence
+atomically. Native recovery uses a frozen same-source backfill intent and a
+conditional private-only source write, with retained UID enrollment before
+publication. Replacement APIs can finish committed proof or cancel the paused
+write before clearing its intent. Cancellation cannot invent prior evidence or
+retire the live source. Intervening material changes and delete/recreate lifetimes
+remain authoritative; sources missing birth authority remain unproved. The same
+path can restore proof after an unsupported transition returns to canonical
+metadata. Full-scan target coverage additionally requires the server-owned
+verification pass and a matching current epoch. This is coverage of participating
+writers, not a certificate for old replicas, Translation reverse indexes or
+activation. Mutation-clock observations and dry-run inspections never initialize
+an absent clock.
+
+The source mutation epoch still observes every participating source CAS.
+The independent coverage epoch changes only when a source operation can
+introduce unproved material. A held proved grant can preserve coverage; an
+unproved, malformed or unavailable grant cannot. Coverage does not establish
+positive target material or name absence: those consumers retain their own
+serialized evidence checks. Native backfill cancellation invalidates coverage
+even when its intended result was positive, because its prior source was
+unproved. Namespace replacement never adopts an older source's birth authority.
+Confirmed native target repair can fence a blocking unproved source grant,
+returning Conflict without advancing progress. Classification and revocation
+compare the same frozen owner, so a newer proved grant cannot inherit its
+cancellation. Read-only inspection never performs this recovery.
+Already-proved native sources use UPDATING,
+source-token CAS and stable evidence for all five normal material-update paths.
+Bounded update recovery either publishes a matching committed token or first
+changes the source identity to durably cancel the paused writer. It preserves
+old material under a fresh token rather than clearing pending work by timeout.
+A canceled-intent marker distinguishes that outcome from a status-only advance
+with identical content. File status updates preserve material identity without
+rewriting or hashing the body. Canonical native creation now reserves a name
+fence, commits its originating token with the source insert and publishes stable
+evidence. Incomplete legacy envelopes retain CRUD without acquiring proof.
+Creation recovery either proves the committed token or first installs an
+exact-key conditional negative source marker before permanently retiring the
+UID and publishing name absence. A missing-row read alone cannot cancel a
+paused insert. Creation compensation fences both the public version and private
+identity, retires the UID and vacates its name rather than deleting positive
+source proof directly. Unproved creation rollback also permanently retires the
+UID, preventing replay through another API instance while permitting a fresh
+UID to reuse the name.
+Native foreground termination uses the fenced source writer. Final deletion
+publishes permanent UID retirement and stable name absence before source
+compaction. Repair settles an owned pending name fence before removing its
+retirement proof. These write/recovery protocols do not certify legacy
+backfill or authorize activation.
+Non-advancing or unsupported transitions from a proved source reserve a fresh
+invalidating intent. Their source CAS records that outcome before stable
+evidence is revoked; interrupted publication remains recoverable. This does
+not retire the live UID or tighten legacy File CRUD. Subsequent unproved
+changes cannot recreate positive evidence without a supported upgrade path.
+An evidence-less stable head is unavailable proof, not by itself proof that
+the target resource is absent.
+Native target writes publish segmented private discovery before reserving their
+name head. A retained locator freezes the intent, old expected token and actual
+new fence token. API replicas automatically recover this work, including
+pre-head interruptions and deleted namespaces. Discovery and recovery use
+separate durable phases, each limited to 16 head/segment probes and 256 cells.
+Per-namespace cursors survive replacement processes; a namespace receives at
+most four consecutive recovery turns. Normal completion closes the retained
+locator before compacting its derived discovery cell. A late cell replay can
+only rediscover closed work, not restart the old name CAS.
+The worker uses bounded deadlines, retries conflicts and stops before datastore
+shutdown. This is not a deployed recovery-time guarantee. Connected
+rolling-upgrade verification, namespace-wide mutation-watermarked
+audit/backfill and public readiness integration
+remain required before activation.
 
 ## Configuration Highlights
 

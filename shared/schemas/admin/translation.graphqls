@@ -1,0 +1,256 @@
+"""
+A Git-authored translation document. Validation never applies its text to the
+target. Runtime operations remain unavailable until admission is activated.
+"""
+type Translation implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: TranslationSpec!
+  body: String
+  status: TranslationStatus
+}
+
+type TranslationSpec {
+  locale: String!
+  targetRef: CatalogObjectReference!
+  patches: [TranslationPatch!]!
+}
+
+type TranslationPatch {
+  fieldPath: String!
+  translation: String!
+}
+
+"""
+Guarded current status. lastAppliedRevision identifies the Translation source
+successfully reconciled, including unresolved observations, not target changes.
+"""
+type TranslationStatus {
+  observedGeneration: Int!
+  lastAppliedRevision: String!
+  conditions: [Condition!]!
+  resolved: ResolvedTranslation
+}
+
+type ResolvedTranslation {
+  canonicalLocale: String
+  target: TranslationTargetEvidence
+  validatedFieldPaths: [String!]!
+}
+
+type TranslationTargetEvidence {
+  apiVersion: String!
+  kind: String!
+  namespace: String!
+  name: String!
+  uid: ID!
+  generation: Int!
+  revision: String!
+  resourceVersion: String!
+  contentDigest: String!
+}
+
+input TranslationBy @oneOf {
+  id: ID
+  namespacePath: TranslationNamespacePath
+}
+
+input TranslationNamespacePath {
+  namespace: String!
+  name: String!
+}
+
+type TranslationEdge {
+  cursor: String!
+  node: Translation!
+}
+
+type TranslationConnection {
+  edges: [TranslationEdge!]!
+  pageInfo: PageInfo!
+}
+
+type TranslationWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+  translation: Translation
+  historical: Boolean!
+}
+
+extend type Subscription {
+  """Durable changes. Historical payloads do not advertise current Ready."""
+  watchTranslations(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): TranslationWatchEvent!
+}
+
+input UpdateTranslationStatusInput {
+  name: String!
+  namespace: String!
+  """The source lifetime UID returned by Translation metadata."""
+  uid: ID!
+  resourceVersion: String!
+  observedGeneration: Int!
+  lastAppliedRevision: String!
+  conditions: [ConditionInput!]!
+  resolved: ResolvedTranslationInput
+}
+
+input ResolvedTranslationInput {
+  canonicalLocale: String
+  descriptorDigest: String!
+  sourceDigest: String!
+  target: TranslationTargetEvidenceInput
+  validatedFieldPaths: [String!]!
+}
+
+input TranslationTargetEvidenceInput {
+  apiVersion: String!
+  kind: String!
+  namespace: String!
+  name: String!
+  uid: ID!
+  generation: Int!
+  revision: String!
+  resourceVersion: String!
+  contentDigest: String!
+}
+
+type UpdateTranslationStatusPayload {
+  translation: Translation
+}
+
+"""Controller-only sticky reference state, separate from public status."""
+type TranslationBinding {
+  translationID: ID!
+  sourceVersion: String!
+  bindingVersion: String!
+  referenceEpoch: String!
+  namespaceUID: ID!
+  boundUID: ID
+}
+
+input BindTranslationTargetInput {
+  namespace: String!
+  name: String!
+  translationID: ID!
+  sourceVersion: String!
+  bindingVersion: String!
+  referenceEpoch: String!
+  targetUID: ID!
+}
+
+type BindTranslationTargetPayload {
+  binding: TranslationBinding!
+}
+
+input TranslationDependencyInput {
+  namespace: String!
+  namespaceUID: ID!
+  apiVersion: String!
+  kind: String!
+  name: String!
+  uid: ID
+}
+
+type TranslationDependent {
+  translationID: ID!
+  sourceVersion: String!
+  referenceEpoch: String!
+}
+
+"""One bounded controller scan turn, not a Relay resource connection."""
+type TranslationDependentScan {
+  items: [TranslationDependent!]!
+  """Opaque scan progress. Continue even when items is empty; null means exhausted."""
+  continuation: String
+}
+
+"""Controller-only source and target evidence from one bounded validation turn."""
+type TranslationValidationSnapshot {
+  sourceID: ID!
+  sourceVersion: String!
+  sourceDigest: String!
+  namespaceUID: ID!
+  binding: TranslationBinding!
+  target: TranslationValidationTarget
+  """Stored observation for controller convergence, not a claim of current target validity."""
+  observation: TranslationValidationObservation
+}
+
+"""Controller-only stored common status, including private validation fingerprints."""
+type TranslationValidationObservation {
+  observedGeneration: Int!
+  lastAppliedRevision: String!
+  conditions: [Condition!]!
+  resolved: JSON
+}
+
+type TranslationValidationTarget {
+  namespace: String!
+  evidence: TranslationTargetEvidence!
+  """Authorized raw spec fields with authored names; absent and null leaves are preserved."""
+  fields: JSON!
+}
+
+"""Controller-only thin material proof for classifying invalidation hints."""
+type TranslationTargetObservation {
+  namespaceUID: ID!
+  evidence: TranslationTargetEvidence!
+}
+
+extend type Query {
+  """Read a Translation by global ID or namespace and name."""
+  translation(by: TranslationBy!): Translation
+
+  """Namespace-bound paging, default 100 and maximum 256 per page."""
+  translations(
+    namespace: String!
+    first: Int
+    after: String
+    last: Int
+    before: String
+  ): TranslationConnection!
+
+  """Controller-only point observation without reading target spec or body."""
+  translationTargetObservation(
+    namespace: String!
+    apiVersion: String!
+    kind: String!
+    name: String!
+  ): TranslationTargetObservation!
+
+  """Controller-only source/version-fenced binding observation."""
+  translationBinding(namespace: String!, name: String!): TranslationBinding!
+
+  """Controller-only validation input; unavailable proof is an error, never target absence."""
+  translationValidationSnapshot(
+    namespace: String!
+    name: String!
+    sourceID: ID!
+    sourceVersion: String!
+  ): TranslationValidationSnapshot!
+
+  """Controller-only reverse-reference scan; hints are not authority or proof of target existence."""
+  scanTranslationDependents(
+    target: TranslationDependencyInput!
+    """Scan row budget, default and maximum 256; minimum 1. Probe limits also bound each turn."""
+    limit: Int
+    """Resume the same target and Namespace lifetime using the previous turn's continuation."""
+    continuation: String
+  ): TranslationDependentScan!
+}
+
+extend type Mutation {
+  """Bind the current reference epoch once, without changing source or status."""
+  bindTranslationTarget(input: BindTranslationTargetInput!): BindTranslationTargetPayload!
+
+  """Controller-only observation CAS; the response always uses the read guard."""
+  updateTranslationStatus(input: UpdateTranslationStatusInput!): UpdateTranslationStatusPayload!
+}

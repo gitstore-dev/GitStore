@@ -57,6 +57,7 @@ func (s *scyllaDatastore) RunRepositoryCDC(ctx context.Context, materializer *wa
 		ProgressManager:       progress,
 		Logger:                zapCDCLogger{s.log},
 		Advanced: scyllacdc.AdvancedReaderConfig{ChangeAgeLimit: changeAgeLimit, ConfidenceWindowSize: confidenceWindow,
+			MaxStreamsPerBatch:          namespaceCDCStreamsPerBatch,
 			MaxEmptyQueryTimeWindowSize: namespaceCDCEmptyProbeWindow,
 			PostEmptyQueryDelay:         100 * time.Millisecond, PostNonEmptyQueryDelay: 100 * time.Millisecond,
 			PostFailedQueryDelay: 100 * time.Millisecond, MaxPostFailedQueryDelay: 2 * time.Second, TableMissingRetryLimit: 30},

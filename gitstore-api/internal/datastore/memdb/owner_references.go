@@ -28,6 +28,17 @@ type ownerReferenceProjection struct {
 	ResourceVersion string
 }
 
+type ownerReferenceRepositoryIndex struct{}
+
+func (ownerReferenceRepositoryIndex) FromObject(raw interface{}) (bool, []byte, error) {
+	// Empty repository IDs identify namespace scope, not a missing index key.
+	return true, []byte(raw.(*ownerReferenceProjection).RepositoryID + "\x00"), nil
+}
+
+func (ownerReferenceRepositoryIndex) FromArgs(args ...interface{}) ([]byte, error) {
+	return (&gomemdb.StringFieldIndex{Field: "RepositoryID"}).FromArgs(args...)
+}
+
 func projectionID(namespace, repositoryID, ownerUID, dependentKind, dependentUID string) string {
 	return strings.Join([]string{namespace, repositoryID, ownerUID, dependentKind, dependentUID}, "\x00")
 }
@@ -169,7 +180,7 @@ func (m *memdbDatastore) ListNonBlockingProductOwnerDependents(_ context.Context
 	return page, nil
 }
 
-func (m *memdbDatastore) MarkCategoryTaxonomyDeletion(_ context.Context, namespace, name, expectedResourceVersion string, at time.Time) (*datastore.CategoryTaxonomy, error) {
+func (m *memdbDatastore) MarkCategoryTaxonomyDeletion(ctx context.Context, namespace, name, expectedResourceVersion string, at time.Time) (*datastore.CategoryTaxonomy, error) {
 	m.categoryMutationMu.Lock()
 	defer m.categoryMutationMu.Unlock()
 	txn := m.db.Txn(true)
@@ -198,7 +209,7 @@ func (m *memdbDatastore) MarkCategoryTaxonomyDeletion(_ context.Context, namespa
 	category.UpdateTimestamp = at
 	category.UpdateActor = "deletion"
 	datastore.AdvanceCategoryTaxonomySystemVersion(category)
-	if err := txn.Insert("category_taxonomy", category); err != nil {
+	if err := insertTranslationMaterialTarget(ctx, txn, "category_taxonomy", category); err != nil {
 		txn.Abort()
 		return nil, fmt.Errorf("memdb: mark category taxonomy deletion: %w", err)
 	}
@@ -237,7 +248,7 @@ func (m *memdbDatastore) CompleteCategoryTaxonomyDeletion(_ context.Context, nam
 		txn.Abort()
 		return nil, err
 	}
-	if err := txn.Delete("category_taxonomy", category); err != nil {
+	if err := deleteTranslationTarget(txn, "CategoryTaxonomy", "category_taxonomy", category.UID, category); err != nil {
 		txn.Abort()
 		return nil, fmt.Errorf("memdb: complete category taxonomy deletion: %w", err)
 	}

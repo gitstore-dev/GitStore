@@ -16,11 +16,16 @@
   with reader-shutdown, completed-query notification and opt-in empty-range
   catch-up patches. Wider probes must never deliver changes or acknowledge
   failed queries; nonempty ranges retain the ordinary query bound.
+  Opt-in stream batching reuses bounded multi-partition queries and preserves
+  every stream's consumer/progress and the unchanged confidence window.
   Preserve its Apache-2.0 license and
   provenance in `NOTICE.md`. Native and container API builds use the same
   local replacement.
-- All three Go modules participate in the existing build/test/lint families
+- All four Go modules participate in the existing build/test/lint families
   and standalone `GOWORK=off` CI checks.
+- `translation` owns pure locale, field-path and target-descriptor validation
+  for API and controller reuse. Keep authorization, target lookup and storage
+  in the callers; retain its standalone `GOWORK=off` and aggregate checks.
 - Use `make generate TARGET=<authz|all>` for authorization catalogs or all API
   generation directives. `make test` and `make check TARGET=all` reject
   authorization catalog drift without rewriting generated files.

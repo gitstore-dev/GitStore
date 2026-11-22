@@ -35,6 +35,28 @@ case "${mode}" in
   *) usage; exit 2 ;;
 esac
 
+case "${CAPACITY_TRANSLATION_READINESS:-0}" in
+  0) ;;
+  1)
+    umask 077
+    [[ "${target}/${profile}" == api/readiness && "${CAPACITY_IDENTITY_READINESS:-0}" == 0 ]] || {
+      echo "Translation domain mode requires api/readiness and cannot be combined with identity mode" >&2
+      exit 2
+    }
+    ;;
+  *) echo "CAPACITY_TRANSLATION_READINESS must be 0 or 1" >&2; exit 2 ;;
+esac
+
+case "${CAPACITY_TRANSLATION_PUSHES:-0}" in
+  0) ;;
+  1)
+    [[ "${CAPACITY_TRANSLATION_READINESS:-0}" == 1 && "${target}/${profile}" == api/readiness ]] || {
+      echo "Translation pushes require the Translation api/readiness domain" >&2; exit 2;
+    }
+    ;;
+  *) echo "CAPACITY_TRANSLATION_PUSHES must be 0 or 1" >&2; exit 2 ;;
+esac
+
 case "${CAPACITY_RBAC_WORKLOAD:-0}" in
   0) ;;
   1)
@@ -102,6 +124,10 @@ case "${target}/${profile}" in
     ;;
   *) usage; exit 2 ;;
 esac
+
+if [[ "${CAPACITY_TRANSLATION_READINESS:-0}" == 1 ]]; then
+  command+=("CAPACITY_TRANSLATION_READINESS=1")
+fi
 
 case "${REPOSITORY_CAPACITY_SECRET_SCENARIO:-0}" in
   0) ;;

@@ -80,6 +80,12 @@ func (r *queryResolver) resolveNode(ctx context.Context, kind, rawID string) (mo
 		return nil, err
 	}
 	switch kind {
+	case nodeKindTranslation:
+		if !r.translationActivation.Enabled {
+			return nil, translationNotActivated()
+		}
+		id := mustEncodeNodeID(nodeKindTranslation, rawID)
+		return r.readTranslation(ctx, model.TranslationBy{ID: &id})
 	case nodeKindRole, nodeKindClusterRole, nodeKindRoleBinding, nodeKindClusterRoleBinding:
 		return r.readRBACNode(ctx, rbac.Kind(kind), rawID)
 	case nodeKindStaff, nodeKindCustomer, nodeKindServiceAccount:

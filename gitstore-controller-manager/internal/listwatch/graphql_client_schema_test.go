@@ -24,5 +24,17 @@ func TestGraphQLOperationsMatchSchema(t *testing.T) {
 		{Name: "watchNamespacesSubscription", Query: watchNamespacesSubscription},
 		{Name: "repositoriesControllerListQuery", Query: repositoriesControllerListQuery},
 		{Name: "watchRepositoriesSubscription", Query: watchRepositoriesSubscription},
+		{Name: "translationsListQuery", Query: translationsListQuery},
+		{Name: "watchTranslationsSubscription", Query: watchTranslationsSubscription},
 	})
+	for kind := range translationTargetQueries {
+		watcher, err := NewTranslationTargetListWatcher(nil, kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		schemavalidate.Validate(t, []schemavalidate.Operation{
+			{Name: kind + "MetadataList", Query: watcher.listQuery},
+			{Name: kind + "MetadataWatch", Query: watcher.watchQuery},
+		})
+	}
 }

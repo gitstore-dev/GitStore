@@ -1120,6 +1120,56 @@ func TestCatalogCDCRejectsMalformedOrUnboundedFramesBeforeProgress(t *testing.T)
 	}
 }
 
+func TestCatalogCDCRetirementPublishesDeletionWithoutCompactionReplay(t *testing.T) {
+	retired, invalid := true, false
+	live := &productRow{UID: gocql.TimeUUID(), Namespace: "content", Name: "target", Kind: "File", ResourceVersion: "1"}
+	next := *live
+	next.ResourceVersion = "2"
+	deleted := *live
+	deleted.TranslationRetired = &retired
+	corrupt := *live
+	corrupt.TranslationRetired = &invalid
+	for _, test := range []struct {
+		name          string
+		before, after *productRow
+		want          datastore.ResourceWatchEventType
+		discontinuity bool
+	}{
+		{name: "create", after: live, want: datastore.ResourceWatchAdded},
+		{name: "update", before: live, after: &next, want: datastore.ResourceWatchModified},
+		{name: "retire", before: live, after: &deleted, want: datastore.ResourceWatchDeleted},
+		{name: "compact", before: &deleted},
+		{name: "already-retired", before: &deleted, after: &deleted},
+		{name: "unpublished-retired", after: &deleted},
+		{name: "reversed", before: &deleted, after: live, discontinuity: true},
+		{name: "corrupt-before", before: &corrupt, discontinuity: true},
+		{name: "corrupt-after", before: live, after: &corrupt, discontinuity: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			beforeLive, afterLive, err := catalogCDCLiveImages(test.before, test.after)
+			if test.discontinuity {
+				require.ErrorIs(t, err, datastore.ErrNamespaceWatchDiscontinuity)
+				return
+			}
+			require.NoError(t, err)
+			change := watchjournal.Change{Kind: live.Kind, Namespace: live.Namespace, Name: live.Name}
+			if beforeLive {
+				change.Before, err = json.Marshal(fromProductRow(test.before))
+				require.NoError(t, err)
+			}
+			if afterLive {
+				change.After, err = json.Marshal(fromProductRow(test.after))
+				require.NoError(t, err)
+			}
+			event, published := watchjournal.ClassifyResource(change, nil)
+			require.Equal(t, test.want != "", published)
+			if published {
+				require.Equal(t, test.want, event.Type)
+			}
+		})
+	}
+}
+
 func TestCatalogCDCSequencerPublishesWholeFrameBeforeCheckpoint(t *testing.T) {
 	store := &sequencerStore{}
 	sequencer := newNamespaceCDCSequencer(watchjournal.NewMaterializer(store, watchjournal.MaterializerConfig{}), datastore.ResourceWatchLease{})

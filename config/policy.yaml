@@ -13,18 +13,24 @@ clusterRoles:
     rules:
       - resources: [repository, categoryTaxonomy, product, productVariant, collection, file]
         verbs: [create, read, list, watch, update, delete, transfer]
+      - resources: [translation]
+        verbs: [create, read, list, watch, update, delete]
       - resources: [repository, categoryTaxonomy, product]
         verbs: [purge]
       - resources: [product/management, productVariant/management]
         verbs: [read, list]
   edit:
     rules:
+      - resources: [translation]
+        verbs: [create, read, list, watch, update, delete]
       - resources: [repository, categoryTaxonomy, product, productVariant, collection, file]
         verbs: [create, read, list, watch, update, delete]
       - resources: [product/management, productVariant/management]
         verbs: [read, list]
   view:
     rules:
+      - resources: [translation]
+        verbs: [read, list, watch]
       - resources: [repository, categoryTaxonomy, product, productVariant, collection, file]
         verbs: [read, list, watch]
       - resources: [product/management, productVariant/management]
@@ -41,9 +47,9 @@ clusterRoles:
         when: [{attr: tier, op: eq, value: USER}]
   controller:
     rules:
-      - resources: [namespace, repository, categoryTaxonomy, product, file]
+      - resources: [namespace, repository, categoryTaxonomy, product, productVariant, collection, file, translation]
         verbs: [read, list, watch]
-      - resources: [namespace/status, repository/status, categoryTaxonomy/status, product/status, file/status]
+      - resources: [namespace/status, repository/status, categoryTaxonomy/status, product/status, file/status, translation/status]
         verbs: [write]
       - resources: [namespace, repository, categoryTaxonomy, product]
         verbs: [purge]

@@ -19,6 +19,8 @@ proposed designs and historical plans are not supported-feature references.
 - [Product](products/product-spec.md) and [ProductVariant](products/product-variant-spec.md)
 - [CategoryTaxonomy](categories/category-taxonomy-spec.md)
 - [Collection](collections/collection-spec.md)
+- [Translation](storage-groups/translations.md): disabled-by-default
+  validation/resolution, not localized application
 - [Push validation](products/push-validation.md)
 - [Storage placement](storage-groups/README.md): current patterns and explicitly
   identified intended resource scope
@@ -35,6 +37,8 @@ proposed designs and historical plans are not supported-feature references.
 ## Contributors and design provenance
 
 - [Developer guide](developer-guide.md)
+- [Translation implementation boundaries](development/translation-contract.md):
+  descriptors, binding, snapshots and disabled-runtime safety limits
 - [Make command reference](development/make-reference.md)
 - [Production-readiness testing](development/production-readiness-testing.md)
 - [Release process](development/release-process.md)

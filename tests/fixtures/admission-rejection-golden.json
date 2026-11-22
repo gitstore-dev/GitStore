@@ -2,6 +2,25 @@
   "description": "Admission rejection text parity between the API mutation path and the Git push path. Each case lists the ValidationError entries returned by catalog validation and the exact rejection text both paths must produce.",
   "cases": [
     {
+      "name": "translation_safe_diagnostics",
+      "manifestPath": "translations/de.md",
+      "errors": [
+        {
+          "filePath": "translations/de.md",
+          "field": "status",
+          "constraint": "translation/UnknownField",
+          "message": "member is not author-writable"
+        },
+        {
+          "filePath": "translations/de.md",
+          "field": "spec.patches[1].fieldPath",
+          "constraint": "translation/OverlappingPaths",
+          "message": "duplicate or overlapping content is not permitted"
+        }
+      ],
+      "expected": "translations/de.md: member is not author-writable; translations/de.md: duplicate or overlapping content is not permitted"
+    },
+    {
       "name": "empty_path",
       "manifestPath": "",
       "errors": [

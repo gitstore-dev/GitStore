@@ -45,3 +45,13 @@ Failed queries or iterator closure never acknowledge the probed interval.
 The API enables probes up to one hour for its existing journal sources;
 probing is disabled by default. `stream_batch_test.go`
 covers empty-range continuity, the cap, nonempty fallback and probe failures.
+
+The opt-in `MaxStreamsPerBatch` setting packs generation streams into bounded
+multi-partition queries using the existing CDC `IN` query path. Zero preserves
+upstream vnode grouping. The API selects at most 32 streams per batch instead
+of starting a long-lived query worker for every vnode in every watched table.
+Every stream retains its own consumer and durable progress; confidence windows,
+query windows, generation membership, completion notifications and failed-query
+rules are unchanged. `reader_shutdown_test.go` checks complete membership,
+bounded batches and unchanged default grouping, alongside the existing
+mixed-stream, progress, failure and shutdown regressions.

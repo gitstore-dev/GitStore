@@ -673,12 +673,31 @@ pub(crate) fn small_pack_objects(
 /// Small packs become loose objects; larger packs keep their pack/index files.
 /// Cross-filesystem pack moves fall back to copy and deletion.
 pub fn promote_quarantine(repo: &gix::Repository, q: Quarantine) -> Result<()> {
+    promote_quarantine_inner(repo, q, false)
+}
+
+/// Sync accepted objects and their directory chain before receive preparation.
+pub fn promote_quarantine_durable(repo: &gix::Repository, q: Quarantine) -> Result<()> {
+    promote_quarantine_inner(repo, q, true)
+}
+
+fn promote_quarantine_inner(repo: &gix::Repository, q: Quarantine, durable: bool) -> Result<()> {
     if let Some(objects) = small_pack_objects(&q.pack_path) {
         use gix::objs::Write;
         for (id, kind, data) in objects {
             repo.objects
                 .write_buf_with_known_id(kind, &data, id)
                 .context("publish accepted loose object")?;
+            if durable {
+                let oid = id.to_string();
+                let directory = repo.objects.store_ref().path().join(&oid[..2]);
+                std::fs::File::open(directory.join(&oid[2..]))?.sync_all()?;
+                std::fs::File::open(directory)?.sync_all()?;
+            }
+        }
+        if durable {
+            std::fs::File::open(repo.objects.store_ref().path())?.sync_all()?;
+            std::fs::File::open(repo.path())?.sync_all()?;
         }
         info!(
             objects_written = q.num_objects,
@@ -687,6 +706,10 @@ pub fn promote_quarantine(repo: &gix::Repository, q: Quarantine) -> Result<()> {
         );
         return Ok(());
     }
+    promote_packed_quarantine(repo, q, durable)
+}
+
+fn promote_packed_quarantine(repo: &gix::Repository, q: Quarantine, durable: bool) -> Result<()> {
     let pack_dir = repo.objects.store_ref().path().join("pack");
     std::fs::create_dir_all(&pack_dir).context("ensure pack dir")?;
 
@@ -695,6 +718,19 @@ pub fn promote_quarantine(repo: &gix::Repository, q: Quarantine) -> Result<()> {
 
     move_file(&q.pack_path, &pack_dest).context("move pack file")?;
     move_file(&q.index_path, &idx_dest).context("move index file")?;
+    if durable {
+        for path in [
+            &pack_dest,
+            &idx_dest,
+            &pack_dir,
+            repo.objects.store_ref().path(),
+            repo.path(),
+        ] {
+            std::fs::File::open(path)?
+                .sync_all()
+                .context("sync accepted pack")?;
+        }
+    }
 
     drop(q.dir);
 
@@ -799,30 +835,36 @@ mod tests {
 
     #[test]
     fn small_accepted_pack_is_visible_without_refreshing_cached_indexes() {
-        let (_source_directory, source) = make_test_repo();
-        let commit = make_commit(&source, "accepted incremental content", None);
-        let pack = build_pack_for_wants(&source, &[commit.to_string()], &[]).unwrap();
-        let quarantine =
-            stage_pack_from_reader(std::io::Cursor::new(pack), Some((*source.objects).clone()))
-                .unwrap();
-        let (directory, target) = make_test_repo();
-        let cached = crate::git::repo::open_repository(directory.path()).unwrap();
-        assert!(cached.find_object(commit).is_err());
-        let before = cached.objects.store_ref().metrics().num_refreshes;
-        promote_quarantine(&target, quarantine).unwrap();
-        assert_eq!(
-            std::fs::read_dir(directory.path().join("objects/pack"))
-                .unwrap()
-                .count(),
-            0,
-            "small accepted packs must not add another pack index"
-        );
-        assert!(cached.find_object(commit).is_ok());
-        assert_eq!(
-            cached.objects.store_ref().metrics().num_refreshes,
-            before,
-            "new loose objects must be visible without index discovery"
-        );
+        for durable in [false, true] {
+            let (_source_directory, source) = make_test_repo();
+            let commit = make_commit(&source, "accepted incremental content", None);
+            let pack = build_pack_for_wants(&source, &[commit.to_string()], &[]).unwrap();
+            let quarantine =
+                stage_pack_from_reader(std::io::Cursor::new(pack), Some((*source.objects).clone()))
+                    .unwrap();
+            let (directory, target) = make_test_repo();
+            let cached = crate::git::repo::open_repository(directory.path()).unwrap();
+            assert!(cached.find_object(commit).is_err());
+            let before = cached.objects.store_ref().metrics().num_refreshes;
+            if durable {
+                promote_quarantine_durable(&target, quarantine).unwrap();
+            } else {
+                promote_quarantine(&target, quarantine).unwrap();
+            }
+            assert_eq!(
+                std::fs::read_dir(directory.path().join("objects/pack"))
+                    .unwrap()
+                    .count(),
+                0,
+                "small accepted packs must not add another pack index"
+            );
+            assert!(cached.find_object(commit).is_ok());
+            assert_eq!(
+                cached.objects.store_ref().metrics().num_refreshes,
+                before,
+                "new loose objects must be visible without index discovery"
+            );
+        }
     }
 
     #[test]
@@ -850,6 +892,30 @@ mod tests {
             .unwrap()
             .find_object(commit)
             .is_ok());
+        let parent = source
+            .find_commit(commit)
+            .unwrap()
+            .parent_ids()
+            .next()
+            .unwrap()
+            .to_string();
+        let incremental = build_pack_for_wants(&source, &[commit.to_string()], &[parent]).unwrap();
+        let quarantine = stage_pack_from_reader(
+            std::io::Cursor::new(incremental),
+            Some((*source.objects).clone()),
+        )
+        .unwrap();
+        promote_quarantine_durable(&target, quarantine).unwrap();
+        let oid = commit.to_string();
+        assert!(
+            directory
+                .path()
+                .join("objects")
+                .join(&oid[..2])
+                .join(&oid[2..])
+                .is_file(),
+            "durable small publication must also handle objects already present in packs"
+        );
     }
 
     #[test]

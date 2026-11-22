@@ -129,6 +129,13 @@ pub const SERVICEACCOUNT_LIST: &str = "serviceAccount.list";
 pub const SERVICEACCOUNT_READ: &str = "serviceAccount.read";
 pub const SERVICEACCOUNT_TOKEN_ISSUE: &str = "serviceAccount.token.issue";
 pub const SERVICEACCOUNT_UPDATE: &str = "serviceAccount.update";
+pub const TRANSLATION_CREATE: &str = "translation.create";
+pub const TRANSLATION_DELETE: &str = "translation.delete";
+pub const TRANSLATION_LIST: &str = "translation.list";
+pub const TRANSLATION_READ: &str = "translation.read";
+pub const TRANSLATION_STATUS_WRITE: &str = "translation.status.write";
+pub const TRANSLATION_UPDATE: &str = "translation.update";
+pub const TRANSLATION_WATCH: &str = "translation.watch";
 pub const USER_CREATE: &str = "user.create";
 pub const USER_DELETE: &str = "user.delete";
 pub const USER_GROUP_UPDATE: &str = "user.group.update";
@@ -258,6 +265,13 @@ pub const AUTHORIZATION_ACTIONS: &[ActionDefinition] = &[
     ActionDefinition { action: "serviceAccount.read", kind: "serviceAccount", scope: "cluster", resource: "serviceAccount", verb: "read", reserved: false },
     ActionDefinition { action: "serviceAccount.token.issue", kind: "serviceAccount", scope: "cluster", resource: "serviceAccount/token", verb: "issue", reserved: false },
     ActionDefinition { action: "serviceAccount.update", kind: "serviceAccount", scope: "cluster", resource: "serviceAccount", verb: "update", reserved: false },
+    ActionDefinition { action: "translation.create", kind: "translation", scope: "namespace", resource: "translation", verb: "create", reserved: false },
+    ActionDefinition { action: "translation.delete", kind: "translation", scope: "namespace", resource: "translation", verb: "delete", reserved: false },
+    ActionDefinition { action: "translation.list", kind: "translation", scope: "namespace", resource: "translation", verb: "list", reserved: false },
+    ActionDefinition { action: "translation.read", kind: "translation", scope: "namespace", resource: "translation", verb: "read", reserved: false },
+    ActionDefinition { action: "translation.status.write", kind: "translation", scope: "namespace", resource: "translation/status", verb: "write", reserved: false },
+    ActionDefinition { action: "translation.update", kind: "translation", scope: "namespace", resource: "translation", verb: "update", reserved: false },
+    ActionDefinition { action: "translation.watch", kind: "translation", scope: "namespace", resource: "translation", verb: "watch", reserved: false },
     ActionDefinition { action: "user.create", kind: "user", scope: "cluster", resource: "user", verb: "create", reserved: false },
     ActionDefinition { action: "user.delete", kind: "user", scope: "cluster", resource: "user", verb: "delete", reserved: false },
     ActionDefinition { action: "user.group.update", kind: "user", scope: "cluster", resource: "user/group", verb: "update", reserved: false },

@@ -72,21 +72,22 @@ type providerShutdowner interface {
 
 // Server is the composed API runtime.
 type Server struct {
-	cfg              *config.Config
-	log              *zap.Logger
-	store            datastore.Datastore
-	gitClient        *gitclient.Client
-	httpServers      []httpEndpoint
-	connections      *wsregistry.Registry
-	grpcServer       *grpc.Server
-	grpcListener     net.Listener
-	authReloader     authReloader
-	providerShutdown []providerShutdowner
-	namespaceWatch   *namespaceWatchRuntime
-	endpointCleanup  []func()
-	bootstrap        *bootstrapRuntime
-	roleReady        *roleReadiness
-	runtimeCancel    context.CancelFunc
+	cfg                   *config.Config
+	log                   *zap.Logger
+	store                 datastore.Datastore
+	gitClient             *gitclient.Client
+	httpServers           []httpEndpoint
+	connections           *wsregistry.Registry
+	grpcServer            *grpc.Server
+	grpcListener          net.Listener
+	authReloader          authReloader
+	providerShutdown      []providerShutdowner
+	namespaceWatch        *namespaceWatchRuntime
+	endpointCleanup       []func()
+	bootstrap             *bootstrapRuntime
+	roleReady             *roleReadiness
+	runtimeCancel         context.CancelFunc
+	targetMaintenanceDone chan struct{}
 }
 
 type namespaceCDCRunner interface {
@@ -175,6 +176,13 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 	}
 	if log == nil {
 		return nil, fmt.Errorf("app: logger is required")
+	}
+	translationActivation := cataloggrpc.TranslationActivation{
+		Enabled:          cfg.Api.Translation.Enabled,
+		DescriptorDigest: cfg.Api.Translation.DescriptorDigest,
+	}
+	if err := translationActivation.Validate(); err != nil {
+		return nil, err
 	}
 	if err := cfg.Api.ValidateRuntime(); err != nil {
 		return nil, err
@@ -372,6 +380,7 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 			RBACGitReader:         recoveryReader,
 			Logger:                log,
 			Clock:                 clock,
+			TranslationActivation: translationActivation,
 		})
 		if err != nil {
 			return nil, err
@@ -409,6 +418,7 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 			Clock:                        clock,
 			IDs:                          ids,
 			CommittedManifestAdmitter:    catalogServer,
+			TranslationActivation:        translationActivation,
 			RBACValidator:                validator,
 			ResourceJournal:              resourceJournal,
 			NamespaceWatch:               cfg.Api.Watch.Journal,
@@ -860,6 +870,15 @@ func constructProviderRegistryWithOPA(cfg *config.Config, store serviceAccountSt
 func (s *Server) Start() {
 	runCtx, runCancel := context.WithCancel(context.Background())
 	s.runtimeCancel = runCancel
+	if capable, ok := s.store.(datastore.TranslationTargetMaintenanceCapable); ok {
+		if maintenance := capable.TranslationTargetMaintenanceStore(); maintenance != nil {
+			s.targetMaintenanceDone = make(chan struct{})
+			go func() {
+				defer close(s.targetMaintenanceDone)
+				runTranslationTargetMaintenance(runCtx, maintenance, s.log)
+			}()
+		}
+	}
 	if s.bootstrap != nil {
 		s.bootstrap.start()
 	}
@@ -945,6 +964,15 @@ func (s *Server) Shutdown(ctx context.Context) {
 func (s *Server) Close() {
 	if s.runtimeCancel != nil {
 		s.runtimeCancel()
+	}
+	if s.targetMaintenanceDone != nil {
+		timer := time.NewTimer(namespaceWatchStopTimeout)
+		select {
+		case <-s.targetMaintenanceDone:
+		case <-timer.C:
+			s.log.Warn("Translation target maintenance shutdown timed out")
+		}
+		timer.Stop()
 	}
 	if s.bootstrap != nil {
 		s.bootstrap.close()

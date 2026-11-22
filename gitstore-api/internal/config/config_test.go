@@ -27,6 +27,8 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_API__STOREFRONT_PORT",
 		"GITSTORE_API__GIT_PORT",
 		"GITSTORE_API__GRPC_PORT",
+		"GITSTORE_API__TRANSLATION__ENABLED",
+		"GITSTORE_API__TRANSLATION__DESCRIPTOR_DIGEST",
 		"GITSTORE_API__PROFILING__URI",
 		"GITSTORE_API__PROFILING__TOKEN",
 		"GITSTORE_API__RATE_LIMIT__PER_SECOND",
@@ -120,6 +122,29 @@ func clearEnv(t *testing.T) func() {
 			}
 		}
 	}
+}
+
+func TestTranslationRolloutConfiguration(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.False(t, cfg.Api.Translation.Enabled)
+	require.Empty(t, cfg.Api.Translation.DescriptorDigest)
+
+	path := filepath.Join(t.TempDir(), "translation.toml")
+	require.NoError(t, os.WriteFile(path, []byte("[api.translation]\nenabled = false\ndescriptor_digest = \"file-descriptor\"\n"), 0o600))
+	cfg, err = LoadFrom(path)
+	require.NoError(t, err)
+	require.False(t, cfg.Api.Translation.Enabled)
+	require.Equal(t, "file-descriptor", cfg.Api.Translation.DescriptorDigest)
+
+	t.Setenv("GITSTORE_API__TRANSLATION__ENABLED", "true")
+	t.Setenv("GITSTORE_API__TRANSLATION__DESCRIPTOR_DIGEST", "environment-descriptor")
+	cfg, err = LoadFrom(path)
+	require.NoError(t, err)
+	require.True(t, cfg.Api.Translation.Enabled)
+	require.Equal(t, "environment-descriptor", cfg.Api.Translation.DescriptorDigest)
 }
 
 func TestDynamicRBACRolloutConfiguration(t *testing.T) {

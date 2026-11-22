@@ -116,7 +116,7 @@ func (s *scyllaDatastore) deleteOwnerReferenceDependent(
 
 func (s *scyllaDatastore) HasBlockingOwnerDependents(ctx context.Context, scope datastore.OwnerReferenceScope, ownerUID string) (bool, error) {
 	const stmt = `SELECT dependent_uid FROM owner_reference_dependents
-		WHERE namespace=? AND repository_id=? AND owner_uid=? AND block_owner_deletion=? LIMIT 1`
+		WHERE namespace=? AND repository_id=? AND owner_uid=? AND block_owner_deletion=? AND dependent_kind > '' LIMIT 1`
 	var row struct {
 		DependentUID string `db:"dependent_uid"`
 	}
@@ -139,7 +139,7 @@ func (s *scyllaDatastore) ListBlockingOwnerDependents(ctx context.Context, scope
 		limit = datastore.MaxOwnerDependentPageSize
 	}
 	var rows []ownerReferenceDependentRow
-	for _, kind := range []string{"CategoryTaxonomy", "Collection", "File", "Product", "ProductVariant"} {
+	for _, kind := range []string{"CategoryTaxonomy", "Collection", "File", "Product", "ProductVariant", "Translation"} {
 		stmt := `SELECT dependent_uid, dependent_kind, name, resource_version
 			FROM owner_reference_dependents
 			WHERE namespace=? AND repository_id=? AND owner_uid=? AND block_owner_deletion=?
@@ -241,19 +241,8 @@ func (s *scyllaDatastore) MarkCategoryTaxonomyDeletion(
 	category.UpdateTimestamp = at
 	category.UpdateActor = "deletion"
 	datastore.AdvanceCategoryTaxonomySystemVersion(category)
-	uid := mustParseUUID(category.UID)
-	const stmt = `UPDATE category_taxonomies_by_namespace
-		SET resource_version=?, deletion_timestamp=?, finalizers=?, status=?, update_timestamp=?, update_actor=?
-		WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?`
-	applied, err := s.session.Query(stmt, nil).WithContext(ctx).Bind(
-		category.ResourceVersion, category.DeletionTimestamp, category.Finalizers, string(category.Status), category.UpdateTimestamp, category.UpdateActor,
-		category.Namespace, category.CreationTimestamp, uid, expectedResourceVersion,
-	).ExecCASRelease()
-	if err != nil {
+	if err := s.updateCategoryTaxonomyAuthoritative(ctx, toCategoryTaxonomyRow(category), expectedResourceVersion); err != nil {
 		return nil, fmt.Errorf("scylla: mark category taxonomy deletion: %w", err)
-	}
-	if !applied {
-		return nil, datastore.ErrConflict
 	}
 	return category, nil
 }

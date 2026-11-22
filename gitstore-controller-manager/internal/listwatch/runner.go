@@ -62,7 +62,13 @@ type Runner[T any] struct {
 	DiskIndexes        func(T) []string
 	DiskRelated        func(T) []types.WorkItemKey
 	DiskRelatedVersion func(T) string
-	Enqueue            func(types.WorkItemKey) error
+	// PrepareDiskItem may enrich bounded indexes before a list page or watch
+	// event is persisted. Errors preserve the previous projection and cursor.
+	PrepareDiskItem func(context.Context, T, *checkpoint.DiskItem) error
+	// BeforeDiskChange persists dependencies before publishing relists or
+	// advancing accepted/version-deduplicated watch hints. Errors retry.
+	BeforeDiskChange func(context.Context, *T, *T) error
+	Enqueue          func(types.WorkItemKey) error
 	// ReplayEnqueue receives related replay keys restored from the checkpoint.
 	// It is used when this runner observes changes whose durable work belongs to
 	// another controller kind.
@@ -75,6 +81,9 @@ type Runner[T any] struct {
 	// ShouldEnqueueUpdate determines whether an accepted Modified event should
 	// enqueue reconciliation. Nil enqueues every accepted update.
 	ShouldEnqueueUpdate func(oldObj, newObj T) bool
+	// RequeueUnchanged accepts durable watch hints that intentionally preserve
+	// the public source version. Work and the new cursor commit atomically.
+	RequeueUnchanged bool
 	// DisableReplay prevents this runner from tracking its own keys. This is
 	// useful for observer-only runners whose durable work is represented by
 	// RelatedReplayKeys instead.
@@ -159,7 +168,7 @@ func (r *Runner[T]) diskItem(value T) (checkpoint.DiskItem, error) {
 	if err != nil {
 		return checkpoint.DiskItem{}, err
 	}
-	item := checkpoint.DiskItem{Key: r.KeyFunc(value), Version: r.RevisionFunc(value), Value: data}
+	item := checkpoint.DiskItem{Key: r.KeyFunc(value), Version: r.RevisionFunc(value), Value: data, ObserverOnly: r.DisableReplay}
 	if r.DiskIndexes != nil {
 		item.Indexes = r.DiskIndexes(value)
 	}
@@ -168,6 +177,19 @@ func (r *Runner[T]) diskItem(value T) (checkpoint.DiskItem, error) {
 	}
 	if r.DiskRelatedVersion != nil {
 		item.RelatedVersion = r.DiskRelatedVersion(value)
+	}
+	return item, nil
+}
+
+func (r *Runner[T]) prepareDiskItem(ctx context.Context, value T) (checkpoint.DiskItem, error) {
+	item, err := r.diskItem(value)
+	if err != nil {
+		return item, err
+	}
+	if r.PrepareDiskItem != nil {
+		if err := r.PrepareDiskItem(ctx, value, &item); err != nil {
+			return checkpoint.DiskItem{}, err
+		}
 	}
 	return item, nil
 }
@@ -209,7 +231,7 @@ func (r *Runner[T]) listToDisk(ctx context.Context, lw PagedListWatcher[T]) erro
 				return nil
 			}
 			for _, value := range items {
-				item, err := r.diskItem(value)
+				item, err := r.prepareDiskItem(ctx, value)
 				if err != nil {
 					return err
 				}
@@ -230,6 +252,11 @@ func (r *Runner[T]) listToDisk(ctx context.Context, lw PagedListWatcher[T]) erro
 		if err != nil {
 			return err
 		}
+		if r.BeforeDiskChange != nil {
+			if err := r.Disk.VisitSnapshotChanges(ctx, generation, r.beforeSnapshotChange); err != nil {
+				return err
+			}
+		}
 		if err := r.Disk.FinishSnapshot(ctx, generation, cursor, func(pages int64) {
 			r.Cache.ObserveListProgress(progress.pages+pages, progress.rows)
 		}); err != nil {
@@ -241,6 +268,31 @@ func (r *Runner[T]) listToDisk(ctx context.Context, lw PagedListWatcher[T]) erro
 	})
 }
 
+func (r *Runner[T]) beforeSnapshotChange(ctx context.Context, previous, current *checkpoint.DiskItem) error {
+	decode := func(item *checkpoint.DiskItem) (*T, error) {
+		if item == nil {
+			return nil, nil
+		}
+		var value T
+		if err := json.Unmarshal(item.Value, &value); err != nil {
+			return nil, fmt.Errorf("decode %s snapshot projection: %w", r.Kind, err)
+		}
+		if r.KeyFunc(value) != item.Key || r.RevisionFunc(value) != item.Version {
+			return nil, fmt.Errorf("%s snapshot projection identity mismatch", r.Kind)
+		}
+		return &value, nil
+	}
+	prior, err := decode(previous)
+	if err != nil {
+		return err
+	}
+	next, err := decode(current)
+	if err != nil {
+		return err
+	}
+	return r.BeforeDiskChange(ctx, prior, next)
+}
+
 func (r *Runner[T]) applyDiskEvent(ctx context.Context, event WatchEvent[T]) error {
 	if event.Type == Bookmark {
 		return r.Disk.AdvanceCursor(ctx, event.ResourceVersion)
@@ -249,9 +301,24 @@ func (r *Runner[T]) applyDiskEvent(ctx context.Context, event WatchEvent[T]) err
 		return fmt.Errorf("unknown %s watch event type %d", r.Kind, event.Type)
 	}
 	if event.Type == Deleted {
-		return r.Disk.Apply(ctx, checkpoint.DiskItem{Key: r.KeyFunc(event.Object)}, true, true, event.ResourceVersion)
+		if r.BeforeDiskChange != nil {
+			previous := event.Object
+			prior, exists, _, err := r.Disk.Read(ctx, r.KeyFunc(event.Object))
+			if err != nil {
+				return err
+			}
+			if exists {
+				if err := json.Unmarshal(prior.Value, &previous); err != nil {
+					return fmt.Errorf("decode prior %s projection: %w", r.Kind, err)
+				}
+			}
+			if err := r.BeforeDiskChange(ctx, &previous, nil); err != nil {
+				return err
+			}
+		}
+		return r.Disk.Apply(ctx, checkpoint.DiskItem{Key: r.KeyFunc(event.Object), ObserverOnly: r.DisableReplay}, true, !r.DisableReplay, event.ResourceVersion)
 	}
-	item, err := r.diskItem(event.Object)
+	item, err := r.prepareDiskItem(ctx, event.Object)
 	if err != nil {
 		return err
 	}
@@ -260,16 +327,34 @@ func (r *Runner[T]) applyDiskEvent(ctx context.Context, event WatchEvent[T]) err
 		return err
 	}
 	enqueue := true
+	var previous *T
 	if exists {
 		var old T
 		if err := json.Unmarshal(prior.Value, &old); err != nil {
 			return fmt.Errorf("decode prior %s projection: %w", r.Kind, err)
 		}
-		if prior.Version == item.Version || r.AcceptUpdate != nil && !r.AcceptUpdate(old, event.Object) {
+		if prior.Version == item.Version {
+			if r.BeforeDiskChange != nil {
+				if err := r.BeforeDiskChange(ctx, &old, &event.Object); err != nil {
+					return err
+				}
+			}
+			if r.RequeueUnchanged {
+				return r.Disk.Apply(ctx, item, false, !r.DisableReplay, event.ResourceVersion)
+			}
+			return r.Disk.AdvanceCursor(ctx, event.ResourceVersion)
+		}
+		if r.AcceptUpdate != nil && !r.AcceptUpdate(old, event.Object) {
 			return r.Disk.AdvanceCursor(ctx, event.ResourceVersion)
 		}
 		if r.ShouldEnqueueUpdate != nil {
 			enqueue = r.ShouldEnqueueUpdate(old, event.Object)
+		}
+		previous = &old
+	}
+	if r.BeforeDiskChange != nil {
+		if err := r.BeforeDiskChange(ctx, previous, &event.Object); err != nil {
+			return err
 		}
 	}
 	return r.Disk.Apply(ctx, item, false, enqueue, event.ResourceVersion)

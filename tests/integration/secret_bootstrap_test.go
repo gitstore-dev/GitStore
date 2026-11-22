@@ -186,6 +186,11 @@ func secretTestGraphQLWithTimeout(t *testing.T, api, token, query string, variab
 
 func secretTestGraphQLWithHeaders(t *testing.T, api, token, query string, variables map[string]any, timeout time.Duration, headers map[string]string) gqlResponse {
 	t.Helper()
+	return secretTestGraphQLWithHeadersBounded(t, api, token, query, variables, timeout, headers, 1<<20)
+}
+
+func secretTestGraphQLWithHeadersBounded(t *testing.T, api, token, query string, variables map[string]any, timeout time.Duration, headers map[string]string, limit int64) gqlResponse {
+	t.Helper()
 	data, err := json.Marshal(gqlRequest{Query: query, Variables: variables})
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -203,7 +208,7 @@ func secretTestGraphQLWithHeaders(t *testing.T, api, token, query string, variab
 	}
 	defer response.Body.Close()
 	var result gqlResponse
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(response.Body, limit)).Decode(&result); err != nil {
 		if response.StatusCode < 400 {
 			t.Fatalf("invalid test GraphQL response (HTTP %d)", response.StatusCode)
 		}

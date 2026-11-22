@@ -338,10 +338,14 @@ target content on both APIs before and after the declared recovery scenarios.
   inheriting the old resolved identity.
 - **FR-016**: System-owned status MUST distinguish admission, locale,
   target-resolution and field-validation outcomes, using common condition,
-  observed-generation and source-revision conventions.
+  observed-generation and source-revision conventions. Retain #40's common
+  status baseline: `conditions`, `observedGeneration`, `lastAppliedRevision`
+  and kind-specific `resolved` evidence. `lastAppliedRevision` identifies the
+  Translation's own source revision successfully reconciled into its observed
+  status; it does not identify a target revision or claim localized application.
   Ready means this Translation is validated and its target is resolved, not
   that a localized target has been produced. The design MUST choose or omit
-  #78's proposed `resolved.target`, `lastAppliedRevision` and
+  #78's proposed `resolved.target` and
   `resolved.appliedFieldPaths` fields according to their actual semantics,
   rather than inventing application work to fill them. No status or
   `ProjectionUpdated` outcome may claim target application before that separate

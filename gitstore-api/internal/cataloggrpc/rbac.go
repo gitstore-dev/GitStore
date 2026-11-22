@@ -62,6 +62,11 @@ func (s *Server) projectRBACReceive(ctx context.Context, req *catalogv1.AdmitRes
 		// an intervening commit to this receive's actor.
 		return nil
 	}
+	for _, ref := range []string{req.GetOldCommitSha(), req.GetNewCommitSha()} {
+		if _, err := s.loadParsedEntriesFrom(ctx, s.rbacGit, repository.UID, ref, repository.Namespace, req.GetChangedPaths()); err != nil {
+			return err
+		}
+	}
 	return s.projectRBACOrigin(ctx, tier, origin, resources, auth.PrincipalFromContext(ctx).Subject)
 }
 

@@ -134,6 +134,7 @@ type DiskItem struct {
 	Indexes        []string
 	Related        []types.WorkItemKey
 	RelatedVersion string
+	ObserverOnly   bool `json:",omitempty"`
 }
 
 type DiskWork struct {
@@ -144,6 +145,7 @@ type DiskWork struct {
 
 type DiskSchedule struct {
 	Token         uint64
+	QueuedAt      time.Time
 	Due           int64
 	Priority      byte
 	Attempts      int
@@ -159,6 +161,26 @@ type DiskPoison struct {
 type DiskCounts struct {
 	Pending uint64
 	Poison  uint64
+}
+
+type DiskStats struct {
+	DiskCounts
+	OldestPending           time.Time
+	PendingWithoutTimestamp uint64
+}
+
+type DiskOption func(*DiskStore)
+
+// WithPendingAge is for kinds whose supported checkpoint writers all maintain
+// enqueue timestamps. Existing kinds need not change their checkpoint contract.
+func WithPendingAge() DiskOption {
+	return func(s *DiskStore) { s.pendingAge = true }
+}
+
+// WithProjectionLimit accounts for serialization expansion without changing
+// other kinds' default bounds. The bound is retained with the checkpoint.
+func WithProjectionLimit(maximum int) DiskOption {
+	return func(s *DiskStore) { s.projectionLimit = maximum }
 }
 
 type diskBatch struct {
@@ -178,20 +200,22 @@ func (b *diskBatch) count(generation uint64, name string, delta int64) {
 // Each kind has its own locked directory on the existing checkpoint volume.
 // A snapshot is published by one atomic generation-pointer/cursor write.
 type DiskStore struct {
-	mu             sync.RWMutex
-	db             *leveldb.DB
-	kind           string
-	counts         atomic.Pointer[DiskCounts]
-	longOperations atomic.Int64
-	lastWrite      atomic.Int64
-	writeFailures  atomic.Uint64
+	mu              sync.RWMutex
+	db              *leveldb.DB
+	kind            string
+	counts          atomic.Pointer[DiskStats]
+	pendingAge      bool
+	projectionLimit int
+	longOperations  atomic.Int64
+	lastWrite       atomic.Int64
+	writeFailures   atomic.Uint64
 }
 
 var diskSync = &opt.WriteOptions{Sync: true}
 var diskScan = &opt.ReadOptions{DontFillCache: true}
 var ErrSnapshotInProgress = errors.New("checkpoint: snapshot recovery is in progress")
 
-func OpenDiskStore(dir, kind string) (*DiskStore, error) {
+func OpenDiskStore(dir, kind string, options ...DiskOption) (*DiskStore, error) {
 	if kind == "" {
 		return nil, errors.New("checkpoint: disk store kind is empty")
 	}
@@ -212,7 +236,13 @@ func OpenDiskStore(dir, kind string) (*DiskStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint: open disk store: %w", err)
 	}
-	s := &DiskStore{db: db, kind: kind}
+	s := &DiskStore{db: db, kind: kind, projectionLimit: DiskItemBytes}
+	for _, option := range options {
+		option(s)
+	}
+	if s.projectionLimit < DiskItemBytes || s.projectionLimit > 8<<20 {
+		return nil, errors.Join(errors.New("checkpoint: invalid projection byte bound"), db.Close())
+	}
 	version, err := db.Get([]byte("schema"), nil)
 	if errors.Is(err, leveldb.ErrNotFound) {
 		it := db.NewIterator(nil, diskScan)
@@ -230,6 +260,37 @@ func OpenDiskStore(dir, kind string) (*DiskStore, error) {
 	}
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("checkpoint: disk schema: %w", err), db.Close())
+	}
+	storedLimit, err := s.number("projection-limit")
+	if err == nil && storedLimit != 0 {
+		if storedLimit < DiskItemBytes || storedLimit > 8<<20 ||
+			(s.projectionLimit != DiskItemBytes && storedLimit > uint64(s.projectionLimit)) {
+			err = errors.New("incompatible persisted projection byte bound")
+		} else {
+			s.projectionLimit = max(s.projectionLimit, int(storedLimit))
+		}
+	}
+	if err == nil && uint64(s.projectionLimit) > storedLimit && s.projectionLimit != DiskItemBytes {
+		err = db.Put([]byte("projection-limit"), diskNumber(uint64(s.projectionLimit)), diskSync)
+	}
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("checkpoint: projection bound: %w", err), db.Close())
+	}
+	ageVersion, err := db.Get([]byte("pending-age"), nil)
+	if errors.Is(err, leveldb.ErrNotFound) {
+		err = nil
+		if s.pendingAge {
+			err = db.Put([]byte("pending-age"), []byte("1"), diskSync)
+		}
+	} else if err == nil {
+		if string(ageVersion) != "1" {
+			err = errors.New("unsupported pending age index")
+		} else {
+			s.pendingAge = true
+		}
+	}
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("checkpoint: pending age schema: %w", err), db.Close())
 	}
 	if err := s.refreshCounts(); err != nil {
 		return nil, errors.Join(err, db.Close())
@@ -280,8 +341,8 @@ func (s *DiskStore) logical(key types.WorkItemKey) (string, error) {
 	return diskLogical(key)
 }
 
-func diskItem(item DiskItem) ([]byte, error) {
-	if item.Version == "" || len(item.Version) > 1024 || len(item.RelatedVersion) > 1024 || len(item.Value) > DiskItemBytes ||
+func (s *DiskStore) diskItem(item DiskItem) ([]byte, error) {
+	if item.Version == "" || len(item.Version) > 1024 || len(item.RelatedVersion) > 1024 || len(item.Value) > s.projectionLimit ||
 		!json.Valid(item.Value) || len(item.Indexes) > 32 || len(item.Related) > 32 {
 		return nil, errors.New("checkpoint: invalid or oversized resource projection")
 	}
@@ -316,14 +377,14 @@ func (s *DiskStore) item(generation uint64, logical string) (DiskItem, bool, err
 	if err != nil {
 		return item, false, err
 	}
-	if len(data) > 2*DiskItemBytes {
+	if len(data) > 2*s.projectionLimit {
 		return item, false, errors.New("checkpoint: oversized stored projection")
 	}
 	if err := json.Unmarshal(data, &item); err != nil {
 		return item, false, fmt.Errorf("checkpoint: invalid stored projection: %w", err)
 	}
 	actual, err := s.logical(item.Key)
-	if err != nil || actual != logical || item.Version == "" || len(item.Value) > DiskItemBytes || !json.Valid(item.Value) {
+	if err != nil || actual != logical || item.Version == "" || len(item.Value) > s.projectionLimit || !json.Valid(item.Value) {
 		return item, false, errors.New("checkpoint: inconsistent stored projection")
 	}
 	return item, true, nil
@@ -416,7 +477,7 @@ func (s *DiskStore) write(ctx context.Context, batch *diskBatch) (writeErr error
 		}
 		batch.Put([]byte(name), diskNumber(uint64(int64(current)+delta)))
 	}
-	if len(batch.Dump()) > DiskPageBytes {
+	if len(batch.Dump()) > 4*s.projectionLimit {
 		return errors.New("checkpoint: disk batch exceeds byte bound")
 	}
 	if err := s.db.Write(&batch.Batch, diskSync); err != nil {
@@ -438,13 +499,51 @@ func (s *DiskStore) refreshCounts() error {
 	if err != nil {
 		return err
 	}
-	s.counts.Store(&DiskCounts{Pending: pending, Poison: poison})
+	stats := &DiskStats{DiskCounts: DiskCounts{Pending: pending, Poison: poison}, PendingWithoutTimestamp: pending}
+	if s.pendingAge {
+		timed, err := s.number(string(diskPrefix(active, "timed-count")))
+		if err != nil {
+			return err
+		}
+		if timed > pending {
+			return errors.New("checkpoint: invalid timestamped work count")
+		}
+		stats.PendingWithoutTimestamp -= timed
+		prefix := diskPrefix(active, "a/")
+		it := s.db.NewIterator(util.BytesPrefix(prefix), diskScan)
+		if it.First() {
+			if len(it.Key()) <= len(prefix)+8 || timed == 0 {
+				it.Release()
+				return errors.New("checkpoint: invalid pending age index")
+			}
+			nanos := int64(binary.BigEndian.Uint64(it.Key()[len(prefix) : len(prefix)+8]))
+			if nanos <= 0 {
+				it.Release()
+				return errors.New("checkpoint: invalid pending age timestamp")
+			}
+			stats.OldestPending = time.Unix(0, nanos).UTC()
+		} else if timed != 0 {
+			it.Release()
+			return errors.New("checkpoint: missing pending age index")
+		}
+		err = it.Error()
+		it.Release()
+		if err != nil {
+			return err
+		}
+	}
+	s.counts.Store(stats)
 	return nil
 }
 
 // Counts is the last committed snapshot, so health never waits behind a long
 // generation merge or garbage collection.
 func (s *DiskStore) Counts() DiskCounts {
+	return s.counts.Load().DiskCounts
+}
+
+// Stats is an atomic committed snapshot; neither health nor scrapes read the DB.
+func (s *DiskStore) Stats() DiskStats {
 	return *s.counts.Load()
 }
 
@@ -486,6 +585,13 @@ func (s *DiskStore) put(batch *diskBatch, generation uint64, item DiskItem, data
 			diskRelated(batch, generation, item.Related, token)
 		}
 	}
+	observerOnly := item.ObserverOnly
+	if deleted && exists {
+		observerOnly = observerOnly || old.ObserverOnly
+	}
+	if observerOnly {
+		return s.forgetWork(batch, generation, logical)
+	}
 	if enqueue {
 		priority := byte(0)
 		staging, err := s.number("staging")
@@ -495,7 +601,7 @@ func (s *DiskStore) put(batch *diskBatch, generation uint64, item DiskItem, data
 		if staging == generation {
 			priority = 1
 		}
-		return s.queueWork(batch, generation, logical, DiskSchedule{Token: token, Priority: priority})
+		return s.queueWork(batch, generation, logical, s.newSchedule(token, priority))
 	}
 	return nil
 }
@@ -505,6 +611,18 @@ func diskReadyKey(generation uint64, logical string, state DiskSchedule) []byte 
 	prefix = append(prefix, diskNumber(uint64(state.Due))...)
 	prefix = append(prefix, diskNumber(state.Token)...)
 	return append(prefix, logical...)
+}
+
+func diskAgeKey(generation uint64, logical string, queuedAt time.Time) []byte {
+	return append(append(diskPrefix(generation, "a/"), diskNumber(uint64(queuedAt.UnixNano()))...), logical...)
+}
+
+func (s *DiskStore) newSchedule(token uint64, priority byte) DiskSchedule {
+	state := DiskSchedule{Token: token, Priority: priority}
+	if s.pendingAge {
+		state.QueuedAt = time.Now().UTC()
+	}
+	return state
 }
 
 func (s *DiskStore) schedule(generation uint64, logical string, token uint64) (DiskSchedule, error) {
@@ -519,7 +637,8 @@ func (s *DiskStore) schedule(generation uint64, logical string, token uint64) (D
 	if err := json.Unmarshal(data, &state); err != nil {
 		return state, fmt.Errorf("checkpoint: invalid work schedule: %w", err)
 	}
-	if state.Token != token || state.Priority > 1 || state.Due < 0 {
+	if state.Token != token || state.Priority > 1 || state.Due < 0 ||
+		!state.QueuedAt.IsZero() && state.QueuedAt.UnixNano() <= 0 {
 		return state, errors.New("checkpoint: inconsistent work schedule")
 	}
 	return state, nil
@@ -539,6 +658,10 @@ func (s *DiskStore) forgetWork(batch *diskBatch, generation uint64, logical stri
 	batch.Delete(append(diskPrefix(generation, "s/"), logical...))
 	batch.Delete(append(diskPrefix(generation, "p/"), logical...))
 	batch.count(generation, "pending-count", -1)
+	if s.pendingAge && !state.QueuedAt.IsZero() {
+		batch.Delete(diskAgeKey(generation, logical, state.QueuedAt))
+		batch.count(generation, "timed-count", -1)
+	}
 	if !state.QuarantinedAt.IsZero() {
 		batch.count(generation, "poison-count", -1)
 	}
@@ -546,6 +669,21 @@ func (s *DiskStore) forgetWork(batch *diskBatch, generation uint64, logical stri
 }
 
 func (s *DiskStore) queueWork(batch *diskBatch, generation uint64, logical string, state DiskSchedule) error {
+	if s.pendingAge {
+		token, err := s.token(diskPrefix(generation, "w/"), logical)
+		if err != nil {
+			return err
+		}
+		if token != 0 {
+			old, err := s.schedule(generation, logical, token)
+			if err != nil {
+				return err
+			}
+			if old.QueuedAt.IsZero() || !state.QueuedAt.IsZero() && old.QueuedAt.Before(state.QueuedAt) {
+				state.QueuedAt = old.QueuedAt
+			}
+		}
+	}
 	if state.Priority == 0 && state.Due == 0 {
 		state.Due = time.Now().UnixMilli()
 	}
@@ -554,7 +692,11 @@ func (s *DiskStore) queueWork(batch *diskBatch, generation uint64, logical strin
 	}
 	batch.Put(append(diskPrefix(generation, "w/"), logical...), diskNumber(state.Token))
 	batch.count(generation, "pending-count", 1)
-	if state.Priority != 1 || state.Due != 0 || !state.QuarantinedAt.IsZero() {
+	if s.pendingAge && !state.QueuedAt.IsZero() {
+		batch.Put(diskAgeKey(generation, logical, state.QueuedAt), nil)
+		batch.count(generation, "timed-count", 1)
+	}
+	if state.Priority != 1 || state.Due != 0 || !state.QuarantinedAt.IsZero() || !state.QueuedAt.IsZero() {
 		data, err := json.Marshal(state)
 		if err != nil {
 			return err
@@ -598,7 +740,7 @@ func (s *DiskStore) PutSnapshotPage(ctx context.Context, generation uint64, item
 			return errors.New("checkpoint: duplicate resource in snapshot page")
 		}
 		seen[item.Key] = struct{}{}
-		data, err := diskItem(item)
+		data, err := s.diskItem(item)
 		if err != nil {
 			return err
 		}
@@ -609,7 +751,7 @@ func (s *DiskStore) PutSnapshotPage(ctx context.Context, generation uint64, item
 		if err := s.put(batch, generation, item, data, token, false, true); err != nil {
 			return err
 		}
-		if len(batch.Dump()) > DiskPageBytes {
+		if len(batch.Dump()) > 4*s.projectionLimit {
 			return errors.New("checkpoint: snapshot page exceeds byte bound")
 		}
 	}
@@ -638,10 +780,10 @@ func (s *DiskStore) scan(ctx context.Context, prefix []byte, after string, limit
 			continue
 		}
 		n := len(key) + len(it.Value())
-		if n > DiskPageBytes {
+		if n > 4*s.projectionLimit {
 			return nil, errors.New("checkpoint: stored row exceeds page byte bound")
 		}
-		if len(page) == limit || size+n > DiskPageBytes {
+		if len(page) == limit || size+n > 4*s.projectionLimit {
 			break
 		}
 		page = append(page, [2][]byte{bytes.Clone(key), bytes.Clone(it.Value())})
@@ -662,6 +804,98 @@ func (s *DiskStore) token(prefix []byte, logical string) (uint64, error) {
 		return 0, errors.New("checkpoint: invalid work token")
 	}
 	return binary.BigEndian.Uint64(value), nil
+}
+
+// VisitSnapshotChanges streams a staged snapshot's changes against the active
+// snapshot. Callbacks run without a store lock and must succeed before publish.
+func (s *DiskStore) VisitSnapshotChanges(ctx context.Context, generation uint64, visit func(context.Context, *DiskItem, *DiskItem) error) error {
+	if visit == nil {
+		return errors.New("checkpoint: missing snapshot change visitor")
+	}
+	var old uint64
+	if err := s.readStagedSnapshot(ctx, generation, func() error {
+		var err error
+		old, err = s.number("active")
+		return err
+	}); err != nil {
+		return err
+	}
+	for _, source := range []struct {
+		generation uint64
+		removed    bool
+	}{{generation, false}, {old, true}} {
+		if source.generation == 0 {
+			continue
+		}
+		after := ""
+		for {
+			var page [][2][]byte
+			if err := s.readStagedSnapshot(ctx, generation, func() error {
+				var err error
+				page, err = s.scan(ctx, diskPrefix(source.generation, "d/"), after, DiskPageItems)
+				return err
+			}); err != nil {
+				return err
+			}
+			if len(page) == 0 {
+				break
+			}
+			for _, row := range page {
+				var item DiskItem
+				if err := json.Unmarshal(row[1], &item); err != nil {
+					return err
+				}
+				comparison := old
+				if source.removed {
+					comparison = generation
+				}
+				var prior DiskItem
+				var exists bool
+				if err := s.readStagedSnapshot(ctx, generation, func() error {
+					var err error
+					prior, exists, err = s.item(comparison, string(row[0]))
+					return err
+				}); err != nil {
+					return err
+				}
+				if source.removed {
+					if !exists {
+						if err := visit(ctx, &item, nil); err != nil {
+							return err
+						}
+					}
+					continue
+				}
+				if exists && item.Version == prior.Version && bytes.Equal(item.Value, prior.Value) {
+					continue
+				}
+				var previous *DiskItem
+				if exists {
+					previous = &prior
+				}
+				if err := visit(ctx, previous, &item); err != nil {
+					return err
+				}
+			}
+			after = string(page[len(page)-1][0])
+		}
+	}
+	return s.readStagedSnapshot(ctx, generation, func() error { return nil })
+}
+
+func (s *DiskStore) readStagedSnapshot(ctx context.Context, generation uint64, read func() error) error {
+	if err := s.readLock(ctx); err != nil {
+		return err
+	}
+	defer s.mu.RUnlock()
+	staging, err := s.number("staging")
+	if err != nil {
+		return err
+	}
+	if staging == 0 || staging != generation {
+		return ErrSnapshotInProgress
+	}
+	return read()
 }
 
 // FinishSnapshot preserves unfinished/deleted work before atomically publishing.
@@ -725,8 +959,10 @@ func (s *DiskStore) FinishSnapshot(ctx context.Context, generation uint64, curso
 						if sequence == 0 {
 							return errors.New("checkpoint: work token overflow")
 						}
-						if err := s.queueWork(batch, generation, logical, DiskSchedule{Token: sequence, Priority: 1}); err != nil {
-							return err
+						if !prior.ObserverOnly {
+							if err := s.queueWork(batch, generation, logical, s.newSchedule(sequence, 1)); err != nil {
+								return err
+							}
 						}
 						diskRelated(batch, generation, prior.Related, sequence)
 					} else if current.RelatedVersion != prior.RelatedVersion || !slices.Equal(current.Indexes, prior.Indexes) || !slices.Equal(current.Related, prior.Related) {
@@ -763,13 +999,16 @@ func (s *DiskStore) FinishSnapshot(ctx context.Context, generation uint64, curso
 					if err != nil {
 						return err
 					}
-					current, _, err := s.item(generation, logical)
+					current, exists, err := s.item(generation, logical)
 					if err != nil {
 						return err
 					}
+					if current.ObserverOnly || !exists && prior.ObserverOnly {
+						continue
+					}
 					if prior.Version != current.Version || prior.RelatedVersion != current.RelatedVersion || !bytes.Equal(prior.Value, current.Value) ||
 						!slices.Equal(prior.Indexes, current.Indexes) || !slices.Equal(prior.Related, current.Related) {
-						state = DiskSchedule{Priority: 1}
+						state = DiskSchedule{Priority: 1, QueuedAt: state.QueuedAt}
 					}
 					state.Token = sequence
 					if err := s.queueWork(batch, generation, logical, state); err != nil {
@@ -823,7 +1062,7 @@ func (s *DiskStore) Apply(ctx context.Context, item DiskItem, deleted, enqueue b
 	}
 	var data []byte
 	if !deleted {
-		data, err = diskItem(item)
+		data, err = s.diskItem(item)
 		if err != nil {
 			return err
 		}
@@ -1112,7 +1351,7 @@ func (s *DiskStore) Enqueue(ctx context.Context, key types.WorkItemKey) error {
 		return errors.New("checkpoint: work token overflow")
 	}
 	batch := newDiskBatch()
-	if err := s.queueWork(batch, active, logical, DiskSchedule{Token: token}); err != nil {
+	if err := s.queueWork(batch, active, logical, s.newSchedule(token, 0)); err != nil {
 		return err
 	}
 	batch.Put([]byte("sequence"), diskNumber(token))
@@ -1139,7 +1378,11 @@ func (s *DiskStore) DeferWork(ctx context.Context, key types.WorkItemKey, token 
 	if err != nil || current != token {
 		return false, err
 	}
-	state := DiskSchedule{Token: token, Due: time.Now().Add(delay).UnixMilli(), Attempts: attempts}
+	prior, err := s.schedule(active, logical, current)
+	if err != nil {
+		return false, err
+	}
+	state := DiskSchedule{Token: token, Due: time.Now().Add(delay).UnixMilli(), Attempts: attempts, QueuedAt: prior.QueuedAt}
 	if failure != "" {
 		state.LastError = failure
 		if len(state.LastError) > 2048 {
@@ -1287,6 +1530,7 @@ func (s *DiskStore) IndexCount(ctx context.Context, index string) (uint64, error
 type diskFanout struct {
 	Generation uint64
 	After      string
+	Dirty      bool `json:",omitempty"`
 }
 
 func (s *DiskStore) RequestFanout(ctx context.Context, index string) error {
@@ -1310,9 +1554,80 @@ func (s *DiskStore) RequestFanout(ctx context.Context, index string) error {
 	return s.write(ctx, batch)
 }
 
+// ReadHint returns bounded opaque invalidation state, not resource authority.
+func (s *DiskStore) ReadHint(ctx context.Context, key string) ([]byte, error) {
+	if key == "" || len(key) > 1024 {
+		return nil, errors.New("checkpoint: invalid hint key")
+	}
+	if err := s.readLock(ctx); err != nil {
+		return nil, err
+	}
+	defer s.mu.RUnlock()
+	data, err := s.db.Get([]byte("hint/"+base64.RawURLEncoding.EncodeToString([]byte(key))), nil)
+	if errors.Is(err, leveldb.ErrNotFound) {
+		return nil, nil
+	}
+	if len(data) > 16<<10 {
+		return nil, errors.New("checkpoint: oversized persisted hint")
+	}
+	return data, err
+}
+
+func (s *DiskStore) WriteHint(ctx context.Context, key string, data []byte) error {
+	if key == "" || len(key) > 1024 || len(data) > 16<<10 {
+		return errors.New("checkpoint: invalid hint")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	batch := newDiskBatch()
+	row := []byte("hint/" + base64.RawURLEncoding.EncodeToString([]byte(key)))
+	if len(data) == 0 {
+		batch.Delete(row)
+	} else {
+		batch.Put(row, data)
+	}
+	return s.write(ctx, batch)
+}
+
+// RequestCoalescedFanout preserves the current sweep and records another sweep
+// for changes behind its cursor. Such tasks share a durable round-robin cursor.
+func (s *DiskStore) RequestCoalescedFanout(ctx context.Context, index string) error {
+	if index == "" || len(index) > 1024 {
+		return errors.New("checkpoint: invalid fanout index")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := []byte("fanout/" + base64.RawURLEncoding.EncodeToString([]byte(index)))
+	data, err := s.db.Get(key, nil)
+	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
+		return err
+	}
+	var task diskFanout
+	if err == nil {
+		if err := json.Unmarshal(data, &task); err != nil {
+			return fmt.Errorf("checkpoint: invalid fanout task: %w", err)
+		}
+	}
+	task.Dirty = task.Dirty || task.After != ""
+	data, err = json.Marshal(task)
+	if err != nil {
+		return err
+	}
+	batch := newDiskBatch()
+	batch.Put(key, data)
+	rotating, err := s.db.Has([]byte("fanout-after"), nil)
+	if err != nil {
+		return err
+	}
+	if !rotating {
+		batch.Put([]byte("fanout-after"), []byte{})
+	}
+	return s.write(ctx, batch)
+}
+
 // ProcessFanout advances one durable range task by at most one bounded page.
-// A changed generation or dependency request restarts its scan; periodic
-// resync requests preserve an already-running sweep.
+// Coalesced changes repeat a completed sweep without starving other tasks.
+// Ordinary dependency requests restart their scan; periodic resyncs preserve it.
 func (s *DiskStore) ProcessFanout(ctx context.Context) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1323,7 +1638,15 @@ func (s *DiskStore) ProcessFanout(ctx context.Context) (bool, error) {
 	if staging != 0 {
 		return false, ErrSnapshotInProgress
 	}
-	tasks, err := s.scan(ctx, []byte("fanout/"), "", 1)
+	after, err := s.db.Get([]byte("fanout-after"), nil)
+	rotating := err == nil
+	if err != nil && !errors.Is(err, leveldb.ErrNotFound) {
+		return false, err
+	}
+	tasks, err := s.scan(ctx, []byte("fanout/"), string(after), 1)
+	if err == nil && len(tasks) == 0 && len(after) != 0 {
+		tasks, err = s.scan(ctx, []byte("fanout/"), "", 1)
+	}
 	if err != nil || len(tasks) == 0 {
 		return false, err
 	}
@@ -1352,8 +1675,19 @@ func (s *DiskStore) ProcessFanout(ctx context.Context) (bool, error) {
 	}
 	batch := newDiskBatch()
 	taskKey := append([]byte("fanout/"), tasks[0][0]...)
+	if rotating {
+		batch.Put([]byte("fanout-after"), tasks[0][0])
+	}
 	if len(page) == 0 {
-		batch.Delete(taskKey)
+		if task.Dirty {
+			data, err := json.Marshal(diskFanout{Generation: active})
+			if err != nil {
+				return false, err
+			}
+			batch.Put(taskKey, data)
+		} else {
+			batch.Delete(taskKey)
+		}
 		return true, s.write(ctx, batch)
 	}
 	token, err := s.number("sequence")
@@ -1375,7 +1709,7 @@ func (s *DiskStore) ProcessFanout(ctx context.Context) (bool, error) {
 		if token == 0 {
 			return false, errors.New("checkpoint: work token overflow")
 		}
-		state := DiskSchedule{Token: token}
+		state := s.newSchedule(token, 0)
 		if string(index) == "*" {
 			state.Priority = 1
 		}

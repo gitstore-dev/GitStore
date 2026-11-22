@@ -106,10 +106,12 @@ func provisionKeyspace(addr, keyspace string) {
 			`AND durable_writes = true`,
 		keyspace,
 	)
-	if err := session.Query(stmt).Exec(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := session.Query(stmt).WithContext(ctx).SetRequestTimeout(30 * time.Second).Exec(); err != nil {
 		panic("provisionKeyspace: create keyspace: " + err.Error())
 	}
-	if err := session.AwaitSchemaAgreement(context.Background()); err != nil {
+	if err := session.AwaitSchemaAgreement(ctx); err != nil {
 		panic("provisionKeyspace: await schema agreement: " + err.Error())
 	}
 }
@@ -120,7 +122,10 @@ func dropKeyspace(addr, keyspace string) {
 		return
 	}
 	defer session.Close()
-	_ = session.Query(fmt.Sprintf(`DROP KEYSPACE IF EXISTS %s`, keyspace)).Exec()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_ = session.Query(fmt.Sprintf(`DROP KEYSPACE IF EXISTS %s`, keyspace)).
+		WithContext(ctx).SetRequestTimeout(30 * time.Second).Exec()
 }
 
 func openRootSession(addr string) (*gocql.Session, error) {

@@ -567,6 +567,7 @@ func TestGraphQLAdditionalCatalogReadBoundaries(t *testing.T) {
 		{"Query", "collections", "collection.list", "", map[string]any{"namespace": "acme"}, nil},
 		{"Query", "productVariant", "productVariant.read", "blue", map[string]any{"by": model.ProductVariantBy{NamespacePath: &model.ProductVariantNamespacePath{Namespace: "acme", Name: "blue"}}}, nil},
 		{"Query", "productVariants", "productVariant.list", "", map[string]any{"namespace": "acme"}, nil},
+		{"Query", "files", "file.list", "", map[string]any{"namespace": "acme"}, nil},
 		{"Query", "node", "collection.read", "summer", map[string]any{"id": base64.StdEncoding.EncodeToString([]byte("gid://GitStore/Collection/id"))}, nil},
 		{"Query", "nodes", "productVariant.read", "blue", map[string]any{"ids": []string{base64.StdEncoding.EncodeToString([]byte("gid://GitStore/ProductVariant/id"))}}, nil},
 		{"Collection", "products", "product.list", "", nil, &model.Collection{Metadata: &model.ObjectMeta{Namespace: new("acme"), Name: "summer"}}},

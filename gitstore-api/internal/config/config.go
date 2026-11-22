@@ -60,7 +60,13 @@ type ApiConfig struct {
 	Notification NotificationConfig            `mapstructure:"notification"`
 	Datastore    DatastoreConfig               `mapstructure:"datastore"`
 	Watch        WatchConfig                   `mapstructure:"watch"`
+	Translation  TranslationConfig             `mapstructure:"translation"`
 	Profiling    observability.ProfilingConfig `mapstructure:"profiling"`
+}
+
+type TranslationConfig struct {
+	Enabled          bool   `mapstructure:"enabled"`
+	DescriptorDigest string `mapstructure:"descriptor_digest"`
 }
 
 // OPAConfig holds the OPA provider's dynamic-RBAC rollout and runtime bounds.
@@ -547,6 +553,8 @@ func load(paths []string) (*Config, error) {
 	setEndpointDefaults(v)
 	v.SetDefault("api.git_port", 9000)
 	v.SetDefault("api.grpc_port", 6000)
+	v.SetDefault("api.translation.enabled", false)
+	v.SetDefault("api.translation.descriptor_digest", "")
 	v.SetDefault("api.rate_limit.per_second", 50)
 	v.SetDefault("api.rate_limit.burst", 100)
 	v.SetDefault("api.git_service.uri", "dns:///localhost:50051")

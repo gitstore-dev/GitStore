@@ -16,6 +16,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
@@ -150,6 +151,9 @@ func TestCommittedAuthorizationCatalogParity(t *testing.T) {
 		for _, verb := range []string{"create", "read", "list", "watch", "update", "delete", "purge", "status.write"} {
 			additions[kind+"."+verb] = true
 		}
+	}
+	for _, verb := range []string{"create", "read", "list", "watch", "update", "delete", "status.write"} {
+		additions["translation."+verb] = true
 	}
 	if len(catalog.Actions) != len(baseline.Actions)+len(additions) {
 		t.Fatalf("unexpected catalog size %d", len(catalog.Actions))
@@ -414,6 +418,152 @@ func TestProjectionRepairRequiresExplicitConfirmation(t *testing.T) {
 	if !strings.Contains(stderr.String(), "--dry-run or explicit --confirm") {
 		t.Fatalf("stderr = %q, want confirmation guidance", stderr.String())
 	}
+}
+
+func TestTranslationProjectionCommandsUseBoundedOwnedProgress(t *testing.T) {
+	const namespace = "7153486f-4e16-424e-bd68-fb43e94f8188"
+	for _, args := range [][]string{
+		{"scylla-projection-audit"},
+		{"scylla-projection-repair", "--dry-run"},
+		{"scylla-projection-repair", "--confirm"},
+		{"scylla-projection-repair", "--dry-run", "--confirm"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			client := &fakeTranslationProjectionClient{}
+			original := openProjectionRepair
+			t.Cleanup(func() { openProjectionRepair = original })
+			openProjectionRepair = func(config.ScyllaConfig) (projectionRepairClient, error) { return client, nil }
+			var stdout, stderr bytes.Buffer
+			code := run(append(args, "--kind", "Translation", "--namespace-uid", namespace, "--page-size", "3", "--timeout", "2s"),
+				strings.NewReader(""), &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("code=%d stderr=%s", code, &stderr)
+			}
+			mutates := strings.Contains(strings.Join(args, " "), "--confirm") && !strings.Contains(strings.Join(args, " "), "--dry-run")
+			if client.repairCalls != boolInt(mutates) || client.inspectCalls != boolInt(!mutates) ||
+				client.namespace != namespace || client.limit != 3 || !client.deadline {
+				t.Fatalf("unexpected dispatch: %+v", client)
+			}
+			if client.applyCalls != 0 || !strings.Contains(stdout.String(), "Sources") {
+				t.Fatalf("generic repair used or progress missing: %s", &stdout)
+			}
+		})
+	}
+}
+
+func TestTranslationProjectionCommandsRejectUnboundedOrUnscopedWork(t *testing.T) {
+	original := openProjectionRepair
+	t.Cleanup(func() { openProjectionRepair = original })
+	openProjectionRepair = func(config.ScyllaConfig) (projectionRepairClient, error) {
+		t.Fatal("invalid options opened Scylla")
+		return nil, nil
+	}
+	const namespace = "7153486f-4e16-424e-bd68-fb43e94f8188"
+	for _, args := range [][]string{
+		{"--kind", "Translation"},
+		{"--namespace-uid", namespace},
+		{"--audit-scope", "targets"},
+		{"--kind", "Product"},
+		{"--kind", "Translation", "--namespace-uid", "not-a-uid"},
+		{"--kind", "Translation", "--namespace-uid", namespace, "--page-size", "0"},
+		{"--kind", "Translation", "--namespace-uid", namespace, "--page-size", "1025"},
+		{"--kind", "Translation", "--namespace-uid", namespace, "--timeout", "0s"},
+		{"--kind", "Translation", "--namespace-uid", namespace, "--audit-scope", "unknown"},
+		{"--kind", "Translation", "--namespace-uid", namespace, "unexpected"},
+	} {
+		for _, command := range [][]string{{"scylla-projection-audit"}, {"scylla-projection-repair", "--confirm"}} {
+			var stdout, stderr bytes.Buffer
+			if code := run(append(command, args...), strings.NewReader(""), &stdout, &stderr); code != 2 {
+				t.Fatalf("accepted %v: code=%d stderr=%s", args, code, &stderr)
+			}
+		}
+	}
+}
+
+func TestTranslationProjectionTargetCommandsUseBoundedOwnedProgress(t *testing.T) {
+	const namespace = "7153486f-4e16-424e-bd68-fb43e94f8188"
+	for _, args := range [][]string{
+		{"scylla-projection-audit"},
+		{"scylla-projection-repair", "--dry-run"},
+		{"scylla-projection-repair", "--confirm"},
+		{"scylla-projection-repair", "--dry-run", "--confirm"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			client := &fakeTranslationProjectionClient{}
+			original := openProjectionRepair
+			t.Cleanup(func() { openProjectionRepair = original })
+			openProjectionRepair = func(config.ScyllaConfig) (projectionRepairClient, error) { return client, nil }
+			var stdout, stderr bytes.Buffer
+			code := run(append(args, "--kind", "Translation", "--audit-scope", "targets",
+				"--namespace-uid", namespace, "--page-size", "3", "--timeout", "2s"),
+				strings.NewReader(""), &stdout, &stderr)
+			mutates := strings.Contains(strings.Join(args, " "), "--confirm") && !strings.Contains(strings.Join(args, " "), "--dry-run")
+			if code != 0 || !client.target || client.repairCalls != boolInt(mutates) ||
+				client.inspectCalls != boolInt(!mutates) || client.namespace != namespace ||
+				client.limit != 3 || !client.deadline || client.applyCalls != 0 {
+				t.Fatalf("unexpected target dispatch: code=%d client=%+v stderr=%s", code, client, &stderr)
+			}
+		})
+	}
+}
+
+func TestTranslationProjectionCommandsReportFailureWithoutClaimingCompletion(t *testing.T) {
+	const namespace = "7153486f-4e16-424e-bd68-fb43e94f8188"
+	original := openProjectionRepair
+	t.Cleanup(func() { openProjectionRepair = original })
+	for _, args := range [][]string{
+		{"scylla-projection-audit"},
+		{"scylla-projection-repair", "--confirm"},
+	} {
+		client := &fakeTranslationProjectionClient{err: datastore.ErrRepairRequired}
+		openProjectionRepair = func(config.ScyllaConfig) (projectionRepairClient, error) { return client, nil }
+		var stdout, stderr bytes.Buffer
+		if code := run(append(args, "--kind", "Translation", "--namespace-uid", namespace),
+			strings.NewReader(""), &stdout, &stderr); code != 1 || stdout.Len() != 0 ||
+			!strings.Contains(stderr.String(), "inspect persisted progress") {
+			t.Fatalf("failed turn claimed success: code=%d stdout=%s stderr=%s", code, &stdout, &stderr)
+		}
+	}
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+type fakeTranslationProjectionClient struct {
+	fakeProjectionRepairClient
+	inspectCalls, repairCalls, limit int
+	namespace                        string
+	deadline                         bool
+	target                           bool
+	err                              error
+}
+
+func (f *fakeTranslationProjectionClient) InspectTranslationAuditTurn(ctx context.Context, namespace string, limit int) (scylla.TranslationAuditInspection, error) {
+	f.inspectCalls++
+	f.namespace, f.limit = namespace, limit
+	_, f.deadline = ctx.Deadline()
+	return scylla.TranslationAuditInspection{NextPhase: "Sources"}, f.err
+}
+
+func (f *fakeTranslationProjectionClient) RepairTranslationAuditTurn(ctx context.Context, namespace string, limit int) (datastore.TranslationAuditProgress, error) {
+	f.repairCalls++
+	f.namespace, f.limit = namespace, limit
+	_, f.deadline = ctx.Deadline()
+	return datastore.TranslationAuditProgress{NamespaceUID: namespace, Phase: "Sources"}, f.err
+}
+
+func (f *fakeTranslationProjectionClient) InspectTranslationTargetAuditTurn(ctx context.Context, namespace string, limit int) (scylla.TranslationAuditInspection, error) {
+	f.target = true
+	return f.InspectTranslationAuditTurn(ctx, namespace, limit)
+}
+
+func (f *fakeTranslationProjectionClient) RepairTranslationTargetAuditTurn(ctx context.Context, namespace string, limit int) (datastore.TranslationAuditProgress, error) {
+	f.target = true
+	return f.RepairTranslationAuditTurn(ctx, namespace, limit)
 }
 
 func TestProjectionRepairDryRunPrintsPlanWithoutApply(t *testing.T) {

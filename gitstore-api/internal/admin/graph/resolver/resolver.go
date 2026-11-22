@@ -11,6 +11,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/rbac"
@@ -32,23 +33,26 @@ func rbacUnavailableError() error {
 
 // Resolver is the root GraphQL resolver
 type Resolver struct {
-	logger                 *zap.Logger
-	store                  datastore.Datastore
-	service                *Service
-	registry               *auth.ProviderRegistry
-	storageDataDir         string // data_dir used to build storagePath in responses; defaults to "/data"
-	clock                  apiruntime.Clock
-	resourceJournal        datastore.ResourceWatchJournal
-	namespaceSubscriber    *watchjournal.Subscriber
-	namespaceWatch         config.WatchJournalConfig
-	namespaceMetrics       *watchjournal.Metrics
-	serviceAccountAudience string
-	connectionRegistry     *wsregistry.Registry
-	rbacBuiltinsResources  []*rbac.Resource
-	rbacBuiltinDigest      string
-	rbacValidator          *admission.RBACValidator
-	watchRechecks          chan struct{}
-	rbacSourceReads        chan struct{}
+	logger                       *zap.Logger
+	store                        datastore.Datastore
+	service                      *Service
+	registry                     *auth.ProviderRegistry
+	storageDataDir               string // data_dir used to build storagePath in responses; defaults to "/data"
+	clock                        apiruntime.Clock
+	resourceJournal              datastore.ResourceWatchJournal
+	namespaceSubscriber          *watchjournal.Subscriber
+	namespaceWatch               config.WatchJournalConfig
+	namespaceMetrics             *watchjournal.Metrics
+	serviceAccountAudience       string
+	connectionRegistry           *wsregistry.Registry
+	rbacBuiltinsResources        []*rbac.Resource
+	rbacBuiltinDigest            string
+	rbacValidator                *admission.RBACValidator
+	watchRechecks                chan struct{}
+	rbacSourceReads              chan struct{}
+	translationActivation        cataloggrpc.TranslationActivation
+	translationControllerSubject string
+	translationMetrics           *translationReadMetrics
 }
 
 // ResolverDeps contains dependencies for the root GraphQL resolver.
@@ -69,15 +73,20 @@ type ResolverDeps struct {
 	PushLimits config.PushLimitsConfig
 	// ServiceAccountAudience is the configured audience value for service
 	// account token issuance (spec 061).
-	ServiceAccountAudience string
-	ConnectionRegistry     *wsregistry.Registry
-	RBACValidator          *admission.RBACValidator
+	ServiceAccountAudience       string
+	ConnectionRegistry           *wsregistry.Registry
+	RBACValidator                *admission.RBACValidator
+	TranslationActivation        cataloggrpc.TranslationActivation
+	TranslationControllerSubject string
 }
 
 // NewResolver creates a new GraphQL resolver.
 func NewResolver(deps ResolverDeps) (*Resolver, error) {
 	if deps.Logger == nil {
 		return nil, errMissingLogger
+	}
+	if err := deps.TranslationActivation.Validate(); err != nil {
+		return nil, err
 	}
 	if deps.RBACValidator != nil && deps.RBACValidator.Capture.Registry != deps.Registry {
 		return nil, errors.New("resolver: RBAC validator must use the selected provider registry")
@@ -123,23 +132,26 @@ func NewResolver(deps ResolverDeps) (*Resolver, error) {
 		clock = apiruntime.SystemClock{}
 	}
 	return &Resolver{
-		logger:                 deps.Logger,
-		store:                  deps.Store,
-		service:                svc,
-		registry:               deps.Registry,
-		storageDataDir:         "/data",
-		clock:                  clock,
-		resourceJournal:        deps.ResourceJournal,
-		namespaceSubscriber:    namespaceSubscriber,
-		namespaceWatch:         deps.NamespaceWatch,
-		namespaceMetrics:       deps.NamespaceMetrics,
-		serviceAccountAudience: deps.ServiceAccountAudience,
-		connectionRegistry:     deps.ConnectionRegistry,
-		rbacBuiltinsResources:  builtinResources,
-		rbacBuiltinDigest:      builtins.Digest(),
-		rbacValidator:          deps.RBACValidator,
-		watchRechecks:          make(chan struct{}, 32),
-		rbacSourceReads:        make(chan struct{}, 4),
+		logger:                       deps.Logger,
+		store:                        deps.Store,
+		service:                      svc,
+		registry:                     deps.Registry,
+		storageDataDir:               "/data",
+		clock:                        clock,
+		resourceJournal:              deps.ResourceJournal,
+		namespaceSubscriber:          namespaceSubscriber,
+		namespaceWatch:               deps.NamespaceWatch,
+		namespaceMetrics:             deps.NamespaceMetrics,
+		serviceAccountAudience:       deps.ServiceAccountAudience,
+		connectionRegistry:           deps.ConnectionRegistry,
+		rbacBuiltinsResources:        builtinResources,
+		rbacBuiltinDigest:            builtins.Digest(),
+		rbacValidator:                deps.RBACValidator,
+		watchRechecks:                make(chan struct{}, 32),
+		rbacSourceReads:              make(chan struct{}, 4),
+		translationActivation:        deps.TranslationActivation,
+		translationControllerSubject: deps.TranslationControllerSubject,
+		translationMetrics:           defaultTranslationReadMetrics,
 	}, nil
 }
 

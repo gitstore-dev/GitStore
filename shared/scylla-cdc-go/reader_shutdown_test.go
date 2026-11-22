@@ -6,11 +6,39 @@ package scyllacdc
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/gocql/gocql"
 )
+
+func TestCoalescedStreamBatchesPreserveEveryStreamAndBoundQueries(t *testing.T) {
+	groups := [][]StreamID{{{1}, {2}}, {{3}}, {{4}, {5}, {6}}, {{7}}}
+	before := [][]StreamID{{{1}, {2}}, {{3}}, {{4}, {5}, {6}}, {{7}}}
+	if got := coalesceStreamBatches(groups, 0); !reflect.DeepEqual(got, before) {
+		t.Fatal("disabled batching changed the original generation grouping")
+	}
+	for _, limit := range []int{1, 2, 3, 32} {
+		batches := coalesceStreamBatches(groups, limit)
+		var streams []StreamID
+		for _, batch := range batches {
+			if len(batch) == 0 || len(batch) > limit {
+				t.Fatalf("batch width %d exceeds the configured limit %d", len(batch), limit)
+			}
+			streams = append(streams, batch...)
+		}
+		if !reflect.DeepEqual(streams, []StreamID{{1}, {2}, {3}, {4}, {5}, {6}, {7}}) {
+			t.Fatal("coalescing dropped, reordered or duplicated generation streams")
+		}
+		if len(batches) != (7+limit-1)/limit {
+			t.Fatal("coalescing retained one worker per vnode instead of bounded multi-stream queries")
+		}
+	}
+	if !reflect.DeepEqual(groups, before) {
+		t.Fatal("coalescing mutated the authoritative generation membership")
+	}
+}
 
 type shutdownGenerationSource struct {
 	times  []time.Time

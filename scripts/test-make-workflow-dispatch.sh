@@ -154,16 +154,16 @@ rg -q '^  workflow_dispatch:' "${core_ci}"
 for check_name in 'API Tests' 'Controller Manager Tests' 'Git Service Tests'; do
   rg -q "^    name: ${check_name}$" "${core_ci}"
 done
-for module in observability secretmaterial scylla-cdc-go; do
+for module in observability secretmaterial scylla-cdc-go translation; do
   rg -Fq "go-version-file: shared/${module}/go.mod" "${core_ci}"
   rg -Fq "cache-dependency-path: shared/${module}/go.sum" "${core_ci}"
   rg -Fq "working-directory: ./shared/${module}" "${core_ci}"
 done
 rg -q "^      GOWORK: 'off'$" "${core_ci}"
-for setup in go_observability go_secretmaterial go_scylla_cdc; do
+for setup in go_observability go_secretmaterial go_scylla_cdc go_translation; do
   rg -Fq "if: \${{ !cancelled() && steps.${setup}.outcome == 'success' }}" "${core_ci}"
 done
-[[ "$(rg -Fc "if: \${{ !cancelled() && steps.checkout.outcome == 'success' }}" "${core_ci}")" -eq 2 ]]
+[[ "$(rg -Fc "if: \${{ !cancelled() && steps.checkout.outcome == 'success' }}" "${core_ci}")" -eq 3 ]]
 [[ "$(rg -Fc "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" "${core_ci}")" -eq 2 ]]
 
 for target in controller dev enroll-controller-serviceaccount; do
@@ -314,7 +314,14 @@ all_tests="$(env -u TARGET -u MAKEFLAGS -u MFLAGS -u MAKEOVERRIDES make --no-pri
    "${all_tests}" == *"test-repository-capacity-stack.sh"* && "${all_tests}" == *"TestSecretCapacity"* &&
    "${all_tests}" == *"CapacityPush"* && "${all_tests}" == *"EndpointSplit"* &&
    "${all_tests}" == *"RepositoryController"* ]]
-[[ "${all_tests}" != *"SECRET_TEST_RUN=1"* && "${all_tests}" != *"-tags scylla"* ]]
+for selector in TranslationCapacity TranslationAuthoring TranslationIntegration; do
+  if [[ "${all_tests}" != *"${selector}"* ]]; then
+    echo "default test suite omits local ${selector} regressions" >&2
+    exit 1
+  fi
+done
+[[ "${all_tests}" != *"SECRET_TEST_RUN=1"* && "${all_tests}" != *"TRANSLATION_TEST_RUN=1"* &&
+   "${all_tests}" != *"-tags scylla"* ]]
 explicit_all="$(env -u MAKEFLAGS -u MFLAGS -u MAKEOVERRIDES make --no-print-directory -C "${repo_root}" -n test TARGET=all)"
 [[ "${all_tests}" == "${explicit_all}" ]]
 datastore_tests="$(make --no-print-directory -C "${repo_root}" -n test TARGET=datastore DATASTORE=memdb)"

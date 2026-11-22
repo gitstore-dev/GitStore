@@ -6,6 +6,8 @@ package cataloggrpc
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
@@ -16,6 +18,39 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTranslationOperationIdentityRetainsExactAcceptedSource(t *testing.T) {
+	raw, err := os.ReadFile("testdata/translation/corpus.json")
+	require.NoError(t, err)
+	var corpus struct{ Valid map[string]string }
+	require.NoError(t, json.Unmarshal(raw, &corpus))
+	content := []byte(corpus.Valid["product-combined"])
+	parsed, body, err := validate.NewParser().ParseResource(bytes.NewReader(content))
+	require.NoError(t, err)
+	require.Equal(t, content, parsed.RawSource)
+	first, supported, err := newParsedEntry("translations/product.de.md", parsed, body, "default")
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Equal(t, resourceIdentity{APIVersion: "i18n.gitstore.dev/v1beta1", Kind: "Translation",
+		Namespace: "acme-store", Name: parsed.Translation.Metadata.Name}, first.identity)
+	duplicate, _, err := newParsedEntry(first.path, parsed, body, "default")
+	require.NoError(t, err)
+	require.Equal(t, first.contentHash, duplicate.contentHash)
+	rewritten := strings.Replace(string(content), "kind: Translation", "kind: Translation # retained source comment", 1)
+	require.NotEqual(t, string(content), rewritten)
+	updated, sameBody, err := validate.NewParser().ParseResource(strings.NewReader(rewritten))
+	require.NoError(t, err)
+	require.Equal(t, body, sameBody)
+	next, supported, err := newParsedEntry(first.path, updated, sameBody, "default")
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.NotEqual(t, first.contentHash, next.contentHash, "byte-distinct accepted source must not disappear as a semantic no-op")
+	operations := deriveResourceAdmissionOperations([]*parsedEntry{first}, []*parsedEntry{next}, nil)
+	require.Len(t, operations, 1)
+	require.Equal(t, admission.OperationUpdate, operations[0].operation)
+	require.True(t, operations[0].contentChanged)
+	require.Equal(t, content, parsed.RawSource)
+}
 
 func TestOwnerAnnotationRemovalRequiresTransferAuthorization(t *testing.T) {
 	recorder := testutil.NewAllowAllAuthZ()

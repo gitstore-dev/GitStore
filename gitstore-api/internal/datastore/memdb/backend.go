@@ -153,6 +153,8 @@ type memdbDatastore struct {
 	namespaceMutationMu      sync.Mutex
 	fileMutationMu           sync.Mutex
 	categoryMutationMu       sync.Mutex
+	targetWatchMutationMu    sync.Mutex
+	translationMutationMu    sync.Mutex
 	serviceAccountMutationMu sync.Mutex
 	namespaceWatchMu         sync.RWMutex
 	namespaceWatchEpoch      string
@@ -305,7 +307,7 @@ func (m *memdbDatastore) ConsumeSession(_ context.Context, jti string, expiresAt
 
 func (m *memdbDatastore) Close() error { return nil }
 
-func (m *memdbDatastore) CreateFile(_ context.Context, f *datastore.File) error {
+func (m *memdbDatastore) CreateFile(ctx context.Context, f *datastore.File) error {
 	if f == nil {
 		return fmt.Errorf("%w: file is nil", datastore.ErrInvalidArgument)
 	}
@@ -314,6 +316,10 @@ func (m *memdbDatastore) CreateFile(_ context.Context, f *datastore.File) error 
 	f = cloneFile(f)
 	txn := m.db.Txn(true)
 	if err := catalogParentsActive(txn, f.Namespace, f.RepositoryID); err != nil {
+		txn.Abort()
+		return err
+	}
+	if err := checkTranslationTargetUID(txn, "File", f.UID); err != nil {
 		txn.Abort()
 		return err
 	}
@@ -330,7 +336,7 @@ func (m *memdbDatastore) CreateFile(_ context.Context, f *datastore.File) error 
 		txn.Abort()
 		return fmt.Errorf("%w: serialize File journal payload: %v", datastore.ErrInvalidArgument, err)
 	}
-	if err := txn.Insert("file", cloneFile(f)); err != nil {
+	if err := insertTranslationMaterialTarget(ctx, txn, "file", cloneFile(f)); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: insert file: %w", err)
 	}
@@ -364,6 +370,10 @@ func (m *memdbDatastore) GetFileByName(_ context.Context, namespace, name string
 }
 
 func (m *memdbDatastore) ListFiles(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.File], error) {
+	page, pageErr := page.BoundedProductPage()
+	if pageErr != nil {
+		return nil, pageErr
+	}
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 	it, err := txn.Get("file", "namespace", namespace)
@@ -377,7 +387,7 @@ func (m *memdbDatastore) ListFiles(_ context.Context, namespace string, page dat
 	return paginateSlice(all, page, func(f *datastore.File) (time.Time, string) { return f.CreationTimestamp, f.UID }), nil
 }
 
-func (m *memdbDatastore) UpdateFile(_ context.Context, f *datastore.File, expectedResourceVersion string) error {
+func (m *memdbDatastore) UpdateFile(ctx context.Context, f *datastore.File, expectedResourceVersion string) error {
 	if f == nil {
 		return fmt.Errorf("%w: file is nil", datastore.ErrInvalidArgument)
 	}
@@ -412,7 +422,7 @@ func (m *memdbDatastore) UpdateFile(_ context.Context, f *datastore.File, expect
 		txn.Abort()
 		return fmt.Errorf("%w: serialize File journal payload: %v", datastore.ErrInvalidArgument, err)
 	}
-	if err := txn.Insert("file", cloneFile(f)); err != nil {
+	if err := insertTranslationMaterialTarget(ctx, txn, "file", cloneFile(f)); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: update file: %w", err)
 	}
@@ -447,7 +457,7 @@ func (m *memdbDatastore) deleteFile(uid, expectedResourceVersion string, checkRe
 		return datastore.ErrConflict
 	}
 
-	if err := txn.Delete("file", raw); err != nil {
+	if err := deleteTranslationTarget(txn, "File", "file", uid, raw); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: delete file: %w", err)
 	}
@@ -461,7 +471,7 @@ func (m *memdbDatastore) deleteFile(uid, expectedResourceVersion string, checkRe
 	return nil
 }
 
-func (m *memdbDatastore) UpdateFileStatus(_ context.Context, namespace, name string, patch datastore.FileStatusPatch) (*datastore.File, error) {
+func (m *memdbDatastore) UpdateFileStatus(ctx context.Context, namespace, name string, patch datastore.FileStatusPatch) (*datastore.File, error) {
 	m.fileMutationMu.Lock()
 	defer m.fileMutationMu.Unlock()
 	txn := m.db.Txn(true)
@@ -480,7 +490,7 @@ func (m *memdbDatastore) UpdateFileStatus(_ context.Context, namespace, name str
 		txn.Abort()
 		return nil, fmt.Errorf("%w: serialize File journal payload: %v", datastore.ErrInvalidArgument, err)
 	}
-	if err := txn.Insert("file", updated); err != nil {
+	if err := insertTranslationMaterialTarget(ctx, txn, "file", updated); err != nil {
 		txn.Abort()
 		return nil, fmt.Errorf("memdb: update file status: %w", err)
 	}
@@ -502,13 +512,17 @@ func notFoundOrErr(err error) error {
 
 // ── Product ───────────────────────────────────────────────────────────────────
 
-func (m *memdbDatastore) CreateProduct(_ context.Context, p *datastore.Product) error {
+func (m *memdbDatastore) CreateProduct(ctx context.Context, p *datastore.Product) error {
 	if p == nil {
 		return fmt.Errorf("%w: product is nil", datastore.ErrInvalidArgument)
 	}
 	stored := cloneProduct(p)
 	txn := m.db.Txn(true)
 	if err := catalogParentsActive(txn, p.Namespace, p.RepositoryID); err != nil {
+		txn.Abort()
+		return err
+	}
+	if err := checkTranslationTargetUID(txn, "Product", p.UID); err != nil {
 		txn.Abort()
 		return err
 	}
@@ -520,7 +534,7 @@ func (m *memdbDatastore) CreateProduct(_ context.Context, p *datastore.Product) 
 		txn.Abort()
 		return fmt.Errorf("%w: product %s/%s", datastore.ErrAlreadyExists, p.Namespace, p.Name)
 	}
-	if err := txn.Insert("product", stored); err != nil {
+	if err := insertTranslationMaterialTarget(ctx, txn, "product", stored); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: insert product: %w", err)
 	}
@@ -581,7 +595,7 @@ func (m *memdbDatastore) ListProducts(_ context.Context, namespace string, page 
 	}), nil
 }
 
-func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product, expectedResourceVersion string) error {
+func (m *memdbDatastore) UpdateProduct(ctx context.Context, p *datastore.Product, expectedResourceVersion string) error {
 	if p == nil {
 		return fmt.Errorf("%w: product is nil", datastore.ErrInvalidArgument)
 	}
@@ -603,7 +617,7 @@ func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product, 
 		txn.Abort()
 		return fmt.Errorf("%w: product %s/%s", datastore.ErrAlreadyExists, p.Namespace, p.Name)
 	}
-	if err := txn.Insert("product", cloneProduct(p)); err != nil {
+	if err := insertTranslationMaterialTarget(ctx, txn, "product", cloneProduct(p)); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: update product: %w", err)
 	}
@@ -616,7 +630,7 @@ func (m *memdbDatastore) UpdateProduct(_ context.Context, p *datastore.Product, 
 	return nil
 }
 
-func (m *memdbDatastore) UpdateProductStatus(_ context.Context, namespace, name string, patch datastore.ProductStatusPatch) (*datastore.Product, error) {
+func (m *memdbDatastore) UpdateProductStatus(ctx context.Context, namespace, name string, patch datastore.ProductStatusPatch) (*datastore.Product, error) {
 	txn := m.db.Txn(true)
 	raw, err := txn.First("product", "name_namespace", namespace, name)
 	if err != nil || raw == nil {
@@ -628,7 +642,7 @@ func (m *memdbDatastore) UpdateProductStatus(_ context.Context, namespace, name 
 		txn.Abort()
 		return nil, err
 	}
-	if err := txn.Insert("product", updated); err != nil {
+	if err := insertTranslationMaterialTarget(ctx, txn, "product", updated); err != nil {
 		txn.Abort()
 		return nil, fmt.Errorf("memdb: update product status: %w", err)
 	}
@@ -651,7 +665,7 @@ func (m *memdbDatastore) DeleteProductWithResourceVersion(_ context.Context, uid
 
 // MarkProductTerminating is the durable first phase of foreground deletion.
 // It advances only resourceVersion; generation remains authored-spec state.
-func (m *memdbDatastore) MarkProductTerminating(_ context.Context, uid, expectedResourceVersion, finalizer string, deletionTimestamp time.Time) (*datastore.Product, error) {
+func (m *memdbDatastore) MarkProductTerminating(ctx context.Context, uid, expectedResourceVersion, finalizer string, deletionTimestamp time.Time) (*datastore.Product, error) {
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("product", "id", uid)
 	if raw == nil {
@@ -684,7 +698,7 @@ func (m *memdbDatastore) MarkProductTerminating(_ context.Context, uid, expected
 		}
 	}
 	datastore.AdvanceProductSystemVersion(updated)
-	if err := txn.Insert("product", updated); err != nil {
+	if err := insertTranslationMaterialTarget(ctx, txn, "product", updated); err != nil {
 		txn.Abort()
 		return nil, fmt.Errorf("memdb: mark product terminating: %w", err)
 	}
@@ -714,7 +728,7 @@ func (m *memdbDatastore) deleteProduct(uid, expectedResourceVersion string, chec
 		txn.Abort()
 		return err
 	}
-	if err := txn.Delete("product", raw); err != nil {
+	if err := deleteTranslationTarget(txn, "Product", "product", uid, raw); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: delete product: %w", err)
 	}
@@ -728,13 +742,19 @@ func (m *memdbDatastore) deleteProduct(uid, expectedResourceVersion string, chec
 
 // ── ProductVariant ────────────────────────────────────────────────────────────
 
-func (m *memdbDatastore) CreateProductVariant(_ context.Context, v *datastore.ProductVariant) error {
+func (m *memdbDatastore) CreateProductVariant(ctx context.Context, v *datastore.ProductVariant) error {
 	if v == nil {
 		return fmt.Errorf("%w: product variant is nil", datastore.ErrInvalidArgument)
 	}
 	stored := cloneProductVariant(v)
+	m.targetWatchMutationMu.Lock()
+	defer m.targetWatchMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	if err := catalogParentsActive(txn, v.Namespace, v.RepositoryID); err != nil {
+		txn.Abort()
+		return err
+	}
+	if err := checkTranslationTargetUID(txn, "ProductVariant", v.UID); err != nil {
 		txn.Abort()
 		return err
 	}
@@ -752,7 +772,7 @@ func (m *memdbDatastore) CreateProductVariant(_ context.Context, v *datastore.Pr
 			return fmt.Errorf("%w: product_variant sku %s in namespace %s", datastore.ErrAlreadyExists, v.SKU, v.Namespace)
 		}
 	}
-	if err := txn.Insert("product_variant", stored); err != nil {
+	if err := insertTranslationMaterialTarget(ctx, txn, "product_variant", stored); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: insert product_variant: %w", err)
 	}
@@ -761,6 +781,7 @@ func (m *memdbDatastore) CreateProductVariant(_ context.Context, v *datastore.Pr
 		return err
 	}
 	txn.Commit()
+	m.recordCommittedVariant(datastore.ResourceWatchAdded, stored, nil)
 	return nil
 }
 
@@ -795,6 +816,10 @@ func (m *memdbDatastore) GetProductVariantBySKU(_ context.Context, namespace, sk
 }
 
 func (m *memdbDatastore) ListProductVariants(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.ProductVariant], error) {
+	page, pageErr := page.BoundedProductPage()
+	if pageErr != nil {
+		return nil, pageErr
+	}
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 
@@ -832,10 +857,12 @@ func (m *memdbDatastore) ListProductVariantsByProductRef(_ context.Context, name
 	return result, nil
 }
 
-func (m *memdbDatastore) UpdateProductVariant(_ context.Context, v *datastore.ProductVariant, expectedResourceVersion string) error {
+func (m *memdbDatastore) UpdateProductVariant(ctx context.Context, v *datastore.ProductVariant, expectedResourceVersion string) error {
 	if v == nil {
 		return fmt.Errorf("%w: product variant is nil", datastore.ErrInvalidArgument)
 	}
+	m.targetWatchMutationMu.Lock()
+	defer m.targetWatchMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	if err := catalogParentsActive(txn, v.Namespace, v.RepositoryID); err != nil {
 		txn.Abort()
@@ -860,7 +887,7 @@ func (m *memdbDatastore) UpdateProductVariant(_ context.Context, v *datastore.Pr
 			return fmt.Errorf("%w: product_variant sku %s in namespace %s", datastore.ErrAlreadyExists, v.SKU, v.Namespace)
 		}
 	}
-	if err := txn.Insert("product_variant", cloneProductVariant(v)); err != nil {
+	if err := insertTranslationMaterialTarget(ctx, txn, "product_variant", cloneProductVariant(v)); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: update product_variant: %w", err)
 	}
@@ -869,6 +896,7 @@ func (m *memdbDatastore) UpdateProductVariant(_ context.Context, v *datastore.Pr
 		return err
 	}
 	txn.Commit()
+	m.recordCommittedVariant(datastore.ResourceWatchModified, v, raw.(*datastore.ProductVariant).Labels)
 	return nil
 }
 
@@ -881,6 +909,8 @@ func (m *memdbDatastore) DeleteProductVariantWithResourceVersion(_ context.Conte
 }
 
 func (m *memdbDatastore) deleteProductVariant(uid, expectedResourceVersion string, checkResourceVersion bool) error {
+	m.targetWatchMutationMu.Lock()
+	defer m.targetWatchMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("product_variant", "id", uid)
 	if raw == nil {
@@ -895,17 +925,18 @@ func (m *memdbDatastore) deleteProductVariant(uid, expectedResourceVersion strin
 		txn.Abort()
 		return err
 	}
-	if err := txn.Delete("product_variant", raw); err != nil {
+	if err := deleteTranslationTarget(txn, "ProductVariant", "product_variant", uid, raw); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: delete product_variant: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedVariant(datastore.ResourceWatchDeleted, raw.(*datastore.ProductVariant), nil)
 	return nil
 }
 
 // ── CategoryTaxonomy ──────────────────────────────────────────────────────────
 
-func (m *memdbDatastore) CreateCategoryTaxonomy(_ context.Context, c *datastore.CategoryTaxonomy) error {
+func (m *memdbDatastore) CreateCategoryTaxonomy(ctx context.Context, c *datastore.CategoryTaxonomy) error {
 	if c == nil {
 		return fmt.Errorf("%w: category taxonomy is nil", datastore.ErrInvalidArgument)
 	}
@@ -917,6 +948,10 @@ func (m *memdbDatastore) CreateCategoryTaxonomy(_ context.Context, c *datastore.
 		txn.Abort()
 		return err
 	}
+	if err := checkTranslationTargetUID(txn, "CategoryTaxonomy", c.UID); err != nil {
+		txn.Abort()
+		return err
+	}
 	if raw, _ := txn.First("category_taxonomy", "id", c.UID); raw != nil {
 		txn.Abort()
 		return fmt.Errorf("%w: category_taxonomy uid %s", datastore.ErrAlreadyExists, c.UID)
@@ -925,7 +960,7 @@ func (m *memdbDatastore) CreateCategoryTaxonomy(_ context.Context, c *datastore.
 		txn.Abort()
 		return fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrAlreadyExists, c.Namespace, c.Name)
 	}
-	if err := txn.Insert("category_taxonomy", stored); err != nil {
+	if err := insertTranslationMaterialTarget(ctx, txn, "category_taxonomy", stored); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: insert category_taxonomy: %w", err)
 	}
@@ -959,6 +994,10 @@ func (m *memdbDatastore) GetCategoryTaxonomyByName(_ context.Context, namespace,
 }
 
 func (m *memdbDatastore) ListCategoryTaxonomies(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
+	page, pageErr := page.BoundedProductPage()
+	if pageErr != nil {
+		return nil, pageErr
+	}
 	if err := datastore.RejectClosureCursors(page); err != nil {
 		return nil, err
 	}
@@ -984,7 +1023,7 @@ func (m *memdbDatastore) ListCategoryTaxonomies(_ context.Context, namespace str
 	}), nil
 }
 
-func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.CategoryTaxonomy, expectedResourceVersion string) error {
+func (m *memdbDatastore) UpdateCategoryTaxonomy(ctx context.Context, c *datastore.CategoryTaxonomy, expectedResourceVersion string) error {
 	if c == nil {
 		return fmt.Errorf("%w: category taxonomy is nil", datastore.ErrInvalidArgument)
 	}
@@ -1009,7 +1048,7 @@ func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.
 		return fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrAlreadyExists, c.Namespace, c.Name)
 	}
 	stored := cloneCategoryTaxonomy(c)
-	if err := txn.Insert("category_taxonomy", stored); err != nil {
+	if err := insertTranslationMaterialTarget(ctx, txn, "category_taxonomy", stored); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: update category_taxonomy: %w", err)
 	}
@@ -1022,7 +1061,7 @@ func (m *memdbDatastore) UpdateCategoryTaxonomy(_ context.Context, c *datastore.
 	return nil
 }
 
-func (m *memdbDatastore) UpdateCategoryTaxonomyStatus(_ context.Context, namespace, name string, patch datastore.CategoryTaxonomyStatusPatch) (*datastore.CategoryTaxonomy, error) {
+func (m *memdbDatastore) UpdateCategoryTaxonomyStatus(ctx context.Context, namespace, name string, patch datastore.CategoryTaxonomyStatusPatch) (*datastore.CategoryTaxonomy, error) {
 	m.categoryMutationMu.Lock()
 	defer m.categoryMutationMu.Unlock()
 	txn := m.db.Txn(true)
@@ -1038,7 +1077,7 @@ func (m *memdbDatastore) UpdateCategoryTaxonomyStatus(_ context.Context, namespa
 		return nil, applyErr
 	}
 
-	if insErr := txn.Insert("category_taxonomy", updated); insErr != nil {
+	if insErr := insertTranslationMaterialTarget(ctx, txn, "category_taxonomy", updated); insErr != nil {
 		txn.Abort()
 		return nil, fmt.Errorf("memdb: update category_taxonomy status: %w", insErr)
 	}
@@ -1074,7 +1113,7 @@ func (m *memdbDatastore) DeleteCategoryTaxonomy(_ context.Context, uid string) e
 		txn.Abort()
 		return err
 	}
-	if err := txn.Delete("category_taxonomy", raw); err != nil {
+	if err := deleteTranslationTarget(txn, "CategoryTaxonomy", "category_taxonomy", uid, raw); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: delete category_taxonomy: %w", err)
 	}
@@ -1085,13 +1124,19 @@ func (m *memdbDatastore) DeleteCategoryTaxonomy(_ context.Context, uid string) e
 
 // ── Collection ────────────────────────────────────────────────────────────────
 
-func (m *memdbDatastore) CreateCollection(_ context.Context, c *datastore.Collection) error {
+func (m *memdbDatastore) CreateCollection(ctx context.Context, c *datastore.Collection) error {
 	if c == nil {
 		return fmt.Errorf("%w: collection is nil", datastore.ErrInvalidArgument)
 	}
 	stored := cloneCollection(c)
+	m.targetWatchMutationMu.Lock()
+	defer m.targetWatchMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	if err := catalogParentsActive(txn, c.Namespace, c.RepositoryID); err != nil {
+		txn.Abort()
+		return err
+	}
+	if err := checkTranslationTargetUID(txn, "Collection", c.UID); err != nil {
 		txn.Abort()
 		return err
 	}
@@ -1103,7 +1148,7 @@ func (m *memdbDatastore) CreateCollection(_ context.Context, c *datastore.Collec
 		txn.Abort()
 		return fmt.Errorf("%w: collection %s/%s", datastore.ErrAlreadyExists, c.Namespace, c.Name)
 	}
-	if err := txn.Insert("collection", stored); err != nil {
+	if err := insertTranslationMaterialTarget(ctx, txn, "collection", stored); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: insert collection: %w", err)
 	}
@@ -1112,6 +1157,7 @@ func (m *memdbDatastore) CreateCollection(_ context.Context, c *datastore.Collec
 		return err
 	}
 	txn.Commit()
+	m.recordCommittedCollection(datastore.ResourceWatchAdded, stored, nil)
 	return nil
 }
 
@@ -1136,6 +1182,10 @@ func (m *memdbDatastore) GetCollectionByName(_ context.Context, namespace, name 
 }
 
 func (m *memdbDatastore) ListCollections(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
+	page, pageErr := page.BoundedProductPage()
+	if pageErr != nil {
+		return nil, pageErr
+	}
 	txn := m.db.Txn(false)
 	defer txn.Abort()
 	it, err := txn.Get("collection", "namespace", namespace)
@@ -1151,10 +1201,12 @@ func (m *memdbDatastore) ListCollections(_ context.Context, namespace string, pa
 	}), nil
 }
 
-func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collection, expectedResourceVersion string) error {
+func (m *memdbDatastore) UpdateCollection(ctx context.Context, c *datastore.Collection, expectedResourceVersion string) error {
 	if c == nil {
 		return fmt.Errorf("%w: collection is nil", datastore.ErrInvalidArgument)
 	}
+	m.targetWatchMutationMu.Lock()
+	defer m.targetWatchMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	if err := catalogParentsActive(txn, c.Namespace, c.RepositoryID); err != nil {
 		txn.Abort()
@@ -1173,7 +1225,7 @@ func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collec
 		txn.Abort()
 		return fmt.Errorf("%w: collection %s/%s", datastore.ErrAlreadyExists, c.Namespace, c.Name)
 	}
-	if err := txn.Insert("collection", cloneCollection(c)); err != nil {
+	if err := insertTranslationMaterialTarget(ctx, txn, "collection", cloneCollection(c)); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: update collection: %w", err)
 	}
@@ -1182,6 +1234,7 @@ func (m *memdbDatastore) UpdateCollection(_ context.Context, c *datastore.Collec
 		return err
 	}
 	txn.Commit()
+	m.recordCommittedCollection(datastore.ResourceWatchModified, c, raw.(*datastore.Collection).Labels)
 	return nil
 }
 
@@ -1194,6 +1247,8 @@ func (m *memdbDatastore) DeleteCollectionWithResourceVersion(_ context.Context, 
 }
 
 func (m *memdbDatastore) deleteCollection(uid, expectedResourceVersion string, checkResourceVersion bool) error {
+	m.targetWatchMutationMu.Lock()
+	defer m.targetWatchMutationMu.Unlock()
 	txn := m.db.Txn(true)
 	raw, _ := txn.First("collection", "id", uid)
 	if raw == nil {
@@ -1208,11 +1263,12 @@ func (m *memdbDatastore) deleteCollection(uid, expectedResourceVersion string, c
 		txn.Abort()
 		return err
 	}
-	if err := txn.Delete("collection", raw); err != nil {
+	if err := deleteTranslationTarget(txn, "Collection", "collection", uid, raw); err != nil {
 		txn.Abort()
 		return fmt.Errorf("memdb: delete collection: %w", err)
 	}
 	txn.Commit()
+	m.recordCommittedCollection(datastore.ResourceWatchDeleted, raw.(*datastore.Collection), nil)
 	return nil
 }
 
@@ -1694,7 +1750,7 @@ func (m *memdbDatastore) DeleteRepository(_ context.Context, uid string) error {
 
 // catalogTablesWithRepositoryID lists every table indexed on RepositoryID,
 // checked in order by HasCatalogResources with short-circuit on first match.
-var catalogTablesWithRepositoryID = []string{"product", "product_variant", "category_taxonomy", "collection", "file"}
+var catalogTablesWithRepositoryID = []string{"product", "product_variant", "category_taxonomy", "collection", "file", "translation"}
 
 func (m *memdbDatastore) HasCatalogResources(_ context.Context, repositoryID string) (bool, error) {
 	txn := m.db.Txn(false)
@@ -1949,6 +2005,7 @@ func cloneProduct(product *datastore.Product) *datastore.Product {
 		return nil
 	}
 	clone := *product
+	clone.TranslationTargetSource = datastore.TranslationTargetSourceIdentity{}
 	clone.Labels = cloneStringMap(product.Labels)
 	clone.Annotations = cloneStringMap(product.Annotations)
 	clone.OwnerReferences = append([]byte(nil), product.OwnerReferences...)
@@ -1964,6 +2021,7 @@ func cloneFile(file *datastore.File) *datastore.File {
 		return nil
 	}
 	clone := *file
+	clone.TranslationTargetSource = datastore.TranslationTargetSourceIdentity{}
 	clone.Labels = cloneStringMap(file.Labels)
 	clone.Annotations = cloneStringMap(file.Annotations)
 	clone.OwnerReferences = append([]byte(nil), file.OwnerReferences...)
@@ -1979,6 +2037,7 @@ func cloneProductVariant(variant *datastore.ProductVariant) *datastore.ProductVa
 		return nil
 	}
 	clone := *variant
+	clone.TranslationTargetSource = datastore.TranslationTargetSourceIdentity{}
 	clone.Labels = cloneStringMap(variant.Labels)
 	clone.Annotations = cloneStringMap(variant.Annotations)
 	clone.OwnerReferences = append([]byte(nil), variant.OwnerReferences...)
@@ -1994,6 +2053,7 @@ func cloneCategoryTaxonomy(category *datastore.CategoryTaxonomy) *datastore.Cate
 		return nil
 	}
 	clone := *category
+	clone.TranslationTargetSource = datastore.TranslationTargetSourceIdentity{}
 	clone.Labels = cloneStringMap(category.Labels)
 	clone.Annotations = cloneStringMap(category.Annotations)
 	clone.OwnerReferences = append([]byte(nil), category.OwnerReferences...)
@@ -2009,6 +2069,7 @@ func cloneCollection(collection *datastore.Collection) *datastore.Collection {
 		return nil
 	}
 	clone := *collection
+	clone.TranslationTargetSource = datastore.TranslationTargetSourceIdentity{}
 	clone.Labels = cloneStringMap(collection.Labels)
 	clone.Annotations = cloneStringMap(collection.Annotations)
 	clone.OwnerReferences = append([]byte(nil), collection.OwnerReferences...)

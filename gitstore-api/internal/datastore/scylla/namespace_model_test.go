@@ -186,6 +186,7 @@ func TestScyllaSchemaIsPerResourceBaseline(t *testing.T) {
 		"012_repository_resource_membership.cql",
 		"013_service_account_cdc.cql",
 		"014_rbac.cql",
+		"015_translation.cql",
 	}, names)
 }
 

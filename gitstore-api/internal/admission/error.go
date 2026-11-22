@@ -197,6 +197,44 @@ func FromValidationErrors(errs []*catalogv1.ValidationError) []Diagnostic {
 // Unmapped constraints fall back to VALIDATION_FAILED.
 func ReasonForConstraint(field, constraint string) string {
 	switch constraint {
+	case "translation/MalformedSource":
+		return "TRANSLATION_MALFORMED_SOURCE"
+	case "translation/UnknownField":
+		return "TRANSLATION_UNKNOWN_FIELD"
+	case "translation/Required":
+		return "REQUIRED_FIELD"
+	case "translation/InvalidMetadata":
+		return "INVALID_FIELD"
+	case "translation/InvalidEncoding":
+		return "TRANSLATION_INVALID_ENCODING"
+	case "translation/InvalidLocale":
+		return "TRANSLATION_INVALID_LOCALE"
+	case "translation/InvalidText":
+		return "TRANSLATION_INVALID_TEXT"
+	case "translation/InvalidPath":
+		return "TRANSLATION_INVALID_PATH"
+	case "translation/UnsupportedResource":
+		return "INVALID_ENVELOPE"
+	case "translation/UnsupportedTarget":
+		return "TRANSLATION_UNSUPPORTED_TARGET"
+	case "translation/UnsupportedField":
+		return "TRANSLATION_UNSUPPORTED_FIELD"
+	case "translation/CrossNamespaceRef":
+		return "CROSS_NAMESPACE_REFERENCE"
+	case "translation/EmptyTranslation":
+		return "TRANSLATION_EMPTY_CONTENT"
+	case "translation/OverlappingPaths":
+		return "TRANSLATION_OVERLAPPING_PATHS"
+	case "translation/ReferenceBoundary":
+		return "TRANSLATION_REFERENCE_BOUNDARY"
+	case "translation/FieldMissing":
+		return "TRANSLATION_FIELD_MISSING"
+	case "translation/AmbiguousSelector":
+		return "TRANSLATION_AMBIGUOUS_SELECTOR"
+	case "translation/PinMismatch":
+		return "TRANSLATION_PIN_MISMATCH"
+	case "translation/LimitExceeded":
+		return "TRANSLATION_LIMIT_EXCEEDED"
 	case "namespace-required":
 		return ReasonNamespaceRequired
 	case "namespace-forbidden":

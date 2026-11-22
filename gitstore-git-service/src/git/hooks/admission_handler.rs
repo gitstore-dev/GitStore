@@ -3,8 +3,12 @@
 
 use async_trait::async_trait;
 use regex::Regex;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 use tracing::error;
 
+use super::admission_receipts::{AdmissionReceiptStore, ReceiptId};
 use super::{AdmissionDecision, AdmissionHandler, HookContext, RefUpdate};
 use crate::git::tree_diff::{collect_diff_paths_from_trees, collect_paths_from_tree, get_tree_id};
 
@@ -50,16 +54,196 @@ impl AdmissionControlHandler {
         let client = CatalogServiceClient::new(channel);
         Ok(Self::new(client, re))
     }
+
+    pub async fn replay_committed(
+        &self,
+        store: Arc<AdmissionReceiptStore>,
+        id: ReceiptId,
+        data_root: &Path,
+        repository_lock: Arc<tokio::sync::RwLock<()>>,
+    ) -> anyhow::Result<()> {
+        let loading_store = Arc::clone(&store);
+        let loading_id = id.clone();
+        let data_root = data_root.to_path_buf();
+        let (authorization, catalog_refs, git_dir) = crate::spawn_blocking(move || {
+            let (authorization, catalog_refs) =
+                loading_store.load_committed_delivery(&loading_id)?;
+            let git_dir = crate::git::repo::fanout_path(&data_root, &authorization.repository_id)?;
+            let repo = crate::git::repo::open_repository(&git_dir)?;
+            // Missing retained objects must not look like an empty RBAC tree.
+            for update in &authorization.refs {
+                if !catalog_refs.contains(&update.ref_name)
+                    && !update.ref_name.starts_with("refs/heads/")
+                {
+                    continue;
+                }
+                for oid in [&update.old_commit_sha, &update.new_commit_sha] {
+                    let oid = gix::ObjectId::from_hex(oid.as_bytes())?;
+                    if !oid.is_null() {
+                        repo.find_commit(oid)?.tree()?.decode()?;
+                    }
+                }
+            }
+            Ok::<_, anyhow::Error>((authorization, catalog_refs, git_dir))
+        })
+        .await??;
+        let actor = authorization
+            .actor
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("receipt actor required"))?;
+        let context = HookContext {
+            repository_id: authorization.repository_id.clone(),
+            receive_id: authorization.receive_id.clone(),
+            actor_subject: actor.subject.clone(),
+            actor_auth_method: actor.auth_method.clone(),
+            actor_issuer: actor.issuer.clone(),
+            actor_groups: actor.groups.clone(),
+            actor_service_account_uid: actor.service_account_uid.clone(),
+            ..HookContext::default()
+        };
+        let updates: Vec<_> = authorization
+            .refs
+            .iter()
+            .map(|update| RefUpdate {
+                ref_name: update.ref_name.clone(),
+                old_oid: update.old_commit_sha.clone(),
+                new_oid: update.new_commit_sha.clone(),
+            })
+            .collect();
+        for request in Self::callback_requests_for_refs(
+            &updates,
+            &authorization.repository_id,
+            &git_dir,
+            &context,
+            catalog_refs,
+        )
+        .await?
+        {
+            deliver_admission_callback(
+                self.client.clone(),
+                request,
+                &self.service_token,
+                Duration::from_secs(30),
+            )
+            .await?;
+        }
+        let write_guard = repository_lock.write_owned().await;
+        crate::spawn_blocking(move || {
+            let _guard = write_guard;
+            let repository = crate::git::repo::open_repository(&git_dir)?;
+            store.acknowledge_fenced(&repository, &id)
+        })
+        .await??;
+        Ok(())
+    }
+
+    async fn callback_requests(
+        &self,
+        updates: &[RefUpdate],
+        repository_id: &str,
+        git_dir: &Path,
+        hook_ctx: &HookContext,
+    ) -> anyhow::Result<Vec<AdmitResourcesRequest>> {
+        Self::callback_requests_for_refs(
+            updates,
+            repository_id,
+            git_dir,
+            hook_ctx,
+            self.receipt_catalog_refs(updates),
+        )
+        .await
+    }
+
+    async fn callback_requests_for_refs(
+        updates: &[RefUpdate],
+        repository_id: &str,
+        git_dir: &Path,
+        hook_ctx: &HookContext,
+        catalog_refs: Vec<String>,
+    ) -> anyhow::Result<Vec<AdmitResourcesRequest>> {
+        let matching_updates: Vec<_> = updates
+            .iter()
+            .filter(|update| {
+                catalog_refs.contains(&update.ref_name)
+                    || update.ref_name.starts_with("refs/heads/")
+            })
+            .cloned()
+            .collect();
+        if matching_updates.is_empty() {
+            return Ok(Vec::new());
+        }
+        // Index discovery and tree reads can block for a retained repository.
+        // Keep that work off the async executor that serves RPC streams.
+        let git_dir = git_dir.to_path_buf();
+        let path_updates = matching_updates.clone();
+        let paths = crate::spawn_blocking(move || {
+            let repo = if git_dir.as_os_str().is_empty() {
+                None
+            } else {
+                Some(crate::git::repo::open_repository(&git_dir)?)
+            };
+            Ok::<_, anyhow::Error>(
+                path_updates
+                    .into_iter()
+                    .filter_map(|update| {
+                        let paths = if catalog_refs.contains(&update.ref_name) {
+                            repo.as_ref()
+                                .map(|repo| {
+                                    compute_changed_paths_in_repo(
+                                        repo,
+                                        &update.old_oid,
+                                        &update.new_oid,
+                                    )
+                                })
+                                .unwrap_or_default()
+                        } else if repo.as_ref().is_some_and(|repo| {
+                            has_rbac_root(repo, &update.old_oid)
+                                || has_rbac_root(repo, &update.new_oid)
+                        }) {
+                            vec!["rbac".to_owned()]
+                        } else {
+                            return None;
+                        };
+                        Some((update, paths))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .await??;
+
+        Ok(paths
+            .into_iter()
+            .map(|(update, changed_paths)| {
+                let authorization = Some(hook_ctx.callback_authorization(vec![(&update).into()]));
+                AdmitResourcesRequest {
+                    repository_id: repository_id.to_owned(),
+                    ref_name: update.ref_name,
+                    old_commit_sha: update.old_oid,
+                    new_commit_sha: update.new_oid,
+                    changed_paths,
+                    authorization,
+                }
+            })
+            .collect())
+    }
 }
 
 #[async_trait]
 impl AdmissionHandler for AdmissionControlHandler {
+    fn receipt_catalog_refs(&self, updates: &[RefUpdate]) -> Vec<String> {
+        updates
+            .iter()
+            .filter(|update| self.branch_pattern.is_match(&update.ref_name))
+            .map(|update| update.ref_name.clone())
+            .collect()
+    }
+
     async fn admit(
         &self,
         _phase: &str,
         updates: &[RefUpdate],
         repository_id: &str,
-        git_dir: &std::path::Path,
+        git_dir: &Path,
         hook_ctx: &HookContext,
     ) -> anyhow::Result<AdmissionDecision> {
         tracing::info!(
@@ -68,77 +252,18 @@ impl AdmissionHandler for AdmissionControlHandler {
             repository_id,
             "admission_control: admit called"
         );
-        let matching_updates: Vec<_> = updates
-            .iter()
-            .filter(|update| {
-                self.branch_pattern.is_match(&update.ref_name)
-                    || update.ref_name.starts_with("refs/heads/")
-            })
-            .cloned()
-            .collect();
-        if matching_updates.is_empty() {
-            return Ok(AdmissionDecision::Accept);
-        }
-        // Index discovery and tree reads can block for a retained repository.
-        // Keep that work off the async executor that serves RPC streams.
-        let git_dir = git_dir.to_path_buf();
-        let path_updates = matching_updates.clone();
-        let branch_pattern = self.branch_pattern.clone();
-        let paths = crate::spawn_blocking(move || {
-            let repo = if git_dir.as_os_str().is_empty() {
-                None
-            } else {
-                match crate::git::repo::open_repository(&git_dir) {
-                    Ok(repo) => Some(repo),
-                    Err(error) => {
-                        error!(git_dir = %git_dir.display(), error = %error, "compute_changed_paths: failed to open repo");
-                        None
-                    }
-                }
-            };
-            path_updates.into_iter().filter_map(|update| {
-                let paths = if branch_pattern.is_match(&update.ref_name) {
-                    repo.as_ref()
-                        .map(|repo| compute_changed_paths_in_repo(repo, &update.old_oid, &update.new_oid))
-                        .unwrap_or_default()
-                } else if repo.as_ref().is_some_and(|repo| {
-                    has_rbac_root(repo, &update.old_oid) || has_rbac_root(repo, &update.new_oid)
-                }) {
-                    vec!["rbac".to_owned()]
-                } else {
-                    return None;
-                };
-                Some((update, paths))
-            }).collect::<Vec<_>>()
-        }).await?;
-
-        for (update, changed_paths) in paths {
-            let old_commit_sha = update.old_oid.clone();
-            let new_commit_sha = update.new_oid.clone();
-            let ref_name = update.ref_name.clone();
-            let mut client = self.client.clone();
-            let repository_id = repository_id.to_string();
-            let authorization = Some(hook_ctx.callback_authorization(vec![(&update).into()]));
+        for req in self
+            .callback_requests(updates, repository_id, git_dir, hook_ctx)
+            .await?
+        {
+            let client = self.client.clone();
             let service_token = self.service_token.clone();
-
+            let ref_name = req.ref_name.clone();
             tokio::spawn(async move {
-                let req = AdmitResourcesRequest {
-                    repository_id,
-                    ref_name: ref_name.clone(),
-                    old_commit_sha,
-                    new_commit_sha,
-                    changed_paths,
-                    authorization,
-                };
-                let result = match crate::auth::interceptor::callback_request(
-                    req,
-                    &service_token,
-                    "/gitstore.catalog.v1.CatalogService/AdmitResources",
-                ) {
-                    Ok(request) => client.admit_resources(request).await,
-                    Err(error) => Err(error),
-                };
-                if let Err(e) = result {
+                if let Err(e) =
+                    deliver_admission_callback(client, req, &service_token, Duration::from_secs(30))
+                        .await
+                {
                     error!(
                         ref_name = %ref_name,
                         error = %e,
@@ -149,6 +274,51 @@ impl AdmissionHandler for AdmissionControlHandler {
         }
 
         Ok(AdmissionDecision::Accept)
+    }
+}
+
+async fn deliver_admission_callback(
+    mut client: CatalogServiceClient<tonic::transport::Channel>,
+    request: AdmitResourcesRequest,
+    service_token: &str,
+    attempt_timeout: Duration,
+) -> Result<(), tonic::Status> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        // Reusing the accepted snapshot is safe; reusing its signed transport
+        // request is not, because the receiver retains RPC nonces.
+        let result = match crate::auth::interceptor::callback_request(
+            request.clone(),
+            service_token,
+            "/gitstore.catalog.v1.CatalogService/AdmitResources",
+        ) {
+            Ok(signed) => tokio::time::timeout(attempt_timeout, client.admit_resources(signed))
+                .await
+                .unwrap_or_else(|_| {
+                    Err(tonic::Status::deadline_exceeded(
+                        "admission callback timed out",
+                    ))
+                })
+                .map(|_| ()),
+            Err(error) => Err(error),
+        };
+        match result {
+            Err(error)
+                if attempt < 3
+                    && matches!(
+                        error.code(),
+                        tonic::Code::Unavailable
+                            | tonic::Code::DeadlineExceeded
+                            | tonic::Code::ResourceExhausted
+                            | tonic::Code::Aborted
+                            | tonic::Code::Internal
+                    ) =>
+            {
+                tokio::time::sleep(Duration::from_millis(100 * attempt)).await;
+            }
+            outcome => return outcome,
+        }
     }
 }
 
@@ -319,10 +489,16 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
     struct MockCatalogService {
         admit_call_count: Arc<AtomicU32>,
         actor_subject: Arc<Mutex<String>>,
         requests: Arc<Mutex<Vec<AdmitResourcesRequest>>>,
+        signatures: Arc<Mutex<Vec<String>>>,
+        failures_remaining: AtomicU32,
+        fail_after_calls: u32,
+        failure_code: Option<tonic::Code>,
+        block: bool,
     }
 
     #[tonic::async_trait]
@@ -348,7 +524,15 @@ mod tests {
             &self,
             req: Request<AdmitResourcesRequest>,
         ) -> Result<Response<AdmitResourcesResponse>, Status> {
-            self.admit_call_count.fetch_add(1, Ordering::SeqCst);
+            let call_index = self.admit_call_count.fetch_add(1, Ordering::SeqCst);
+            self.signatures.lock().unwrap().push(
+                req.metadata()
+                    .get(crate::auth::interceptor::SIGNATURE_HEADER)
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_owned(),
+            );
             let req = req.into_inner();
             *self.actor_subject.lock().unwrap() = req
                 .authorization
@@ -360,6 +544,22 @@ mod tests {
                 .subject
                 .clone();
             self.requests.lock().unwrap().push(req);
+            if self.block {
+                std::future::pending::<()>().await;
+            }
+            if call_index >= self.fail_after_calls
+                && self
+                    .failures_remaining
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                        remaining.checked_sub(1)
+                    })
+                    .is_ok()
+            {
+                return Err(Status::new(
+                    self.failure_code.unwrap_or(tonic::Code::Unavailable),
+                    "callback reply unavailable",
+                ));
+            }
             Ok(Response::new(AdmitResourcesResponse {}))
         }
 
@@ -390,13 +590,18 @@ mod tests {
         actor_subject: Arc<Mutex<String>>,
         requests: Arc<Mutex<Vec<AdmitResourcesRequest>>>,
     ) -> String {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
         let svc = MockCatalogService {
             admit_call_count: admit_count,
             actor_subject,
             requests,
+            ..Default::default()
         };
+        start_mock_server_with_service(svc).await
+    }
+
+    async fn start_mock_server_with_service(svc: MockCatalogService) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             Server::builder()
                 .add_service(CatalogServiceServer::new(svc))
@@ -418,6 +623,298 @@ mod tests {
             },
             new_oid: "b".repeat(40),
         }
+    }
+
+    fn make_callback_request() -> AdmitResourcesRequest {
+        let update = make_update("refs/heads/main", false);
+        let mut context = make_hook_context("translation-author");
+        context.receive_id = "accepted-receive".to_owned();
+        AdmitResourcesRequest {
+            repository_id: context.repository_id.clone(),
+            authorization: Some(context.callback_authorization(vec![(&update).into()])),
+            ref_name: update.ref_name,
+            old_commit_sha: update.old_oid,
+            new_commit_sha: update.new_oid,
+            changed_paths: vec!["translations/title-de.md".to_owned()],
+        }
+    }
+
+    #[tokio::test]
+    async fn committed_receipt_replay_retains_failed_work_and_original_receive() {
+        use super::super::admission_receipts::{AdmissionReceiptStore, ReceiptPhase};
+
+        let directory = tempfile::TempDir::new().unwrap();
+        let repository_id = "01960000-0000-7000-8000-000000000250";
+        let git_dir = crate::git::repo::fanout_path(directory.path(), repository_id).unwrap();
+        std::fs::create_dir_all(git_dir.parent().unwrap()).unwrap();
+        let (repo, old) = make_repo_with_files(
+            &git_dir,
+            &[("translations/title-de.md", b"accepted translation")],
+        );
+        let new = add_file_to_repo(&repo, old, "translations/title-fr.md", b"nouveau");
+        let updates: Vec<_> = [
+            "refs/heads/main",
+            "refs/heads/release",
+            "refs/tags/not-catalog",
+        ]
+        .into_iter()
+        .map(|name| RefUpdate {
+            ref_name: name.to_owned(),
+            old_oid: old.to_string(),
+            new_oid: new.to_string(),
+        })
+        .collect();
+        let context = HookContext {
+            repository_id: repository_id.to_owned(),
+            receive_id: "original-accepted-receive".to_owned(),
+            actor_subject: "system:serviceaccount:translation-author".to_owned(),
+            actor_auth_method: "serviceaccount-jwt".to_owned(),
+            actor_service_account_uid: "01960000-0000-7000-8000-000000000251".to_owned(),
+            actor_issuer: "original-issuer".to_owned(),
+            actor_groups: vec!["original-authors".to_owned()],
+            ..HookContext::default()
+        };
+        let authorization =
+            context.callback_authorization(updates.iter().map(Into::into).collect());
+        let store = Arc::new(AdmissionReceiptStore::open(directory.path()).unwrap());
+        let id = store.prepare(&authorization).unwrap();
+        let repository_lock = Arc::new(tokio::sync::RwLock::new(()));
+        let count = Arc::default();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let addr = start_mock_server_with_service(MockCatalogService {
+            admit_call_count: Arc::clone(&count),
+            requests: Arc::clone(&requests),
+            failures_remaining: AtomicU32::new(3),
+            fail_after_calls: 1,
+            ..Default::default()
+        })
+        .await;
+        let handler = AdmissionControlHandler::connect(&addr, "^refs/heads/".to_owned())
+            .await
+            .unwrap()
+            .with_service_token("fixture-key");
+        assert!(handler
+            .replay_committed(
+                Arc::clone(&store),
+                id.clone(),
+                directory.path(),
+                Arc::clone(&repository_lock)
+            )
+            .await
+            .is_err());
+        assert_eq!(count.load(Ordering::SeqCst), 0, "prepared is not committed");
+        store.commit(&id).unwrap();
+        let offline_dir = git_dir.with_extension("git.offline");
+        std::fs::rename(&git_dir, &offline_dir).unwrap();
+        assert!(handler
+            .replay_committed(
+                Arc::clone(&store),
+                id.clone(),
+                directory.path(),
+                Arc::clone(&repository_lock)
+            )
+            .await
+            .is_err());
+        std::fs::rename(&offline_dir, &git_dir).unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        assert_eq!(store.load(&id).unwrap(), authorization);
+        assert!(handler
+            .replay_committed(
+                Arc::clone(&store),
+                id.clone(),
+                directory.path(),
+                Arc::clone(&repository_lock)
+            )
+            .await
+            .is_err());
+        assert_eq!(count.load(Ordering::SeqCst), 4);
+        assert_eq!(store.load(&id).unwrap(), authorization);
+        assert_eq!(
+            store.list(None, 1).unwrap().entries,
+            vec![(id.clone(), ReceiptPhase::Committed)]
+        );
+        drop(handler);
+        drop(store);
+
+        let store = Arc::new(AdmissionReceiptStore::open(directory.path()).unwrap());
+        let replacement = Arc::new(
+            AdmissionControlHandler::connect(&addr, "^refs/tags/".to_owned())
+                .await
+                .unwrap()
+                .with_service_token("fixture-key"),
+        );
+        let service = crate::grpc::server::GitServiceImpl::new(
+            directory.path().to_path_buf(),
+            crate::auth::interceptor::RPCVerifier::new("fixture-key", None, directory.path())
+                .unwrap(),
+        )
+        .with_receipts(store.clone());
+        service
+            .repo_locks
+            .insert(repository_id.to_owned(), repository_lock.clone());
+        service.recover_receipts_before_serving().await.unwrap();
+        let worker_handler = replacement.clone();
+        let worker = tokio::spawn(async move {
+            service.run_receipt_replay(&worker_handler).await;
+        });
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !store.list(None, 1).unwrap().entries.is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("replacement worker must finish original accepted delivery");
+        worker.abort();
+        assert!(worker.await.unwrap_err().is_cancelled());
+        assert!(store.list(None, 1).unwrap().entries.is_empty());
+        let requests = requests.lock().unwrap().clone();
+        assert_eq!(requests.len(), 6);
+        for (index, request) in requests.iter().enumerate() {
+            let update = &authorization.refs[usize::from(index != 0 && index != 4)];
+            let mut expected = authorization.clone();
+            expected.refs = vec![update.clone()];
+            assert_eq!(request.authorization.as_ref(), Some(&expected));
+            assert_eq!(request.repository_id, repository_id);
+            assert_eq!(request.ref_name, update.ref_name);
+            assert_eq!(request.old_commit_sha, update.old_commit_sha);
+            assert_eq!(request.new_commit_sha, update.new_commit_sha);
+            assert_eq!(request.changed_paths, vec!["translations/title-fr.md"]);
+        }
+        let mut missing_object = authorization.clone();
+        missing_object.receive_id = "missing-retained-object".to_owned();
+        missing_object.refs[0].new_commit_sha = "f".repeat(40);
+        let id = store.prepare(&missing_object).unwrap();
+        store.commit(&id).unwrap();
+        assert!(replacement
+            .replay_committed(
+                Arc::clone(&store),
+                id.clone(),
+                directory.path(),
+                Arc::clone(&repository_lock)
+            )
+            .await
+            .is_err());
+        assert_eq!(store.load(&id).unwrap(), missing_object);
+        assert_eq!(count.load(Ordering::SeqCst), 6);
+    }
+
+    #[tokio::test]
+    async fn callback_retries_preserve_snapshot_and_use_fresh_signatures() {
+        let count = Arc::default();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let signatures = Arc::new(Mutex::new(Vec::new()));
+        let addr = start_mock_server_with_service(MockCatalogService {
+            admit_call_count: Arc::clone(&count),
+            requests: Arc::clone(&requests),
+            signatures: Arc::clone(&signatures),
+            failures_remaining: AtomicU32::new(2),
+            ..Default::default()
+        })
+        .await;
+        let client = CatalogServiceClient::connect(addr).await.unwrap();
+        let handler =
+            AdmissionControlHandler::new(client, Regex::new("^refs/heads/main$").unwrap())
+                .with_service_token("fixture-key");
+        let context = HookContext {
+            receive_id: "accepted-receive".to_owned(),
+            ..make_hook_context("translation-author")
+        };
+        let mut request = make_callback_request();
+        request.changed_paths.clear();
+        assert!(matches!(
+            handler
+                .admit(
+                    "post-receive",
+                    &[make_update("refs/heads/main", false)],
+                    "repo-1",
+                    std::path::Path::new(""),
+                    &context,
+                )
+                .await
+                .unwrap(),
+            AdmissionDecision::Accept
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while requests.lock().unwrap().len() < 3 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("transient post-receive failure was not retried");
+        assert_eq!(count.load(Ordering::SeqCst), 3);
+        assert!(requests.lock().unwrap().iter().all(|sent| sent == &request));
+        let nonces: Vec<_> = signatures
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|signature| signature.split(':').nth(2).unwrap().to_owned())
+            .collect();
+        for (index, nonce) in nonces.iter().enumerate() {
+            assert!(!nonce.is_empty());
+            assert!(
+                !nonces[..index].contains(nonce),
+                "a retry reused an RPC nonce"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn callback_retry_budget_and_terminal_rejections_are_bounded() {
+        for (code, expected_calls) in [
+            (tonic::Code::Unavailable, 3),
+            (tonic::Code::ResourceExhausted, 3),
+            (tonic::Code::Aborted, 3),
+            (tonic::Code::Internal, 3),
+            (tonic::Code::PermissionDenied, 1),
+            (tonic::Code::Unauthenticated, 1),
+            (tonic::Code::InvalidArgument, 1),
+            (tonic::Code::FailedPrecondition, 1),
+        ] {
+            let count = Arc::default();
+            let addr = start_mock_server_with_service(MockCatalogService {
+                admit_call_count: Arc::clone(&count),
+                failures_remaining: AtomicU32::new(10),
+                failure_code: Some(code),
+                ..Default::default()
+            })
+            .await;
+            let client = CatalogServiceClient::connect(addr).await.unwrap();
+            let error = deliver_admission_callback(
+                client,
+                make_callback_request(),
+                "fixture-key",
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.code(), code);
+            assert_eq!(count.load(Ordering::SeqCst), expected_calls, "{code}");
+        }
+    }
+
+    #[tokio::test]
+    async fn callback_deadlines_bound_a_nonresponding_receiver() {
+        let count = Arc::default();
+        let addr = start_mock_server_with_service(MockCatalogService {
+            admit_call_count: Arc::clone(&count),
+            block: true,
+            ..Default::default()
+        })
+        .await;
+        let client = CatalogServiceClient::connect(addr).await.unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            deliver_admission_callback(
+                client,
+                make_callback_request(),
+                "fixture-key",
+                Duration::from_millis(100),
+            ),
+        )
+        .await
+        .expect("callback exhausted its wall-clock budget");
+        assert_eq!(result.unwrap_err().code(), tonic::Code::DeadlineExceeded);
+        assert!(count.load(Ordering::SeqCst) <= 3);
     }
 
     #[tokio::test]

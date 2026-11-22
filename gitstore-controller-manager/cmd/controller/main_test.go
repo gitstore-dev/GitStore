@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/cache"
+	"github.com/gitstore-dev/gitstore/controller-manager/internal/categorytaxonomy"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/checkpoint"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/graphqlclient"
@@ -35,8 +36,10 @@ import (
 	repositorycontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/repository"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/secret"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
+	translationcontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/translation"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gitstore-dev/gitstore/secretmaterial"
+	"github.com/gitstore-dev/gitstore/translation"
 	"github.com/stretchr/testify/require"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
@@ -199,6 +202,260 @@ func TestExistingUSERNamespaceCatchupPagesAndPendingWorkSurviveReplacement(t *te
 				t.Fatal("catch-up runner did not stop before replacement")
 			}
 			require.NoError(t, store.Close())
+		}
+	}
+}
+
+func TestTranslationSourceIndexesUseOnlyMatchingPrivateBinding(t *testing.T) {
+	for _, scenario := range []string{"matching", "source-replaced", "source-updated", "unavailable"} {
+		t.Run(scenario, func(t *testing.T) {
+			source := translationcontroller.Resource{
+				Metadata: translationcontroller.Metadata{UID: "opaque-source-id", Namespace: "shop", Name: "fr", ResourceVersion: "1", Generation: 1},
+				Spec:     json.RawMessage(`{"targetRef":{"apiVersion":"catalog.gitstore.dev/v1beta1","kind":"Product","name":"laptop"}}`),
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if scenario == "unavailable" {
+					http.Error(w, "unavailable", http.StatusServiceUnavailable)
+					return
+				}
+				binding := map[string]any{"translationID": source.Metadata.UID, "sourceVersion": "1",
+					"bindingVersion": "1", "referenceEpoch": "epoch", "namespaceUID": "raw-namespace", "boundUID": "raw-target"}
+				if scenario == "source-replaced" {
+					binding["translationID"] = "replacement-id"
+				}
+				if scenario == "source-updated" {
+					binding["sourceVersion"] = "2"
+				}
+				require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"translationBinding": binding}}))
+			}))
+			defer server.Close()
+			client := translationcontroller.NewGraphQLClient(graphqlclient.New(server.URL, graphqlclient.NewStaticToken("enrolled")))
+			raw, err := json.Marshal(source)
+			require.NoError(t, err)
+			item := checkpoint.DiskItem{Key: types.WorkItemKey{Kind: "Translation", Namespace: "shop", Name: "fr"}, Version: "1", Value: raw}
+			require.NoError(t, prepareTranslationSource(client)(t.Context(), source, &item))
+			store, err := checkpoint.OpenDiskStore(t.TempDir(), "Translation")
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			generation, err := store.BeginSnapshot(t.Context())
+			require.NoError(t, err)
+			require.NoError(t, store.PutSnapshotPage(t.Context(), generation, []checkpoint.DiskItem{item}))
+			require.NoError(t, store.FinishSnapshot(t.Context(), generation, "journal@one"))
+			work, err := store.Pending(t.Context(), "", 256)
+			require.NoError(t, err)
+			require.Len(t, work, 1)
+			_, err = store.Acknowledge(t.Context(), item.Key, work[0].Token)
+			require.NoError(t, err)
+			target := translationcontroller.TargetObservation{
+				Target: translationcontroller.DependencyTarget{NamespaceUID: "raw-namespace", APIVersion: "catalog.gitstore.dev/v1beta1",
+					Kind: "Product", Name: "laptop", UID: "raw-target"},
+				ResourceVersion: "1", Generation: 1, ContentDigest: "material",
+			}
+			require.NoError(t, translationcontroller.QueueTargetChange(t.Context(), store, nil, &target))
+			for range 8 {
+				progress, err := store.ProcessFanout(t.Context())
+				require.NoError(t, err)
+				if !progress {
+					break
+				}
+			}
+			if scenario == "matching" {
+				require.EqualValues(t, 1, store.Counts().Pending)
+			} else {
+				require.Zero(t, store.Counts().Pending, "stale or unavailable bindings cannot supply raw namespace/UID identity")
+				require.NoError(t, translationcontroller.QueueNamespaceChange(t.Context(), store, "shop"))
+				for range 8 {
+					progress, err := store.ProcessFanout(t.Context())
+					require.NoError(t, err)
+					if !progress {
+						break
+					}
+				}
+				require.EqualValues(t, 1, store.Counts().Pending, "unproved binding identity retains conservative namespace invalidation")
+			}
+		})
+	}
+}
+
+type targetProofStub struct{ version string }
+
+func (s *targetProofStub) ObserveTarget(_ context.Context, namespace, apiVersion, kind, name string) (*translationcontroller.TargetObservation, error) {
+	return &translationcontroller.TargetObservation{
+		Target:          translationcontroller.DependencyTarget{NamespaceUID: "raw-namespace", APIVersion: apiVersion, Kind: kind, Name: name, UID: "raw-" + kind},
+		ResourceVersion: s.version, Generation: 1, ContentDigest: "material",
+	}, nil
+}
+
+func TestAllFiveTranslationTargetHooksAndNamespaceLifetimeUseDurableIndexes(t *testing.T) {
+	store, err := checkpoint.OpenDiskStore(t.TempDir(), "Translation")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	generation, err := store.BeginSnapshot(t.Context())
+	require.NoError(t, err)
+	kinds := []string{"Product", "ProductVariant", "CategoryTaxonomy", "Collection", "File"}
+	var items []checkpoint.DiskItem
+	for _, kind := range kinds {
+		apiVersion := "catalog.gitstore.dev/v1beta1"
+		if kind == "File" {
+			apiVersion = "storage.gitstore.dev/v1beta1"
+		}
+		source := translationcontroller.Resource{
+			Metadata: translationcontroller.Metadata{UID: "source-" + kind, Namespace: "shop", Name: kind, ResourceVersion: "1", Generation: 1},
+			Spec:     json.RawMessage(fmt.Sprintf(`{"targetRef":{"apiVersion":%q,"kind":%q,"name":"target"}}`, apiVersion, kind)),
+		}
+		uid := "raw-" + kind
+		indexes, err := translationcontroller.SourceDependencyIndexes(source, &translationcontroller.BindingState{
+			TranslationID: source.Metadata.UID, SourceVersion: "1", BindingVersion: "1", ReferenceEpoch: "epoch",
+			NamespaceUID: "raw-namespace", BoundUID: &uid,
+		})
+		require.NoError(t, err)
+		raw, err := json.Marshal(source)
+		require.NoError(t, err)
+		items = append(items, checkpoint.DiskItem{
+			Key: types.WorkItemKey{Kind: "Translation", Namespace: "shop", Name: kind}, Version: "1", Value: raw, Indexes: indexes,
+		})
+	}
+	require.NoError(t, store.PutSnapshotPage(t.Context(), generation, items))
+	require.NoError(t, store.FinishSnapshot(t.Context(), generation, "translation-journal@one"))
+	clear := func() {
+		t.Helper()
+		work, err := store.Pending(t.Context(), "", 256)
+		require.NoError(t, err)
+		for _, pending := range work {
+			ok, err := store.Acknowledge(t.Context(), pending.Key, pending.Token)
+			require.NoError(t, err)
+			require.True(t, ok)
+		}
+	}
+	drain := func() {
+		t.Helper()
+		for range 64 {
+			progress, err := store.ProcessFanout(t.Context())
+			require.NoError(t, err)
+			if !progress {
+				return
+			}
+		}
+		t.Fatal("target handoff did not finish its bounded tasks")
+	}
+	clear()
+	ns := &listwatch.Runner[namespacecontroller.Namespace]{}
+	product := &listwatch.Runner[categorytaxonomy.Product]{}
+	category := &listwatch.Runner[categorytaxonomy.CategoryTaxonomy]{}
+	var targets []*listwatch.Runner[listwatch.TargetMetadataResource]
+	for _, kind := range []string{"ProductVariant", "Collection", "File"} {
+		targets = append(targets, &listwatch.Runner[listwatch.TargetMetadataResource]{Kind: kind})
+	}
+	proof := &targetProofStub{version: "1"}
+	wireTranslationTargetHandoffs(translationcontroller.NewTargetHandoff(store, proof), store, ns, product, category, targets)
+	productBefore := categorytaxonomy.Product{Namespace: "shop", Name: "target", UID: "opaque-product-id", ResourceVersion: "1"}
+	categoryBefore := categorytaxonomy.CategoryTaxonomy{Namespace: "shop", Name: "target", UID: "opaque-category-id", ResourceVersion: "1"}
+	require.NoError(t, product.BeforeDiskChange(t.Context(), nil, &productBefore))
+	drain()
+	work, err := store.Pending(t.Context(), "", 256)
+	require.NoError(t, err)
+	require.Len(t, work, 1)
+	require.Equal(t, "Product", work[0].Key.Name)
+	clear()
+	require.NoError(t, category.BeforeDiskChange(t.Context(), nil, &categoryBefore))
+	drain()
+	work, err = store.Pending(t.Context(), "", 256)
+	require.NoError(t, err)
+	require.Len(t, work, 1)
+	require.Equal(t, "CategoryTaxonomy", work[0].Key.Name)
+	clear()
+	for _, runner := range targets {
+		target := listwatch.TargetMetadataResource{Kind: runner.Kind,
+			Metadata: translationcontroller.Metadata{Namespace: "shop", Name: "target", UID: "opaque-" + runner.Kind, ResourceVersion: "1"}}
+		require.NoError(t, runner.BeforeDiskChange(t.Context(), nil, &target))
+		drain()
+		work, err := store.Pending(t.Context(), "", 256)
+		require.NoError(t, err)
+		require.Len(t, work, 1)
+		require.Equal(t, runner.Kind, work[0].Key.Name)
+		clear()
+		proof.version = "2"
+		next := target
+		next.Metadata.ResourceVersion = "2"
+		require.NoError(t, runner.BeforeDiskChange(t.Context(), &target, &next))
+		drain()
+		require.Zero(t, store.Counts().Pending, "a status-only target event must not invalidate an unpinned source")
+		proof.version = "1"
+	}
+	before := namespacecontroller.Namespace{UID: "old-namespace", Name: "shop"}
+	after := namespacecontroller.Namespace{UID: "new-namespace", Name: "shop"}
+	require.NoError(t, ns.BeforeDiskChange(t.Context(), &before, &after))
+	drain()
+	require.EqualValues(t, len(kinds), store.Counts().Pending, "namespace recreation must include old-incarnation dependencies")
+	_, cursor, err := store.Active(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, "translation-journal@one", cursor)
+}
+
+func TestTranslationRegistrationRejectsIncompatibleConfigurationBeforeDiskEffects(t *testing.T) {
+	for _, activation := range []config.TranslationConfig{
+		{Enabled: true},
+		{Enabled: true, DescriptorDigest: "unsupported"},
+		{DescriptorDigest: "unsupported"},
+	} {
+		dir := filepath.Join(t.TempDir(), "checkpoints")
+		cfg := &config.Config{Controller: config.ControllerConfig{
+			Checkpoint: config.CheckpointConfig{Dir: dir}, Translation: activation,
+		}}
+		mgr := manager.New()
+		var runners sync.WaitGroup
+		closeStores, err := registerDiskControllersWithRBAC(t.Context(), &runners, mgr, cfg, zap.NewNop(), nil, false)
+		require.ErrorContains(t, err, "controller.translation")
+		require.Nil(t, closeStores)
+		require.Empty(t, mgr.KindStats())
+		_, err = os.Stat(dir)
+		require.ErrorIs(t, err, os.ErrNotExist, "invalid configuration must not create checkpoint state")
+	}
+}
+
+func TestTranslationRegistrationUsesConfiguredCapabilityAndIndependentDiskState(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		for replica := range 2 {
+			t.Run(fmt.Sprintf("enabled=%t/replica=%d", enabled, replica), func(t *testing.T) {
+				dir := t.TempDir()
+				cfg := &config.Config{Controller: config.ControllerConfig{Checkpoint: config.CheckpointConfig{Dir: dir}}}
+				cfg.Controller.Translation = config.TranslationConfig{Enabled: enabled, DescriptorDigest: translation.CapabilityDigest()}
+				ctx, cancel := context.WithCancel(t.Context())
+				cancel()
+				mgr := manager.New()
+				var runners sync.WaitGroup
+				client := graphqlclient.New("http://unused.invalid/admin/graphql", graphqlclient.NewStaticToken("enrolled"))
+				closeStores, err := registerDiskControllersWithRBAC(ctx, &runners, mgr, cfg, zap.NewNop(), client, false)
+				require.NoError(t, err)
+				runners.Wait()
+				for _, kind := range []string{"Translation", "ProductVariant", "Collection", "File"} {
+					require.Equal(t, enabled, mgr.KindStats()[kind].Registered)
+				}
+				key := types.WorkItemKey{Kind: "Translation", Namespace: "shop", Name: "pending"}
+				if enabled {
+					require.NoError(t, mgr.Enqueue(key))
+				} else {
+					require.ErrorIs(t, mgr.Enqueue(key), types.ErrKindNotRegistered)
+				}
+				require.NoError(t, closeStores())
+				if !enabled {
+					_, err := os.Stat(filepath.Join(dir, "Translation.disk-v2"))
+					require.ErrorIs(t, err, os.ErrNotExist)
+					return
+				}
+				store, err := checkpoint.OpenDiskStore(dir, "Translation")
+				require.NoError(t, err)
+				work, err := store.Pending(t.Context(), "", 10)
+				require.NoError(t, err)
+				require.Len(t, work, 1)
+				require.Equal(t, key, work[0].Key)
+				require.False(t, store.Stats().OldestPending.IsZero(), "Translation registration must retain pending age")
+				require.Zero(t, store.Stats().PendingWithoutTimestamp)
+				second, err := checkpoint.OpenDiskStore(dir, "Translation")
+				require.Error(t, err, "replicas must never overlap writable checkpoint ownership")
+				require.Nil(t, second)
+				require.NoError(t, store.Close())
+			})
 		}
 	}
 }

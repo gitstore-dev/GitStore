@@ -6,6 +6,8 @@ replace github.com/gitstore-dev/gitstore/secretmaterial => ../shared/secretmater
 
 replace github.com/gitstore-dev/gitstore/observability => ../shared/observability
 
+replace github.com/gitstore-dev/gitstore/translation => ../shared/translation
+
 replace github.com/scylladb/scylla-cdc-go => ../shared/scylla-cdc-go
 
 require (
@@ -17,6 +19,7 @@ require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/gitstore-dev/gitstore/observability v0.0.0
 	github.com/gitstore-dev/gitstore/secretmaterial v0.0.0
+	github.com/gitstore-dev/gitstore/translation v0.0.0
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/gocql/gocql v1.17.0
