@@ -1,0 +1,117 @@
+// Proposed additions merged into the canonical Git service during implementation.
+// Add ReceivePackStream(stream AdmissionReceiveRequest) returns (stream AdmissionReceiveEvent)
+// and WriteAdmissionNote(WriteAdmissionNoteRequest) returns (WriteAdmissionNoteResponse)
+// and LookupAdmissionMutation(LookupAdmissionMutationRequest) returns (LookupAdmissionMutationResponse)
+// to GitService. Existing RPC cardinalities/numbers remain unchanged.
+syntax = "proto3";
+package gitstore.git.v1;
+
+import "gitstore/git/v1/git_service.proto";
+
+message AdmissionReceiveRequest {
+  oneof frame {
+    AdmissionReceiveBegin begin = 1;
+    bytes data = 2;
+    AdmissionReceiveEnd end = 3;
+  }
+}
+message AdmissionReceiveBegin {
+  string operation_id = 1;
+  repeated RefCommand ref_commands = 2;
+  repeated string capabilities = 3;
+  PushContext push_context = 4;
+  string repository_id = 15;
+  // PushContext.authorization is the existing approved authorization contract.
+  // The signed RPC metadata authenticates this complete first request frame.
+}
+message AdmissionReceiveEnd { uint64 pack_bytes = 1; }
+
+message AdmissionReceiveEvent {
+  uint64 ordinal = 1;
+  oneof frame {
+    AdmissionReceiveProgress progress = 2;
+    AdmissionReceiveFinding finding = 3;
+    AdmissionPublicationResult publication = 4;
+  }
+}
+message AdmissionReceiveProgress {
+  enum Stage { STAGE_UNSPECIFIED = 0; INDEXING = 1; VALIDATING = 2; PUBLISHING = 3; }
+  Stage stage = 1;
+  uint64 completed = 2;
+  optional uint64 total = 3;
+}
+message AdmissionReceiveFinding {
+  string reason = 1;
+  string message = 2;
+  string level = 3;
+  optional string file = 4;
+  optional string field = 5;
+  // Canonical Diagnostic region extension, using one-based Unicode code points.
+  optional uint32 start_line = 6;
+  optional uint32 start_column = 7;
+  optional uint32 end_line = 8;
+  optional uint32 end_column = 9;
+}
+message AdmissionPublicationResult {
+  string operation_id = 1;
+  bool unpack_succeeded = 2;
+  optional string unpack_reason = 3;
+  repeated AdmissionRefResult refs = 4;
+  bool publication_uncertain = 5;
+}
+message AdmissionRefResult {
+  string ref_name = 1;
+  string old_oid = 2;
+  string new_oid = 3;
+  bool committed = 4;
+  optional string rejection_reason = 5;
+  optional AdmissionSourceReceipt source = 6;
+}
+// Canonical receipt owner must converge with spec074/#139, not duplicate IDs.
+// Add this same receipt to owned write responses/callback context where relevant.
+message AdmissionSourceReceipt {
+  string repository_id = 1;
+  string source_epoch = 2;
+  uint64 source_sequence = 3;
+  string mutation_id = 4;
+  string ref_name = 5;
+  optional string old_oid = 6;
+  optional string new_oid = 7;
+  string source_cursor = 8;
+  string digest = 9;
+}
+
+message LookupAdmissionMutationRequest {
+  string operation_id = 1;
+  RequestAuthorization authorization = 14;
+  string repository_id = 15;
+}
+message LookupAdmissionMutationResponse {
+  enum State { STATE_UNSPECIFIED = 0; COMMITTED = 1; NOT_PUBLISHED = 2; UNCERTAIN = 3; }
+  State state = 1;
+  repeated AdmissionSourceReceipt refs = 2;
+}
+
+message WriteAdmissionNoteRequest {
+  string repository_id = 15;
+  RequestAuthorization authorization = 14;
+  string commit_oid = 1;
+  string expected_notes_oid = 2;
+  uint64 projection_revision = 3;
+  string projection_epoch = 4;
+  string idempotency_key = 5;
+  repeated AdmissionNoteEntry entries = 6;
+}
+message AdmissionNoteEntry {
+  string ref_name = 1;
+  string producer_name = 2;
+  string producer_version = 3;
+  string report_id = 4;
+  uint32 attempt = 5;
+  string conclusion = 6;
+}
+message WriteAdmissionNoteResponse {
+  string notes_oid = 1;
+  uint64 projection_revision = 2;
+  string digest = 3;
+}
