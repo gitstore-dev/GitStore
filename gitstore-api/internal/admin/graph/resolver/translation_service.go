@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"slices"
 	"sync"
 	"time"
 
@@ -742,7 +743,9 @@ func (r *Resolver) writeTranslationStatus(ctx context.Context, input model.Updat
 		resolved := &catalog.ResolvedTranslation{}
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
-		if decoder.Decode(resolved) != nil || len(resolved.ValidatedFieldPaths) > translation.MaxPatches {
+		if decoder.Decode(resolved) != nil ||
+			len(resolved.ValidatedFieldPaths) > translation.MaxPatches+1 ||
+			(len(resolved.ValidatedFieldPaths) > translation.MaxPatches && !slices.Contains(resolved.ValidatedFieldPaths, "{body}")) {
 			return nil, admission.NewError(admission.CodeBadUserInput, "INVALID_RESOLVED", "invalid Translation resolved status").ToGQLError()
 		}
 		status.Resolved = resolved

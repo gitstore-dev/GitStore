@@ -295,6 +295,8 @@ escapes an error. Existing admission diagnostics retain safe reasons and field
 locations. Documents are limited to 1 MiB, 65,536 YAML nodes, depth 64 and 256
 patches. Path and target-work limits apply independently. Diagnostics are
 bounded to 32 entries with 256-byte messages and explicit truncation.
+Resolved validation paths allow 256 patch addresses plus one `{body}` entry;
+the body does not consume a patch slot.
 Human Git rejections retain the common `file: message` format; structured
 reason and field locations belong to the admission diagnostic envelope.
 The shared Catalog in-flight gate rejects overload without a waiting queue;

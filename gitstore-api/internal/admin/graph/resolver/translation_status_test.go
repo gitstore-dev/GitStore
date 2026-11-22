@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
@@ -68,6 +69,84 @@ func nextTranslationRouteVersion(t *testing.T, version string) string {
 	next, err := datastore.AdvanceTranslationIndexVersion(version)
 	require.NoError(t, err)
 	return next
+}
+
+func TestTranslationStatusPreservesPatchLimitWithAdditionalBodyPath(t *testing.T) {
+	for _, scenario := range []string{"patches-and-body", "too-many-patches", "too-many-paths-with-body"} {
+		t.Run(scenario, func(t *testing.T) {
+			root, ctx, source, target := newTranslationStatusRouteFixture(t)
+			ctx = auth.ContextWithPrincipal(ctx, translationEnrolledController(t, root))
+			patches := make([]translation.Patch, translation.MaxPatches)
+			options := make([]any, len(patches))
+			for index := range patches {
+				name := fmt.Sprintf("option-%03d", index)
+				options[index] = map[string]any{"name": name, "title": "Option"}
+				patches[index] = translation.Patch{FieldPath: "spec.options{" + name + "}.title", Translation: "Translated"}
+			}
+			targetSpec := map[string]any{"title": "Laptop", "options": options}
+			targetRaw, err := json.Marshal(targetSpec)
+			require.NoError(t, err)
+			nextTarget := *target
+			nextTarget.Spec = targetRaw
+			nextTarget.Generation++
+			nextTarget.ResourceVersion = nextTranslationRouteVersion(t, target.ResourceVersion)
+			require.NoError(t, root.store.UpdateProduct(ctx, &nextTarget, target.ResourceVersion))
+			body := "Translated body"
+			if scenario == "too-many-patches" {
+				body = ""
+			}
+			paths, err := translation.ValidateFieldsContext(ctx, target.APIVersion, target.Kind, targetSpec, patches, []byte(body))
+			require.NoError(t, err)
+			source.Spec, err = json.Marshal(translation.Spec{
+				Locale: "he-IL", TargetRef: translation.Reference{APIVersion: target.APIVersion, Kind: target.Kind, Name: target.Name},
+				Patches: patches,
+			})
+			require.NoError(t, err)
+			source.Body = body
+			source.Generation++
+			store := root.store.(datastore.TranslationCapable).TranslationStore()
+			previous := source.ResourceVersion
+			source.ResourceVersion = nextTranslationRouteVersion(t, previous)
+			require.NoError(t, store.UpdateTranslation(ctx, source, previous))
+			var status catalog.TranslationStatus
+			require.NoError(t, json.Unmarshal(source.Status, &status))
+			status.Resolved.Target, err = root.store.(datastore.TranslationTargetFenceStore).ReadTargetEvidence(ctx, datastore.TranslationTargetKey{
+				NamespaceUID: source.NamespaceID, APIVersion: target.APIVersion, Kind: target.Kind, Name: target.Name,
+			})
+			require.NoError(t, err)
+			if scenario != "patches-and-body" {
+				paths = append(paths, "spec.title")
+			}
+			status.Resolved.ValidatedFieldPaths = paths
+			encoded, err := json.Marshal(status.Resolved)
+			require.NoError(t, err)
+			var resolved map[string]any
+			require.NoError(t, json.Unmarshal(encoded, &resolved))
+			generation := int32(source.Generation)
+			uid := mustEncodeNodeID(nodeKindTranslation, source.UID)
+			value, err := root.writeTranslationStatus(ctx, model.UpdateResourceStatusInput{
+				Namespace: source.Namespace, Name: source.Name, UID: &uid, ResourceVersion: source.ResourceVersion,
+				ObservedGeneration: &generation, LastAppliedRevision: &source.Revision, Resolved: resolved,
+				Conditions: []*model.ConditionInput{{Type: "Ready", Status: model.ConditionStatusTrue,
+					ObservedGeneration: generation, LastTransitionTime: source.CreationTimestamp}},
+			})
+			stored, readErr := store.GetTranslation(ctx, source.UID)
+			require.NoError(t, readErr)
+			if scenario != "patches-and-body" {
+				require.Nil(t, value)
+				require.ErrorContains(t, err, "invalid Translation resolved status")
+				require.Equal(t, source.ResourceVersion, stored.ResourceVersion)
+				require.Equal(t, source.Status, stored.Status)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, value.Status.Resolved)
+			require.Equal(t, paths, value.Status.Resolved.ValidatedFieldPaths)
+			require.Equal(t, model.ConditionStatusTrue, value.Status.Conditions[0].Status)
+			require.NoError(t, json.Unmarshal(stored.Status, &status))
+			require.Equal(t, paths, status.Resolved.ValidatedFieldPaths)
+		})
+	}
 }
 
 type translationUnavailableProofStore struct {

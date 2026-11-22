@@ -388,7 +388,9 @@ func TestTranslationWatchesReplaySharedJournalAcrossReplicas(t *testing.T) {
 	ctx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 	bootstrap := watchjournal.BootstrapCursor
-	bootstrapStream, err := a.Subscription().WatchTranslations(ctx, &source.Namespace, nil, &bootstrap)
+	bootstrapCtx, stopBootstrap := context.WithCancel(ctx)
+	t.Cleanup(stopBootstrap)
+	bootstrapStream, err := a.Subscription().WatchTranslations(bootstrapCtx, &source.Namespace, nil, &bootstrap)
 	require.NoError(t, err)
 	receive := func(events <-chan *model.TranslationWatchEvent) *model.TranslationWatchEvent {
 		t.Helper()
@@ -404,6 +406,14 @@ func TestTranslationWatchesReplaySharedJournalAcrossReplicas(t *testing.T) {
 	bookmark := receive(bootstrapStream)
 	require.Equal(t, model.WatchEventTypeBookmark, bookmark.Type)
 	require.Nil(t, bookmark.Translation)
+	// This bookmark-only stream must not schedule live revalidation during replay.
+	stopBootstrap()
+	select {
+	case _, open := <-bootstrapStream:
+		require.False(t, open)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out closing the bootstrap-only stream")
+	}
 	expected := source.ResourceVersion
 	source.Body, source.ResourceVersion, source.Generation = "new accepted body\r\n", "4", 3
 	store := r.store.(datastore.TranslationCapable).TranslationStore()
