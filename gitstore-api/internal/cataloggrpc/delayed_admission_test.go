@@ -231,9 +231,11 @@ func TestAdmitResourcesSupersededDenialCannotChangeNewerStatus(t *testing.T) {
 		kind, directory string
 		manifest        func(string) []byte
 		unchanged       bool
+		unavailable     bool
 	}{
-		{"Product", "products", makeProduct, false}, {"CategoryTaxonomy", "categories", makeCategoryTaxonomy, false},
-		{"ProductUnchanged", "products", makeProduct, true}, {"CategoryUnchanged", "categories", makeCategoryTaxonomy, true},
+		{"Product", "products", makeProduct, false, false}, {"CategoryTaxonomy", "categories", makeCategoryTaxonomy, false, false},
+		{"ProductUnchanged", "products", makeProduct, true, false}, {"CategoryUnchanged", "categories", makeCategoryTaxonomy, true, false},
+		{"ProductUnavailable", "products", makeProduct, false, true}, {"CategoryUnavailable", "categories", makeCategoryTaxonomy, false, true},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			store := newTestDatastore(t)
@@ -263,13 +265,22 @@ func TestAdmitResourcesSupersededDenialCannotChangeNewerStatus(t *testing.T) {
 						RepositoryId: testRepoID, RefName: "refs/heads/main", OldCommitSha: first, NewCommitSha: second, ChangedPaths: []string{path},
 					})
 					require.NoError(t, err)
+					if tc.unavailable {
+						reader.resolveRefFunc = func(context.Context, string, string) (string, error) {
+							return "", grpcstatus.Error(codes.Unavailable, "denial ref read unavailable")
+						}
+					}
 				}}}
 			})
 			current = first
 			_, err := older.AdmitResources(t.Context(), &catalogv1.AdmitResourcesRequest{
 				RepositoryId: testRepoID, RefName: "refs/heads/main", OldCommitSha: initial, NewCommitSha: first, ChangedPaths: []string{path},
 			})
-			require.NoError(t, err)
+			if tc.unavailable {
+				require.Equal(t, codes.Unavailable, grpcstatus.Code(err))
+			} else {
+				require.NoError(t, err)
+			}
 			var source string
 			var raw []byte
 			if strings.HasPrefix(tc.kind, "Product") {

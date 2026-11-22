@@ -21,9 +21,9 @@ if [[ ! "${target}" =~ ^gitstore-[a-zA-Z0-9_.-]+$ ]]; then
   echo "CHAOS_TARGET must be one explicit GitStore container name beginning with gitstore-" >&2
   exit 2
 fi
-case "${CHAOS_RBAC:-0}" in
-  0) ;;
-  1)
+case "${CHAOS_RBAC:-0}:${CHAOS_TRANSLATION:-0}" in
+  0:0) ;;
+  1:0|0:1)
     exec python3 - "${repo_root}" "${profile}" "${profile_file}" "${target}" <<'PY'
 import json
 import os
@@ -37,12 +37,14 @@ import time
 
 os.umask(0o077)
 root, profile, profile_file, target = sys.argv[1:]
+domain = "translation" if os.environ.get("CHAOS_TRANSLATION", "0") == "1" else "rbac"
+display = "Translation" if domain == "translation" else "RBAC"
 owner = os.environ.get("CHAOS_OWNER", "")
 label = os.environ.get("CHAOS_OWNERSHIP_LABEL", "com.docker.compose.project")
 patterns = {
     "api-restart": r"gitstore-(?:[A-Za-z0-9_.-]+-)?api-[A-Za-z0-9_.-]+",
     "controller-restart": r"gitstore-(?:[A-Za-z0-9_.-]+-)?controller-[A-Za-z0-9_.-]+",
-    "journal-interruption": r"gitstore-(?:[A-Za-z0-9_.-]+-)?(?:journal|scylla)-[A-Za-z0-9_.-]+",
+    "journal-interruption": r"gitstore-(?:[A-Za-z0-9_.-]+-)?(?:journal|scylla)(?:-[A-Za-z0-9_.-]+)?",
 }
 
 def require(condition, message):
@@ -70,36 +72,43 @@ def inspect(selector, ready=False, injector=False):
 
 def checkpoint(value):
     destination = os.environ.get("CHAOS_CHECKPOINT_DESTINATION", "/var/lib/gitstore/checkpoints")
-    require(destination.startswith("/") and destination != "/" and posixpath.normpath(destination) == destination,
+    require(destination.startswith("/") and not destination.startswith("//") and destination != "/" and posixpath.normpath(destination) == destination,
             "controller checkpoint destination must be an explicit absolute directory")
     mounts = [mount for mount in value.get("Mounts", []) if mount.get("Destination") == destination]
     require(len(mounts) == 1, "one explicit controller checkpoint mount is required")
     mount = mounts[0]
     source = mount.get("Source", "")
-    require(mount.get("RW") and mount.get("Type") in ("volume", "bind") and source.startswith("/") and
+    require(mount.get("RW") and mount.get("Type") in ("volume", "bind") and source.startswith("/") and not source.startswith("//") and
             source != "/" and posixpath.normpath(source) == source,
             "controller checkpoint mount is not private writable retained storage")
     return source, mount.get("Name", "")
 
 def sanitized(value):
-    return {key: value.get(key) for key in ("Id", "Name", "Image", "RestartCount")} | {
+    result = {key: value.get(key) for key in ("Id", "Name", "Image", "RestartCount")} | {
         "State": {key: value["State"].get(key) for key in ("Running", "Paused", "StartedAt", "OOMKilled")},
     }
+    if profile == "controller-restart":
+        source, volume = checkpoint(value)
+        result["Checkpoint"] = {
+            "source": source, "volume": volume, "writable": True,
+            "destination": os.environ.get("CHAOS_CHECKPOINT_DESTINATION", "/var/lib/gitstore/checkpoints"),
+        }
+    return result
 
 def write(path, value):
     with path.open("x", encoding="utf-8") as output:
         json.dump(value, output, indent=2)
 
 try:
-    require(profile in patterns and re.fullmatch(patterns[profile], target), "RBAC profile target role is invalid")
+    require(profile in patterns and re.fullmatch(patterns[profile], target), display + " profile target role is invalid")
     require(owner and len(owner) <= 128 and re.fullmatch(r"[A-Za-z0-9_.-]+", label),
-            "RBAC faults require an explicit owner and ownership label")
+            display + " faults require an explicit owner and ownership label")
     start_text, end_text = (os.environ.get(name, "") for name in
                            ("CHAOS_WINDOW_START_MILLIS", "CHAOS_WINDOW_END_MILLIS"))
     require(re.fullmatch(r"[0-9]{1,16}", start_text) and re.fullmatch(r"[0-9]{1,16}", end_text),
-            "RBAC faults require a predeclared millisecond window")
+            display + " faults require a predeclared millisecond window")
     start, end = int(start_text), int(end_text)
-    require(0 < end - start <= 30_000 and start <= now() < end, "RBAC fault window is invalid or expired")
+    require(0 < end - start <= 30_000 and start <= now() < end, display + " fault window is invalid or expired")
     config = json.loads(Path(profile_file).read_text())
     action = config["action"]
     require(action == ("pause" if profile == "journal-interruption" else "restart"), "unexpected fault action")
@@ -113,16 +122,17 @@ try:
     before = inspect(target, ready=True)
     target_id = before["Id"]
     peer_name, peer_before = None, None
-    if profile == "controller-restart":
+    if profile == "controller-restart" or (domain == "translation" and profile == "api-restart"):
         peer_name = os.environ.get("CHAOS_PEER_TARGET", "")
-        require(re.fullmatch(patterns[profile], peer_name) and peer_name != target, "an independent controller peer is required")
+        require(re.fullmatch(patterns[profile], peer_name) and peer_name != target, "an independent same-role peer is required")
         peer_before = inspect(peer_name, ready=True)
-        require(peer_before["Id"] != target_id, "controller peer aliases the target")
-        source, volume = checkpoint(before)
-        peer_source, peer_volume = checkpoint(peer_before)
-        require(source != peer_source and not source.startswith(peer_source + "/") and
-                not peer_source.startswith(source + "/") and not (volume and volume == peer_volume),
-                "controller checkpoint mounts overlap")
+        require(peer_before["Id"] != target_id, "surviving peer aliases the target")
+        if profile == "controller-restart":
+            source, volume = checkpoint(before)
+            peer_source, peer_volume = checkpoint(peer_before)
+            require(source != peer_source and not source.startswith(peer_source + "/") and
+                    not peer_source.startswith(source + "/") and not (volume and volume == peer_volume),
+                    "controller checkpoint mounts overlap")
     run_id = os.environ.get("CHAOS_RUN_ID", time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()))
     require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", run_id), "invalid fault run ID")
     directory = Path(os.environ.get("CHAOS_EVIDENCE_DIR", str(Path(root) / ".gitstore/chaos"))) / profile / run_id
@@ -132,7 +142,7 @@ try:
     if peer_before:
         write(directory / "peer-before.json", [sanitized(peer_before)])
 except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
-    print("RBAC chaos preflight refused: " + str(error), file=sys.stderr)
+    print(display + " chaos preflight refused: " + str(error), file=sys.stderr)
     sys.exit(2)
 
 process = None
@@ -172,7 +182,7 @@ try:
         injection_status = process.returncode
         status = injection_status
 except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
-    print("RBAC chaos injection failed: " + str(error), file=sys.stderr)
+    print(display + " chaos injection failed: " + str(error), file=sys.stderr)
     status = 1
 finally:
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -212,21 +222,24 @@ finally:
             require(observed, "successful injector did not replace the target process epoch")
         else:
             require(after["State"]["StartedAt"] == before["State"]["StartedAt"], "source pause unexpectedly restarted its process")
+        if profile == "controller-restart":
+            require(checkpoint(after) == checkpoint(before), "restored controller checkpoint changed")
         if peer_before:
             peer_after = inspect(peer_name, ready=True)
             write(directory / "peer-after.json", [sanitized(peer_after)])
             require(peer_after["Id"] == peer_before["Id"] and
-                    peer_after["State"]["StartedAt"] == peer_before["State"]["StartedAt"] and
-                    checkpoint(peer_after) == checkpoint(peer_before), "surviving controller peer changed")
+                    peer_after["State"]["StartedAt"] == peer_before["State"]["StartedAt"], "surviving peer changed")
+            if profile == "controller-restart":
+                require(checkpoint(peer_after) == checkpoint(peer_before), "surviving controller checkpoint changed")
     except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
-        print("RBAC chaos restoration failed: " + str(error), file=sys.stderr)
+        print(display + " chaos restoration failed: " + str(error), file=sys.stderr)
         status = 1
     completed = now()
     confirmed = injection_status == 0 and status == 0 and observed and restored and start <= injection_started < completed <= end
     if not confirmed:
         status = status or 1
     write(directory / "metadata.json", {
-        "schemaVersion": 1, "profile": profile, "target": target, "targetId": target_id,
+        "schemaVersion": 1, "runId": run_id, "domain": domain, "kind": "physical", "profile": profile, "target": target, "targetId": target_id,
         "action": action, "ownership": {"label": label, "owner": owner},
         "injector": {"name": "pumba", "image": image}, "injectorExitCode": injection_status,
         "injected": injection_status == 0 and observed, "faultObserved": observed,
@@ -241,10 +254,10 @@ print("chaos evidence: " + str(directory))
 sys.exit(status)
 PY
     ;;
-  *) echo "CHAOS_RBAC must be 0 or 1" >&2; exit 2 ;;
+  *) echo "CHAOS_RBAC and CHAOS_TRANSLATION must each be 0 or 1 and cannot both be enabled" >&2; exit 2 ;;
 esac
 if [[ "$(jq -r '.requiresRBAC // false' "${profile_file}")" == true ]]; then
-  echo "this profile requires CHAOS_RBAC=1 and a predeclared owned fault window" >&2
+  echo "this profile requires CHAOS_RBAC=1 or CHAOS_TRANSLATION=1 and a predeclared owned fault window" >&2
   exit 2
 fi
 if ! docker inspect "${target}" >/dev/null 2>&1; then

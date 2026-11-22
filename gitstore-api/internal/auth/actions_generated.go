@@ -127,6 +127,13 @@ const (
 	ActionServiceAccountRead                 = "serviceAccount.read"
 	ActionServiceAccountTokenIssue           = "serviceAccount.token.issue"
 	ActionServiceAccountUpdate               = "serviceAccount.update"
+	ActionTranslationCreate                  = "translation.create"
+	ActionTranslationDelete                  = "translation.delete"
+	ActionTranslationList                    = "translation.list"
+	ActionTranslationRead                    = "translation.read"
+	ActionTranslationStatusWrite             = "translation.status.write"
+	ActionTranslationUpdate                  = "translation.update"
+	ActionTranslationWatch                   = "translation.watch"
 	ActionUserCreate                         = "user.create"
 	ActionUserDelete                         = "user.delete"
 	ActionUserGroupUpdate                    = "user.group.update"
@@ -256,6 +263,13 @@ var authorizationActions = [...]ActionDefinition{
 	{"serviceAccount.read", "serviceAccount", "cluster", "serviceAccount", "read", false},
 	{"serviceAccount.token.issue", "serviceAccount", "cluster", "serviceAccount/token", "issue", false},
 	{"serviceAccount.update", "serviceAccount", "cluster", "serviceAccount", "update", false},
+	{"translation.create", "translation", "namespace", "translation", "create", false},
+	{"translation.delete", "translation", "namespace", "translation", "delete", false},
+	{"translation.list", "translation", "namespace", "translation", "list", false},
+	{"translation.read", "translation", "namespace", "translation", "read", false},
+	{"translation.status.write", "translation", "namespace", "translation/status", "write", false},
+	{"translation.update", "translation", "namespace", "translation", "update", false},
+	{"translation.watch", "translation", "namespace", "translation", "watch", false},
 	{"user.create", "user", "cluster", "user", "create", false},
 	{"user.delete", "user", "cluster", "user", "delete", false},
 	{"user.group.update", "user", "cluster", "user/group", "update", false},

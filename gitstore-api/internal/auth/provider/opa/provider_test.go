@@ -21,6 +21,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTranslationControllerBuiltinPermissions(t *testing.T) {
+	provider, err := NewProvider(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(provider.Close)
+	require.NoError(t, provider.PublishTier(t.Context(), servingTier(t, rbac.ClusterTierID, "", 1, false)))
+	require.NoError(t, provider.PublishTier(t.Context(), servingTier(t, testUID("shop"), "shop", 1, false)))
+	controller := &auth.Principal{Subject: "system:serviceaccount:gitstore-controller-manager",
+		ServiceAccountUID: testUID("controller"), AuthMethod: "serviceaccount-jwt"}
+	for _, action := range []string{
+		"translation.read", "translation.list", "translation.watch", "translation.status.write",
+		"product.read", "productVariant.read", "categoryTaxonomy.read", "collection.read", "file.read",
+		"translation.create", "translation.update", "translation.delete",
+		"product.update", "productVariant.update", "categoryTaxonomy.update", "collection.update", "file.update",
+	} {
+		t.Run(action, func(t *testing.T) {
+			definition, ok := auth.LookupAction(action)
+			require.True(t, ok)
+			resource := auth.ResourceContext{Kind: definition.Kind, Name: "source", Attrs: map[string]any{"namespace": "shop"}}
+			decision, err := provider.Authorize(t.Context(), controller, action, resource)
+			require.NoError(t, err)
+			allowed := definition.Verb == "read" || definition.Verb == "list" ||
+				definition.Verb == "watch" || action == "translation.status.write"
+			require.Equal(t, allowed, decision.Outcome == auth.OutcomeAllow)
+			for _, actor := range []*auth.Principal{
+				{Subject: "alice", AuthMethod: "static-users"},
+				{Subject: "system:serviceaccount:unbound", ServiceAccountUID: testUID("unbound"), AuthMethod: "serviceaccount-jwt"},
+			} {
+				decision, err := provider.Authorize(t.Context(), actor, action, resource)
+				require.NoError(t, err)
+				require.Equal(t, auth.OutcomeDeny, decision.Outcome)
+			}
+		})
+	}
+}
+
 func maximumRootBatchTier(t testing.TB) Tier {
 	t.Helper()
 	builtins, err := rbac.ReleaseBuiltins()

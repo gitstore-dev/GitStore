@@ -1,0 +1,108 @@
+{
+  "namespace": "acme-store",
+  "targets": {
+    "Product": "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Product\nmetadata:\n  name: laptop\n  namespace: acme-store\nspec:\n  title: Portable computer\n  lifecycle:\n    state: Active\n  options:\n  - name: color\n    title: Color\n    values: [silver, black]\n---\n\nOriginal Product body.\n",
+    "ProductVariant": "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: ProductVariant\nmetadata:\n  name: laptop-silver\n  namespace: acme-store\nspec:\n  title: Silver laptop\n  sku: LAPTOP-SILVER\n  productRef:\n    apiVersion: catalog.gitstore.dev/v1beta1\n    kind: Product\n    name: laptop\n  inventory:\n    managed: false\n    policy: Deny\n  selectedOptions:\n  - name: color\n    value: silver\n---\n\nOriginal variant body.\n",
+    "CategoryTaxonomy": "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: CategoryTaxonomy\nmetadata:\n  name: computers\n  namespace: acme-store\nspec:\n  title: Computers\n---\n\nOriginal category body.\n",
+    "Collection": "---\napiVersion: catalog.gitstore.dev/v1beta1\nkind: Collection\nmetadata:\n  name: featured\n  namespace: acme-store\nspec:\n  title: Featured computers\n  selector:\n    matchExpressions:\n    - key: archived\n      operator: DoesNotExist\n      values: []\n---\n\nOriginal collection body.\n",
+    "File": "---\napiVersion: storage.gitstore.dev/v1beta1\nkind: File\nmetadata:\n  name: laptop-hero\n  namespace: acme-store\nspec:\n  contentType: image/png\n  provider: Git\n  source:\n    uri: images/laptop.png\n---\n\nA silver laptop on a desk.\n"
+  },
+  "valid": {
+    "product-field": "---\napiVersion: i18n.gitstore.dev/v1beta1\nkind: Translation\nmetadata:\n  name: laptop-title-de-de\n  namespace: acme-store\nspec:\n  locale: de-DE\n  targetRef:\n    apiVersion: catalog.gitstore.dev/v1beta1\n    kind: Product\n    name: laptop\n  patches:\n  - fieldPath: spec.title\n    translation: Tragbarer Computer\n---\n",
+    "product-body": "---\napiVersion: i18n.gitstore.dev/v1beta1\nkind: Translation\nmetadata:\n  name: laptop-body-fr-fr\n  namespace: acme-store\nspec:\n  locale: fr-FR\n  targetRef:\n    apiVersion: catalog.gitstore.dev/v1beta1\n    kind: Product\n    name: laptop\n---\n\n# Ordinateur portable\n\nUne description avec un accent: \u00e9.\n---\nCe d\u00e9limiteur appartient au contenu.\n",
+    "product-combined": "---\r\napiVersion: i18n.gitstore.dev/v1beta1\r\nkind: Translation\r\nmetadata:\r\n  name: laptop-details-de-de\r\n  namespace: acme-store\r\nspec:\r\n  locale: de-DE\r\n  targetRef:\r\n    apiVersion: catalog.gitstore.dev/v1beta1\r\n    kind: Product\r\n    name: laptop\r\n  patches:\r\n  - fieldPath: spec.title\r\n    translation: Tragbarer Computer\r\n  - fieldPath: spec.options{color}.title\r\n    translation: \"\"\r\n---\r\n\r\n# Tragbarer Computer\r\n\r\nGr\u00f6\u00dfe und Farbe.\r\n---\r\n",
+    "variant-field": "---\napiVersion: i18n.gitstore.dev/v1beta1\nkind: Translation\nmetadata:\n  name: laptop-silver-de-de\n  namespace: acme-store\nspec:\n  locale: de-DE\n  targetRef:\n    apiVersion: catalog.gitstore.dev/v1beta1\n    kind: ProductVariant\n    name: laptop-silver\n  patches:\n  - fieldPath: spec.title\n    translation: Silberner Laptop\n---\n",
+    "category-field": "---\napiVersion: i18n.gitstore.dev/v1beta1\nkind: Translation\nmetadata:\n  name: computers-de-de\n  namespace: acme-store\nspec:\n  locale: de-DE\n  targetRef:\n    apiVersion: catalog.gitstore.dev/v1beta1\n    kind: CategoryTaxonomy\n    name: computers\n  patches:\n  - fieldPath: spec.title\n    translation: Computer\n---\n",
+    "collection-field": "---\napiVersion: i18n.gitstore.dev/v1beta1\nkind: Translation\nmetadata:\n  name: featured-de-de\n  namespace: acme-store\nspec:\n  locale: de-DE\n  targetRef:\n    apiVersion: catalog.gitstore.dev/v1beta1\n    kind: Collection\n    name: featured\n  patches:\n  - fieldPath: spec.title\n    translation: Ausgew\u00e4hlte Computer\n---\n",
+    "file-body": "---\napiVersion: i18n.gitstore.dev/v1beta1\nkind: Translation\nmetadata:\n  name: laptop-hero-de-de\n  namespace: acme-store\nspec:\n  locale: de-DE\n  targetRef:\n    apiVersion: storage.gitstore.dev/v1beta1\n    kind: File\n    name: laptop-hero\n---\n\nEin silberner Laptop auf einem Schreibtisch.\n"
+  },
+  "negative": [
+    {"name": "wrong-version", "base": "product-field", "old": "i18n.gitstore.dev/v1beta1", "new": "i18n.gitstore.dev/v999", "field": "apiVersion", "reason": "UnsupportedResource"},
+    {"name": "missing-locale", "base": "product-field", "old": "  locale: de-DE\n", "new": "", "field": "spec.locale", "reason": "Required"},
+    {"name": "null-locale", "base": "product-field", "old": "locale: de-DE", "new": "locale: null", "field": "spec.locale", "reason": "InvalidText"},
+    {"name": "numeric-locale", "base": "product-field", "old": "locale: de-DE", "new": "locale: 42", "field": "spec.locale", "reason": "InvalidText"},
+    {"name": "locale-underscore", "base": "product-field", "old": "locale: de-DE", "new": "locale: en_US", "field": "spec.locale", "reason": "InvalidLocale"},
+    {"name": "locale-whitespace", "base": "product-field", "old": "locale: de-DE", "new": "locale: \" de-DE \"", "field": "spec.locale", "reason": "InvalidLocale"},
+    {"name": "duplicate-key", "base": "product-field", "old": "  locale: de-DE\n", "new": "  locale: de-DE\n  locale: fr-FR\n", "field": "spec.locale", "reason": "MalformedSource"},
+    {"name": "unknown-spec-member", "base": "product-field", "old": "spec:\n", "new": "spec:\n  extra: true\n", "field": "spec.extra", "reason": "UnknownField"},
+    {"name": "authored-freshness", "base": "product-field", "old": "spec:\n", "new": "spec:\n  freshness: CURRENT\n", "field": "spec.freshness", "reason": "UnknownField"},
+    {"name": "authored-status", "base": "product-field", "old": "spec:\n", "new": "status:\n  lastAppliedRevision: main@sha1:author\nspec:\n", "field": "status", "reason": "UnknownField"},
+    {"name": "authored-uid", "base": "product-field", "old": "metadata:\n", "new": "metadata:\n  uid: author-asserted\n", "field": "metadata.uid", "reason": "UnknownField"},
+    {"name": "null-translation", "base": "product-field", "old": "translation: Tragbarer Computer", "new": "translation: null", "field": "spec.patches[0].translation", "reason": "InvalidText"},
+    {"name": "numeric-translation", "base": "product-field", "old": "translation: Tragbarer Computer", "new": "translation: 42", "field": "spec.patches[0].translation", "reason": "InvalidText"},
+    {"name": "unknown-patch-member", "base": "product-field", "old": "    translation:", "new": "    extra: true\n    translation:", "field": "spec.patches[0].extra", "reason": "UnknownField"},
+    {"name": "duplicate-path", "base": "product-field", "old": "    translation: Tragbarer Computer\n", "new": "    translation: Tragbarer Computer\n  - fieldPath: spec.title\n    translation: Duplicate\n", "field": "spec.patches[1].fieldPath", "reason": "OverlappingPaths"},
+    {"name": "positional-path", "base": "product-field", "old": "fieldPath: spec.title", "new": "fieldPath: spec.options[0].title", "field": "spec.patches[0].fieldPath", "reason": "InvalidPath"},
+    {"name": "wildcard-path", "base": "product-field", "old": "fieldPath: spec.title", "new": "fieldPath: spec.options{*}.title", "field": "spec.patches[0].fieldPath", "reason": "InvalidPath"},
+    {"name": "reference-field-path", "base": "product-field", "old": "    name: laptop\n", "new": "    name: laptop\n    fieldPath: spec.title\n", "field": "spec.targetRef.fieldPath", "reason": "UnknownField"},
+    {"name": "cross-namespace", "base": "product-field", "old": "    name: laptop\n", "new": "    name: laptop\n    namespace: other-store\n", "field": "spec.targetRef.namespace", "reason": "CrossNamespaceRef"},
+    {"name": "object-terminal", "base": "product-field", "old": "fieldPath: spec.title", "new": "fieldPath: spec.options{color}", "field": "spec.patches[0].fieldPath", "reason": "UnsupportedField"},
+    {"name": "missing-selector", "base": "product-field", "old": "fieldPath: spec.title", "new": "fieldPath: spec.options{absent}.title", "field": "spec.patches[0].fieldPath", "reason": "FieldMissing"},
+    {"name": "selection-identity", "base": "product-field", "old": "fieldPath: spec.title", "new": "fieldPath: spec.options{color}.values", "field": "spec.patches[0].fieldPath", "reason": "UnsupportedField"},
+    {"name": "file-title", "base": "file-body", "old": "    name: laptop-hero\n", "new": "    name: laptop-hero\n  patches:\n  - fieldPath: spec.title\n    translation: Invalid title\n", "field": "spec.patches[0].fieldPath", "reason": "UnsupportedField"},
+    {"name": "body-as-path", "base": "product-field", "old": "fieldPath: spec.title", "new": "fieldPath: \"{body}\"", "field": "spec.patches[0].fieldPath", "reason": "InvalidPath"},
+    {"name": "empty-document", "base": "file-body", "old": "\nEin silberner Laptop auf einem Schreibtisch.\n", "new": " \n\t\n", "field": "spec.patches", "reason": "EmptyTranslation"},
+    {"name": "implicit-reference", "base": "product-field", "old": "fieldPath: spec.title", "new": "fieldPath: spec.options{size}.definitionRef.values{m}.title", "field": "spec.patches[0].fieldPath", "reason": "ReferenceBoundary"}
+  ],
+  "negativeGitMessages": {
+    "UnsupportedResource": "unsupported Translation version or kind",
+    "Required": "member is required",
+    "InvalidText": "expected a string, not null or a coerced value",
+    "InvalidLocale": "expected a well-formed BCP 47 tag",
+    "MalformedSource": "mapping keys must be unique strings",
+    "UnknownField": "member is not author-writable",
+    "OverlappingPaths": "duplicate or overlapping content is not permitted",
+    "InvalidPath": "expected a bounded spec-rooted dot path with optional named brace selectors",
+    "CrossNamespaceRef": "the target must be in the same namespace",
+    "UnsupportedField": "path is not an eligible owned text field",
+    "FieldMissing": "selected member does not exist",
+    "EmptyTranslation": "a patch or meaningful body is required",
+    "ReferenceBoundary": "paths cannot traverse a resource reference"
+  },
+  "targetNegative": [
+    {"name": "wrong-kind", "base": "product-field", "old": "kind: Translation", "new": "kind: Unknown", "field": "apiVersion", "reason": "UnsupportedResource"},
+    {"name": "blank-locale", "base": "product-field", "old": "locale: de-DE", "new": "locale: \" \"", "field": "spec.locale", "reason": "Required"},
+    {"name": "missing-target-name", "base": "product-field", "old": "    name: laptop\n", "new": "", "field": "spec.targetRef.name", "reason": "Required"},
+    {"name": "null-target", "base": "product-field", "old": "  targetRef:\n    apiVersion: catalog.gitstore.dev/v1beta1\n    kind: Product\n    name: laptop\n", "new": "  targetRef: null\n", "field": "spec.targetRef", "reason": "MalformedSource"},
+    {"name": "non-list-patches", "base": "product-field", "old": "  patches:\n  - fieldPath: spec.title\n    translation: Tragbarer Computer\n", "new": "  patches: {}\n", "field": "spec.patches", "reason": "MalformedSource"},
+    {"name": "null-patch", "base": "product-field", "old": "  - fieldPath: spec.title\n    translation: Tragbarer Computer\n", "new": "  - null\n", "field": "spec.patches[0]", "reason": "MalformedSource"},
+    {"name": "mixed-valid-invalid", "base": "product-field", "old": "    translation: Tragbarer Computer\n", "new": "    translation: Tragbarer Computer\n  - fieldPath: spec.tags\n    translation: Not display text\n", "field": "spec.patches[1].fieldPath", "reason": "UnsupportedField"},
+    {"name": "first-invalid-patch-order", "base": "product-field", "old": "    translation: Tragbarer Computer\n", "new": "    translation: \"\"\n  - fieldPath: spec.options[0].title\n    translation: Invalid path\n", "field": "spec.patches[0].translation", "reason": "InvalidText"},
+    {"name": "overlap", "base": "product-field", "old": "    translation: Tragbarer Computer\n", "new": "    translation: Tragbarer Computer\n  - fieldPath: spec.title.child\n    translation: Invalid child\n", "field": "spec.patches[1].fieldPath", "reason": "OverlappingPaths"},
+    {"name": "title-null", "base": "product-field", "old": "locale: de-DE", "new": "locale: de-DE", "field": "spec.patches[0].fieldPath", "reason": "FieldMissing", "targetSpec": {"title": null}},
+    {"name": "title-absent", "base": "product-field", "old": "locale: de-DE", "new": "locale: de-DE", "field": "spec.patches[0].fieldPath", "reason": "FieldMissing", "targetSpec": {}},
+    {"name": "title-non-text", "base": "product-field", "old": "locale: de-DE", "new": "locale: de-DE", "field": "spec.patches[0].fieldPath", "reason": "FieldMissing", "targetSpec": {"title": 42}},
+    {"name": "ambiguous-selector", "base": "product-field", "old": "fieldPath: spec.title", "new": "fieldPath: spec.options{color}.title", "field": "spec.patches[0].fieldPath", "reason": "AmbiguousSelector", "targetSpec": {"options": [{"name": "color", "title": "First"}, {"name": "color", "title": "Second"}]}},
+    {"name": "uid-pin-mismatch", "base": "product-field", "old": "    name: laptop\n", "new": "    name: laptop\n    uid: 00000000-0000-4000-8000-000000000002\n", "field": "spec.targetRef.uid", "reason": "PinMismatch"},
+    {"name": "version-pin-mismatch", "base": "product-field", "old": "    name: laptop\n", "new": "    name: laptop\n    resourceVersion: \"07\"\n", "field": "spec.targetRef.resourceVersion", "reason": "PinMismatch"},
+    {"name": "alias", "base": "product-field", "old": "  locale: de-DE\n", "new": "  locale: &locale de-DE\n  extra: *locale\n", "field": "spec.extra", "reason": "MalformedSource"},
+    {"name": "merge", "base": "product-field", "old": "spec:\n", "new": "spec:\n  <<: {locale: de-DE}\n", "field": "spec.<<", "reason": "MalformedSource"},
+    {"name": "malformed-yaml", "base": "product-field", "old": "locale: de-DE", "new": "locale: [Tragbarer Computer", "field": "document", "reason": "MalformedSource"},
+    {"name": "authored-generation", "base": "product-field", "old": "metadata:\n", "new": "metadata:\n  generation: 1\n", "field": "metadata.generation", "reason": "UnknownField"},
+    {"name": "authored-finalizers", "base": "product-field", "old": "metadata:\n", "new": "metadata:\n  finalizers: [mine]\n", "field": "metadata.finalizers", "reason": "UnknownField"},
+    {"name": "unsupported-target", "base": "product-field", "old": "    kind: Product\n", "new": "    kind: Translation\n", "field": "spec.targetRef", "reason": "UnsupportedTarget"},
+    {"name": "variant-selection", "base": "variant-field", "old": "fieldPath: spec.title", "new": "fieldPath: spec.selectedOptions{color}.value", "field": "spec.patches[0].fieldPath", "reason": "UnsupportedField"},
+    {"name": "category-reference", "base": "category-field", "old": "fieldPath: spec.title", "new": "fieldPath: spec.parentRef.title", "field": "spec.patches[0].fieldPath", "reason": "ReferenceBoundary"},
+    {"name": "collection-membership", "base": "collection-field", "old": "fieldPath: spec.title", "new": "fieldPath: spec.selector", "field": "spec.patches[0].fieldPath", "reason": "UnsupportedField"}
+  ],
+  "deferred": {
+    "keyed-inline": {
+      "base": "product-field",
+      "old": "fieldPath: spec.title",
+      "new": "fieldPath: spec.options{size}.inline.values{m}.title",
+      "reason": "UnsupportedField"
+    },
+    "attribute-definition": {
+      "base": "product-field",
+      "old": "    kind: Product\n",
+      "new": "    kind: AttributeDefinition\n",
+      "reason": "UnsupportedTarget"
+    },
+    "custom-kind": {
+      "base": "product-field",
+      "old": "    kind: Product\n",
+      "new": "    kind: CustomCatalogKind\n",
+      "reason": "UnsupportedTarget"
+    }
+  }
+}

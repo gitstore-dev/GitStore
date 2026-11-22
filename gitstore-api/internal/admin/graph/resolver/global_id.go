@@ -22,6 +22,7 @@ const (
 	nodeKindRepository         = "Repository"
 	nodeKindProductVariant     = "ProductVariant"
 	nodeKindFile               = "File"
+	nodeKindTranslation        = "Translation"
 	nodeKindStaff              = "Staff"
 	nodeKindCustomer           = "Customer"
 	nodeKindServiceAccount     = "ServiceAccount"
@@ -42,6 +43,7 @@ var supportedNodeKinds = map[string]struct{}{
 	nodeKindRepository:         {},
 	nodeKindProductVariant:     {},
 	nodeKindFile:               {},
+	nodeKindTranslation:        {},
 	nodeKindStaff:              {},
 	nodeKindCustomer:           {},
 	nodeKindServiceAccount:     {},

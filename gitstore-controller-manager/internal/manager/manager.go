@@ -108,6 +108,9 @@ func (m *Manager) Register(reg ReconcilerRegistration) error {
 	// Pre-initialise gauges so they appear in /metrics before the first poll.
 	health.ActiveWorkers.Record(context.Background(), 0, metric.WithAttributes(attribute.String("kind", reg.Kind)))
 	health.QueueDepth.Record(context.Background(), 0, metric.WithAttributes(attribute.String("kind", reg.Kind)))
+	health.OldestPendingTimestamp.Record(context.Background(), 0, metric.WithAttributes(attribute.String("kind", reg.Kind)))
+	health.PendingWithoutTimestamp.Record(context.Background(), 0, metric.WithAttributes(attribute.String("kind", reg.Kind)))
+	health.KindReady.Record(context.Background(), 0, metric.WithAttributes(attribute.String("kind", reg.Kind)))
 	health.PoisonItemsTotal.Record(context.Background(), 0, metric.WithAttributes(attribute.String("kind", reg.Kind)))
 	health.StalledWorkers.Record(context.Background(), 0, metric.WithAttributes(attribute.String("kind", reg.Kind)))
 	health.ConflictRequeues.Add(context.Background(), 0, metric.WithAttributes(attribute.String("kind", reg.Kind)))
@@ -186,9 +189,15 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 		depth := ks.q.Len() + int(ks.pool.WaitingTasks())
 		poison := ks.quarantine.Len()
 		if ks.reg.Disk != nil {
-			counts := ks.reg.Disk.Counts()
-			poison = int(counts.Poison)
-			depth = max(0, int(counts.Pending)-poison-int(active))
+			stats := ks.reg.Disk.Stats()
+			poison = int(stats.Poison)
+			depth = max(0, int(stats.Pending)-poison-int(active))
+			oldest := 0.0
+			if !stats.OldestPending.IsZero() {
+				oldest = float64(stats.OldestPending.UnixNano()) / 1e9
+			}
+			health.OldestPendingTimestamp.Record(context.Background(), oldest, metric.WithAttributes(attribute.String("kind", kind)))
+			health.PendingWithoutTimestamp.Record(context.Background(), float64(stats.PendingWithoutTimestamp), metric.WithAttributes(attribute.String("kind", kind)))
 		}
 
 		health.ActiveWorkers.Record(context.Background(), float64(active), metric.WithAttributes(attribute.String("kind", kind)))
@@ -251,7 +260,7 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 			health.StalledWorkers.Record(context.Background(), 1, metric.WithAttributes(attribute.String("kind", kind)))
 		}
 
-		out[kind] = health.KindStat{
+		stat := health.KindStat{
 			ActiveWorkers: active,
 			QueueDepth:    depth,
 			PoisonItems:   poison,
@@ -260,6 +269,12 @@ func (m *Manager) KindStats() map[string]health.KindStat {
 			Recovering:    recovery.Recovering || !ks.cache.HasSynced(),
 			Recovery:      recovery,
 		}
+		out[kind] = stat
+		ready := 0.0
+		if !stat.Recovering && !stat.Stalled && stat.PoisonItems == 0 {
+			ready = 1
+		}
+		health.KindReady.Record(context.Background(), ready, metric.WithAttributes(attribute.String("kind", kind)))
 	}
 	return out
 }
@@ -656,8 +671,20 @@ func (m *Manager) storageError(ks *kindState, err error) {
 
 func (m *Manager) complete(ctx context.Context, ks *kindState, key WorkItemKey) bool {
 	if ks.reg.Disk != nil {
-		_, err := ks.reg.Disk.Acknowledge(ctx, key, m.lease(ks, key))
+		token := m.lease(ks, key)
+		origin, ageErr := ks.reg.Disk.WorkSchedule(ctx, key)
+		acknowledged, err := ks.reg.Disk.Acknowledge(ctx, key, token)
 		m.storageError(ks, err)
+		if acknowledged && err == nil {
+			age := "unknown"
+			if ageErr == nil && origin.Token == token && !origin.QueuedAt.IsZero() {
+				age = "known"
+				health.WorkCompletionLag.Record(context.Background(), max(0, time.Since(origin.QueuedAt).Seconds()),
+					metric.WithAttributes(attribute.String("kind", key.Kind)))
+			}
+			health.WorkCompletions.Add(context.Background(), 1,
+				metric.WithAttributes(attribute.String("kind", key.Kind), attribute.String("age", age)))
+		}
 		return err == nil
 	}
 	if ks.reg.OnSuccess != nil {

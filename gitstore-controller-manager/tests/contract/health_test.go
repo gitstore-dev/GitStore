@@ -20,7 +20,60 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/listwatch"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/manager"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
+	"github.com/stretchr/testify/require"
 )
+
+func TestHealthPendingAgeAndReadinessUseCommittedState(t *testing.T) {
+	mgr := manager.New()
+	c := cache.New[string]()
+	store, err := checkpoint.OpenDiskStore(t.TempDir(), "AgeHealth", checkpoint.WithPendingAge())
+	require.NoError(t, err)
+	defer store.Close()
+	require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+		Kind: "AgeHealth", Reconciler: &countingReconciler{}, Cache: c, Disk: store,
+	}))
+	key := types.WorkItemKey{Kind: "AgeHealth", Namespace: "shop", Name: "pending"}
+	require.NoError(t, mgr.Enqueue(key))
+	state, err := store.WorkSchedule(t.Context(), key)
+	require.NoError(t, err)
+	deferred, err := store.DeferWork(t.Context(), key, state.Token, time.Hour, "", 2)
+	require.NoError(t, err)
+	require.True(t, deferred)
+	mgr.KindStats()
+	labels := map[string]string{"kind": key.Kind}
+	require.InDelta(t, float64(state.QueuedAt.UnixNano())/1e9,
+		observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_oldest_pending_timestamp_seconds", labels), 0.000001,
+		"retry deadline must not become the queue's origin")
+	require.Zero(t, observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_pending_without_timestamp", labels))
+	require.Zero(t, observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_kind_ready", labels),
+		"unsynced caches must not advertise dispatch readiness")
+	c.MarkSynced()
+	mgr.KindStats()
+	require.Equal(t, 1.0, observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_kind_ready", labels))
+	deferred, err = store.DeferWork(t.Context(), key, state.Token, 0, "denied", 3)
+	require.NoError(t, err)
+	require.True(t, deferred)
+	mgr.KindStats()
+	require.Zero(t, observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_kind_ready", labels))
+	require.NoError(t, store.Close())
+	mgr.KindStats()
+	require.InDelta(t, float64(state.QueuedAt.UnixNano())/1e9,
+		observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_oldest_pending_timestamp_seconds", labels), 0.000001,
+		"health must use committed atomics, not checkpoint reads")
+
+	legacy, err := checkpoint.OpenDiskStore(t.TempDir(), "LegacyAgeHealth")
+	require.NoError(t, err)
+	defer legacy.Close()
+	require.NoError(t, mgr.Register(manager.ReconcilerRegistration{
+		Kind: "LegacyAgeHealth", Reconciler: &countingReconciler{}, Cache: c, Disk: legacy,
+	}))
+	require.NoError(t, mgr.Enqueue(types.WorkItemKey{Kind: "LegacyAgeHealth", Name: "pending"}))
+	mgr.KindStats()
+	labels = map[string]string{"kind": "LegacyAgeHealth"}
+	require.Zero(t, observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_oldest_pending_timestamp_seconds", labels))
+	require.Equal(t, 1.0, observabilitytest.Value(t, sdkTestMetrics, "gitstore_controller_pending_without_timestamp", labels),
+		"missing timestamps must be explicit, not reported as zero age")
+}
 
 func TestHealth_JSONFieldsPresent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

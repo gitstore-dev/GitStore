@@ -3,7 +3,7 @@
 
 //go:build !darwin && !linux
 
-package cataloggrpc_test
+package cataloggrpc
 
 func namespaceCapacityProcessCPUSeconds() float64 {
 	panic("Namespace capacity process CPU measurement is supported only on Darwin and Linux")

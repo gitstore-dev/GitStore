@@ -7,6 +7,7 @@ package resolver
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
@@ -45,6 +46,15 @@ func (r *queryResolver) File(ctx context.Context, by model.FileBy) (*model.File,
 		return nil, nodeLookupError(nodeKindFile, err)
 	}
 	return DatastoreFileToGraphQL(file), nil
+}
+
+// Files is the resolver for the files field.
+func (r *queryResolver) Files(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.FileConnection, error) {
+	result, err := r.store.ListFiles(ctx, namespace, toPageParams(first, after, last, before))
+	if err != nil {
+		return nil, fmt.Errorf("failed to get files: %w", err)
+	}
+	return BuildFileConnection(result), nil
 }
 
 // WatchFiles is the resolver for the watchFiles field.

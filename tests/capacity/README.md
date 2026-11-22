@@ -1145,7 +1145,244 @@ a default.
   sustained successful traffic, not one readiness request. This functional
   validation boundary does not certify released API binaries, deployed
   authentication or the full shared-datastore lifecycle.
+  The same 500-file budget retains all 50 Namespace cases while including
+  Translation fixtures for all delivered target kinds and both content
+  channels, structural/field/locale rejection and an exact 1-MiB document.
+  Normal, Namespace rejection, Translation rejection and near-limit traffic
+  are reported separately without relaxing aggregate gates. Both helpers use
+  signed RPC requests and independently audited target-absence evidence;
+  test-only dormant validation does not enable public admission. Local tests
+  compare standalone/preflight decisions and exercise both helper processes.
+  Preflight records fixture/harness digests in `validation-corpus.json`,
+  explicitly labeled helper-only, never connected ingestion evidence.
 - `api-readiness` is a non-mutating runner smoke test.
+- `CAPACITY_TRANSLATION_READINESS=1` selects authenticated exact-source/current-
+  status reads instead of health checks, currently **diagnostic only**. It
+  requires `TRANSLATION_TEST_OWNED_DEPLOYMENT=1`, two distinct Admin root URLs
+  in `CAPACITY_API_ENDPOINTS`, the usual private `CAPACITY_TOKEN_FILE` and a
+  fresh `CAPACITY_RUN_ID`. Do not combine it with identity mode.
+  Supply a runner-owned, mode-0600 `CAPACITY_TRANSLATION_FIXTURE_FILE` with
+  `{runId,cases}`. Its ten cases must cover distinct owned `translation-`
+  namespaces; each case supplies `query`, `variables` and the complete expected
+  GraphQL `data` object for an independently verified, stable Translation.
+  The typed `translation` query must include source metadata, exact body and
+  patches, current-generation Ready and `lastAppliedRevision`.
+  The default is 20 reads/s; set an explicit whole-second
+  `CAPACITY_DURATION` for a short diagnostic. Every request checks the entire
+  expected response, including body bytes and current status. Work is bounded
+  to the declared rate/window; a possible k6 end-boundary iteration is reported
+  separately and cannot issue an extra domain request.
+  Protected preflight/verifier receipts bind the source state, fixture digest,
+  run and both replica counts. A successful diagnostic records
+  `domainChecksPassed:true` but deliberately retains `passed:false`.
+  Add `CAPACITY_TRANSLATION_PUSHES=1` to coordinate real Git pushes with the
+  same public reads. This requires `TRANSLATION_TEST_GIT_URL_A` and
+  `TRANSLATION_TEST_GIT_URL_B`, a private token file and the independently
+  verified retained-corpus fixture described below. The runner compiles and
+  starts its bounded native companion, then releases both workloads using a
+  shared future preparation/measured-window barrier. Thirty seconds of
+  authenticated read warmup include twenty independently verified real pushes,
+  including the same exact-one-MiB content class used during measurement;
+  fifteen seconds of read cooldown retain live clients and watches across
+  the final original resource scrape. These bounded preparation phases are
+  counted separately and cannot inflate measured reads/pushes, dilute their
+  latency percentiles or replace any part of the offered window. Source checks,
+  both-replica joins and unchanged targets/baseline/history cover preparation
+  too. The connected reader preallocates its existing bounded hundred-client
+  pool before load instead of creating clients while offers are arriving.
+  Setup returns before the shared barrier to allow executor initialization;
+  each request waits for its absolute offered timestamp, and command completion
+  brackets the full cooldown. Out-of-window requests still fail correctness.
+  Bounded `translation_failures` reason counters distinguish scheduling,
+  transport, malformed/GraphQL responses and source/body/spec/metadata/status
+  mismatches without recording response content.
+  Connected receipts retain independent first source-read, first guarded-ready
+  read for the observed version, and actual watch-delivery clocks. Their
+  component percentiles are diagnostic detail: the existing combined
+  visibility/convergence boundaries still include watch delivery and are not
+  replaced by faster read-only timings.
+  The default measured diagnostic window is ten seconds,
+  offering one single-document push/second with two global workers alongside
+  the configured reads. Read-only diagnostics permit windows up to two hours;
+  connected diagnostics cap the offered window at ninety minutes to reserve
+  setup/recovery time within the companion's unchanged two-hour deadline.
+  Both ingress clone pools and all ten namespaces
+  participate. Protected receipts join every offered push to its actual commit,
+  exact source/body/patch fingerprints, both APIs' durable watches and current
+  Ready observations. Complete target/Product hashes must remain unchanged;
+  original canonical history must remain reachable.
+  The measured schedule includes an exact-one-MiB source every hundred offers,
+  starting with its first offer. Protected source-size joins report normal and
+  near-limit acknowledgement, visibility and convergence percentiles separately;
+  preparation cannot dilute either distribution. These diagnostic percentiles
+  are not sustained latency acceptance.
+  Before the load barrier, the companion independently submits the shared
+  invalid-locale case alongside a valid sentinel in one rejected Git candidate.
+  Its protected receipt joins the rejection classification, exact source/sentinel
+  hashes, unchanged canonical refs and absence of both documents on both APIs.
+  These preparatory expected-rejection counts and response percentiles are
+  separate from all accepted-push and measured-read distributions; this is not
+  sustained negative-traffic or fault-recovery certification.
+  Preparation is invalidated
+  by changed canonical refs, including warmup pushes: refresh the fixture
+  before another push run.
+  Connected diagnostics also retain `passed:false`. Alpha/production selection
+  fails closed until complete live topology/resource attribution and the full
+  acceptance verifier are wired; neither diagnostic mode certifies those gates.
+  When exporting Prometheus evidence, explicitly set the existing
+  `CAPACITY_PROMETHEUS_TARGETS` and `CAPACITY_PROMETHEUS_CONTROLLER_TARGETS`
+  to the two distinct `host:port` scrape addresses for each role. Export scopes
+  API/controller process identities, CPU, RSS, goroutines and available
+  Translation metrics to those targets, before the domain verifier runs.
+  Missing per-process resource history or query warnings fail export; each
+  raw matrix is capped at 256 MiB and a two-minute request deadline.
+  The protected manifest
+  binds queries, range, targets and raw-series digests to the
+  run/source/configuration/environment. The diagnostic verifier rejects stale
+  capture bindings, altered raw series and endpoint aliases of one process;
+  raw samples alone do not establish full-window coverage, resource limits or
+  acceptance.
+  A configuration manifest may additionally declare `services.translationTopology`
+  to request live container attribution, even in diagnostic mode. This requires
+  a clean source-attributed verifier and an exclusively owned eight-container
+  core project: two APIs, two controllers, one Git service and three Scylla nodes.
+  Other dependencies and collectors must be outside that exclusive project.
+  Set the existing `CAPACITY_OWNED_PROJECT`, `CAPACITY_API_CONTAINERS`,
+  `CAPACITY_CONTROLLER_CONTAINERS`, `CAPACITY_GIT_SERVICE_CONTAINER` and
+  `CAPACITY_SCYLLA_CONTAINERS` selectors to those explicit containers, with
+  `CAPACITY_CONTROLLER_A` and `CAPACITY_CONTROLLER_B` health-root URLs.
+  Container and endpoint arrays, including Prometheus targets, use matching
+  replica order. Declare release builds and replica counts in `services.api`
+  and `services.controller`, a release `services.gitService`, and three nodes
+  with the actual SMP in `services.scylla`. The environment topology includes
+  `apiReplicas:2`, `controllerReplicas:2`, `gitServiceReplicas:1`, `scyllaNodes:3`
+  and `scyllaSmpPerNode`; host memory, CPUs and architecture must match Docker.
+  The additional block has this shape; resource ceilings are illustrative and
+  must match the existing deployment rather than silently resizing it:
+
+  ```json
+  {
+    "apiPorts": [4000, 4000],
+    "controllerPorts": [5001, 5001],
+    "checkpointDestination": "/var/lib/gitstore/checkpoints",
+    "repositoryDestination": "/var/lib/gitstore/repos",
+    "limits": {
+      "api": {"nanoCPUs": 2000000000, "memoryBytes": 1073741824},
+      "controller": {"nanoCPUs": 1000000000, "memoryBytes": 536870912},
+      "gitService": {"nanoCPUs": 1000000000, "memoryBytes": 1073741824},
+      "scylla": {"nanoCPUs": 2000000000, "memoryBytes": 2147483648}
+    }
+  }
+  ```
+
+  Preflight verifies actual immutable image revisions, PID-1 executables,
+  endpoint/process identities, configured CPU/memory ceilings, distinct private
+  namespaces, independent writable controller checkpoints, sole Git storage
+  consumption and agreement on live Scylla membership. It uses the verified
+  API image's existing bounded `gitctl` probes in each target's PID/network
+  namespaces, without mounting credentials or relying on a controller shell.
+  Probes drop all capabilities; only PID executable inspection adds `SYS_PTRACE`
+  for Linux ptrace-read permission. HTTP probes receive no capabilities.
+  Git consumer checks inspect mount metadata for all running containers, including
+  other projects and overlapping bind sources; Docker volume-name filtering alone
+  cannot establish exclusive bind-mount consumption. Unrelated environment and
+  credential configuration is not inspected for that check.
+  The protected topology receipt remains non-certifying (`passed:false`).
+  Scylla entries retain their declared container names, immutable IDs and
+  startup epochs for journal-source attribution. Duplicate core/journal
+  identities, missing or post-load journal epochs, disagreeing membership and
+  mismatched configured ceilings fail closed; these joins alone do not prove
+  interruption or restoration.
+  With Prometheus export, the verifier also checks fault-free resource coverage
+  across the complete offered window. Separate original-scrape timestamp matrices
+  prevent Prometheus lookback from disguising a missing scrape. Recorded queries
+  must match the canonical role and target selectors, including the
+  metric-preserving timestamp expression; query digests alone are insufficient.
+  Every API/controller resource scrape includes `process_start_time_seconds`
+  matching the native epoch observed during live preflight, alongside the
+  process-instance UUID. A missing epoch or an unjoined epoch change fails
+  closed even if the resource counters appear continuous.
+  The five-second
+  cadence permits at most six seconds between actual samples, including jitter.
+  CPU deltas are normalized to configured cores, RSS must remain within its
+  ceiling, retained heap growth must be below 10% and absolute goroutine drift
+  at most 5%. Retained heap comes from SDK `go_gc_heap_live_bytes`, joined to
+  `go_gc_cycles_total`, representing the last completed GC's marked live heap,
+  not current `HeapAlloc`. Missing GC evidence, undeclared process replacement,
+  stale samples or gaps fail closed. These diagnostic checks do not certify
+  physical-fault recovery, rollout or production.
+  Connected diagnostics can opt into one simulated transport boundary with
+  `CAPACITY_TRANSLATION_CALLBACK_STAGE=callback-loss` or `reply-loss` and a
+  20-to-30-second measured window. This requires the existing explicitly owned
+  callback proxy and singleton Catalog route, its protected
+  `TRANSLATION_TEST_CALLBACK_EVIDENCE_DIR` and matching
+  `TRANSLATION_TEST_CALLBACK_UPSTREAM`, plus a hashed configuration declaring
+  `services.translationFaults` as `{ "callback-loss": "simulated" }` (or the
+  corresponding reply-loss entry). The companion declares the bounded window
+  before injection, joins the first measured acknowledgement to actual
+  interception and successful post-restoration replay, then independently
+  reads that exact source on both APIs for five seconds at 20 reads/s.
+  When starting the native proxy, set
+  `TRANSLATION_TEST_CALLBACK_PROXY_DURATION` to cover the complete retained
+  preparation, workload and restoration, not just the measured window.
+  Its default remains five minutes; an explicit positive Go duration is
+  bounded at seventy minutes. The proxy test's outer deadline must leave time
+  for coordinated shutdown. This changes fixture lifetime, not fault windows
+  or recovery gates.
+  Native sequence/latency samples, source UID/version, reference snapshots and
+  the unchanged 30-second recovery deadline must all join; every recovery read
+  verifies the pinned source UID/version. Canonical reference snapshots must
+  preserve all sorted refs, match their SHA-256 fingerprints and identify the
+  actual acknowledged `refs/heads/main` commit; each snapshot is bounded to
+  4 MiB and 4,096 entries. Matching opaque fingerprints alone are insufficient.
+  Health-only counts and stale or unjoined physical claims fail closed.
+  The verifier can additionally validate a physical journal-source pause
+  nested in callback-loss recovery. It requires a separate hashed
+  `services.translationPhysicalFaults` declaration
+  `{ "journal-interruption": "physical" }`, the existing chaos runner's metadata
+  and sanitized target-before/during/after captures, and independently verified
+  complete API/controller resource histories. The paused container must match
+  the owned Scylla topology's immutable image, container identity and unchanged
+  process epoch. Restoration must precede ordinary replay and two fresh
+  authorized source observations, followed by five seconds of correct traffic
+  within the unchanged recovery deadline. The report separates physical pause
+  evidence from simulated transport loss.
+  For a replica restart, the verifier instead requires
+  `{ "api-restart": "physical" }` (or the controller equivalent) and one hashed
+  `services.translationResourceGaps` entry with the matching `role` (`api` or
+  `controller`), owned `container`, `fault` (`api-restart` or `controller-restart`)
+  and a positive integer `maximumSeconds` no greater than 30.
+  Original scrapes must independently identify the old
+  and new native process UUIDs and starts, with CPU, completed-GC heap and
+  goroutine baselines in each epoch. Counter resets inside an epoch fail.
+  The declared gap must bracket actual injection/restoration; unchanged
+  same-role peer captures and immutable target lifetime/image must join the
+  owned topology. Both API recovery observations and five seconds of correct
+  traffic still follow restoration. Controller captures additionally identify
+  each target/peer's writable checkpoint source, volume and destination before
+  and after replacement. They must match retained preflight storage and the
+  declared destination, using normalized single-root paths with neither
+  equal/nested sources nor aliased volumes.
+  The automatically coordinated connected companion still selects simulated
+  transport faults only; it does not schedule a physical pause or replacement
+  or assemble the separate combined receipt. Public physical-verifier support
+  is covered by local synthetic regressions, not a deployed combined pass.
+  Sustained acceptance and production remain unsupported by this diagnostic
+  verdict.
+  `TestTranslationNativeCapacityReadFixture` prepares that private fixture
+  from the retained native corpus rather than trusting captured HTTP success.
+  Set `TRANSLATION_TEST_CAPACITY_READ_FIXTURE=1` with the native owned-deployment
+  API/Git/token variables, the original ten-name
+  `TRANSLATION_TEST_CAPACITY_NAMESPACES`, `CAPACITY_RUN_ID` and a fresh private
+  `CAPACITY_TRANSLATION_FIXTURE_FILE`. It independently verifies every retained
+  document against its last authored Git commit and exact blob, both public
+  current reads and renewable controller-source snapshots; canonical refs must
+  stay unchanged throughout capture. It writes one stable, replica-matching
+  public read case per namespace, complete bounded Product baseline digests and
+  seeded-target samples, checked through both APIs before and after capture.
+  The Product scan must exhaust its two ten-row pages; larger baselines fail
+  rather than produce a partial digest. It never reseeds sources, and is preparation
+  evidence only, not a connected push or acceptance run.
 - With `CAPACITY_IDENTITY_READINESS=1`, the same selector runs the identity
   acceptance matrix instead of health-only traffic. It requires a private
   `CAPACITY_IDENTITY_FIXTURE_FILE`, the usual private `CAPACITY_TOKEN_FILE`,

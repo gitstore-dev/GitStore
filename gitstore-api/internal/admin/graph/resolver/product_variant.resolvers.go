@@ -57,3 +57,8 @@ func (r *queryResolver) ProductVariants(ctx context.Context, namespace string, f
 	}
 	return BuildVariantConnection(result), nil
 }
+
+// WatchProductVariants is the resolver for the watchProductVariants field.
+func (r *subscriptionResolver) WatchProductVariants(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.ProductVariantWatchEvent, error) {
+	return watchCatalogJournal(ctx, r.Resolver, "ProductVariant", namespace, selector, resourceVersion, "typed", productVariantJournalEventToGraphQL)
+}

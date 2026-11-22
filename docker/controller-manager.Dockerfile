@@ -12,6 +12,7 @@ ENV GOWORK=off
 COPY gitstore-controller-manager/go.mod gitstore-controller-manager/go.sum ./
 COPY shared/secretmaterial/go.mod /build/shared/secretmaterial/go.mod
 COPY shared/observability/go.mod /build/shared/observability/go.mod
+COPY shared/translation/go.mod /build/shared/translation/go.mod
 
 # Download dependencies
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -21,6 +22,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY gitstore-controller-manager/ ./
 COPY shared/secretmaterial/ /build/shared/secretmaterial/
 COPY shared/observability/ /build/shared/observability/
+COPY shared/translation/ /build/shared/translation/
 
 # Build application
 RUN --mount=type=cache,target=/go/pkg/mod \

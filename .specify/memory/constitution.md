@@ -1,31 +1,26 @@
 <!--
 Sync Impact Report:
-- Version change: 2.0.0 -> 3.0.0
-- Modified principles:
-  - VI. Independently Deployable Delivery (service-specific rollout)
-  - VII. Simplicity with Proven Scale (explicit singleton Git constraint)
-  - VIII. Horizontally Replicable Core Services -> VIII. Service-Specific Replica Safety
-- Added sections: None
+- Version change: 3.0.0 -> 4.0.0
+- Modified guidance: Development Workflow and Quality Gates
+- Added sections: Pull Request Readiness; Production Qualification
 - Removed sections: None
-- Rationale: Correct the unsupported all-service replication mandate introduced
-  in 5f69102 (#363); Git repository sharding/routing is not implemented.
-  This is a MAJOR redefinition, not evidence that API/controller HA is complete.
-- Templates requiring updates:
-  - ✅ .specify/templates/plan-template.md
-  - ✅ .specify/templates/spec-template.md
-  - ✅ .specify/templates/tasks-template.md
-  - ✅ .specify/templates/commands/ (directory absent; no command templates to update)
+- Rationale: Redefine which checks block ordinary feature delivery. Focused
+  correctness verification remains mandatory; deployed capacity, soak, chaos
+  and complete rolling-upgrade rehearsals qualify production claims rather
+  than every alpha PR. Safety principles and production obligations remain.
+- Templates updated:
+  - .specify/templates/plan-template.md
+  - .specify/templates/spec-template.md
+  - .specify/templates/tasks-template.md
+  - .specify/templates/commands/ (absent; no command templates to update)
 - Runtime guidance updated:
-  - ✅ AGENTS.md (also used by the CLAUDE.md symlink)
-  - ✅ README.md
-  - ✅ docs/architecture/README.md
-  - ✅ docs/developer-guide.md
-  - ✅ docs/development/production-readiness-testing.md
-  - ✅ docs/ADRs/0015-resource-lifecycle-hooks.md
-  - ✅ docs/ADRs/0018-controller-ownership-concurrency-and-fencing.md
-  - ✅ docs/implementation/036-git-service-extension-architecture.md
-  - ✅ gitstore-controller-manager/README.md
-  - ✅ specs/063-implement-secret-adrs/ (spec, plan, research, capacity contract, tasks)
+  - AGENTS.md (also used by the CLAUDE.md symlink)
+  - .github/AGENTS.md
+  - tests/AGENTS.md
+  - specs/AGENTS.md
+  - docs/development/production-readiness-testing.md
+  - docs/developer-guide.md
+  - specs/071-translation-contract/ (current plan, tasks and qualification contract)
 - Follow-up TODOs: None
 -->
 
@@ -227,7 +222,8 @@ not depend on another service's private storage.
 4. Verify the new tests fail for the expected reason.
 5. Implement the minimum code required to pass.
 6. Refactor while preserving all tests.
-7. Run focused load or soak validation for load-bearing changes.
+7. Run the smallest checks covering the changed behavior; schedule deployed
+   load, soak and release rehearsals separately when qualifying production.
 8. Commit tests and implementation in the same logical change.
 
 ### Task Execution Order
@@ -240,20 +236,39 @@ not depend on another service's private storage.
 4. **Production Readiness**: Load/soak, failover, rolling-upgrade, security, and
    runbook validation.
 
-### Quality Gates
+### Pull Request Readiness
 
-- `make pr-ready` passes before a pull request is considered ready.
+- The full default `make pr-ready` passes before a pull request is considered ready.
 - New behavior has tests that were demonstrated to fail before implementation.
-- API/controller changes document and test concurrent-replica behavior and
-  implementation limitations. Git changes document and test singleton
-  concurrency, persistent-storage recovery and non-overlapping replacement
-  where applicable, not Git replication.
-- Load-bearing changes meet declared capacity and sustained-load objectives.
+- Affected concurrency, authorization, persistence and recovery boundaries
+  have focused contract/integration tests and documented limitations. Reuse
+  existing coverage; do not require a complete deployed old/new-version
+  rehearsal or a new scaling test for every feature.
+- Migration, wire-format or replay changes test the compatibility risks they
+  introduce. A known unsafe rollout or data-loss path remains a blocker.
+- Git changes preserve singleton writer safety and retained storage; tests
+  cover changed recovery/replacement behavior, not Git replication.
 - Protected operations include authentication and authorization tests.
 - Logs, metrics, readiness, and error handling cover new operational states.
 - Contract changes document compatibility, rollout, and rollback.
 - Documentation and runbooks are updated with the implementation.
 - Constitution compliance is verified during PR review.
+
+### Production Qualification
+
+Before production readiness is claimed, affected load-bearing paths MUST meet
+their declared capacity, sustained-load, backpressure and recovery objectives.
+Use opt-in capacity/soak, chaos and full deployed rolling-upgrade rehearsals
+appropriate to the changed boundaries. Reuse attributable evidence for
+unchanged paths; requalify when changes invalidate it.
+
+These checks MUST NOT become routine alpha feature or PR CI prerequisites
+unless the delivery explicitly claims production qualification. Feature
+plans MUST separate implementation completion from deferred qualification.
+Deferred or failed qualification MUST remain visible and MUST NOT be presented
+as a pass, a scaling guarantee or permission to bypass deployment safety.
+Ordinary PR CI runs correctness, build, lint and security checks; expensive
+deployed qualification is selected explicitly.
 
 ## Governance
 
@@ -290,4 +305,4 @@ preferences. Runtime guidance may add detail but may not weaken these rules.
 Day-to-day repository and agent instructions supplement this constitution.
 When they conflict, this constitution takes precedence.
 
-**Version**: 3.0.0 | **Ratified**: 2026-03-09 | **Last Amended**: 2026-10-03
+**Version**: 4.0.0 | **Ratified**: 2026-03-09 | **Last Amended**: 2026-11-22

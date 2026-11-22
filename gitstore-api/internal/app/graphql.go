@@ -23,6 +23,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/admissionreport"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/cataloggrpc"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/middleware"
@@ -52,6 +53,7 @@ type GraphQLHandlerDeps struct {
 	IDs                          apiruntime.IDGenerator
 	CommittedManifestAdmitter    admission.CommittedManifestAdmitter
 	RBACValidator                *admission.RBACValidator
+	TranslationActivation        cataloggrpc.TranslationActivation
 	ResourceJournal              datastore.ResourceWatchJournal
 	NamespaceWatch               config.WatchJournalConfig
 	NamespaceMetrics             *watchjournal.Metrics
@@ -102,6 +104,8 @@ func NewGraphQLHandler(deps GraphQLHandlerDeps) (*gin.Engine, error) {
 		IDGenerator:                  deps.IDs,
 		CommittedManifestAdmitter:    deps.CommittedManifestAdmitter,
 		RBACValidator:                deps.RBACValidator,
+		TranslationActivation:        deps.TranslationActivation,
+		TranslationControllerSubject: deps.Endpoint.ControllerSubject,
 		ResourceJournal:              deps.ResourceJournal,
 		NamespaceWatch:               deps.NamespaceWatch,
 		NamespaceMetrics:             deps.NamespaceMetrics,

@@ -146,6 +146,81 @@ func fileJournalEventToGeneric(event datastore.ResourceWatchEvent) (*model.Watch
 	return out, nil
 }
 
+func catalogTargetJournalImage[T any](event datastore.ResourceWatchEvent) (*T, error) {
+	if event.Type == datastore.ResourceWatchDeleted || event.Type == datastore.ResourceWatchBookmark {
+		return nil, nil
+	}
+	var resource T
+	if len(event.Payload) == 0 || json.Unmarshal(event.Payload, &resource) != nil {
+		return nil, gqlerror.Errorf("invalid %s journal resource image", event.Kind)
+	}
+	return &resource, nil
+}
+
+func productVariantJournalEventToGraphQL(event datastore.ResourceWatchEvent) (*model.ProductVariantWatchEvent, error) {
+	resource, err := catalogTargetJournalImage[datastore.ProductVariant](event)
+	if err != nil {
+		return nil, err
+	}
+	if resource != nil && (resource.UID == "" || resource.Kind != "ProductVariant" ||
+		resource.Namespace != event.Namespace || resource.Name != event.Name) {
+		return nil, gqlerror.Errorf("ProductVariant journal resource identity mismatch")
+	}
+	return &model.ProductVariantWatchEvent{
+		Type: model.WatchEventType(event.Type), Namespace: &event.Namespace, Name: event.Name,
+		ResourceVersion: watchjournal.EncodeCursor(event.Epoch, event.Sequence),
+		ProductVariant:  DatastoreVariantToGraphQL(resource),
+	}, nil
+}
+
+func collectionJournalEventToGraphQL(event datastore.ResourceWatchEvent) (*model.CollectionWatchEvent, error) {
+	resource, err := catalogTargetJournalImage[datastore.Collection](event)
+	if err != nil {
+		return nil, err
+	}
+	if resource != nil && (resource.UID == "" || resource.Kind != "Collection" ||
+		resource.Namespace != event.Namespace || resource.Name != event.Name) {
+		return nil, gqlerror.Errorf("Collection journal resource identity mismatch")
+	}
+	return &model.CollectionWatchEvent{
+		Type: model.WatchEventType(event.Type), Namespace: &event.Namespace, Name: event.Name,
+		ResourceVersion: watchjournal.EncodeCursor(event.Epoch, event.Sequence),
+		Collection:      DatastoreCollectionToGraphQL(resource),
+	}, nil
+}
+
+func catalogTargetJournalEventToGeneric(kind string, event datastore.ResourceWatchEvent) (*model.WatchEvent, error) {
+	var object any
+	switch kind {
+	case "ProductVariant":
+		resource, err := productVariantJournalEventToGraphQL(event)
+		if err != nil {
+			return nil, err
+		}
+		object = resource.ProductVariant
+	case "Collection":
+		resource, err := collectionJournalEventToGraphQL(event)
+		if err != nil {
+			return nil, err
+		}
+		object = resource.Collection
+	}
+	out := &model.WatchEvent{
+		Type: model.WatchEventType(event.Type), Kind: kind, Namespace: &event.Namespace,
+		Name: event.Name, ResourceVersion: watchjournal.EncodeCursor(event.Epoch, event.Sequence),
+	}
+	if event.Type != datastore.ResourceWatchDeleted && event.Type != datastore.ResourceWatchBookmark {
+		raw, err := json.Marshal(object)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &out.Object); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 func categoryFromJournalEvent(event datastore.ResourceWatchEvent) (*datastore.CategoryTaxonomy, error) {
 	if event.Type == datastore.ResourceWatchDeleted || event.Type == datastore.ResourceWatchBookmark {
 		return nil, nil
@@ -190,10 +265,111 @@ func categoryJournalEventToGeneric(event datastore.ResourceWatchEvent) (*model.W
 	return out, nil
 }
 
+func watchTranslationJournal[T any](ctx context.Context, r *Resolver, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string, path string, convert func(datastore.ResourceWatchEvent, *model.Translation, bool) (T, error)) (<-chan T, error) {
+	if err := r.authorizeTranslationSource(ctx, "watch", namespaceValue(namespace), "", ""); err != nil {
+		return nil, err
+	}
+	store, err := r.translationSourceStore()
+	if err != nil {
+		return nil, err
+	}
+	return watchCatalogJournalWithReplay(ctx, r, "Translation", namespace, selector, resourceVersion, path, func(event datastore.ResourceWatchEvent, historical bool) (result T, err error) {
+		mode := "live"
+		if historical {
+			mode = "historical"
+		}
+		defer func() { r.translationMetrics.observeWatch(ctx, mode, err) }()
+		var zero T
+		if r.registry.AuthZ().Name() != "opa" {
+			if err := r.authorizeTranslationSource(ctx, "watch", namespaceValue(namespace), "", ""); err != nil {
+				return zero, err
+			}
+		}
+		if event.Type == datastore.ResourceWatchBookmark {
+			mode = "bookmark"
+			return convert(event, nil, historical)
+		}
+		var source datastore.Translation
+		if event.Type != datastore.ResourceWatchDeleted {
+			if json.Unmarshal(event.Payload, &source) != nil || source.Namespace != event.Namespace || source.Name != event.Name {
+				return zero, translationReadUnavailable()
+			}
+		}
+		owner := ""
+		var current *datastore.Translation
+		if source.UID != "" {
+			observed, readErr := store.GetTranslation(ctx, source.UID)
+			if readErr != nil && !errors.Is(readErr, datastore.ErrNotFound) {
+				return zero, translationReadUnavailable(readErr)
+			}
+			if readErr == nil {
+				current = observed
+				if current == nil || current.Namespace != event.Namespace || current.Name != event.Name {
+					return zero, translationReadUnavailable()
+				}
+				owner = current.EffectiveOwnerSub()
+			}
+		}
+		if err := r.authorizeTranslationSource(ctx, "read", event.Namespace, event.Name, owner); err != nil {
+			return zero, err
+		}
+		if event.Type == datastore.ResourceWatchDeleted {
+			mode = "historical"
+			return convert(event, nil, true)
+		}
+		if !historical && current != nil && current.UID == source.UID &&
+			current.NamespaceID == source.NamespaceID && current.ResourceVersion == source.ResourceVersion &&
+			current.CreationTimestamp.Equal(source.CreationTimestamp) {
+			guarded, status, err := r.guardTranslationRead(ctx, &source)
+			if err != nil {
+				return zero, err
+			}
+			if guarded.UID == source.UID && guarded.NamespaceID == source.NamespaceID &&
+				guarded.ResourceVersion == source.ResourceVersion && guarded.CreationTimestamp.Equal(source.CreationTimestamp) {
+				value, err := translationGuardedToGraphQL(guarded, status)
+				if err != nil {
+					return zero, err
+				}
+				return convert(event, value, false)
+			}
+		}
+		mode = "historical"
+		value, err := translationSourceToGraphQL(&source)
+		if err != nil {
+			return zero, err
+		}
+		return convert(event, value, true)
+	})
+}
+
+func (r *Resolver) watchTranslationResources(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.WatchEvent, error) {
+	return watchTranslationJournal(ctx, r, namespace, selector, resourceVersion, "generic",
+		func(event datastore.ResourceWatchEvent, value *model.Translation, historical bool) (*model.WatchEvent, error) {
+			out := &model.WatchEvent{
+				Type: model.WatchEventType(event.Type), Kind: "Translation", Namespace: &event.Namespace, Name: event.Name,
+				ResourceVersion: watchjournal.EncodeCursor(event.Epoch, event.Sequence),
+			}
+			if value != nil {
+				object, err := translationToJSONMap(value)
+				if err != nil {
+					return nil, err
+				}
+				object["historical"] = historical
+				out.Object = object
+			}
+			return out, nil
+		})
+}
+
 // watchCatalogJournal serves the typed and generic projections of one
 // namespaced catalog kind from the shared durable envelope and bounded
 // subscriber; no projection can fall back to a process-local cursor.
 func watchCatalogJournal[T any](ctx context.Context, r *Resolver, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string, path string, convert func(datastore.ResourceWatchEvent) (T, error)) (<-chan T, error) {
+	return watchCatalogJournalWithReplay(ctx, r, kind, namespace, selector, resourceVersion, path,
+		func(event datastore.ResourceWatchEvent, _ bool) (T, error) { return convert(event) })
+}
+
+func watchCatalogJournalWithReplay[T any](ctx context.Context, r *Resolver, kind string, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string, path string, convert func(datastore.ResourceWatchEvent, bool) (T, error)) (<-chan T, error) {
 	if err := r.repositoryWatchAvailable(); err != nil {
 		return nil, err
 	}
@@ -239,7 +415,7 @@ func watchCatalogJournal[T any](ctx context.Context, r *Resolver, kind string, n
 				if !matches {
 					continue
 				}
-				value, err := convert(projected)
+				value, err := convert(projected, event.Sequence <= stream.ReplayHighWater)
 				if err != nil {
 					addNamespaceWatchSubscriptionError(ctx, err)
 					return

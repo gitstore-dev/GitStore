@@ -47,7 +47,7 @@ func authoritativeColumns(includeNamespace, includeRepository bool, specific ...
 var (
 	ProductByNamespace = table.New(table.Metadata{
 		Name:    "products_by_key",
-		Columns: authoritativeColumns(true, true),
+		Columns: authoritativeColumns(true, true, "translation_retired", "translation_source_identity"),
 		PartKey: []string{"namespace", "creation_timestamp", "uid"},
 	})
 	ProductByName = table.New(table.Metadata{
@@ -63,7 +63,7 @@ var (
 
 	CategoryTaxonomy = table.New(table.Metadata{
 		Name:    "category_taxonomies_by_namespace",
-		Columns: authoritativeColumns(true, true, "parent_name", "ancestor_path"),
+		Columns: authoritativeColumns(true, true, "parent_name", "ancestor_path", "translation_retired", "translation_source_identity"),
 		PartKey: []string{"namespace"},
 		SortKey: []string{"creation_timestamp", "uid"},
 	})
@@ -81,7 +81,7 @@ var (
 
 	Collection = table.New(table.Metadata{
 		Name:    "collections_by_namespace",
-		Columns: authoritativeColumns(true, true),
+		Columns: authoritativeColumns(true, true, "translation_retired", "translation_source_identity"),
 		PartKey: []string{"namespace"},
 		SortKey: []string{"creation_timestamp", "uid"},
 	})
@@ -97,7 +97,7 @@ var (
 		PartKey: []string{"uid"},
 	})
 	FileByNamespace = table.New(table.Metadata{
-		Name: "files_by_namespace", Columns: authoritativeColumns(true, true),
+		Name: "files_by_namespace", Columns: authoritativeColumns(true, true, "translation_retired", "translation_source_identity"),
 		PartKey: []string{"namespace"}, SortKey: []string{"creation_timestamp", "uid"},
 	})
 	FileByName = table.New(table.Metadata{
@@ -150,7 +150,7 @@ var (
 
 	ProductVariantByNamespace = table.New(table.Metadata{
 		Name:    "product_variants_by_namespace",
-		Columns: authoritativeColumns(true, true, "sku", "product_ref_name"),
+		Columns: authoritativeColumns(true, true, "sku", "product_ref_name", "translation_retired", "translation_source_identity"),
 		PartKey: []string{"namespace"},
 		SortKey: []string{"creation_timestamp", "uid"},
 	})

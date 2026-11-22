@@ -68,8 +68,14 @@ func TestWatchedKindsEnableAuthoritativeFullImageCDC(t *testing.T) {
 		{"005_product.cql", "products_by_key"},
 		{"008_file.cql", "files_by_namespace"},
 		{"014_rbac.cql", "rbac_resources_by_scope"},
+		{"015_translation.cql", "translations_by_key"},
 	} {
 		assert.Containsf(t, createStatement(t, tc.file, tc.table), fullImageCDC, "%s CDC", tc.table)
+	}
+	raw, err := migrations.Files.ReadFile("015_translation.cql")
+	require.NoError(t, err)
+	for _, table := range []string{"product_variants_by_namespace", "collections_by_namespace"} {
+		assert.Contains(t, strings.ToLower(string(raw)), "alter table "+table+" with "+fullImageCDC)
 	}
 }
 
@@ -82,7 +88,7 @@ func TestOnlyWatchedAuthoritativeTablesEnableCDC(t *testing.T) {
 		require.NoError(t, err)
 		count += strings.Count(strings.ToLower(string(raw)), "cdc = {")
 	}
-	assert.Equal(t, 7, count, "only authoritative watched tables and the internal ServiceAccount source enable CDC")
+	assert.Equal(t, 10, count, "only authoritative watched tables and the internal ServiceAccount source enable CDC")
 }
 
 func TestRBACMigrationKeepsTransactionsWithinOnePartition(t *testing.T) {
@@ -116,6 +122,72 @@ func TestProductPartitionsSeparateEnvelopesNamesAndListings(t *testing.T) {
 	assert.NotContains(t, listing, "cdc")
 }
 
+func TestTranslationStorageSeparatesAuthorityAndSegmentedThinIndexes(t *testing.T) {
+	const file = "015_translation.cql"
+	authority := strings.Join(strings.Fields(createStatement(t, file, "translations_by_key")), " ")
+	assert.Contains(t, authority, "primary key ((namespace_uid, creation_timestamp, uid))")
+	assert.Contains(t, authority, fullImageCDC)
+	for _, column := range []string{
+		"namespace_uid uuid", "resource_version text", "raw_source blob", "source_blob_oid text",
+		"source_digest text", "reference_epoch text", "maintenance_intent text", "spec text", "body text", "status text",
+	} {
+		assert.Contains(t, authority, column)
+	}
+	for _, table := range []string{
+		"translations_by_namespace", "translation_dependents_by_target_name", "translation_dependents_by_target_uid",
+		"translation_target_maintenance_by_segment",
+	} {
+		thin := strings.Join(strings.Fields(createStatement(t, file, table)), " ")
+		for _, column := range []string{
+			"namespace_uid uuid", "shard tinyint", "segment bigint", "uid uuid", "source_version text",
+			"reservation_token uuid", "retired boolean", "creation_timestamp timestamp",
+		} {
+			assert.Contains(t, thin, column)
+		}
+		assert.Contains(t, thin, "segment),")
+		for _, forbidden := range []string{"spec ", "body ", "status ", "raw_source ", "cdc"} {
+			assert.NotContains(t, thin, forbidden)
+		}
+	}
+	name := strings.Join(strings.Fields(createStatement(t, file, "translations_by_name")), " ")
+	assert.Contains(t, name, "primary key ((namespace_uid, name))")
+	assert.NotContains(t, name, "raw_source")
+	binding := strings.Join(strings.Fields(createStatement(t, file, "translation_bindings_by_uid")), " ")
+	assert.Contains(t, binding, "primary key ((uid))")
+	assert.Contains(t, binding, "resource_version text")
+	assert.Contains(t, binding, "epochs text")
+	fence := strings.Join(strings.Fields(createStatement(t, file, "translation_target_fences_by_name")), " ")
+	assert.Contains(t, fence, "primary key ((namespace_uid, api_version, kind, name))")
+	for _, column := range []string{"fence_token text", "phase text", "evidence text", "write_intent text", "target_creation_timestamp timestamp"} {
+		assert.Contains(t, fence, column)
+	}
+	reservation := strings.Join(strings.Fields(createStatement(t, file, "translation_index_reservations_by_token")), " ")
+	assert.Contains(t, reservation, "primary key ((reservation_token))")
+	for _, table := range []string{
+		"translations_by_uid", "translations_by_name", "translation_bindings_by_uid",
+		"translation_target_fences_by_name", "translation_index_heads_by_shard",
+		"translation_index_reservations_by_token", "translation_maintenance_by_bucket",
+		"translation_target_write_intents_by_id", "translation_target_maintenance_by_segment",
+		"translation_target_maintenance_cursors_by_namespace",
+	} {
+		assert.NotContains(t, createStatement(t, file, table), "cdc")
+	}
+	head := strings.Join(strings.Fields(createStatement(t, file, "translation_index_heads_by_shard")), " ")
+	for _, column := range []string{"resource_version text", "segment bigint", "next_slot int", "reserved_bytes bigint"} {
+		assert.Contains(t, head, column)
+	}
+	assert.NotContains(t, head, "list<")
+	assert.NotContains(t, head, "map<")
+	intents := strings.Join(strings.Fields(createStatement(t, file, "translation_target_write_intents_by_id")), " ")
+	assert.Contains(t, intents, "primary key ((id))")
+	assert.Contains(t, intents, "closed boolean")
+	cursors := strings.Join(strings.Fields(createStatement(t, file, "translation_target_maintenance_cursors_by_namespace")), " ")
+	assert.Contains(t, cursors, "primary key ((scope, namespace_uid))")
+	for _, table := range []string{"translation_target_write_intents_by_id", "translation_target_maintenance_by_segment", "translation_target_maintenance_cursors_by_namespace"} {
+		assert.NotContains(t, createStatement(t, file, table), "default_time_to_live")
+	}
+}
+
 func TestNamespaceCatalogFenceIsNotAWatchedResource(t *testing.T) {
 	statement := strings.Join(strings.Fields(createStatement(t, "002_namespace.cql", "namespace_catalog_fences_by_uid")), " ")
 	assert.Contains(t, statement, "uid uuid primary key")
@@ -123,6 +195,20 @@ func TestNamespaceCatalogFenceIsNotAWatchedResource(t *testing.T) {
 	assert.Contains(t, statement, "pending bigint")
 	assert.NotContains(t, statement, "cdc")
 	assert.NotContains(t, statement, "default_time_to_live")
+}
+
+func TestTranslationReservationRecoverySchema(t *testing.T) {
+	const file = "015_translation.cql"
+	head := strings.Join(strings.Fields(createStatement(t, file, "translation_index_heads_by_shard")), " ")
+	assert.Contains(t, head, "pending_token uuid")
+	assert.NotContains(t, head, "cdc")
+	reservation := strings.Join(strings.Fields(createStatement(t, file, "translation_index_reservations_by_token")), " ")
+	for _, column := range []string{
+		"creation_timestamp timestamp", "expected_head_version text", "allocation_version text", "reserved_bytes bigint",
+	} {
+		assert.Contains(t, reservation, column)
+	}
+	assert.NotContains(t, reservation, "cdc")
 }
 
 func TestResourceWatchJournalIsSharedAcrossKinds(t *testing.T) {

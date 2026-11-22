@@ -2568,72 +2568,7 @@ func newTestDatastore(t *testing.T) datastore.Datastore {
 
 func newNamespacePolicyDatastore(t *testing.T) datastore.Datastore {
 	t.Helper()
-	store, err := memdb.New()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = store.Close() })
-
-	ctx := context.Background()
-	now := time.Now().UTC()
-	systemNamespace := &datastore.Namespace{
-		ID:                uuid.New().String(),
-		Name:              "gitstore-system",
-		Title:             "GitStore System",
-		Tier:              datastore.NamespaceTierOrganization,
-		CreationTimestamp: now,
-		CreationActor:     "system",
-		UpdateTimestamp:   now,
-		UpdateActor:       "system",
-	}
-	defaultNamespace := &datastore.Namespace{
-		ID:                uuid.New().String(),
-		Name:              "default",
-		Title:             "Default",
-		Tier:              datastore.NamespaceTierOrganization,
-		CreationTimestamp: now,
-		CreationActor:     "system",
-		UpdateTimestamp:   now,
-		UpdateActor:       "system",
-	}
-	otherNamespace := &datastore.Namespace{
-		ID:                uuid.New().String(),
-		Name:              "other",
-		Title:             "Other",
-		Tier:              datastore.NamespaceTierOrganization,
-		CreationTimestamp: now,
-		CreationActor:     "test",
-		UpdateTimestamp:   now,
-		UpdateActor:       "test",
-	}
-	for _, namespace := range []*datastore.Namespace{systemNamespace, defaultNamespace, otherNamespace, {UID: uuid.NewString(), Name: "gitstore", Tier: datastore.NamespaceTierOrganization, CreationActor: "test"}} {
-		require.NoError(t, store.CreateNamespace(ctx, namespace))
-	}
-	for _, repository := range []*datastore.Repository{
-		{
-			UID:               testRepoID,
-			Namespace:         systemNamespace.Name,
-			Name:              "gitstore-system",
-			DefaultBranch:     "main",
-			StorageClass:      "local",
-			CreationTimestamp: now,
-			CreationActor:     "system",
-			UpdateTimestamp:   now,
-			UpdateActor:       "system",
-		},
-		{
-			UID:               wrongNamespaceRepoID,
-			Namespace:         otherNamespace.Name,
-			Name:              "catalog",
-			DefaultBranch:     "main",
-			StorageClass:      "local",
-			CreationTimestamp: now,
-			CreationActor:     "test",
-			UpdateTimestamp:   now,
-			UpdateActor:       "test",
-		},
-	} {
-		require.NoError(t, store.CreateRepository(ctx, repository))
-	}
-	return store
+	return testutil.NewNamespacePolicyDatastore(t, testRepoID, wrongNamespaceRepoID)
 }
 
 // ensure bytes import is used
@@ -3142,6 +3077,123 @@ func TestAdmitResources_DuplicateSKUCreateSkipped(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.GetProductVariantByName(context.Background(), "gitstore", "blue")
 	assert.ErrorIs(t, err, datastore.ErrNotFound)
+}
+
+func TestAdmitResources_RefReadFailuresAreRetryable(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		code codes.Code
+	}{
+		{"transport", grpcstatus.Error(codes.Unavailable, "Git unavailable"), codes.Unavailable},
+		{"authorization", auth.ErrAuthorizationUnavailable, codes.Unavailable},
+		{"deleted ref", grpcstatus.Error(codes.NotFound, "ref deleted"), codes.OK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestDatastore(t)
+			current := strings.Repeat("a", 40)
+			git := newTreeGitReader(&current, map[string]map[string][]byte{
+				current: {"products/widget.md": makeProduct("widget")},
+			})
+			healthy, reads := false, 0
+			git.resolveRefFunc = func(context.Context, string, string) (string, error) {
+				reads++
+				if !healthy {
+					return "", tc.err
+				}
+				return current, nil
+			}
+			server := newCatalogServer(t, store, git)
+			req := &catalogv1.AdmitResourcesRequest{
+				RepositoryId: testRepoID,
+				NewCommitSha: current,
+				ChangedPaths: []string{"products/widget.md"},
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			_, err := server.AdmitResources(ctx, req)
+			require.Equal(t, tc.code, grpcstatus.Code(err))
+			require.NoError(t, ctx.Err(), "provider failures must not wait for the caller deadline")
+			require.LessOrEqual(t, reads, 3)
+			_, err = store.GetProductByName(t.Context(), "gitstore", "widget")
+			require.ErrorIs(t, err, datastore.ErrNotFound)
+			if tc.code == codes.OK {
+				return
+			}
+			healthy = true
+			_, err = server.AdmitResources(t.Context(), req)
+			require.NoError(t, err)
+			_, err = store.GetProductByName(t.Context(), "gitstore", "widget")
+			require.NoError(t, err, "retry the unchanged accepted snapshot after dependency recovery")
+		})
+	}
+}
+
+type admissionNamespaceFailureStore struct {
+	datastore.Datastore
+	err error
+}
+
+func (s *admissionNamespaceFailureStore) GetNamespaceByName(ctx context.Context, name string) (*datastore.Namespace, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.Datastore.GetNamespaceByName(ctx, name)
+}
+
+func TestAdmitResources_NamespaceResolutionFailureIsRetryable(t *testing.T) {
+	store := &admissionNamespaceFailureStore{
+		Datastore: newTestDatastore(t),
+		err:       grpcstatus.Error(codes.Unavailable, "namespace store unavailable"),
+	}
+	current := strings.Repeat("a", 40)
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		current: {"products/widget.md": makeProduct("widget")},
+	})
+	server := newCatalogServer(t, store, git)
+	req := &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, NewCommitSha: current, ChangedPaths: []string{"products/widget.md"},
+	}
+	_, err := server.AdmitResources(t.Context(), req)
+	require.Equal(t, codes.Unavailable, grpcstatus.Code(err))
+	_, err = store.GetProductByName(t.Context(), "gitstore", "widget")
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+	store.err = nil
+	_, err = server.AdmitResources(t.Context(), req)
+	require.NoError(t, err)
+	_, err = store.GetProductByName(t.Context(), "gitstore", "widget")
+	require.NoError(t, err)
+}
+
+func TestAdmitResources_ConvergenceExhaustionIsRetryable(t *testing.T) {
+	store := newTestDatastore(t)
+	first, next := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	current := first
+	git := newTreeGitReader(&current, map[string]map[string][]byte{
+		first: {"files/hero.md": makeFile("hero")},
+		next:  {"files/hero.md": makeFile("hero")},
+	})
+	healthy, reads := false, 0
+	git.resolveRefFunc = func(context.Context, string, string) (string, error) {
+		reads++
+		if !healthy && reads%2 == 0 {
+			return next, nil
+		}
+		return first, nil
+	}
+	server := newCatalogServer(t, store, git)
+	req := &catalogv1.AdmitResourcesRequest{
+		RepositoryId: testRepoID, NewCommitSha: first, ChangedPaths: []string{"files/hero.md"},
+	}
+	_, err := server.AdmitResources(t.Context(), req)
+	require.Equal(t, codes.Aborted, grpcstatus.Code(err))
+	_, err = store.GetFileByName(t.Context(), "gitstore", "hero")
+	require.ErrorIs(t, err, datastore.ErrNotFound)
+	healthy = true
+	_, err = server.AdmitResources(t.Context(), req)
+	require.NoError(t, err)
+	_, err = store.GetFileByName(t.Context(), "gitstore", "hero")
+	require.NoError(t, err)
 }
 
 // A delayed callback may not use the original actor's authority for content

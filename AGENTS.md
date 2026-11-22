@@ -51,9 +51,11 @@ applicable instruction file rather than growing this root file.
   zero-downtime failover or add replication, sharding or autoscaling scope
   without explicit approval.
 - API and controller plans and tests must verify concurrent-replica correctness
-  and rolling upgrades per path. All core-service changes must cover pluggable
-  AuthN/AuthZ, bounded work and sustained push or reconciliation load where
-  applicable; these are requirements, not blanket claims of implemented HA.
+  on changed paths and document rollout compatibility. Use focused tests for
+  changed migration, replay and recovery risks, not a full deployed rehearsal
+  for every feature. Pluggable AuthN/AuthZ and bounded work remain PR requirements;
+  sustained load and full deployed qualification are separate production gates,
+  not alpha PR blockers or blanket claims of implemented HA.
 - Never calculate related-resource aggregates with live datastore queries in
   GraphQL resolvers. Materialize them asynchronously into `status.resolved`.
 
@@ -73,7 +75,7 @@ applicable instruction file rather than growing this root file.
 <!-- SPECKIT START -->
 For feature-specific technologies, structure and implementation context, read
 the applicable plan; the current planning reference is
-`specs/066-git-backed-rbac/plan.md`. Planning history and
+`specs/071-translation-contract/plan.md`. Planning history and
 technology baselines belong in `specs/AGENTS.md`, not this repository-wide
 entry point.
 <!-- SPECKIT END -->

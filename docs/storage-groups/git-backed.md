@@ -134,6 +134,13 @@ Long-form product description.
 | `SearchSynonymSet`   | Extension/CRD | Search synonyms and equivalent terms.                                            | `spec: {locale, synonyms}`                                       |
 | `SearchRedirect`     | Extension/CRD | Search query to destination redirect rules.                                      | `spec: {query, targetURL, locale, channelRefs}`                  |
 
+Translation has an implemented, disabled-by-default validation/resolution
+contract; it does not apply localized content to targets. Its enabled-deployment
+examples, supported target fields, locale/path rules and common status shape
+are described in [Translation authoring](translations.md). `Locale`,
+`MarketLocalization` and automatic locale/fallback selection remain proposed
+scope, not prerequisites supplied by Translation.
+
 Example:
 
 ```markdown
@@ -141,20 +148,18 @@ Example:
 apiVersion: i18n.gitstore.dev/v1beta1
 kind: Translation
 metadata:
-  name: macbook-pro-de-de
+  name: laptop-title-de-de
   namespace: acme-store
 spec:
   locale: de-DE
   targetRef:
     apiVersion: catalog.gitstore.dev/v1beta1
     kind: Product
-    name: macbook-pro
+    name: laptop
   patches:
   - fieldPath: spec.title
-    translation: MacBook Pro
+    translation: Tragbarer Computer
 ---
-
-Translated Markdown body.
 ```
 
 ## Media Manifests

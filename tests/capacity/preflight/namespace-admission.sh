@@ -7,6 +7,34 @@ set -euo pipefail
 
 evidence_dir="$1"
 mode="$(capacity_preflight_mode)"
+if [[ "${CAPACITY_SCENARIO:-}" == "validation" ]]; then
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+  corpus="${repo_root}/gitstore-api/internal/cataloggrpc/testdata/translation/corpus.json"
+  harness="${repo_root}/gitstore-api/internal/cataloggrpc/namespace_capacity_test.go"
+  jq -e '.valid | type == "object" and length > 0' "${corpus}" >/dev/null
+  corpus_digest="$(shasum -a 256 "${corpus}" | awk '{print $1}')"
+  harness_digest="$(shasum -a 256 "${harness}" | awk '{print $1}')"
+  [[ "${corpus_digest}" =~ ^[a-f0-9]{64}$ && "${harness_digest}" =~ ^[a-f0-9]{64}$ ]] || {
+    echo "validation corpus/harness source digests are required" >&2
+    exit 2
+  }
+  jq -n \
+    --arg mode "${mode}" \
+    --arg corpus_digest "${corpus_digest}" \
+    --arg harness_digest "${harness_digest}" \
+    --argjson valid_cases "$(jq '.valid | keys' "${corpus}")" \
+    --argjson target_kinds "$(jq '.targets | keys' "${corpus}")" \
+    '{schemaVersion:1,mode:$mode,scope:"catalog-service-test-helpers",connectedIngestion:false,
+      corpusSha256:$corpus_digest,harnessSha256:$harness_digest,
+      translationValidCases:$valid_cases,targetKinds:$target_kinds,
+      workload:{filesPerRequest:500,namespaceManifestsPerRequest:50,helperProcesses:2,
+        requestsPerSecond:10,workers:20,minimumDurationSeconds:1800,
+        translationMaximumSourceBytes:1048576,
+        classes:["normal","namespace-negative","translation-locale-negative","translation-field-negative","translation-near-limit"]}}' \
+    >"${evidence_dir}/validation-corpus.json"
+  exit 0
+fi
+
 api_replicas="${CAPACITY_API_REPLICAS:-0}"
 api_build="${CAPACITY_API_BUILD:-unknown}"
 scylla_nodes="${CAPACITY_SCYLLA_NODES:-0}"

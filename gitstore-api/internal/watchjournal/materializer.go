@@ -29,6 +29,8 @@ type Change struct {
 	DeletionPayload  json.RawMessage
 	At               time.Time
 	TierProgress     *datastore.RBACTierProgress
+	// ForceModified delivers a durable work hint without changing its source.
+	ForceModified bool
 }
 
 type MaterializerConfig struct {
@@ -97,7 +99,7 @@ func ClassifyResource(change Change, labels func(json.RawMessage) map[string]str
 		event.Payload = append([]byte(nil), change.After...)
 		event.SelectorLabels = labels(change.After)
 	case len(change.Before) > 0 && len(change.After) > 0:
-		if jsonEqual(change.Before, change.After) {
+		if !change.ForceModified && jsonEqual(change.Before, change.After) {
 			return datastore.ResourceWatchEvent{}, false
 		}
 		event.Type = datastore.ResourceWatchModified

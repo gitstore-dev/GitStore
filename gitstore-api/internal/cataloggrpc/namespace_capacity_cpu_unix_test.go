@@ -3,7 +3,7 @@
 
 //go:build darwin || linux
 
-package cataloggrpc_test
+package cataloggrpc
 
 import "syscall"
 

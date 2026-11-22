@@ -6,12 +6,48 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/config"
+	"github.com/gitstore-dev/gitstore/translation"
 )
+
+func TestTranslationStartupRequiresExplicitCompatibleCapability(t *testing.T) {
+	for _, tc := range []struct {
+		name, digest string
+		enabled      bool
+		wantErr      bool
+	}{
+		{name: "default-disabled"},
+		{name: "disabled-capable", digest: translation.CapabilityDigest()},
+		{name: "enabled-capable", enabled: true, digest: translation.CapabilityDigest()},
+		{name: "enabled-unpinned", enabled: true, wantErr: true},
+		{name: "disabled-mismatched", digest: "unsupported", wantErr: true},
+		{name: "enabled-mismatched", enabled: true, digest: "unsupported", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "enrolled-by-test")
+			t.Setenv("GITSTORE_CONTROLLER__TRANSLATION__ENABLED", strconv.FormatBool(tc.enabled))
+			t.Setenv("GITSTORE_CONTROLLER__TRANSLATION__DESCRIPTOR_DIGEST", tc.digest)
+			cfg, err := config.LoadFrom("../../../config/config.toml")
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "controller.translation") {
+					t.Fatalf("expected safe capability configuration failure, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Controller.Translation.Enabled != tc.enabled || cfg.Controller.Translation.DescriptorDigest != tc.digest {
+				t.Fatal("configured Translation capability was not preserved")
+			}
+		})
+	}
+}
 
 func TestShippedComposeConfigUsesClusterIdentity(t *testing.T) {
 	t.Setenv("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID", "enrolled-by-compose")

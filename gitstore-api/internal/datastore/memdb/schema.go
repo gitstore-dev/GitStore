@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"maps"
+	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/hashicorp/go-memdb"
@@ -18,13 +19,17 @@ type repositoryNamespaceOrderIndex struct{}
 
 func (repositoryNamespaceOrderIndex) FromObject(raw interface{}) (bool, []byte, error) {
 	repository := raw.(*datastore.Repository)
-	key := append([]byte(repository.Namespace), 0)
-	key = binary.BigEndian.AppendUint64(key, ^(uint64(repository.CreationTimestamp.Unix()) ^ (1 << 63)))
-	key = binary.BigEndian.AppendUint32(key, ^uint32(repository.CreationTimestamp.Nanosecond()))
-	for _, value := range []byte(repository.UID) {
+	return true, namespaceOrderKey(repository.Namespace, repository.CreationTimestamp, repository.UID), nil
+}
+
+func namespaceOrderKey(namespace string, createdAt time.Time, uid string) []byte {
+	key := append([]byte(namespace), 0)
+	key = binary.BigEndian.AppendUint64(key, ^(uint64(createdAt.Unix()) ^ (1 << 63)))
+	key = binary.BigEndian.AppendUint32(key, ^uint32(createdAt.Nanosecond()))
+	for _, value := range []byte(uid) {
 		key = append(key, ^value)
 	}
-	return true, key, nil
+	return key
 }
 
 func (repositoryNamespaceOrderIndex) FromArgs(args ...interface{}) ([]byte, error) {
@@ -81,6 +86,49 @@ var schema = &memdb.DBSchema{
 		"product": resourceTableSchema("product", map[string]*memdb.IndexSchema{
 			"repository_id": optionalStringIndex("repository_id", "RepositoryID"),
 		}),
+		"translation": resourceTableSchema("translation", map[string]*memdb.IndexSchema{
+			"repository_id": optionalStringIndex("repository_id", "RepositoryID"),
+		}),
+		"translation_binding": {
+			Name: "translation_binding",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {Name: "id", Unique: true, Indexer: &memdb.UUIDFieldIndex{Field: "TranslationUID"}},
+			},
+		},
+		"translation_target_fence": {
+			Name: "translation_target_fence",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {Name: "id", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "ID"}},
+			},
+		},
+		"translation_target_clock": {
+			Name: "translation_target_clock",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {Name: "id", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "Namespace"}},
+			},
+		},
+		"translation_target_audit": {
+			Name: "translation_target_audit",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {Name: "id", Unique: true, Indexer: &memdb.UUIDFieldIndex{Field: "NamespaceUID"}},
+			},
+		},
+		"translation_index_head":        translationAllocationTable("translation_index_head"),
+		"translation_index_reservation": translationAllocationTable("translation_index_reservation"),
+		"translation_index_cell":        translationCellTable(),
+		"translation_source_placements": translationAllocationTable("translation_source_placements"),
+		"deleted_translation_uid": {
+			Name: "deleted_translation_uid",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {Name: "id", Unique: true, Indexer: &memdb.UUIDFieldIndex{Field: "UID"}},
+			},
+		},
+		"deleted_target_uid": {
+			Name: "deleted_target_uid",
+			Indexes: map[string]*memdb.IndexSchema{
+				"id": {Name: "id", Unique: true, Indexer: &memdb.StringFieldIndex{Field: "ID"}},
+			},
+		},
 		"file": resourceTableSchema("file", map[string]*memdb.IndexSchema{
 			"repository_id": optionalStringIndex("repository_id", "RepositoryID"),
 		}),
@@ -150,7 +198,7 @@ var schema = &memdb.DBSchema{
 					Unique: false,
 					Indexer: &memdb.CompoundIndex{Indexes: []memdb.Indexer{
 						&memdb.StringFieldIndex{Field: "Namespace"},
-						&memdb.StringFieldIndex{Field: "RepositoryID"},
+						ownerReferenceRepositoryIndex{},
 						&memdb.StringFieldIndex{Field: "OwnerUID"},
 						&memdb.StringFieldIndex{Field: "BlockKey"},
 					}},
@@ -160,7 +208,7 @@ var schema = &memdb.DBSchema{
 					Unique: false,
 					Indexer: &memdb.CompoundIndex{Indexes: []memdb.Indexer{
 						&memdb.StringFieldIndex{Field: "Namespace"},
-						&memdb.StringFieldIndex{Field: "RepositoryID"},
+						ownerReferenceRepositoryIndex{},
 						&memdb.StringFieldIndex{Field: "OwnerUID"},
 						&memdb.StringFieldIndex{Field: "DependentKind"},
 						&memdb.StringFieldIndex{Field: "BlockKey"},

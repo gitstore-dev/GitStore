@@ -9,7 +9,7 @@ CONTROLLER_MANAGER_DIR := $(ROOT)/gitstore-controller-manager
 GIT_SERVICE_DIR := $(ROOT)/gitstore-git-service
 OIDC_BRIDGE_DIR := $(ROOT)/gitstore-oidc-bridge
 SECRET_MATERIAL_DIR := $(ROOT)/shared/secretmaterial
-GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR) $(SECRET_MATERIAL_DIR) $(ROOT)/shared/observability $(ROOT)/shared/scylla-cdc-go
+GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR) $(SECRET_MATERIAL_DIR) $(ROOT)/shared/observability $(ROOT)/shared/scylla-cdc-go $(ROOT)/shared/translation
 
 API_ENV_FILE ?= $(API_DIR)/.env
 CONFIG_FILE ?= ./config/config.toml
@@ -503,7 +503,7 @@ else ifeq ($(TEST_TARGET),all)
 	@bash ./scripts/test-secret-config.sh
 	@bash ./scripts/test-license-headers.sh
 	@bash ./scripts/test-secret-capacity-evidence.sh
-	@cd "$(ROOT)/tests/integration" && GOWORK=off go test -count=1 -race -run '^TestSecretCapacity|^Test(CapacityPush|CapacityPreflight|PushHelper|EndpointSplit|EndpointLoad|RepositoryController|RBACCapacity)' .
+	@cd "$(ROOT)/tests/integration" && GOWORK=off go test -count=1 -race -run '^TestSecretCapacity|^Test(CapacityPush|CapacityPreflight|PushHelper|EndpointSplit|EndpointLoad|RepositoryController|RBACCapacity|TranslationCapacity|TranslationAuthoring|TranslationIntegration)' .
 	@./scripts/test-make-workflow-dispatch.sh
 	@./scripts/test-capacity-dispatch.sh
 	@./scripts/test-capacity-prometheus-export.sh

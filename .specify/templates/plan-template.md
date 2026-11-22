@@ -56,6 +56,19 @@ verify, not blanket claims about current implementations.
 - **Incremental Delivery**: Slices deploy independently; API/controller replicas may overlap, but Git replacements must not.
 - **Simplicity**: Added complexity is justified by measured or contractual production needs.
 
+## Verification Scope
+
+Separate the smallest PR correctness checks from production qualification.
+Identify changed concurrency, authorization, migration, replay and recovery
+risks and reuse existing tests where they cover those boundaries. Do not add
+a complete deployed mixed-version or capacity rehearsal to every feature.
+
+- **PR readiness**: [Focused contract/integration tests, full default `make pr-ready`, compatibility documentation and known correctness limitations]
+- **Production qualification**: [Opt-in capacity/soak, chaos and deployed rollout evidence needed before production claims; existing attributable evidence or explicitly deferred work]
+
+Deferred qualification does not block an alpha implementation PR and is not
+a passing result. Known data-loss or unsafe-compatibility paths still block.
+
 ## Project Structure
 
 ### Documentation (this feature)

@@ -7,5 +7,6 @@ use (
 	./shared/secretmaterial
 	./shared/observability
 	./shared/scylla-cdc-go
+	./shared/translation
 	./tests/integration
 )

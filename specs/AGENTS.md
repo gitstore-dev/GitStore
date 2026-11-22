@@ -16,6 +16,11 @@
 - Keep repository-wide instructions concise. Put detailed commands, feature
   history and technology notes in the appropriate scoped instructions or
   feature artifacts, not the root `AGENTS.md`.
+- Separate alpha implementation/PR readiness from production qualification.
+  Require focused checks of changed correctness risks and the full default
+  `make pr-ready`; do not make capacity, soak, chaos or complete deployed
+  mixed-version rehearsals prerequisites of every implementation. Record
+  deferred qualification and require it before corresponding production claims.
 
 ## Inherited planning baseline
 

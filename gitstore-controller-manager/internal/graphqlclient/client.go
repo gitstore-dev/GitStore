@@ -282,10 +282,12 @@ func (c *Client) doAttempt(ctx context.Context, doc string, vars map[string]any,
 				return c.doAttempt(ctx, doc, vars, out, false)
 			}
 		}
-		if gr.Errors[0] != nil && gr.Errors[0].Extensions["code"] == "AUTHORIZATION_UNAVAILABLE" &&
-			gr.Errors[0].Extensions["retryable"] == true {
-			c.recordThrottle()
-			return fmt.Errorf("%w: %w", types.ErrAPIUnavailable, gr.Errors[0])
+		if gr.Errors[0] != nil && gr.Errors[0].Extensions["retryable"] == true {
+			switch gr.Errors[0].Extensions["code"] {
+			case "AUTHORIZATION_UNAVAILABLE", "TRANSLATION_UNAVAILABLE":
+				c.recordThrottle()
+				return fmt.Errorf("%w: %w", types.ErrAPIUnavailable, gr.Errors[0])
+			}
 		}
 		return gr.Errors[0]
 	}

@@ -85,6 +85,11 @@ func (r *queryResolver) Collections(ctx context.Context, namespace string, first
 	return BuildCollectionConnection(result), nil
 }
 
+// WatchCollections is the resolver for the watchCollections field.
+func (r *subscriptionResolver) WatchCollections(ctx context.Context, namespace *string, selector *model.LabelSelectorInput, resourceVersion *string) (<-chan *model.CollectionWatchEvent, error) {
+	return watchCatalogJournal(ctx, r.Resolver, "Collection", namespace, selector, resourceVersion, "typed", collectionJournalEventToGraphQL)
+}
+
 // Collection returns generated.CollectionResolver implementation.
 func (r *Resolver) Collection() generated.CollectionResolver { return &collectionResolver{r} }
 

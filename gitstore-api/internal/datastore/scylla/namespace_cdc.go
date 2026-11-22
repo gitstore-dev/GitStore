@@ -37,6 +37,7 @@ const namespaceCDCFlushInterval = 25 * time.Millisecond
 const namespaceCDCIdleCheckpointInterval = 500 * time.Millisecond
 
 const namespaceCDCEmptyProbeWindow = time.Hour
+const namespaceCDCStreamsPerBatch = 32
 
 // RunNamespaceCDC consumes only the authoritative namespaces_by_uid CDC log.
 // The caller owns lease renewal and cancels ctx immediately on fencing loss.
@@ -85,6 +86,7 @@ func (s *scyllaDatastore) RunNamespaceCDC(ctx context.Context, materializer *wat
 		ProgressManager:       progress,
 		Logger:                zapCDCLogger{s.log},
 		Advanced: scyllacdc.AdvancedReaderConfig{
+			MaxStreamsPerBatch:          namespaceCDCStreamsPerBatch,
 			ChangeAgeLimit:              changeAgeLimit,
 			ConfidenceWindowSize:        confidenceWindow,
 			MaxEmptyQueryTimeWindowSize: namespaceCDCEmptyProbeWindow,

@@ -9,6 +9,7 @@ package scylla_test
 
 import (
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -86,6 +87,17 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 		"service_account_assertion_replays",
 		"service_accounts_by_cluster_bucket",
 		"category_ancestor_index",
+		"translations_by_key",
+		"translations_by_name",
+		"translations_by_uid",
+		"translations_by_namespace",
+		"translation_bindings_by_uid",
+		"translation_dependents_by_target_name",
+		"translation_dependents_by_target_uid",
+		"translation_index_heads_by_shard",
+		"translation_index_reservations_by_token",
+		"translation_maintenance_by_bucket",
+		"translation_target_fences_by_name",
 	} {
 		var tblName string
 		err = session.Query(
@@ -94,6 +106,53 @@ func TestRunMigrations_AppliesSchema(t *testing.T) {
 		).Scan(&tblName)
 		require.NoError(t, err, "expected table %s to exist", expectedTable)
 		assert.Equal(t, expectedTable, tblName)
+	}
+}
+
+func TestRunMigrations_TranslationStorageContract(t *testing.T) {
+	session := newRawSession(t)
+	require.NoError(t, scylla.RunMigrations(context.Background(), session, scyllaKeyspace, uuid.New().String(), zap.NewNop()))
+
+	for _, tc := range []struct {
+		table, column, columnType, kind string
+	}{
+		{"translations_by_key", "namespace_uid", "uuid", "partition_key"},
+		{"translations_by_key", "creation_timestamp", "timestamp", "partition_key"},
+		{"translations_by_key", "uid", "uuid", "partition_key"},
+		{"translations_by_key", "source_blob_oid", "text", "regular"},
+		{"translations_by_key", "source_digest", "text", "regular"},
+		{"translations_by_key", "raw_source", "blob", "regular"},
+		{"translations_by_key", "reference_epoch", "text", "regular"},
+		{"translations_by_key", "maintenance_intent", "text", "regular"},
+		{"translations_by_namespace", "segment", "bigint", "partition_key"},
+		{"translation_dependents_by_target_name", "segment", "bigint", "partition_key"},
+		{"translation_dependents_by_target_uid", "segment", "bigint", "partition_key"},
+		{"translation_index_reservations_by_token", "reservation_token", "uuid", "partition_key"},
+		{"translation_index_reservations_by_token", "creation_timestamp", "timestamp", "regular"},
+		{"translation_index_reservations_by_token", "expected_head_version", "text", "regular"},
+		{"translation_index_reservations_by_token", "allocation_version", "text", "regular"},
+		{"translation_index_reservations_by_token", "reserved_bytes", "bigint", "regular"},
+		{"translation_index_heads_by_shard", "pending_token", "uuid", "regular"},
+		{"translations_by_key", "coordination_version", "text", "regular"},
+		{"translations_by_key", "phase", "text", "regular"},
+		{"translations_by_key", "binding_snapshot", "text", "regular"},
+		{"translations_by_uid", "expected_name_token", "uuid", "regular"},
+		{"translations_by_namespace", "retired", "boolean", "regular"},
+		{"translation_dependents_by_target_name", "retired", "boolean", "regular"},
+		{"translation_dependents_by_target_name", "creation_timestamp", "timestamp", "regular"},
+		{"translation_dependents_by_target_uid", "retired", "boolean", "regular"},
+		{"translation_dependents_by_target_uid", "creation_timestamp", "timestamp", "regular"},
+		{"translation_target_fences_by_name", "fence_token", "text", "regular"},
+	} {
+		t.Run(tc.table+"/"+tc.column, func(t *testing.T) {
+			var columnType, kind string
+			require.NoError(t, session.Query(
+				`SELECT type, kind FROM system_schema.columns WHERE keyspace_name = ? AND table_name = ? AND column_name = ?`,
+				scyllaKeyspace, tc.table, tc.column,
+			).Scan(&columnType, &kind))
+			assert.Equal(t, tc.columnType, columnType)
+			assert.Equal(t, tc.kind, kind)
+		})
 	}
 }
 
@@ -171,6 +230,7 @@ func TestRunMigrations_CanonicalEnvelopeColumnsMatch(t *testing.T) {
 
 	tables := []string{
 		"products_by_key",
+		"translations_by_key",
 		"product_variants_by_namespace",
 		"collections_by_namespace",
 		"category_taxonomies_by_namespace",
@@ -405,7 +465,7 @@ func TestServiceAccountCDCUpgradePreservesDataAndMigrationHistory(t *testing.T) 
 
 	require.NoError(t, scylla.RunMigrations(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop()))
 	after := readHistory()
-	require.Len(t, after, 14)
+	require.Len(t, after, 15)
 	for name, entry := range before {
 		require.Equal(t, entry, after[name], "upgrade must preserve the applied ledger for %s", name)
 	}
@@ -428,6 +488,116 @@ func TestServiceAccountCDCUpgradePreservesDataAndMigrationHistory(t *testing.T) 
 		"database is ahead")
 	require.NoError(t, scylla.RunMigrations(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop()))
 	require.Equal(t, after, readHistory(), "rerunning the forward bundle must preserve applied history")
+}
+
+func TestTranslationMigrationResumesUnrecordedAddColumn(t *testing.T) {
+	root, err := openRootSession(scyllaAddr)
+	require.NoError(t, err)
+	t.Cleanup(root.Close)
+	keyspace := "gitstore_scylla_test_translation_upgrade_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	t.Logf("isolated upgrade keyspace: %s", keyspace)
+	require.NoError(t, root.Query("CREATE KEYSPACE "+keyspace+
+		" WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': '1'}").Exec())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		assert.NoError(t, root.Query("DROP KEYSPACE "+keyspace).WithContext(ctx).SetRequestTimeout(30*time.Second).Exec())
+	})
+	session := newRawSessionForKeyspace(t, keyspace)
+	require.NoError(t, scylla.RunMigrationsWithFS(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop(),
+		migrationSetThrough(t, "014_rbac.cql")))
+
+	readHistory := func() map[string]struct {
+		Checksum string
+		Done     int
+		Written  int64
+	} {
+		history := make(map[string]struct {
+			Checksum string
+			Done     int
+			Written  int64
+		})
+		iter := session.Query("SELECT name, checksum, done, writetime(done) FROM gocqlx_migrate").Iter()
+		var name string
+		var entry struct {
+			Checksum string
+			Done     int
+			Written  int64
+		}
+		for iter.Scan(&name, &entry.Checksum, &entry.Done, &entry.Written) {
+			history[name] = entry
+		}
+		require.NoError(t, iter.Close())
+		return history
+	}
+	before := readHistory()
+	uid, created := gocql.TimeUUID(), time.Now().UTC().Truncate(time.Millisecond)
+	const namespace, body, revision = "upgrade-fixture", "retained product body\n", "original-git-revision"
+	require.NoError(t, session.Query(`INSERT INTO products_by_key
+		(namespace, creation_timestamp, uid, name, generation, resource_version, revision, body)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, namespace, created, uid, "retained-product", int64(3), "7", revision, body).Exec())
+
+	const name = "015_translation.cql"
+	content, err := fs.ReadFile(migrations.Files, name)
+	require.NoError(t, err)
+	interrupted := -1
+	for index, statement := range strings.Split(string(content), ";") {
+		statement = strings.TrimSpace(statement)
+		if statement != "" && !strings.HasPrefix(statement, "--") {
+			require.NoError(t, session.Query(statement).Exec())
+			require.NoError(t, session.AwaitSchemaAgreement(t.Context()))
+		}
+		if statement == "ALTER TABLE products_by_key ADD translation_retired boolean" {
+			interrupted = index
+			break
+		}
+	}
+	require.Greater(t, interrupted, 0)
+	// The DDL committed, but the runner died before recording that statement.
+	require.NoError(t, session.Query(`INSERT INTO gocqlx_migrate (name, checksum, done, start_time)
+		VALUES (?, ?, ?, ?)`, name, fmt.Sprintf("%x", md5.Sum(content)), interrupted, created).Exec())
+	require.ErrorContains(t, scylla.ValidateSchema(t.Context(), session), "incompatible schema")
+	partial := readHistory()
+	changed := migrationSetThrough(t, name)
+	changed[name] = &fstest.MapFile{Data: append(append([]byte(nil), content...), []byte("\n-- changed;\n")...), Mode: 0o444}
+	require.ErrorContains(t, scylla.RunMigrationsWithFS(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop(), changed), "checksum")
+	require.Equal(t, partial, readHistory(), "changed migration bytes cannot authorize progress recovery")
+	incompatible := migrationSetThrough(t, name)
+	incompatible[name] = &fstest.MapFile{Data: []byte(strings.Replace(string(content),
+		"ADD translation_retired boolean", "ADD translation_retired text", 1)), Mode: 0o444}
+	require.NoError(t, session.Query("UPDATE gocqlx_migrate SET checksum=? WHERE name=?",
+		fmt.Sprintf("%x", md5.Sum(incompatible[name].Data)), name).Exec())
+	beforeIncompatible := readHistory()
+	require.ErrorContains(t, scylla.RunMigrationsWithFS(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop(), incompatible),
+		"incompatible existing column")
+	require.Equal(t, beforeIncompatible, readHistory(), "a matching checksum cannot authorize the wrong column type")
+	require.NoError(t, session.Query("UPDATE gocqlx_migrate SET checksum=? WHERE name=?",
+		fmt.Sprintf("%x", md5.Sum(content)), name).Exec())
+	inconsistent := migrationSetThrough(t, name)
+	inconsistent["014_z_incompatible.cql"] = inconsistent["014_rbac.cql"]
+	delete(inconsistent, "014_rbac.cql")
+	require.ErrorContains(t, scylla.RunMigrationsWithFS(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop(), inconsistent),
+		"inconsistent migrations")
+	require.Equal(t, partial, readHistory(), "inconsistent history cannot authorize any progress recovery")
+	require.NoError(t, scylla.RunMigrations(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop()))
+	require.NoError(t, scylla.ValidateSchema(t.Context(), session))
+	after := readHistory()
+	for name, entry := range before {
+		require.Equal(t, entry, after[name], "resume must not rewrite completed migration %s", name)
+	}
+	var retainedUID gocql.UUID
+	var retainedBody, retainedRevision, retainedVersion string
+	var retainedGeneration int64
+	require.NoError(t, session.Query(`SELECT uid, body, revision, resource_version, generation FROM products_by_key
+		WHERE namespace=? AND creation_timestamp=? AND uid=?`, namespace, created, uid).
+		Scan(&retainedUID, &retainedBody, &retainedRevision, &retainedVersion, &retainedGeneration))
+	require.Equal(t, uid, retainedUID)
+	require.Equal(t, body, retainedBody)
+	require.Equal(t, revision, retainedRevision)
+	require.Equal(t, "7", retainedVersion)
+	require.Equal(t, int64(3), retainedGeneration)
+	require.NoError(t, scylla.RunMigrations(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop()))
+	require.Equal(t, after, readHistory(), "a completed resume must be idempotent")
 }
 
 func TestRBACMigrationRetainsLegacyAuditPayloadAndLedger(t *testing.T) {
@@ -471,7 +641,7 @@ func TestRBACMigrationRetainsLegacyAuditPayloadAndLedger(t *testing.T) {
 		tier, "", int64(1), 1, 0, int64(len(payload)), []byte(`{}`)).Exec())
 	require.NoError(t, scylla.RunMigrations(t.Context(), session, keyspace, uuid.NewString(), zap.NewNop()))
 	after := readLedger()
-	require.Len(t, after, 14)
+	require.Len(t, after, 15)
 	for name, entry := range before {
 		require.Equal(t, entry, after[name], "applied migration ledger must remain untouched")
 	}

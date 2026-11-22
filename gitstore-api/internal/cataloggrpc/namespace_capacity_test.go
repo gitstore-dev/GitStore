@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 GitStore contributors
 
-package cataloggrpc_test
+package cataloggrpc
 
 import (
 	"context"
@@ -21,10 +21,19 @@ import (
 	"time"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
+	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/testutil"
+	"github.com/gitstore-dev/gitstore/api/internal/validate"
+	"github.com/gitstore-dev/gitstore/translation"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -42,6 +51,8 @@ const (
 	namespaceCapacityMemoryGrowthLimit    = 10.0
 	namespaceCapacityGoroutineDriftLimit  = 5.0
 	namespaceCapacityHelperEnvironmentKey = "GITSTORE_NAMESPACE_CAPACITY_HELPER"
+	namespaceCapacityRepositoryID         = "00000000-0000-0000-0000-000000000001"
+	namespaceCapacityServiceSecret        = "owned-capacity-helper-fixture"
 )
 
 type namespaceCapacityReplicaStats struct {
@@ -79,6 +90,7 @@ type namespaceCapacityRequestSample struct {
 	ReplicaName       string
 	InternalError     bool
 	IncorrectDecision bool
+	Corpus            string
 }
 
 type namespaceCapacityRecorder struct {
@@ -112,7 +124,7 @@ func TestNamespaceCapacityThresholds(t *testing.T) {
 }
 
 func TestNamespaceCapacityRequestFixtures(t *testing.T) {
-	server := newCatalogServer(t, newNamespacePolicyDatastore(t), nil)
+	server := newNamespaceCapacityServer(t)
 	valid, invalid := namespaceCapacityRequests()
 	for _, tc := range []struct {
 		name     string
@@ -125,7 +137,9 @@ func TestNamespaceCapacityRequestFixtures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Len(t, tc.request.Trees, 1)
 			require.Len(t, tc.request.Trees[0].ProposedBlobs, namespaceCapacityFilesPerRequest)
-			response, err := server.ValidateResources(context.Background(), tc.request)
+			ctx, request, err := namespaceCapacitySignedRequest(t.Context(), tc.request)
+			require.NoError(t, err)
+			response, err := server.ValidateResources(ctx, request)
 			require.NoError(t, err)
 			assert.Equal(t, tc.accepted, response.Accepted)
 			if !tc.accepted {
@@ -133,6 +147,106 @@ func TestNamespaceCapacityRequestFixtures(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNamespaceCapacityTranslationCorpus(t *testing.T) {
+	server := newNamespaceCapacityServer(t)
+	for _, entry := range namespaceCapacityCases(t) {
+		t.Run(entry.name, func(t *testing.T) {
+			blobs := entry.request.Trees[0].ProposedBlobs
+			require.Len(t, blobs, namespaceCapacityFilesPerRequest)
+			namespaces, translations := 0, 0
+			for _, blob := range blobs {
+				if strings.HasPrefix(blob.Path, "namespaces/") {
+					namespaces++
+				}
+				if strings.HasPrefix(blob.Path, "translations/") {
+					translations++
+				}
+				if entry.nearLimit && blob.Path == entry.diagnosticPath {
+					require.Len(t, blob.Content, 1<<20)
+				}
+			}
+			require.Equal(t, namespaceCapacityManifestsPerRequest, namespaces)
+			require.Positive(t, translations)
+			ctx, request, err := namespaceCapacitySignedRequest(t.Context(), entry.request)
+			require.NoError(t, err)
+			response, err := server.ValidateResources(ctx, request)
+			require.NoError(t, err)
+			require.Equal(t, entry.accepted, response.Accepted, "%v", response.Errors)
+			if !entry.accepted {
+				require.NotEmpty(t, response.Errors)
+				require.Equal(t, entry.diagnosticPath, response.Errors[0].FilePath)
+			}
+			for _, blob := range blobs {
+				if !strings.HasPrefix(blob.Path, "translations/") {
+					continue
+				}
+				principal := &auth.Principal{Subject: "capacity-validator", AuthMethod: "static-users", Groups: []string{"system:authenticated"}}
+				diagnostics, err := server.ValidateManifest(auth.ContextWithPrincipal(t.Context(), principal), admission.ManifestValidationRequest{
+					RepositoryID: entry.request.RepositoryId, Path: blob.Path, NewContent: blob.Content,
+				})
+				require.NoError(t, err)
+				require.Equal(t, entry.accepted || blob.Path != entry.diagnosticPath, len(diagnostics) == 0,
+					"standalone/full preflight parity for %s: %v", blob.Path, diagnostics)
+			}
+		})
+	}
+}
+
+func TestNamespaceCapacityTranslationCorpusAcrossHelperProcesses(t *testing.T) {
+	cases := namespaceCapacityCases(t)
+	for _, name := range []string{"corpus-helper-a", "corpus-helper-b"} {
+		replica := startNamespaceCapacityReplica(t, name)
+		t.Cleanup(func() { stopNamespaceCapacityReplica(replica) })
+		for _, entry := range cases {
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			response, err := replica.validate(ctx, entry.request)
+			cancel()
+			require.NoError(t, err)
+			require.Equal(t, entry.accepted, response.Accepted, "%s/%s: %v", name, entry.name, response.Errors)
+		}
+	}
+}
+
+func TestNamespaceCapacityMixedCorpusScheduling(t *testing.T) {
+	cases := namespaceCapacityCases(t)
+	client := namespaceCapacityScheduleClient{cases: cases}
+	replicas := []*namespaceCapacityReplica{
+		{name: "schedule-a", client: client}, {name: "schedule-b", client: client},
+	}
+	recorder := &namespaceCapacityRecorder{}
+	config := namespaceCapacityLoadConfigFor(time.Second)
+	result := runNamespaceCapacityLoad(t.Context(), time.Now(), &namespaceCapacityReplicaPool{replicas: replicas}, cases, config, recorder)
+	require.Equal(t, config.RequestCount, result.Scheduled)
+	coverage := map[string]int{}
+	for _, sample := range recorder.snapshot() {
+		require.False(t, sample.InternalError, "%s/%s", sample.ReplicaName, sample.Corpus)
+		require.False(t, sample.IncorrectDecision, "%s/%s", sample.ReplicaName, sample.Corpus)
+		coverage[sample.Corpus]++
+	}
+	for _, entry := range cases {
+		require.Equal(t, 2, coverage[entry.name], "the existing offered driver must exercise every corpus class")
+	}
+}
+
+type namespaceCapacityScheduleClient struct {
+	catalogv1.CatalogServiceClient
+	cases []namespaceCapacityCase
+}
+
+func (client namespaceCapacityScheduleClient) ValidateResources(_ context.Context, request *catalogv1.ValidateResourcesRequest, _ ...grpc.CallOption) (*catalogv1.ValidateResourcesResponse, error) {
+	for _, entry := range client.cases {
+		if proto.Equal(&catalogv1.ResourceValidationTree{ProposedBlobs: request.Trees[0].ProposedBlobs},
+			&catalogv1.ResourceValidationTree{ProposedBlobs: entry.request.Trees[0].ProposedBlobs}) {
+			response := &catalogv1.ValidateResourcesResponse{Accepted: entry.accepted}
+			if !entry.accepted {
+				response.Errors = []*catalogv1.ValidationError{{FilePath: entry.diagnosticPath}}
+			}
+			return response, nil
+		}
+	}
+	return nil, fmt.Errorf("unrecognized scheduled corpus")
 }
 
 func TestNamespaceCapacityProcessCPUExcludesIdleRuntimeCapacity(t *testing.T) {
@@ -215,7 +329,8 @@ func TestNamespaceValidationCapacity(t *testing.T) {
 		t.Fatalf("GITSTORE_NAMESPACE_CAPACITY_DURATION=%s, want at least %s", duration, namespaceCapacityMinimumDuration)
 	}
 
-	validRequest, invalidRequest := namespaceCapacityRequests()
+	cases := namespaceCapacityCases(t)
+	validRequest := cases[0].request
 	replicas := []*namespaceCapacityReplica{
 		startNamespaceCapacityReplica(t, "replica-1"),
 		startNamespaceCapacityReplica(t, "replica-2"),
@@ -246,8 +361,7 @@ func TestNamespaceValidationCapacity(t *testing.T) {
 			loadContext,
 			started,
 			pool,
-			validRequest,
-			invalidRequest,
+			cases,
 			config,
 			recorder,
 		)
@@ -319,6 +433,18 @@ func TestNamespaceValidationCapacity(t *testing.T) {
 	for _, segment := range segments {
 		assertNamespaceCapacityReplicaThresholds(t, segment)
 	}
+	for _, entry := range cases {
+		var values []time.Duration
+		for _, sample := range samples {
+			if sample.Corpus == entry.name {
+				values = append(values, sample.Completed.Sub(sample.Started))
+			}
+		}
+		require.NotEmpty(t, values, "every corpus class must be exercised during the full window")
+		sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+		t.Logf("namespace validation corpus=%s requests=%d p95=%s p99=%s",
+			entry.name, len(values), namespaceCapacityPercentile(values, .95), namespaceCapacityPercentile(values, .99))
+	}
 	t.Logf(
 		"namespace capacity passed: files=%d namespace_manifests=%d requests=%d duration=%s concurrency=%d throughput=%.2f p95=%s p99=%s internal_error_rate=%.5f recovery=%s",
 		namespaceCapacityFilesPerRequest,
@@ -343,10 +469,9 @@ func TestNamespaceCapacityReplicaProcess(t *testing.T) {
 	controlListener, err := net.Listen("tcp", os.Getenv("GITSTORE_NAMESPACE_CAPACITY_CONTROL_ADDR"))
 	require.NoError(t, err)
 
-	store := newNamespacePolicyDatastore(t)
-	server := newCatalogServer(t, store, nil)
+	server := newNamespaceCapacityServer(t)
 	grpcServer := grpc.NewServer()
-	catalogv1.RegisterCatalogServiceServer(grpcServer, server.Server)
+	catalogv1.RegisterCatalogServiceServer(grpcServer, server)
 	go func() {
 		if serveErr := grpcServer.Serve(grpcListener); serveErr != nil {
 			panic(serveErr)
@@ -393,24 +518,18 @@ func runNamespaceCapacityLoad(
 	ctx context.Context,
 	started time.Time,
 	pool *namespaceCapacityReplicaPool,
-	validRequest *catalogv1.ValidateResourcesRequest,
-	invalidRequest *catalogv1.ValidateResourcesRequest,
+	cases []namespaceCapacityCase,
 	config namespaceCapacityLoadConfig,
 	recorder *namespaceCapacityRecorder,
 ) namespaceCapacityLoadResult {
 	jobs := make(chan int, config.QueueCapacity)
 	workersReady, waitForWorkers := startNamespaceCapacityWorkers(config.Workers, jobs, func(sequence int) {
 		replica := pool.replicaFor(sequence)
-		request := validRequest
-		expectedAccepted := true
-		if sequence%10 == 0 {
-			request = invalidRequest
-			expectedAccepted = false
-		}
+		entry := cases[sequence%len(cases)]
 
 		requestContext, cancel := context.WithTimeout(ctx, namespaceCapacityP99Limit*4)
 		requestStarted := time.Now()
-		response, err := replica.client.ValidateResources(requestContext, request)
+		response, err := replica.validate(requestContext, entry.request)
 		requestCompleted := time.Now()
 		cancel()
 
@@ -419,10 +538,17 @@ func runNamespaceCapacityLoad(
 			Completed:     requestCompleted,
 			ReplicaName:   replica.name,
 			InternalError: err != nil,
+			Corpus:        entry.name,
 		}
 		if err == nil {
-			sample.IncorrectDecision = response.GetAccepted() != expectedAccepted ||
-				(!expectedAccepted && !containsNamespaceCapacityStructuralError(response))
+			sample.IncorrectDecision = response.GetAccepted() != entry.accepted
+			if !entry.accepted {
+				found := false
+				for _, finding := range response.Errors {
+					found = found || finding.FilePath == entry.diagnosticPath
+				}
+				sample.IncorrectDecision = sample.IncorrectDecision || !found
+			}
 		}
 		recorder.record(sample)
 	})
@@ -601,11 +727,135 @@ func waitForNamespaceCapacityRecovery(
 	}
 }
 
+type namespaceCapacityCase struct {
+	name, diagnosticPath string
+	request              *catalogv1.ValidateResourcesRequest
+	accepted, nearLimit  bool
+}
+
+func namespaceCapacityCases(t *testing.T) []namespaceCapacityCase {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/translation/corpus.json")
+	require.NoError(t, err)
+	var corpus struct{ Valid map[string]string }
+	require.NoError(t, json.Unmarshal(raw, &corpus))
+	keys := make([]string, 0, len(corpus.Valid))
+	for key := range corpus.Valid {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	valid, invalid := namespaceCapacityRequests()
+	require.LessOrEqual(t, len(keys), namespaceCapacityFilesPerRequest-namespaceCapacityManifestsPerRequest)
+	offset := namespaceCapacityFilesPerRequest - len(keys)
+	for i, key := range keys {
+		source := strings.ReplaceAll(corpus.Valid[key], "acme-store", "gitstore-system")
+		parsed, _, err := validate.NewParser().ParseResource(strings.NewReader(source))
+		require.NoError(t, err)
+		require.NotNil(t, parsed.Translation)
+		name := fmt.Sprintf("capacity-translation-%02d", i)
+		ending := "\n"
+		if strings.Contains(source, "\r\n") {
+			ending = "\r\n"
+		}
+		old := "  name: " + parsed.Translation.Metadata.Name + ending
+		require.Contains(t, source, old)
+		source = strings.Replace(source, old, "  name: "+name+ending, 1)
+		blob := &catalogv1.ResourceBlob{Path: "translations/" + name + ".md", Content: []byte(source)}
+		valid.Trees[0].ProposedBlobs[offset+i] = blob
+		invalid.Trees[0].ProposedBlobs[offset+i] = blob
+	}
+	cases := []namespaceCapacityCase{
+		{name: "normal", request: valid, accepted: true},
+		{name: "namespace-negative", request: invalid, diagnosticPath: "namespaces/invalid.md"},
+	}
+	for _, entry := range []struct {
+		name, source string
+		nearLimit    bool
+	}{
+		{"translation-locale-negative", strings.Replace(corpus.Valid["product-field"], "  locale:", "  locale: invalid_ #", 1), false},
+		{"translation-field-negative", strings.Replace(corpus.Valid["product-field"], "spec.title", "spec.unsupported", 1), false},
+		{"translation-near-limit", corpus.Valid["product-combined"], true},
+	} {
+		request := proto.Clone(valid).(*catalogv1.ValidateResourcesRequest)
+		source := strings.ReplaceAll(entry.source, "acme-store", "gitstore-system")
+		if entry.nearLimit {
+			source += strings.Repeat("x", translation.MaxDocumentBytes-len(source))
+		}
+		path := "translations/" + entry.name + ".md"
+		request.Trees[0].ProposedBlobs[offset] = &catalogv1.ResourceBlob{Path: path, Content: []byte(source)}
+		cases = append(cases, namespaceCapacityCase{
+			name: entry.name, diagnosticPath: path, request: request,
+			accepted: entry.nearLimit, nearLimit: entry.nearLimit,
+		})
+	}
+	return cases
+}
+
+func newNamespaceCapacityServer(t *testing.T) *Server {
+	t.Helper()
+	store := testutil.NewNamespacePolicyDatastore(t, namespaceCapacityRepositoryID, "00000000-0000-0000-0000-000000000002")
+	namespace, err := store.GetNamespaceByName(t.Context(), "gitstore-system")
+	require.NoError(t, err)
+	audit := store.(datastore.TranslationTargetAuditStore)
+	var progress datastore.TranslationAuditProgress
+	for range 64 {
+		progress, err = audit.RepairTranslationTargetAuditTurn(t.Context(), namespace.UID, 256)
+		require.NoError(t, err)
+		if progress.Phase == "Verified" {
+			break
+		}
+	}
+	require.Equal(t, "Verified", progress.Phase, "missing-target facts require an actual completed coverage audit")
+	server, err := NewServer(ServerDeps{
+		Store: store, Logger: zap.NewNop(), ServiceSecret: namespaceCapacityServiceSecret,
+		Registry: auth.NewProviderRegistry(nil, testutil.NewAllowAllAuthZ(), nil),
+	})
+	require.NoError(t, err)
+	// Only the same-package helper exercises dormant validation, not activation.
+	server.translationActivation.Enabled = true
+	return server
+}
+
+func namespaceCapacitySignedRequest(ctx context.Context, request *catalogv1.ValidateResourcesRequest) (context.Context, *catalogv1.ValidateResourcesRequest, error) {
+	request = proto.Clone(request).(*catalogv1.ValidateResourcesRequest)
+	refs := make([]*catalogv1.ReceiveRef, 0, len(request.Trees))
+	for _, tree := range request.Trees {
+		if tree.Ref == nil {
+			tree.Ref = &catalogv1.ReceiveRef{
+				RefName: "refs/heads/capacity", OldCommitSha: strings.Repeat("0", 40), NewCommitSha: strings.Repeat("a", 40),
+			}
+		}
+		refs = append(refs, tree.Ref)
+	}
+	request.Authorization = &catalogv1.CallbackAuthorization{
+		RepositoryId: request.RepositoryId, ReceiveId: "owned-capacity-validation", Refs: refs,
+		Actor: &catalogv1.CallbackActor{Subject: "capacity-validator", AuthMethod: "static-users", Groups: []string{"system:authenticated"}},
+	}
+	signature, err := auth.SignRPC(namespaceCapacityServiceSecret, "gitstore-api", catalogv1.CatalogService_ValidateResources_FullMethodName, request)
+	if err != nil {
+		return ctx, nil, err
+	}
+	headers := metadata.Pairs(auth.RPCSignatureMetadata, signature)
+	return metadata.NewIncomingContext(metadata.NewOutgoingContext(ctx, headers), headers), request, nil
+}
+
+func (replica *namespaceCapacityReplica) validate(ctx context.Context, request *catalogv1.ValidateResourcesRequest) (*catalogv1.ValidateResourcesResponse, error) {
+	ctx, request, err := namespaceCapacitySignedRequest(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	return replica.client.ValidateResources(ctx, request)
+}
+
+func namespaceCapacityBlob(path, name string) *catalogv1.ResourceBlob {
+	return &catalogv1.ResourceBlob{Path: path, Content: []byte(fmt.Sprintf("---\napiVersion: gitstore.dev/v1beta1\nkind: Namespace\nmetadata:\n  name: %s\nspec:\n  title: %s\n  tier: ORGANIZATION\n---\n", name, name))}
+}
+
 func namespaceCapacityRequests() (*catalogv1.ValidateResourcesRequest, *catalogv1.ValidateResourcesRequest) {
 	validBlobs := make([]*catalogv1.ResourceBlob, 0, namespaceCapacityFilesPerRequest)
 	for i := 0; i < namespaceCapacityManifestsPerRequest; i++ {
 		name := fmt.Sprintf("capacity-ns-%02d", i)
-		validBlobs = append(validBlobs, namespaceBlob("namespaces/"+name+".md", name, "ORGANIZATION"))
+		validBlobs = append(validBlobs, namespaceCapacityBlob("namespaces/"+name+".md", name))
 	}
 	for i := namespaceCapacityManifestsPerRequest; i < namespaceCapacityFilesPerRequest; i++ {
 		name := fmt.Sprintf("capacity-product-%03d", i)
@@ -624,12 +874,12 @@ spec:
 		})
 	}
 	invalidBlobs := append([]*catalogv1.ResourceBlob(nil), validBlobs...)
-	invalidBlobs[0] = namespaceBlob("namespaces/invalid.md", "Invalid Name", "ORGANIZATION")
+	invalidBlobs[0] = namespaceCapacityBlob("namespaces/invalid.md", "Invalid Name")
 	return &catalogv1.ValidateResourcesRequest{
-		RepositoryId: testRepoID,
+		RepositoryId: namespaceCapacityRepositoryID,
 		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: validBlobs}},
 	}, &catalogv1.ValidateResourcesRequest{
-		RepositoryId: testRepoID,
+		RepositoryId: namespaceCapacityRepositoryID,
 		Trees:        []*catalogv1.ResourceValidationTree{{ProposedBlobs: invalidBlobs}},
 	}
 }
@@ -719,7 +969,7 @@ func warmNamespaceCapacityReplica(
 	t.Helper()
 	for i := 0; i < namespaceCapacityConcurrency; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		response, err := replica.client.ValidateResources(ctx, request)
+		response, err := replica.validate(ctx, request)
 		cancel()
 		require.NoError(t, err)
 		require.True(t, response.GetAccepted())
@@ -754,16 +1004,6 @@ func currentNamespaceCapacityStats() namespaceCapacityReplicaStats {
 		HeapAlloc:  memory.HeapAlloc,
 		Goroutines: runtime.NumGoroutine(),
 	}
-}
-
-func containsNamespaceCapacityStructuralError(response *catalogv1.ValidateResourcesResponse) bool {
-	for _, validationError := range response.GetErrors() {
-		if validationError.GetFilePath() == "namespaces/invalid.md" &&
-			validationError.GetField() == "metadata.name" {
-			return true
-		}
-	}
-	return false
 }
 
 func namespaceCapacityPercentile(values []time.Duration, percentile float64) time.Duration {

@@ -21,6 +21,164 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestFileListUsesNamespaceScopedBoundedRelayPages(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	now := time.Now().UTC()
+	for i := range 4 {
+		namespace := "shop"
+		if i == 3 {
+			namespace = "other"
+		}
+		require.NoError(t, store.CreateFile(t.Context(), &datastore.File{
+			UID: uuid.NewString(), Namespace: namespace, Name: fmt.Sprintf("file-%d", i),
+			CreationTimestamp: now.Add(time.Duration(i) * time.Second), ResourceVersion: "1",
+			APIVersion: "storage.gitstore.dev/v1beta1", Kind: "File", Generation: 1,
+		}))
+	}
+	r, err := NewResolver(ResolverDeps{Store: store, Logger: zap.NewNop()})
+	require.NoError(t, err)
+	first := int32(2)
+	page, err := r.Query().Files(t.Context(), "shop", &first, nil, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, page.Edges, 2)
+	require.Equal(t, "file-2", page.Edges[0].Node.Metadata.Name)
+	require.True(t, page.PageInfo.HasNextPage)
+	last, err := r.Query().Files(t.Context(), "shop", &first, page.PageInfo.EndCursor, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, last.Edges, 1)
+	require.Equal(t, "file-0", last.Edges[0].Node.Metadata.Name)
+	require.False(t, last.PageInfo.HasNextPage)
+	invalid := int32(-1)
+	_, err = r.Query().Files(t.Context(), "shop", &invalid, nil, nil, nil)
+	require.Error(t, err)
+}
+
+func TestAdditionalTranslationTargetWatchesReplayAcrossReplicas(t *testing.T) {
+	for _, kind := range []string{"ProductVariant", "Collection"} {
+		t.Run(kind, func(t *testing.T) {
+			store, err := memdb.New()
+			require.NoError(t, err)
+			journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+			a, err := NewResolver(repositoryWatchResolverDeps(store, journal))
+			require.NoError(t, err)
+			b, err := NewResolver(repositoryWatchResolverDeps(store, journal))
+			require.NoError(t, err)
+			uid, namespace := uuid.NewString(), "shop"
+			var update, remove func() error
+			switch kind {
+			case "ProductVariant":
+				resource := &datastore.ProductVariant{
+					UID: uid, Namespace: namespace, Name: "target", ResourceVersion: "1", Generation: 1,
+					APIVersion: "catalog.gitstore.dev/v1beta1", Kind: kind, SKU: "sku", ProductRefName: "parent",
+					Spec: json.RawMessage(`{"title":"initial","sku":"sku","productRef":{"name":"parent"}}`),
+				}
+				require.NoError(t, store.CreateProductVariant(t.Context(), resource))
+				update = func() error {
+					resource.ResourceVersion, resource.Generation, resource.Body = "2", 2, "\r\nexact target\r\n"
+					return store.UpdateProductVariant(t.Context(), resource, "1")
+				}
+				remove = func() error { return store.DeleteProductVariantWithResourceVersion(t.Context(), uid, "2") }
+			case "Collection":
+				resource := &datastore.Collection{
+					UID: uid, Namespace: namespace, Name: "target", ResourceVersion: "1", Generation: 1,
+					APIVersion: "catalog.gitstore.dev/v1beta1", Kind: kind, Spec: json.RawMessage(`{"title":"initial"}`),
+				}
+				require.NoError(t, store.CreateCollection(t.Context(), resource))
+				update = func() error {
+					resource.ResourceVersion, resource.Generation, resource.Body = "2", 2, "\r\nexact target\r\n"
+					return store.UpdateCollection(t.Context(), resource, "1")
+				}
+				remove = func() error { return store.DeleteCollectionWithResourceVersion(t.Context(), uid, "2") }
+			}
+			bounds, err := journal.Bounds(t.Context())
+			require.NoError(t, err)
+			cursor := watchjournal.EncodeCursor(bounds.Epoch, bounds.HighWater)
+			require.NoError(t, update())
+			require.NoError(t, remove())
+			generic, err := b.Subscription().WatchResources(t.Context(), kind, &namespace, nil, &cursor)
+			require.NoError(t, err)
+			var nextTyped func() (model.WatchEventType, string, model.Node)
+			switch kind {
+			case "ProductVariant":
+				typed, err := a.Subscription().WatchProductVariants(t.Context(), &namespace, nil, &cursor)
+				require.NoError(t, err)
+				nextTyped = func() (model.WatchEventType, string, model.Node) {
+					event := receiveAdditionalTargetEvent(t, typed)
+					return event.Type, event.ResourceVersion, event.ProductVariant
+				}
+			case "Collection":
+				typed, err := a.Subscription().WatchCollections(t.Context(), &namespace, nil, &cursor)
+				require.NoError(t, err)
+				nextTyped = func() (model.WatchEventType, string, model.Node) {
+					event := receiveAdditionalTargetEvent(t, typed)
+					return event.Type, event.ResourceVersion, event.Collection
+				}
+			}
+			eventType, version, node := nextTyped()
+			require.Equal(t, model.WatchEventTypeModified, eventType)
+			genericEvent := receiveGenericProductEvent(t, generic)
+			require.Equal(t, version, genericEvent.ResourceVersion)
+			require.Equal(t, node.GetID(), genericEvent.Object["id"])
+			require.Equal(t, "\r\nexact target\r\n", genericEvent.Object["body"])
+			eventType, version, node = nextTyped()
+			require.Equal(t, model.WatchEventTypeDeleted, eventType)
+			require.Nil(t, node)
+			genericEvent = receiveGenericProductEvent(t, generic)
+			require.Equal(t, version, genericEvent.ResourceVersion)
+			require.Nil(t, genericEvent.Object)
+		})
+	}
+}
+
+func receiveAdditionalTargetEvent[T any](t *testing.T, events <-chan T) T {
+	t.Helper()
+	select {
+	case event, open := <-events:
+		require.True(t, open)
+		return event
+	case <-time.After(2 * time.Second):
+		t.Fatal("target watch did not replay its journal event")
+		var zero T
+		return zero
+	}
+}
+
+func TestAdditionalTargetWatchRejectsMismatchedJournalImages(t *testing.T) {
+	for _, kind := range []string{"ProductVariant", "Collection"} {
+		for _, invalid := range []string{"null", "wrong-namespace", "wrong-name", "wrong-kind", "missing-uid"} {
+			t.Run(kind+"/"+invalid, func(t *testing.T) {
+				resource := map[string]string{"UID": uuid.NewString(), "Namespace": "shop", "Name": "target", "Kind": kind}
+				switch invalid {
+				case "wrong-namespace":
+					resource["Namespace"] = "elsewhere"
+				case "wrong-name":
+					resource["Name"] = "another"
+				case "wrong-kind":
+					resource["Kind"] = "Product"
+				case "missing-uid":
+					delete(resource, "UID")
+				}
+				payload, err := json.Marshal(resource)
+				require.NoError(t, err)
+				if invalid == "null" {
+					payload = []byte("null")
+				}
+				event := datastore.ResourceWatchEvent{
+					Type: datastore.ResourceWatchAdded, Kind: kind, Namespace: "shop", Name: "target", Payload: payload,
+				}
+				_, err = catalogTargetJournalEventToGeneric(kind, event)
+				require.Error(t, err)
+			})
+		}
+		event, err := catalogTargetJournalEventToGeneric(kind, datastore.ResourceWatchEvent{Type: datastore.ResourceWatchBookmark})
+		require.NoError(t, err)
+		require.Equal(t, kind, event.Kind)
+		require.Nil(t, event.Object)
+	}
+}
+
 func TestUpdateResourceStatusFileResolvedAndConflict(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)

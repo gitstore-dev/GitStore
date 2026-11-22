@@ -33,6 +33,7 @@ import (
 	repositorycontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/repository"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/secret"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/status"
+	translationcontroller "github.com/gitstore-dev/gitstore/controller-manager/internal/translation"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/types"
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/version"
 	"github.com/gitstore-dev/gitstore/observability"
@@ -223,9 +224,13 @@ func newRBACDiskRunner(kind string, watcher listwatch.ListWatcher[rbaccontroller
 }
 
 func registerDiskRunner[T any](ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, runner *listwatch.Runner[T], reconciler types.Reconciler, cfg *config.Config, related func(context.Context, types.WorkItemKey) error) error {
+	resync := cfg.Controller.Watch.ResyncInterval
+	if runner.DisableReplay {
+		resync = 0
+	}
 	if err := mgr.Register(manager.ReconcilerRegistration{
 		Kind: runner.Kind, Reconciler: reconciler, Cache: runner.Cache, Disk: runner.Disk,
-		RelatedEnqueue: related, ResyncInterval: cfg.Controller.Watch.ResyncInterval,
+		RelatedEnqueue: related, ResyncInterval: resync,
 		MaxAttempts: cfg.Controller.Reconcile.MaxAttempts, StallThreshold: cfg.Controller.Reconcile.StallThreshold,
 	}); err != nil {
 		return err
@@ -241,11 +246,95 @@ func registerDiskRunner[T any](ctx context.Context, runners *sync.WaitGroup, mgr
 	return nil
 }
 
+type metadataObserver struct{}
+
+func (metadataObserver) Reconcile(context.Context, types.WorkItemKey) types.ReconcileResult {
+	return types.ResultOK()
+}
+
+func prepareTranslationSource(client *translationcontroller.GraphQLClient) func(context.Context, translationcontroller.Resource, *checkpoint.DiskItem) error {
+	return func(ctx context.Context, source translationcontroller.Resource, item *checkpoint.DiskItem) error {
+		binding, err := client.GetBinding(ctx, source.Metadata.Namespace, source.Metadata.Name)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil || binding == nil || binding.TranslationID != source.Metadata.UID || binding.SourceVersion != source.Metadata.ResourceVersion {
+			binding = nil
+		}
+		item.Indexes, err = translationcontroller.SourceDependencyIndexes(source, binding)
+		return err
+	}
+}
+
+func targetHandoffHook[T any](handoff *translationcontroller.TargetHandoff, project func(T) translationcontroller.TargetHint) func(context.Context, *T, *T) error {
+	return func(ctx context.Context, previous, current *T) error {
+		var before, after *translationcontroller.TargetHint
+		if previous != nil {
+			hint := project(*previous)
+			before = &hint
+		}
+		if current != nil {
+			hint := project(*current)
+			after = &hint
+		}
+		return handoff.Change(ctx, before, after)
+	}
+}
+
+func wireTranslationTargetHandoffs(handoff *translationcontroller.TargetHandoff, store *checkpoint.DiskStore,
+	namespace *listwatch.Runner[namespacecontroller.Namespace], product *listwatch.Runner[categorytaxonomy.Product],
+	category *listwatch.Runner[categorytaxonomy.CategoryTaxonomy], targets []*listwatch.Runner[listwatch.TargetMetadataResource],
+) {
+	product.BeforeDiskChange = targetHandoffHook(handoff, func(resource categorytaxonomy.Product) translationcontroller.TargetHint {
+		return translationcontroller.TargetHint{Namespace: resource.Namespace, APIVersion: "catalog.gitstore.dev/v1beta1",
+			Kind: "Product", Name: resource.Name, UID: resource.UID, ResourceVersion: resource.ResourceVersion,
+			Terminating: resource.DeletionTimestamp != nil || slices.Contains(resource.Finalizers, "gitstore.dev/foreground-deletion")}
+	})
+	category.BeforeDiskChange = targetHandoffHook(handoff, func(resource categorytaxonomy.CategoryTaxonomy) translationcontroller.TargetHint {
+		return translationcontroller.TargetHint{Namespace: resource.Namespace, APIVersion: "catalog.gitstore.dev/v1beta1",
+			Kind: "CategoryTaxonomy", Name: resource.Name, UID: resource.UID, ResourceVersion: resource.ResourceVersion,
+			Terminating: resource.DeletionTimestamp != nil || slices.Contains(resource.Finalizers, "gitstore.dev/foreground-deletion")}
+	})
+	for _, runner := range targets {
+		runner.BeforeDiskChange = targetHandoffHook(handoff, func(resource listwatch.TargetMetadataResource) translationcontroller.TargetHint {
+			version := "catalog.gitstore.dev/v1beta1"
+			if resource.Kind == "File" {
+				version = "storage.gitstore.dev/v1beta1"
+			}
+			return translationcontroller.TargetHint{Namespace: resource.Metadata.Namespace, APIVersion: version,
+				Kind: resource.Kind, Name: resource.Metadata.Name, UID: resource.Metadata.UID, ResourceVersion: resource.Metadata.ResourceVersion,
+				Terminating: resource.Metadata.DeletionTimestamp != nil || slices.Contains(resource.Metadata.Finalizers, "gitstore.dev/foreground-deletion")}
+		})
+	}
+	namespace.BeforeDiskChange = func(ctx context.Context, previous, current *namespacecontroller.Namespace) error {
+		if previous != nil && current != nil && previous.Name == current.Name && previous.UID == current.UID &&
+			(previous.DeletionTimestamp == nil) == (current.DeletionTimestamp == nil) &&
+			slices.Contains(previous.Finalizers, "gitstore.dev/foreground-deletion") == slices.Contains(current.Finalizers, "gitstore.dev/foreground-deletion") {
+			return nil
+		}
+		for _, resource := range []*namespacecontroller.Namespace{previous, current} {
+			if resource != nil {
+				if err := translationcontroller.QueueNamespaceChange(ctx, store, resource.Name); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+}
+
 func registerDiskControllers(ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client) (func() error, error) {
 	return registerDiskControllersWithRBAC(ctx, runners, mgr, cfg, log, client, false)
 }
 
 func registerDiskControllersWithRBAC(ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client, enableRBAC bool) (func() error, error) {
+	if err := cfg.Controller.Translation.Validate(); err != nil {
+		return nil, err
+	}
+	return registerDiskControllersWithFeatures(ctx, runners, mgr, cfg, log, client, enableRBAC, cfg.Controller.Translation.Enabled)
+}
+
+func registerDiskControllersWithFeatures(ctx context.Context, runners *sync.WaitGroup, mgr *manager.Manager, cfg *config.Config, log *zap.Logger, client *graphqlclient.Client, enableRBAC, enableTranslation bool) (func() error, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	stores := make(map[string]*checkpoint.DiskStore, 4)
 	closeStores := func() error {
@@ -258,12 +347,19 @@ func registerDiskControllersWithRBAC(ctx context.Context, runners *sync.WaitGrou
 		return result
 	}
 	kinds := []string{"Namespace", "Repository", "CategoryTaxonomy", "Product"}
+	if enableTranslation {
+		kinds = append(kinds, "Translation", "ProductVariant", "Collection", "File")
+	}
 	if enableRBAC {
 		kinds = append(kinds, rbaccontroller.Kinds...)
 		kinds = append(kinds, rbaccontroller.NamespaceCleanupWorkKind)
 	}
 	for _, kind := range kinds {
-		store, err := checkpoint.OpenDiskStore(cfg.Controller.Checkpoint.Dir, kind)
+		var options []checkpoint.DiskOption
+		if kind == "Translation" {
+			options = append(options, checkpoint.WithPendingAge(), checkpoint.WithProjectionLimit(8<<20))
+		}
+		store, err := checkpoint.OpenDiskStore(cfg.Controller.Checkpoint.Dir, kind, options...)
 		if err != nil {
 			return nil, errors.Join(err, closeStores())
 		}
@@ -289,6 +385,31 @@ func registerDiskControllersWithRBAC(ctx context.Context, runners *sync.WaitGrou
 			return types.WorkItemKey{Kind: "Product", Namespace: p.Namespace, Name: p.Name}
 		},
 		func(p categorytaxonomy.Product) string { return p.ResourceVersion })
+	var translationRunner *listwatch.Runner[translationcontroller.Resource]
+	var targetRunners []*listwatch.Runner[listwatch.TargetMetadataResource]
+	translationClient := translationcontroller.NewGraphQLClient(client)
+	if enableTranslation {
+		translationRunner = newDiskRunner("Translation", listwatch.NewTranslationListWatcher(client), stores["Translation"], cfg, log,
+			func(source translationcontroller.Resource) types.WorkItemKey {
+				return types.WorkItemKey{Kind: "Translation", Namespace: source.Metadata.Namespace, Name: source.Metadata.Name}
+			}, func(source translationcontroller.Resource) string { return source.Metadata.ResourceVersion })
+		translationRunner.PrepareDiskItem = prepareTranslationSource(translationClient)
+		translationRunner.RequeueUnchanged = true
+		for _, kind := range []string{"ProductVariant", "Collection", "File"} {
+			watcher, err := listwatch.NewTranslationTargetListWatcher(client, kind)
+			if err != nil {
+				return nil, errors.Join(err, closeStores())
+			}
+			runner := newDiskRunner(kind, watcher, stores[kind], cfg, log,
+				func(target listwatch.TargetMetadataResource) types.WorkItemKey {
+					return types.WorkItemKey{Kind: target.Kind, Namespace: target.Metadata.Namespace, Name: target.Metadata.Name}
+				}, func(target listwatch.TargetMetadataResource) string { return target.Metadata.ResourceVersion })
+			runner.DisableReplay = true
+			targetRunners = append(targetRunners, runner)
+		}
+		wireTranslationTargetHandoffs(translationcontroller.NewTargetHandoff(stores["Translation"], translationClient),
+			stores["Translation"], ns, product, cat, targetRunners)
+	}
 	rbacClient := rbaccontroller.NewGraphQLClient(client)
 	rbacRunners := map[string]*listwatch.Runner[rbaccontroller.Resource]{}
 	if enableRBAC {
@@ -386,6 +507,17 @@ func registerDiskControllersWithRBAC(ctx context.Context, runners *sync.WaitGrou
 		func() error {
 			return registerDiskRunner(ctx, runners, mgr, product, productcontroller.NewReconcilerWithLookup(product.Lookup, cat.Lookup, status.NewGraphQLProductStatusClient(client), productcontroller.NewGraphQLCompletionClient(client)), cfg, related)
 		},
+	}
+	if enableTranslation {
+		registrations = append(registrations, func() error {
+			return registerDiskRunner(ctx, runners, mgr, translationRunner,
+				translationcontroller.NewReconcilerWithLookup(translationRunner.Lookup, translationClient, translationClient), cfg, related)
+		})
+		for _, runner := range targetRunners {
+			registrations = append(registrations, func() error {
+				return registerDiskRunner(ctx, runners, mgr, runner, metadataObserver{}, cfg, related)
+			})
+		}
 	}
 	for _, register := range registrations {
 		if err := register(); err != nil {

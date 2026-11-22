@@ -111,7 +111,8 @@ type Mutation {
 type Subscription {
   """
   Generic list-then-watch entry point for every kind with a durable watch
-  journal source: Namespace, Repository, CategoryTaxonomy, Product and File
+  journal source: Namespace, Repository, CategoryTaxonomy, Product,
+  ProductVariant, Collection and File
   today, and CRD-defined kinds once they register a source. Core kinds SHOULD prefer their dedicated per-kind subscription
   (e.g. watchCategories) for compile-time-typed payloads. A kind without a
   journal source is rejected with an UNSUPPORTED_KIND extension error
@@ -120,8 +121,8 @@ type Subscription {
   Behavior:
   - resourceVersion omitted/empty: no implicit "list" is performed —
     subscriptions deliver only a stream. Callers obtain the initial
-    list via the kind's existing list query and then open this
-    subscription with the resourceVersion returned by that list.
+    list via the kind's existing paginated query. Capture the shared bootstrap
+    bookmark before listing, then resume the subscription from that bookmark.
   - resourceVersion present but expired (older than server retention):
     the subscription terminates immediately with a WATCH_EXPIRED
     extension error instead of silently resuming from scratch.
@@ -196,6 +197,11 @@ input UpdateResourceStatusInput {
   kind: String!
   name: String!
   namespace: String!
+  """
+  Source lifetime UID, required and enforced for Translation. Other kinds
+  retain their existing status preconditions.
+  """
+  uid: ID
   resourceVersion: String!
   observedGeneration: Int
   lastAppliedRevision: String

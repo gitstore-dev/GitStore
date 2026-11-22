@@ -46,6 +46,8 @@ func resourceCreationActor(resource any) string {
 		return r.CreationActor
 	case *datastore.ProductVariant:
 		return r.CreationActor
+	case *datastore.Translation:
+		return r.CreationActor
 	default:
 		return ""
 	}
@@ -156,6 +158,9 @@ func ownerOnlyChange(proposed *parsedEntry, existing any, namespace string) bool
 		fill(r.APIVersion, r.Kind, r.Namespace, r.Name, r.Labels, r.Annotations, r.Spec, r.Body, r.SourcePath)
 	case *datastore.ProductVariant:
 		fill(r.APIVersion, r.Kind, r.Namespace, r.Name, r.Labels, r.Annotations, r.Spec, r.Body, r.SourcePath)
+	case *datastore.Translation:
+		fill(r.APIVersion, r.Kind, r.Namespace, r.Name, r.Labels, r.Annotations, r.Spec, r.Body, r.SourcePath)
+		desired.RawSource = nil
 	default:
 		return false
 	}
@@ -279,6 +284,7 @@ type comparableResource struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 	Spec        any               `json:"spec,omitempty"`
 	Body        string            `json:"body,omitempty"`
+	RawSource   []byte            `json:"rawSource,omitempty"`
 }
 
 func newParsedEntry(path string, parsed *validate.ParsedResource, body []byte, defaultNamespace string) (*parsedEntry, bool, error) {
@@ -310,6 +316,14 @@ func comparableForParsed(parsed *validate.ParsedResource, body []byte, defaultNa
 		return comparableResource{}, false
 	}
 	switch parsed.Kind {
+	case "Translation":
+		resource := parsed.Translation
+		if resource == nil || len(parsed.RawSource) == 0 {
+			return comparableResource{}, false
+		}
+		comparable := comparableFromMeta(resource.APIVersion, resource.Kind, resource.Metadata, resource.Spec, body, defaultNamespace)
+		comparable.RawSource = parsed.RawSource
+		return comparable, true
 	case "Product":
 		r := parsed.Product
 		if r == nil {

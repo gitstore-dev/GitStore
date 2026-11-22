@@ -8,6 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
+	"runtime/debug"
+	runtimemetrics "runtime/metrics"
 	"strconv"
 	"strings"
 	"sync"
@@ -178,6 +181,74 @@ func TestSDKRuntimePreservesLegacySignalNames(t *testing.T) {
 	}
 	require.True(t, names["go_gc_duration_seconds_count"])
 	require.True(t, names["go_gc_duration_seconds_sum"])
+}
+
+func TestSDKRuntimeReportsLastCompletedGCLiveHeapAndCycles(t *testing.T) {
+	previousGCPercent := debug.SetGCPercent(-1)
+	t.Cleanup(func() { debug.SetGCPercent(previousGCPercent) })
+	provider, registry, err := newMetricProvider(t.Context(), "", nil, resource.Empty())
+	require.NoError(t, err)
+	defer provider.Shutdown(t.Context())
+
+	gatherCompletedGC := func() (uint64, uint64) {
+		t.Helper()
+		samples := []runtimemetrics.Sample{
+			{Name: "/gc/cycles/total:gc-cycles"},
+			{Name: "/gc/heap/live:bytes"},
+		}
+		runtimemetrics.Read(samples)
+		for _, sample := range samples {
+			require.Equal(t, runtimemetrics.KindUint64, sample.Value.Kind())
+		}
+		cycles, live := samples[0].Value.Uint64(), samples[1].Value.Uint64()
+		families, err := registry.Gather()
+		require.NoError(t, err)
+		found := map[string]bool{}
+		for _, family := range families {
+			switch family.GetName() {
+			case "go_gc_heap_live_bytes", "go_gc_cycles_total":
+				require.Len(t, family.Metric, 1)
+				point := family.Metric[0]
+				require.Empty(t, point.Label, "GC provenance must not add content or cycle labels")
+				if family.GetName() == "go_gc_heap_live_bytes" {
+					require.NotNil(t, point.Gauge)
+					require.Equal(t, float64(live), point.GetGauge().GetValue())
+				} else {
+					require.NotNil(t, point.Counter)
+					require.Equal(t, float64(cycles), point.GetCounter().GetValue())
+				}
+				found[family.GetName()] = true
+			}
+		}
+		require.Len(t, found, 2, "SDK collection must expose both completed-GC signals")
+		return cycles, live
+	}
+
+	runtime.GC()
+	baselineCycles, baselineLive := gatherCompletedGC()
+	retained := make([]byte, 8<<20)
+	runtime.GC()
+	retainedCycles, retainedLive := gatherCompletedGC()
+	require.Greater(t, retainedCycles, baselineCycles)
+	require.Greater(t, retainedLive, baselineLive+uint64(len(retained))/2)
+
+	// Allocations since the completed GC must not become retained-heap evidence.
+	uncollected := make([]byte, 4<<20)
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	require.Greater(t, memory.HeapAlloc, retainedLive+uint64(len(uncollected))/2)
+	unchangedCycles, unchangedLive := gatherCompletedGC()
+	require.Equal(t, retainedCycles, unchangedCycles)
+	require.Equal(t, retainedLive, unchangedLive)
+	runtime.KeepAlive(retained)
+	runtime.KeepAlive(uncollected)
+	retained = nil
+	uncollected = nil
+
+	runtime.GC()
+	releasedCycles, releasedLive := gatherCompletedGC()
+	require.Greater(t, releasedCycles, retainedCycles)
+	require.Less(t, releasedLive, retainedLive-(4<<20))
 }
 
 func TestSDKGCQuantileGaugesPreserveCanonicalBackendLabels(t *testing.T) {

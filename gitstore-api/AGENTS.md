@@ -36,3 +36,12 @@
 - See `../tests/AGENTS.md` for datastore contracts and
   `../tests/capacity/AGENTS.md` for deployed performance, profiling and replica
   acceptance work.
+- Projection maintenance reuses `gitctl scylla-projection-audit|repair`.
+  `--kind Translation --namespace-uid <uid>` selects bounded server-resumed
+  turns (`--page-size 1..256`, positive `--timeout`); audit/dry-run only previews
+  discovery, while `--confirm` performs one turn. Scanned is not certification.
+  `--audit-scope indexes` is the default; `targets` uses independent
+  coverage-epoch-fenced target backfill/verification. Proved writers preserve
+  coverage without stationary material versions; unproved writes invalidate it.
+  Saved Verified progress is not positive material, current coverage or
+  deployment capability; recheck the coverage epoch.

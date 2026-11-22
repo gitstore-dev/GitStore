@@ -31,6 +31,19 @@ var (
 
 	QueueDepth = observability.MustInstrument(otel.Meter("gitstore/health").Float64Gauge("gitstore_controller_queue_depth", metric.WithDescription("Number of items waiting in the work queue per kind.")))
 
+	OldestPendingTimestamp = observability.MustInstrument(otel.Meter("gitstore/health").Float64Gauge("gitstore_controller_oldest_pending_timestamp_seconds", metric.WithDescription("Oldest timestamped unfinished disk obligation, including delayed and quarantined work; zero when none is timestamped. Complete oldest-age evidence requires pending_without_timestamp to be zero."), metric.WithUnit("s")))
+
+	PendingWithoutTimestamp = observability.MustInstrument(otel.Meter("gitstore/health").Float64Gauge("gitstore_controller_pending_without_timestamp", metric.WithDescription("Unfinished disk obligations without an original enqueue timestamp; age is unknown, not zero.")))
+
+	KindReady = observability.MustInstrument(otel.Meter("gitstore/health").Float64Gauge("gitstore_controller_kind_ready", metric.WithDescription("1 when this kind is synced, not recovering or stalled, and has no poison work. Excludes credential readiness and feature activation or target validity certification.")))
+
+	WorkCompletionLag = observability.MustInstrument(otel.Meter("gitstore/health").Float64Histogram("gitstore_controller_work_completion_lag_seconds",
+		metric.WithDescription("Original enqueue to durable acknowledgement for timestamped reconciliation work, including queueing and retries. Not target Ready or index audit certification."),
+		metric.WithUnit("s"), metric.WithExplicitBucketBoundaries(0.01, 0.05, 0.1, 0.25, 0.5, 1, 3, 10, 30, 60, 300, 1800, 3600)))
+
+	WorkCompletions = observability.MustInstrument(otel.Meter("gitstore/health").Float64Counter("gitstore_controller_work_completions_total",
+		metric.WithDescription("Durably acknowledged work by kind and known or unknown enqueue age; superseded leases and failed writes are not completions.")))
+
 	ActiveWorkers = observability.MustInstrument(otel.Meter("gitstore/health").Float64Gauge("gitstore_controller_active_workers", metric.WithDescription("Number of goroutines actively reconciling items per kind.")))
 
 	PoisonItemsTotal = observability.MustInstrument(otel.Meter("gitstore/health").Float64Gauge("gitstore_controller_poison_items_total", metric.WithDescription("Number of quarantined (poison) items per kind.")))

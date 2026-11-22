@@ -40,6 +40,18 @@ func statusConflictError(kind, namespace, name, currentResourceVersion string) e
 	}).ToGQLError()
 }
 
+func (r *mutationResolver) updateTranslationStatusGeneric(ctx context.Context, input model.UpdateResourceStatusInput) (*model.UpdateResourceStatusPayload, error) {
+	value, err := r.writeTranslationStatus(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	object, err := translationToJSONMap(value)
+	if err != nil {
+		return nil, err
+	}
+	return &model.UpdateResourceStatusPayload{Object: object}, nil
+}
+
 // updateCategoryTaxonomyStatusGeneric backs updateResourceStatus for
 // kind "CategoryTaxonomy", reusing the same datastore write path as the
 // dedicated updateCategoryStatus mutation.
