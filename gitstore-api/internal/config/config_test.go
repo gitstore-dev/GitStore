@@ -40,10 +40,10 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_PUSH_LIMITS__MAX_PACK_SIZE",
 		"GITSTORE_PUSH_LIMITS__MAX_FILE_SIZE",
 		"GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE",
-		"GITSTORE_API__AUTH__JWT__SECRET",
-		"GITSTORE_API__AUTH__JWT__TTL",
-		"GITSTORE_API__AUTH__JWT__ISSUER",
-		"GITSTORE_API__AUTH__JWT__REFRESH_GRACE",
+		"GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET",
+		"GITSTORE_API__AUTH__STATIC_USERS__JWT__TTL",
+		"GITSTORE_API__AUTH__STATIC_USERS__JWT__ISSUER",
+		"GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE",
 		"GITSTORE_API__AUTH__AUTHN__CHAIN",
 		"GITSTORE_API__AUTH__AUTHZ__PROVIDER",
 		"GITSTORE_API__AUTH__OPA__WRITES_ENABLED",
@@ -198,6 +198,27 @@ func TestDynamicRBACBoundedOverrides(t *testing.T) {
 	require.False(t, cfg.Api.Auth.OPA.WritesEnabled)
 }
 
+func TestRBACPrivateEvidenceConfigurationIsExplicit(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Empty(t, cfg.Api.Auth.OPA.EvidenceDirectory)
+	directory := t.TempDir()
+	t.Setenv("GITSTORE_API__AUTH__OPA__EVIDENCE_DIRECTORY", directory)
+	_, err = Load()
+	require.ErrorContains(t, err, "evidence_directory requires the opa")
+	t.Setenv("GITSTORE_API__AUTH__AUTHZ__PROVIDER", "opa")
+	cfg, err = Load()
+	require.NoError(t, err)
+	require.Equal(t, directory, cfg.Api.Auth.OPA.EvidenceDirectory)
+	for _, invalid := range []string{"relative", directory + "/../alias"} {
+		t.Setenv("GITSTORE_API__AUTH__OPA__EVIDENCE_DIRECTORY", invalid)
+		_, err = Load()
+		require.ErrorContains(t, err, "clean absolute private directory")
+	}
+}
+
 func TestOPAConfigurationFileUsesProviderNamespaceAndEntryCount(t *testing.T) {
 	defer clearEnv(t)()
 	setRequiredAuth(t)
@@ -313,7 +334,7 @@ func TestNotificationConfigurationRequiresBoundedProviderAndRedactsKey(t *testin
 func setRequiredAuth(t *testing.T) {
 	t.Helper()
 	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE", "config/users.yaml")
-	os.Setenv("GITSTORE_API__AUTH__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
+	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
 	os.Setenv("GITSTORE_GRPC_AUTH__HMAC_SECRET", "ci-test-grpc-hmac-secret")
 }
 
@@ -552,9 +573,9 @@ func TestLoad_DefaultsAppliedWhenNoSourceSet(t *testing.T) {
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.Equal(t, "json", cfg.Log.Format)
 
-	assert.Equal(t, 24*time.Hour, cfg.Api.Auth.JWT.TTL)
-	assert.Equal(t, "gitstore", cfg.Api.Auth.JWT.Issuer)
-	assert.Equal(t, 60*time.Second, cfg.Api.Auth.JWT.RefreshGrace)
+	assert.Equal(t, 24*time.Hour, cfg.Api.Auth.StaticUsers.JWT.TTL)
+	assert.Equal(t, "gitstore", cfg.Api.Auth.StaticUsers.JWT.Issuer)
+	assert.Equal(t, 60*time.Second, cfg.Api.Auth.StaticUsers.JWT.RefreshGrace)
 
 	assert.Equal(t, "gitstore", cfg.Api.Auth.ServiceAccount.Issuer)
 	assert.Equal(t, "gitstore-api", cfg.Api.Auth.ServiceAccount.Audience)
@@ -738,7 +759,7 @@ func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	os.Setenv("GITSTORE_API__RATE_LIMIT__BURST", "15")
 	os.Setenv("GITSTORE_LOG__LEVEL", "debug")
 	os.Setenv("GITSTORE_LOG__FORMAT", "text")
-	os.Setenv("GITSTORE_API__AUTH__JWT__REFRESH_GRACE", "30s")
+	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE", "30s")
 
 	cfg, err := Load()
 	require.NoError(t, err)
@@ -749,7 +770,7 @@ func TestLoad_EnvVarOverridesDefault(t *testing.T) {
 	assert.Equal(t, 15, cfg.Api.RateLimit.Burst)
 	assert.Equal(t, "debug", cfg.Log.Level)
 	assert.Equal(t, "text", cfg.Log.Format)
-	assert.Equal(t, 30*time.Second, cfg.Api.Auth.JWT.RefreshGrace)
+	assert.Equal(t, 30*time.Second, cfg.Api.Auth.StaticUsers.JWT.RefreshGrace)
 }
 
 func TestLoad_ConfigFileValueAppliedWhenNoEnvVar(t *testing.T) {
@@ -765,7 +786,7 @@ format = "text"
 [api]
 admin_port = 7777
 
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 refresh_grace = "45s"
 `
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0600))
@@ -782,7 +803,59 @@ refresh_grace = "45s"
 	assert.Equal(t, 7777, cfg.Api.AdminPort)
 	assert.Equal(t, "warn", cfg.Log.Level)
 	assert.Equal(t, "text", cfg.Log.Format)
-	assert.Equal(t, 45*time.Second, cfg.Api.Auth.JWT.RefreshGrace)
+	assert.Equal(t, 45*time.Second, cfg.Api.Auth.StaticUsers.JWT.RefreshGrace)
+}
+
+func TestLoad_StaticUsersJWTSettings(t *testing.T) {
+	for _, source := range []string{"file", "environment"} {
+		t.Run(source, func(t *testing.T) {
+			restore := clearEnv(t)
+			defer restore()
+			path := filepath.Join(t.TempDir(), "config.toml")
+			require.NoError(t, os.WriteFile(path, []byte(`
+[grpc_auth]
+hmac_secret = "fixture-hmac"
+[api.auth.static_users]
+users_file = "fixture-users.yaml"
+[api.auth.static_users.jwt]
+secret = "file-static-users-signing-secret"
+ttl = "15m"
+issuer = "local-users"
+refresh_grace = "90s"
+[api.auth.serviceaccount]
+issuer = "service-accounts"
+default_ttl = "9m"
+[api.auth.oidc_jwt]
+issuer_uri = "https://issuer.example"
+`), 0600))
+			want := JWTConfig{
+				Secret:       "file-static-users-signing-secret",
+				TTL:          15 * time.Minute,
+				Issuer:       "local-users",
+				RefreshGrace: 90 * time.Second,
+			}
+			if source == "environment" {
+				t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET", "environment-static-users-signing-secret")
+				t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__TTL", "30m")
+				t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__ISSUER", "environment-local-users")
+				t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE", "2m")
+				want = JWTConfig{
+					Secret:       "environment-static-users-signing-secret",
+					TTL:          30 * time.Minute,
+					Issuer:       "environment-local-users",
+					RefreshGrace: 2 * time.Minute,
+				}
+			}
+
+			cfg, err := LoadFrom(path)
+			require.NoError(t, err)
+			assert.Equal(t, "fixture-users.yaml", cfg.Api.Auth.StaticUsers.UsersFile)
+			assert.Equal(t, want, cfg.Api.Auth.StaticUsers.JWT)
+			assert.Equal(t, "service-accounts", cfg.Api.Auth.ServiceAccount.Issuer)
+			assert.Equal(t, 9*time.Minute, cfg.Api.Auth.ServiceAccount.DefaultTTL)
+			assert.Equal(t, "https://issuer.example", cfg.Api.Auth.OIDC.IssuerURI)
+		})
+	}
 }
 
 func TestLoad_EnvVarOverridesConfigFile(t *testing.T) {
@@ -815,7 +888,7 @@ func TestLoadFrom_ExplicitSharedFileAndEnvPrecedence(t *testing.T) {
 admin_port = 7111
 [api.auth.static_users]
 users_file = "users.yaml"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
@@ -869,7 +942,7 @@ func TestLoadFromFiles_OverlayMergesOnTopOfBase(t *testing.T) {
 admin_port = 4000
 [api.git_service]
 uri = "dns:///localhost:50051"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "base-secret-at-least-32-characters-x"
 [grpc_auth]
 hmac_secret = "base-hmac-secret"
@@ -926,7 +999,7 @@ func TestLoad_StartupLogRedactsSensitiveFields(t *testing.T) {
 	// Sensitive fields must not appear in the log representation.
 	// We test via the MarshalLogObject-based redact helper indirectly:
 	// JWT secrets must be redacted; users are loaded from a separate file.
-	assert.Equal(t, "<redacted>", redact(cfg.Api.Auth.JWT.Secret))
+	assert.Equal(t, "<redacted>", redact(cfg.Api.Auth.StaticUsers.JWT.Secret))
 	assert.NotEmpty(t, cfg.Api.Auth.StaticUsers.UsersFile)
 }
 
@@ -938,7 +1011,7 @@ func TestLoad_EnvFileLoadsWithoutShellVars(t *testing.T) {
 
 	dir := t.TempDir()
 	envContent := `GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE=users-from-env.yaml
-GITSTORE_API__AUTH__JWT__SECRET=supersecretkey-minimum-32-chars!!
+GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET=supersecretkey-minimum-32-chars!!
 GITSTORE_GRPC_AUTH__HMAC_SECRET=ci-test-grpc-hmac-secret
 GITSTORE_LOG__LEVEL=warn
 `
@@ -1009,7 +1082,7 @@ func TestLoad_EmptyStringForRequiredKeyIsError(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE", "")
-	os.Setenv("GITSTORE_API__AUTH__JWT__SECRET", "")
+	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET", "")
 
 	_, err := Load()
 	require.Error(t, err)
@@ -1056,11 +1129,19 @@ func TestLoad_MultipleValidationErrorsReportedTogether(t *testing.T) {
 func TestValidateAuthChainConfig_StaticUsersRequiresJWTSecret(t *testing.T) {
 	err := validateAuthChainConfig(&Config{Api: ApiConfig{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"static-users"}}}}})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "api.auth.jwt.secret")
+	assert.Contains(t, err.Error(), "api.auth.static_users.jwt.secret")
 }
 
-func TestValidateAuthChainConfig_AnonymousDoesNotRequireJWTSecret(t *testing.T) {
-	require.NoError(t, validateAuthChainConfig(&Config{Api: ApiConfig{Auth: AuthConfig{AuthN: AuthNConfig{Chain: []string{"anonymous"}}}}}))
+func TestValidateAuthChainConfig_OtherProvidersDoNotRequireStaticUsersJWTSecret(t *testing.T) {
+	for _, provider := range []string{"anonymous", "serviceaccount-jwt", "serviceaccount-assertion", "oidc-jwt"} {
+		t.Run(provider, func(t *testing.T) {
+			cfg := &Config{Api: ApiConfig{Auth: AuthConfig{
+				AuthN:   AuthNConfig{Chain: []string{provider}},
+				UserDir: UserDirConfig{Provider: "static-users"},
+			}}}
+			require.NoError(t, validateAuthChainConfig(cfg))
+		})
+	}
 }
 
 // T028: missing HMAC secret causes startup failure
@@ -1068,7 +1149,7 @@ func TestLoad_MissingGrpcHmacSecretReturnsError(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE", "config/users.yaml")
-	os.Setenv("GITSTORE_API__AUTH__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
+	os.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET", "supersecretkey-minimum-32-chars!!")
 	// GITSTORE_GRPC_AUTH__HMAC_SECRET intentionally absent
 
 	_, err := Load()
@@ -1206,7 +1287,7 @@ func TestLoad_ServiceAccountSigningKeyRequiredWhenJWTProviderChained(t *testing.
 	path := filepath.Join(t.TempDir(), "gitstore.toml")
 	content := `[api.auth.static_users]
 users_file = "users.yaml"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
@@ -1227,7 +1308,7 @@ func TestLoad_ServiceAccountSigningKeyRequiredWhenAssertionProviderChained(t *te
 	path := filepath.Join(t.TempDir(), "gitstore.toml")
 	content := `[api.auth.static_users]
 users_file = "users.yaml"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
@@ -1247,7 +1328,7 @@ func TestLoad_ServiceAccountSigningKeySatisfiesRequirementWhenChained(t *testing
 	path := filepath.Join(t.TempDir(), "gitstore.toml")
 	content := `[api.auth.static_users]
 users_file = "users.yaml"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
@@ -1294,7 +1375,7 @@ func TestLoadFrom_RefusesServiceAccountSigningKeyFromSharedMountPath(t *testing.
 
 	content := `[api.auth.static_users]
 users_file = "users.yaml"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
@@ -1319,7 +1400,7 @@ func TestLoadFrom_AllowsServiceAccountSigningKeyFromEnvVarEvenAtSharedMountPath(
 
 	content := `[api.auth.static_users]
 users_file = "users.yaml"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
@@ -1342,7 +1423,7 @@ func TestLoadFromFiles_RefusesServiceAccountSigningKeyFromSharedMountPathEvenWhe
 
 	sharedContent := `[api.auth.static_users]
 users_file = "users.yaml"
-[api.auth.jwt]
+[api.auth.static_users.jwt]
 secret = "explicit-file-secret-at-least-32-characters"
 [grpc_auth]
 hmac_secret = "explicit-hmac"
@@ -1452,18 +1533,18 @@ func TestLoad_StrictDurationGrammarAcceptsSingleMagnitude(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	t.Setenv("GITSTORE_API__AUTH__JWT__REFRESH_GRACE", "500ms")
+	t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE", "500ms")
 
 	cfg, err := Load()
 	require.NoError(t, err)
-	assert.Equal(t, 500*time.Millisecond, cfg.Api.Auth.JWT.RefreshGrace)
+	assert.Equal(t, 500*time.Millisecond, cfg.Api.Auth.StaticUsers.JWT.RefreshGrace)
 }
 
 func TestLoad_StrictDurationGrammarRejectsCompoundDuration(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	t.Setenv("GITSTORE_API__AUTH__JWT__REFRESH_GRACE", "1h30m")
+	t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE", "1h30m")
 
 	_, err := Load()
 	require.Error(t, err)
@@ -1474,7 +1555,7 @@ func TestLoad_StrictDurationGrammarRejectsDayUnit(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	t.Setenv("GITSTORE_API__AUTH__JWT__REFRESH_GRACE", "1d")
+	t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE", "1d")
 
 	_, err := Load()
 	require.Error(t, err)
@@ -1485,7 +1566,7 @@ func TestLoad_StrictDurationGrammarRejectsSubMillisecondUnit(t *testing.T) {
 	restore := clearEnv(t)
 	defer restore()
 	setRequiredAuth(t)
-	t.Setenv("GITSTORE_API__AUTH__JWT__REFRESH_GRACE", "500us")
+	t.Setenv("GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE", "500us")
 
 	_, err := Load()
 	require.Error(t, err)

@@ -1695,13 +1695,20 @@ func authorizeCategoryAction(ctx context.Context, authz auth.AuthZProvider, prin
 	if authz == nil {
 		return gqlerror.Errorf("authorization service unavailable")
 	}
+	managementAlternative := (resource.Kind == "product" || resource.Kind == "productVariant") &&
+		(action == resource.Kind+".read" || action == resource.Kind+".list")
+	if managementAlternative && auth.ServingAuthorizationCaptureFromContext(ctx) == nil {
+		var closeCapture func()
+		ctx, closeCapture = auth.ContextWithServingAuthorizationCapture(ctx)
+		defer closeCapture()
+	}
 	decision, err := authz.Authorize(ctx, principal, action, resource)
 	if err != nil {
 		return authorizationGraphQLError(err)
 	}
 	// The same endpoint can be read using either ordinary or management
 	// capability. There is no role-name shortcut and no requirement to hold both.
-	if decision.Outcome != auth.OutcomeAllow && (resource.Kind == "product" || resource.Kind == "productVariant") && (action == resource.Kind+".read" || action == resource.Kind+".list") {
+	if decision.Outcome != auth.OutcomeAllow && managementAlternative {
 		verb := strings.TrimPrefix(action, resource.Kind+".")
 		decision, err = authz.Authorize(ctx, principal, resource.Kind+".management."+verb, resource)
 		if err != nil {

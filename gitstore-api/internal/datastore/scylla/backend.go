@@ -648,13 +648,21 @@ func (s *scyllaDatastore) ListProducts(ctx context.Context, namespace string, pa
 		}
 		position = &categoryProductRow{CreationTimestamp: parsed.CreatedAt, ProductUID: mustParseUUID(parsed.ID)}
 	}
+	initial, err := s.readInitialProductShards(ctx, namespace, order, relation, position, shardPageSize)
+	if err != nil {
+		return nil, err
+	}
 	items, err := collectProductProjectionPage(ctx, namespace, page.Last > 0, limit, position, productNamespaceShardCount, shardPageSize,
-		func(ctx context.Context, shard int8, position *categoryProductRow) ([]categoryProductRow, error) {
+		func(ctx context.Context, shard int8, after *categoryProductRow) ([]categoryProductRow, error) {
+			// Initial reads share the page cursor; refills have a shard-local cursor.
+			if after == position {
+				return initial[shard], nil
+			}
 			statement := "SELECT creation_timestamp,uid AS product_uid FROM " + productsByNamespaceShard + " WHERE namespace=? AND shard=?"
 			args := []any{namespace, shard}
-			if position != nil {
+			if after != nil {
 				statement += " AND (creation_timestamp,uid) " + relation + " (?,?)"
-				args = append(args, position.CreationTimestamp, position.ProductUID)
+				args = append(args, after.CreationTimestamp, after.ProductUID)
 			}
 			statement += " ORDER BY creation_timestamp " + order + ",uid " + order + " LIMIT ?"
 			args = append(args, shardPageSize)
@@ -670,6 +678,37 @@ func (s *scyllaDatastore) ListProducts(ctx context.Context, namespace string, pa
 		return nil, err
 	}
 	return buildPageResult(items, limit, page), nil
+}
+
+func (s *scyllaDatastore) readInitialProductShards(ctx context.Context, namespace, order, relation string, position *categoryProductRow, shardPageSize int) (pages [productNamespaceShardCount][]categoryProductRow, err error) {
+	if err := ctx.Err(); err != nil {
+		return pages, err
+	}
+	shards := make([]int8, productNamespaceShardCount)
+	for shard := range shards {
+		shards[shard] = int8(shard)
+	}
+	statement := "SELECT shard,creation_timestamp,uid AS product_uid FROM " + productsByNamespaceShard + " WHERE namespace=? AND shard IN ?"
+	args := []any{namespace, shards}
+	if position != nil {
+		statement += " AND (creation_timestamp,uid) " + relation + " (?,?)"
+		args = append(args, position.CreationTimestamp, position.ProductUID)
+	}
+	statement += " ORDER BY creation_timestamp " + order + ",uid " + order + " PER PARTITION LIMIT ?"
+	args = append(args, shardPageSize)
+	var rows []struct {
+		Shard             int8       `db:"shard"`
+		CreationTimestamp time.Time  `db:"creation_timestamp"`
+		ProductUID        gocql.UUID `db:"product_uid"`
+	}
+	// Cross-partition ordering requires paging off; each of the 64 partitions is bounded.
+	if err := s.session.Query(statement, nil).WithContext(ctx).Bind(args...).PageSize(0).SelectRelease(&rows); err != nil {
+		return pages, fmt.Errorf("scylla: list initial product shards: %w", err)
+	}
+	for _, row := range rows {
+		pages[row.Shard] = append(pages[row.Shard], categoryProductRow{CreationTimestamp: row.CreationTimestamp, ProductUID: row.ProductUID})
+	}
+	return pages, nil
 }
 
 const productsByNamespaceShard = "products_by_namespace_shard"

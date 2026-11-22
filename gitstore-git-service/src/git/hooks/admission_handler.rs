@@ -409,6 +409,17 @@ fn compute_changed_paths_in_repo(
 
 #[cfg(test)]
 mod tests {
+    fn test_service_secret() -> &'static str {
+        static SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        SECRET
+            .get_or_init(|| {
+                let mut bytes = [0u8; 32];
+                getrandom::fill(&mut bytes).expect("test service entropy");
+                bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+            })
+            .as_str()
+    }
+
     use super::*;
 
     #[test]
@@ -692,7 +703,7 @@ mod tests {
         let handler = AdmissionControlHandler::connect(&addr, "^refs/heads/".to_owned())
             .await
             .unwrap()
-            .with_service_token("fixture-key");
+            .with_service_token(test_service_secret());
         assert!(handler
             .replay_committed(
                 Arc::clone(&store),
@@ -741,12 +752,16 @@ mod tests {
             AdmissionControlHandler::connect(&addr, "^refs/tags/".to_owned())
                 .await
                 .unwrap()
-                .with_service_token("fixture-key"),
+                .with_service_token(test_service_secret()),
         );
         let service = crate::grpc::server::GitServiceImpl::new(
             directory.path().to_path_buf(),
-            crate::auth::interceptor::RPCVerifier::new("fixture-key", None, directory.path())
-                .unwrap(),
+            crate::auth::interceptor::RPCVerifier::new(
+                test_service_secret(),
+                None,
+                directory.path(),
+            )
+            .unwrap(),
         )
         .with_receipts(store.clone());
         service
@@ -814,7 +829,7 @@ mod tests {
         let client = CatalogServiceClient::connect(addr).await.unwrap();
         let handler =
             AdmissionControlHandler::new(client, Regex::new("^refs/heads/main$").unwrap())
-                .with_service_token("fixture-key");
+                .with_service_token(test_service_secret());
         let context = HookContext {
             receive_id: "accepted-receive".to_owned(),
             ..make_hook_context("translation-author")
@@ -882,7 +897,7 @@ mod tests {
             let error = deliver_admission_callback(
                 client,
                 make_callback_request(),
-                "fixture-key",
+                test_service_secret(),
                 Duration::from_secs(1),
             )
             .await
@@ -907,7 +922,7 @@ mod tests {
             deliver_admission_callback(
                 client,
                 make_callback_request(),
-                "fixture-key",
+                test_service_secret(),
                 Duration::from_millis(100),
             ),
         )
@@ -931,7 +946,7 @@ mod tests {
         let handler = AdmissionControlHandler::connect(&addr, "^refs/heads/main$".to_owned())
             .await
             .unwrap()
-            .with_service_token("fixture-key");
+            .with_service_token(test_service_secret());
         let update = RefUpdate {
             ref_name: "refs/heads/trunk".to_owned(),
             old_oid: old.to_string(),
@@ -983,7 +998,7 @@ mod tests {
         let handler = AdmissionControlHandler::connect(&addr, "refs/heads/main".to_string())
             .await
             .unwrap()
-            .with_service_token("fixture-key");
+            .with_service_token(test_service_secret());
 
         let updates = vec![make_update("refs/heads/main", false)];
         let result = handler
@@ -1015,7 +1030,7 @@ mod tests {
         let handler = AdmissionControlHandler::connect(&addr, "refs/heads/main".to_string())
             .await
             .unwrap()
-            .with_service_token("fixture-key");
+            .with_service_token(test_service_secret());
 
         handler
             .admit(
@@ -1041,7 +1056,7 @@ mod tests {
         let handler = AdmissionControlHandler::connect(&addr, "refs/heads/main".to_string())
             .await
             .unwrap()
-            .with_service_token("fixture-key");
+            .with_service_token(test_service_secret());
 
         let updates = vec![make_update("refs/heads/feature/my-feature", false)];
         let result = handler
@@ -1071,7 +1086,7 @@ mod tests {
             AdmissionControlHandler::connect("http://127.0.0.1:1", "refs/heads/main".to_string())
                 .await
                 .unwrap()
-                .with_service_token("fixture-key");
+                .with_service_token(test_service_secret());
 
         let updates = vec![make_update("refs/heads/main", false)];
         let result = handler
@@ -1097,7 +1112,7 @@ mod tests {
         let handler = AdmissionControlHandler::connect(&addr, "refs/heads/main".to_string())
             .await
             .unwrap()
-            .with_service_token("fixture-key");
+            .with_service_token(test_service_secret());
 
         let updates = vec![make_update("refs/heads/main", true)]; // zero old_oid
         let result = handler
@@ -1130,7 +1145,7 @@ mod tests {
         let handler = AdmissionControlHandler::connect(&addr, "^refs/heads/main$".to_string())
             .await
             .unwrap()
-            .with_service_token("fixture-key");
+            .with_service_token(test_service_secret());
 
         let updates = vec![make_update("refs/heads/main-old", false)];
         let result = handler
@@ -1162,7 +1177,7 @@ mod tests {
         let handler = AdmissionControlHandler::connect(&addr, "refs/heads/main".to_string())
             .await
             .unwrap()
-            .with_service_token("fixture-key");
+            .with_service_token(test_service_secret());
 
         let update = RefUpdate {
             ref_name: "refs/heads/main".to_string(),
@@ -1198,7 +1213,7 @@ mod tests {
         let handler = AdmissionControlHandler::connect(&addr, "^refs/heads/main$".to_string())
             .await
             .unwrap()
-            .with_service_token("fixture-key");
+            .with_service_token(test_service_secret());
 
         let update = RefUpdate {
             ref_name: "refs/heads/experiment/foo".to_string(),
@@ -1234,7 +1249,7 @@ mod tests {
         let handler = AdmissionControlHandler::connect(&addr, "refs/heads/.*".to_string())
             .await
             .unwrap()
-            .with_service_token("fixture-key");
+            .with_service_token(test_service_secret());
 
         let updates = vec![make_update("refs/heads/feature/my-feature", false)];
         let result = handler
@@ -1508,7 +1523,7 @@ mod tests {
         let handler = AdmissionControlHandler::connect(&addr, "refs/heads/main".to_string())
             .await
             .unwrap()
-            .with_service_token("fixture-key");
+            .with_service_token(test_service_secret());
 
         let hook_ctx = make_hook_context("test-user");
         let updates = vec![make_update("refs/heads/main", false)];

@@ -64,10 +64,6 @@ type AccessReviewInput struct {
 	Spec       *SubjectAccessReviewSpecInput `json:"spec"`
 }
 
-type AccessReviewPayload struct {
-	SubjectAccessReview *SubjectAccessReview `json:"subjectAccessReview,omitempty"`
-}
-
 // Exactly one identifier; workload names are separate from human usernames.
 type ActorBy struct {
 	ID                 *string `json:"id,omitempty"`
@@ -1558,9 +1554,10 @@ type RBACRuleInput struct {
 
 // Controller-owned observation. A missing resolved link grants no authority.
 type RBACStatus struct {
-	ObservedGeneration int32             `json:"observedGeneration"`
-	Conditions         []*Condition      `json:"conditions"`
-	Resolved           *RBACResolvedRole `json:"resolved,omitempty"`
+	ObservedGeneration  int32             `json:"observedGeneration"`
+	LastAppliedRevision *string           `json:"lastAppliedRevision,omitempty"`
+	Conditions          []*Condition      `json:"conditions"`
+	Resolved            *RBACResolvedRole `json:"resolved,omitempty"`
 }
 
 type RBACSubject struct {

@@ -261,7 +261,7 @@ func TestRBACNativeColdStartRequiresCanonicalSource(t *testing.T) {
 	assertStopped()
 }
 
-func rbacRuntimePublicationMatches(t *testing.T, path string, offset int64, subject string, revisions map[string]bool) bool {
+func rbacRuntimePublicationMatches(t *testing.T, path string, offset int64, subject string, revisions map[string]bool, outcome string) bool {
 	t.Helper()
 	file, err := os.Open(path)
 	require.NoError(t, err)
@@ -275,7 +275,7 @@ func rbacRuntimePublicationMatches(t *testing.T, path string, offset int64, subj
 			Tiers                    []struct{ GitRevision string } `json:"authorization_tiers"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &decision) != nil || decision.Subject != subject ||
-			decision.Action != "product.list" || decision.Outcome != "allow" || len(decision.Tiers) != len(revisions) {
+			decision.Action != "product.list" || decision.Outcome != outcome || len(decision.Tiers) != len(revisions) {
 			continue
 		}
 		matches := make(map[string]bool, len(revisions))
@@ -448,7 +448,7 @@ func TestRBACNativeRuntimeGrantRevoke(t *testing.T) {
 		rbacNativeEventually(t, func() bool {
 			result := actor.query(t, api, list, map[string]any{"namespace": admin.namespace})
 			require.Empty(t, result.Errors)
-			return rbacRuntimePublicationMatches(t, logs[index], offset, subject, revisions)
+			return rbacRuntimePublicationMatches(t, logs[index], offset, subject, revisions, "allow")
 		}, "stable watches require both APIs to serve the actual post-setup canonical tips")
 	}
 

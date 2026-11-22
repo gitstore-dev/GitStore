@@ -679,9 +679,23 @@ func rbacNativeOwnerControllerRecovery(t *testing.T, admin rbacNativeFixture, su
 	t.Helper()
 	binary := os.Getenv("RBAC_TEST_CONTROLLER_BINARY")
 	require.NotEmpty(t, binary)
+	replacementBinary := os.Getenv("RBAC_TEST_CONTROLLER_REPLACEMENT_BINARY")
+	if replacementBinary == "" {
+		replacementBinary = binary
+	}
 	configs := []string{os.Getenv("RBAC_TEST_CONTROLLER_CONFIG_A"), os.Getenv("RBAC_TEST_CONTROLLER_CONFIG_B")}
 	endpoints := []string{os.Getenv("RBAC_TEST_CONTROLLER_A"), os.Getenv("RBAC_TEST_CONTROLLER_B")}
-	directories := []string{t.TempDir(), t.TempDir()}
+	directories := []string{os.Getenv("RBAC_TEST_CONTROLLER_CHECKPOINT_DIR_A"), os.Getenv("RBAC_TEST_CONTROLLER_CHECKPOINT_DIR_B")}
+	for i, directory := range directories {
+		if directory == "" {
+			directories[i] = t.TempDir()
+			continue
+		}
+		require.True(t, filepath.IsAbs(directory))
+		entries, err := os.ReadDir(directory)
+		require.NoError(t, err)
+		require.Empty(t, entries, "never adopt an existing controller checkpoint directory")
+	}
 	for i, endpoint := range endpoints {
 		require.NotEmpty(t, configs[i])
 		parsed, err := url.Parse(endpoint)
@@ -907,6 +921,8 @@ func rbacNativeOwnerControllerRecovery(t *testing.T, admin rbacNativeFixture, su
 			require.True(t, info.IsDir())
 			checkpoints[i] = info
 		}
+		binary = replacementBinary
+		recoveryStarted := time.Now()
 		phase.Store(2)
 		start(0)
 		observe("BindingAdmitted", "TRUE")
@@ -920,6 +936,24 @@ func rbacNativeOwnerControllerRecovery(t *testing.T, admin rbacNativeFixture, su
 			require.NoError(t, err)
 			require.True(t, os.SameFile(checkpoints[i], info), "replacement must retain its original private checkpoint directory")
 		}
+		for _, api := range admin.apis {
+			rbacNativeEventually(t, func() bool {
+				response := owner.query(t, api,
+					`query($ns:String!){products(namespace:$ns,first:1){edges{node{id}}}}`,
+					map[string]any{"ns": subject})
+				if response.Status == http.StatusServiceUnavailable ||
+					graphqlErrorHasCode(response.Errors, "AUTHORIZATION_UNAVAILABLE") ||
+					graphqlErrorHasCode(response.Errors, "FORBIDDEN") {
+					return false
+				}
+				require.Empty(t, response.Errors)
+				return true
+			}, "controller recovery must restore actual owner access on both APIs")
+		}
+		recoveredIn := time.Since(recoveryStarted)
+		require.LessOrEqual(t, recoveredIn, 30*time.Second,
+			"native owner authorization recovery must complete within 30 seconds after fault restoration")
+		t.Logf("Native controller replacement restores owner authorization on both APIs; recovery=%s", recoveredIn)
 	}
 	return recover, func(action func()) {
 		t.Helper()

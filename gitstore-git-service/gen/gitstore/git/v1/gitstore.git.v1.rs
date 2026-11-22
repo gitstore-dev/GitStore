@@ -71,6 +71,24 @@ pub struct PushContext {
     pub authorization: ::core::option::Option<RequestAuthorization>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetFilesRequest {
+    #[prost(string, repeated, tag="1")]
+    pub paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag="2")]
+    pub commit_sha: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
+    #[prost(string, tag="15")]
+    pub repository_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetFilesResponse {
+    #[prost(string, tag="1")]
+    pub commit_sha: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="2")]
+    pub files: ::prost::alloc::vec::Vec<GetFileResponse>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetFileProvenanceRequest {
     #[prost(string, tag="15")]
     pub repository_id: ::prost::alloc::string::String,
@@ -279,6 +297,38 @@ pub struct ListFilesResponse {
     pub files: ::prost::alloc::vec::Vec<FileEntry>,
     #[prost(string, tag="2")]
     pub ref_commit_sha: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RepositoryRef {
+    #[prost(string, tag="1")]
+    pub repository_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub r#ref: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="14")]
+    pub authorization: ::core::option::Option<RequestAuthorization>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResolveRefsRequest {
+    #[prost(message, repeated, tag="1")]
+    pub refs: ::prost::alloc::vec::Vec<RepositoryRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RepositoryRefProof {
+    #[prost(string, tag="1")]
+    pub repository_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub r#ref: ::prost::alloc::string::String,
+    /// Empty when this ref cannot be proved; other proofs remain independent.
+    #[prost(string, tag="3")]
+    pub commit_sha: ::prost::alloc::string::String,
+    /// A held repository write lock prevented verification; this is not a proof.
+    #[prost(bool, tag="4")]
+    pub busy: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResolveRefsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub proofs: ::prost::alloc::vec::Vec<RepositoryRefProof>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FileEntry {

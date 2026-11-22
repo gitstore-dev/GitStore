@@ -4,6 +4,7 @@
 package integration
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -24,10 +25,11 @@ import (
 )
 
 type rbacNativeFixture struct {
-	apis      []string
-	gitURL    string
-	namespace string
-	token     string
+	apis           []string
+	gitURL         string
+	namespace      string
+	cleanupContext context.Context
+	token          string
 }
 
 func ownedRBACNativeFixture(t *testing.T) rbacNativeFixture {
@@ -82,6 +84,7 @@ type rbacNativeResource struct {
 		Name              string            `json:"name"`
 		Namespace         string            `json:"namespace"`
 		ResourceVersion   string            `json:"resourceVersion"`
+		Revision          string            `json:"revision"`
 		Generation        int64             `json:"generation"`
 		DeletionTimestamp *string           `json:"deletionTimestamp"`
 		Labels            map[string]string `json:"labels"`
@@ -102,7 +105,7 @@ func rbacNativeSelection(kind string) string {
 	if strings.HasSuffix(kind, "Binding") {
 		spec = "roleRef { kind name } subjects { kind name }"
 	}
-	return "id kind metadata { uid name namespace resourceVersion generation deletionTimestamp } status { observedGeneration resolved { roleUID } } spec { " + spec + " }"
+	return "id kind metadata { uid name namespace resourceVersion revision generation deletionTimestamp } status { observedGeneration resolved { roleUID } } spec { " + spec + " }"
 }
 
 func rbacNativeSpec(kind string) map[string]any {
@@ -168,7 +171,11 @@ func (f rbacNativeFixture) queryBounded(t *testing.T, api, query string, variabl
 	}
 	deadline := time.Now().Add(30 * time.Second)
 	for {
-		response := secretTestGraphQLWithHeadersBounded(t, api, f.token, query, variables, 35*time.Second, nil, limit)
+		parent := t.Context()
+		if f.cleanupContext != nil {
+			parent = f.cleanupContext
+		}
+		response := secretTestGraphQLWithContextBounded(t, parent, api, f.token, query, variables, 35*time.Second, nil, limit)
 		retryable := response.Status == 503 && len(response.Data) == 0 && len(response.Errors) == 1 &&
 			string(response.Errors[0]) == `{"message":"non-GraphQL HTTP failure"}`
 		if len(response.Errors) == 1 {
@@ -190,8 +197,12 @@ func (f rbacNativeFixture) queryBounded(t *testing.T, api, query string, variabl
 		if !retryable || time.Now().After(deadline) {
 			return response
 		}
+		ctx := t.Context()
+		if f.cleanupContext != nil {
+			ctx = f.cleanupContext
+		}
 		select {
-		case <-t.Context().Done():
+		case <-ctx.Done():
 			t.Fatal("native GraphQL request canceled")
 		case <-time.After(200 * time.Millisecond):
 		}
@@ -352,9 +363,15 @@ func (f rbacNativeFixture) clone(t *testing.T, kind string) rbacNativeGit {
 
 func (g rbacNativeGit) command(t *testing.T, args ...string) ([]byte, error) {
 	t.Helper()
-	ctx, cancel := fixtureCommandContext(t, 30*time.Second)
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if g.fixture.cleanupContext == nil {
+		ctx, cancel = fixtureCommandContext(t, 30*time.Second)
+	} else {
+		ctx, cancel = context.WithTimeout(g.fixture.cleanupContext, 30*time.Second)
+	}
 	defer cancel()
-	prefix := []string{"-c", "fetch.negotiationAlgorithm=noop", "-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=10",
+	prefix := []string{"-c", "fetch.negotiationAlgorithm=consecutive", "-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=10",
 		"-c", "user.name=Native RBAC acceptance", "-c", "user.email=rbac-fixture@example.invalid"}
 	if _, err := os.Stat(g.dir); err == nil {
 		prefix = append(prefix, "-C", g.dir)
@@ -367,7 +384,21 @@ func (g rbacNativeGit) command(t *testing.T, args ...string) ([]byte, error) {
 	}
 	env = append(env, "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_SYSTEM="+os.DevNull,
 		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader", "GIT_CONFIG_VALUE_0=Authorization: Bearer "+g.fixture.token)
-	return fixtureCommandOutput(ctx, "", env, []string{g.fixture.token}, append([]string{"git"}, append(prefix, args...)...)...)
+	started := time.Now()
+	output, state, err := fixtureCommandRunResult(ctx, "", env, []string{g.fixture.token}, false, append([]string{"git"}, append(prefix, args...)...)...)
+	elapsed := time.Since(started)
+	if elapsed >= 100*time.Millisecond && len(args) != 0 {
+		switch args[0] {
+		case "clone", "fetch", "merge", "add", "commit", "rev-parse", "ls-remote", "push":
+			var userCPU, systemCPU time.Duration
+			if state != nil {
+				userCPU, systemCPU = state.UserTime(), state.SystemTime()
+			}
+			t.Logf("native RBAC Git command: stage=%s elapsed=%s success=%t cpu_known=%t user_cpu=%s system_cpu=%s",
+				args[0], elapsed, err == nil, state != nil, userCPU, systemCPU)
+		}
+	}
+	return output, err
 }
 
 func (g rbacNativeGit) write(t *testing.T, path string, manifest map[string]any) {

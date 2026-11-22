@@ -55,8 +55,10 @@ const (
 	GitService_ReceivePack_FullMethodName          = "/gitstore.git.v1.GitService/ReceivePack"
 	GitService_UploadPack_FullMethodName           = "/gitstore.git.v1.GitService/UploadPack"
 	GitService_GetFile_FullMethodName              = "/gitstore.git.v1.GitService/GetFile"
+	GitService_GetFiles_FullMethodName             = "/gitstore.git.v1.GitService/GetFiles"
 	GitService_GetFileStream_FullMethodName        = "/gitstore.git.v1.GitService/GetFileStream"
 	GitService_ListFiles_FullMethodName            = "/gitstore.git.v1.GitService/ListFiles"
+	GitService_ResolveRefs_FullMethodName          = "/gitstore.git.v1.GitService/ResolveRefs"
 	GitService_GetFileProvenance_FullMethodName    = "/gitstore.git.v1.GitService/GetFileProvenance"
 	GitService_CommitFile_FullMethodName           = "/gitstore.git.v1.GitService/CommitFile"
 	GitService_CommitFileAtRevision_FullMethodName = "/gitstore.git.v1.GitService/CommitFileAtRevision"
@@ -93,10 +95,14 @@ type GitServiceClient interface {
 	UploadPack(ctx context.Context, in *UploadPackRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[UploadPackResponse], error)
 	// GetFile returns the raw bytes of a single file at the given ref.
 	GetFile(ctx context.Context, in *GetFileRequest, opts ...grpc.CallOption) (*GetFileResponse, error)
+	// Read at most 32 regular files, each at most 64 KiB, at one exact commit.
+	GetFiles(ctx context.Context, in *GetFilesRequest, opts ...grpc.CallOption) (*GetFilesResponse, error)
 	// GetFileStream returns a file as a stream of byte chunks.
 	GetFileStream(ctx context.Context, in *GetFileStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetFileStreamResponse], error)
 	// ListFiles enumerates file paths under an optional prefix at the given ref.
 	ListFiles(ctx context.Context, in *ListFilesRequest, opts ...grpc.CallOption) (*ListFilesResponse, error)
+	// Resolve at most 32 independently authorized repository refs without listing trees.
+	ResolveRefs(ctx context.Context, in *ResolveRefsRequest, opts ...grpc.CallOption) (*ResolveRefsResponse, error)
 	// Bounded first-parent provenance for a canonical RBAC path at an exact commit.
 	GetFileProvenance(ctx context.Context, in *GetFileProvenanceRequest, opts ...grpc.CallOption) (*GetFileProvenanceResponse, error)
 	// CommitFile writes a single file and commits it to the default branch.
@@ -194,6 +200,16 @@ func (c *gitServiceClient) GetFile(ctx context.Context, in *GetFileRequest, opts
 	return out, nil
 }
 
+func (c *gitServiceClient) GetFiles(ctx context.Context, in *GetFilesRequest, opts ...grpc.CallOption) (*GetFilesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetFilesResponse)
+	err := c.cc.Invoke(ctx, GitService_GetFiles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *gitServiceClient) GetFileStream(ctx context.Context, in *GetFileStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetFileStreamResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &GitService_ServiceDesc.Streams[2], GitService_GetFileStream_FullMethodName, cOpts...)
@@ -217,6 +233,16 @@ func (c *gitServiceClient) ListFiles(ctx context.Context, in *ListFilesRequest, 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListFilesResponse)
 	err := c.cc.Invoke(ctx, GitService_ListFiles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *gitServiceClient) ResolveRefs(ctx context.Context, in *ResolveRefsRequest, opts ...grpc.CallOption) (*ResolveRefsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResolveRefsResponse)
+	err := c.cc.Invoke(ctx, GitService_ResolveRefs_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -320,10 +346,14 @@ type GitServiceServer interface {
 	UploadPack(*UploadPackRequest, grpc.ServerStreamingServer[UploadPackResponse]) error
 	// GetFile returns the raw bytes of a single file at the given ref.
 	GetFile(context.Context, *GetFileRequest) (*GetFileResponse, error)
+	// Read at most 32 regular files, each at most 64 KiB, at one exact commit.
+	GetFiles(context.Context, *GetFilesRequest) (*GetFilesResponse, error)
 	// GetFileStream returns a file as a stream of byte chunks.
 	GetFileStream(*GetFileStreamRequest, grpc.ServerStreamingServer[GetFileStreamResponse]) error
 	// ListFiles enumerates file paths under an optional prefix at the given ref.
 	ListFiles(context.Context, *ListFilesRequest) (*ListFilesResponse, error)
+	// Resolve at most 32 independently authorized repository refs without listing trees.
+	ResolveRefs(context.Context, *ResolveRefsRequest) (*ResolveRefsResponse, error)
 	// Bounded first-parent provenance for a canonical RBAC path at an exact commit.
 	GetFileProvenance(context.Context, *GetFileProvenanceRequest) (*GetFileProvenanceResponse, error)
 	// CommitFile writes a single file and commits it to the default branch.
@@ -367,11 +397,17 @@ func (UnimplementedGitServiceServer) UploadPack(*UploadPackRequest, grpc.ServerS
 func (UnimplementedGitServiceServer) GetFile(context.Context, *GetFileRequest) (*GetFileResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetFile not implemented")
 }
+func (UnimplementedGitServiceServer) GetFiles(context.Context, *GetFilesRequest) (*GetFilesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetFiles not implemented")
+}
 func (UnimplementedGitServiceServer) GetFileStream(*GetFileStreamRequest, grpc.ServerStreamingServer[GetFileStreamResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method GetFileStream not implemented")
 }
 func (UnimplementedGitServiceServer) ListFiles(context.Context, *ListFilesRequest) (*ListFilesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListFiles not implemented")
+}
+func (UnimplementedGitServiceServer) ResolveRefs(context.Context, *ResolveRefsRequest) (*ResolveRefsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ResolveRefs not implemented")
 }
 func (UnimplementedGitServiceServer) GetFileProvenance(context.Context, *GetFileProvenanceRequest) (*GetFileProvenanceResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetFileProvenance not implemented")
@@ -505,6 +541,24 @@ func _GitService_GetFile_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _GitService_GetFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFilesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GitServiceServer).GetFiles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GitService_GetFiles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GitServiceServer).GetFiles(ctx, req.(*GetFilesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _GitService_GetFileStream_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(GetFileStreamRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -530,6 +584,24 @@ func _GitService_ListFiles_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(GitServiceServer).ListFiles(ctx, req.(*ListFilesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _GitService_ResolveRefs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveRefsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GitServiceServer).ResolveRefs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GitService_ResolveRefs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GitServiceServer).ResolveRefs(ctx, req.(*ResolveRefsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -684,8 +756,16 @@ var GitService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GitService_GetFile_Handler,
 		},
 		{
+			MethodName: "GetFiles",
+			Handler:    _GitService_GetFiles_Handler,
+		},
+		{
 			MethodName: "ListFiles",
 			Handler:    _GitService_ListFiles_Handler,
+		},
+		{
+			MethodName: "ResolveRefs",
+			Handler:    _GitService_ResolveRefs_Handler,
 		},
 		{
 			MethodName: "GetFileProvenance",

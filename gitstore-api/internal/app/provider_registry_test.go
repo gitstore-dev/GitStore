@@ -125,7 +125,7 @@ func TestBuildProviderRegistry_DefaultChain_Unchanged(t *testing.T) {
 	usersFile := filepath.Join(t.TempDir(), "users.yaml")
 	require.NoError(t, os.WriteFile(usersFile, []byte("version: v1\nusers:\n  - username: admin\n    password_hash: "+string(hash)+"\n"), 0600))
 	cfg.Api.Auth.StaticUsers.UsersFile = usersFile
-	cfg.Api.Auth.JWT.Secret = "test-jwt-secret-at-least-32-bytes-long!!"
+	cfg.Api.Auth.StaticUsers.JWT.Secret = "test-jwt-secret-at-least-32-bytes-long!!"
 	store, err := memdb.New()
 	require.NoError(t, err)
 	revocations := store.(staticusers.RevocationStore)

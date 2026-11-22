@@ -136,9 +136,41 @@ not compressed registry transfer sizes or an isolated evaluator-layer delta.
 The source interval includes the RBAC implementation and its dependency changes;
 the entire difference must not be attributed to OPA alone.
 
-This completes the actual binary/image comparison slice, not process heap/RSS,
-sustained acceptance or T095 as a whole. It does not complete image-reduction
-issue #487.
+This completes the actual binary/image comparison slice. The paired runtime
+measurement below completes the heap/RSS slice separately; neither establishes
+sustained acceptance or completes image-reduction issue #487.
+
+### Paired release-runtime heap/RSS measurement
+
+On 2026-11-17, ran the exact retained pre-OPA and linked-implementation images
+above serially on the same shared local Docker engine (`linux/arm64`). Each
+container had the same two-CPU/2-GiB limit, memdb datastore, static-users AuthN,
+allow-all AuthZ and no UserDir or profiler. Each used a fresh private Git
+directory and one non-overlapping native Git process from source `466f99a2`;
+neither accessed retained dataset storage. Both `/ready` checks passed before
+400 `/health` probes spaced 50 ms apart, followed by ten SDK `/metrics` samples
+spaced one second apart. No forced garbage collection was requested.
+
+| Runtime measurement, bytes | Pre-OPA minimum / median / maximum | Linked minimum / median / maximum | Median difference |
+|---|---:|---:|---:|
+| `go_memstats_heap_alloc_bytes` | 20,526,496 / 22,205,104 / 23,792,312 | 22,023,592 / 23,607,640 / 25,199,600 | +1,402,536 |
+| `process_resident_memory_bytes` | 50,352,128 / 51,859,456 / 53,497,856 | 58,658,816 / 60,096,512 / 61,734,912 | +8,237,056 |
+
+These are actual health-warmed process measurements, not estimated allocations,
+post-GC retained heap, peak memory or an activated RBAC working set. The same
+source interval and attribution caveat as the binary comparison apply: the
+delta includes implementation/dependency changes, not OPA alone. The prepared
+decision component and active full-geometry working-set measurements below
+cover different scopes and must not be subtracted from this baseline.
+Image identities, private configurations, raw metric samples and normal
+shutdown evidence are retained privately; all comparison listeners closed.
+The current-source API auth, OPA provider and app race suites, plus the shared
+observability race suite, pass, including the existing SDK telemetry,
+reservation/release, bounded-label and collector/export regressions.
+
+Together with the binary/image and prepared-decision measurements, this closes
+T095's cost/telemetry measurement requirement, not the thirty-minute healthy,
+fault or large-catalog acceptance gates.
 
 Adding OPA v1.22.2 raised the selected versions of gqlparser
 v2.5.33 -> v2.5.58, x/time v0.15.0 -> v0.16.0, go-json
@@ -209,8 +241,40 @@ SDK telemetry, RBAC and app suites also pass with race detection on this source.
 An earlier authenticated-fixture batch measured approximately 39-110 microseconds
 per call across these cases; shared-host variability must not be interpreted
 as an implementation improvement.
-Paired runtime heap/RSS, full-scale prepared-evaluation latency and sustained
-healthy/fault evidence remain required; T095 stays open.
+The paired release-runtime heap/RSS measurement above and this component
+measurement have deliberately distinct scopes. Sustained healthy/fault evidence
+remains required. The following full-scale diagnostic supplements, rather than
+replaces, either measurement.
+
+### Full native working-set decision diagnostic
+
+Source `7c814edeb29b2bef80b0c576909b312ad5e2a5ca` passes the independently
+verified 1,000-Namespace/10,000-Role/50,000-binding retained replay on the shared
+local `darwin/arm64` host. Its 500-second read-only window offers 40 requests/s
+across two APIs, with exactly 20,000 completed and zero wrong, unavailable or
+dropped decisions. Both independent source joins and the five original ordinary
+policy cases pass.
+
+Timing uses the unsampled decision stream's integer `latency_ns`, measured by
+`DecisionLogger.Authorize` around the whole provider call. Filter by the exact
+ordinary request-ID suffix, `product.list`/`role.list` action and matching
+resource kind. Each API has exactly one selected decision for each of its
+10,000 primary offers: 6,000 Product and 4,000 Role lists, with no missing or
+invalid timings. Percentiles use nearest rank over individual calls, not
+histogram interpolation or averages of aggregates.
+
+| API | p50, ms | p95, ms | p99, ms | Maximum, ms | Terminal heap bytes | Terminal RSS bytes |
+|---|---:|---:|---:|---:|---:|---:|
+| A | 0.128125 | 0.201542 | 0.329917 | 1.157875 | 261,692,640 | 396,738,560 |
+| B | 0.129125 | 0.262958 | 0.404167 | 0.754417 | 262,489,968 | 396,722,176 |
+
+These are instrumented native fixture provider calls with already prepared
+tiers, not isolated Rego evaluations, HTTP timings or release-container
+acceptance. Heap/RSS are actual final SDK samples, not peaks, retained-after-GC
+sizes or a paired before/after comparison. Source/decision capture and SDK
+telemetry remain enabled; the observed p99 does not establish the unprofiled
+1,000-request/s thirty-minute latency or memory gates. No freshness, worker,
+resource or acceptance threshold changed.
 
 ## 3. Translation and lifecycle ownership
 
@@ -254,7 +318,8 @@ Access-review API decision: adapt the existing TokenRequest-style envelope
 for transient `SubjectAccessReview`, not a flat GraphQL decision object.
 `authorization.gitstore.dev/v1beta1` request parameters live in `spec`;
 the response echoes `spec` and places decision/revision diagnostics in
-`status`. `AccessReviewPayload.subjectAccessReview` wraps the result.
+`status`. The `accessReview` Admin Query returns `SubjectAccessReview` directly;
+action-specific payload wrappers are reserved for mutations.
 Evidence: [the existing token contract](../../shared/schemas/admin/serviceaccount.graphqls)
 and [the transient resource catalogue](../../docs/storage-groups/transient.md#authn-and-authz-checks).
 The catalogue already identifies this placement, so no new storage group

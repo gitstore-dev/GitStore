@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/catalog"
@@ -33,7 +35,8 @@ func (s *scyllaDatastore) RepairRBACProjection(ctx context.Context, tier string,
 	if state.Revision != revision {
 		return datastore.RBACError(rbac.ErrConflict)
 	}
-	for _, step := range steps {
+	err = runRBACSteps(ctx, steps, func(ctx context.Context, step rbacRepairStep) error {
+		var err error
 		if step.Removed {
 			// UID tombstones prevent delayed repair from resurrecting a lookup.
 			err = s.session.Session.Query("UPDATE rbac_resources_by_id SET deleted=true,tier=null,entry=null WHERE uid=?", step.UID).
@@ -55,6 +58,10 @@ func (s *scyllaDatastore) RepairRBACProjection(ctx context.Context, tier string,
 		if err != nil {
 			return err
 		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	if len(steps) == 0 {
 		return nil
@@ -65,9 +72,50 @@ func (s *scyllaDatastore) RepairRBACProjection(ctx context.Context, tier string,
 		return err
 	}
 	if !applied {
-		return datastore.RBACError(rbac.ErrConflict)
+		return confirmRBACRepair(ctx, state, func(ctx context.Context) (rbac.TierState, error) {
+			current, _, err := s.readRBACTier(ctx, tier)
+			return current, err
+		})
 	}
 	return nil
+}
+
+func confirmRBACRepair(ctx context.Context, before rbac.TierState, read func(context.Context) (rbac.TierState, error)) error {
+	current, err := read(ctx)
+	if err != nil {
+		return err
+	}
+	// A peer may finish the same repair before a status write advances the tier.
+	if current.TierID == before.TierID && current.Revision > before.Revision &&
+		current.Projection == before.Projection && !current.ProjectionPending &&
+		current.NamespaceRetired == before.NamespaceRetired {
+		return nil
+	}
+	return datastore.RBACError(rbac.ErrConflict)
+}
+
+func runRBACSteps[T any](ctx context.Context, steps []T, apply func(context.Context, T) error) error {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	var next atomic.Uint64
+	var workers sync.WaitGroup
+	// Each resource keeps its operation ordering; only independent resources overlap.
+	for range min(4, len(steps)) {
+		workers.Go(func() {
+			for ctx.Err() == nil {
+				index := next.Add(1) - 1
+				if index >= uint64(len(steps)) {
+					return
+				}
+				if err := apply(ctx, steps[index]); err != nil {
+					cancel(err)
+					return
+				}
+			}
+		})
+	}
+	workers.Wait()
+	return context.Cause(ctx)
 }
 
 type FindingType string

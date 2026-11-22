@@ -6,6 +6,7 @@ package rbac
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -60,6 +61,9 @@ func (f *lifecycleFixture) UpdateStatus(_ context.Context, resource Resource, up
 	f.writes = append(f.writes, update)
 	resource.Metadata.ResourceVersion += "-next"
 	resource.Status.ObservedGeneration = resource.Metadata.Generation
+	if update.LastAppliedRevision != "" {
+		resource.Status.LastAppliedRevision = update.LastAppliedRevision
+	}
 	resource.Status.Resolved = update.Resolved
 	resource.Status.Conditions = update.Conditions
 	if update.Finalizers != nil {
@@ -125,6 +129,41 @@ func TestReconcilerWaitsForResolutionAndClearsOnlyItsFinalizer(t *testing.T) {
 	require.Equal(t, []string{"binding-uid"}, fixture.completed)
 }
 
+func TestReconcilerAcknowledgesGenerationAndRevisionWithoutRepeatedWrites(t *testing.T) {
+	for _, kind := range Kinds {
+		t.Run(kind, func(t *testing.T) {
+			role := Resource{Kind: kind, Metadata: Metadata{
+				UID: "role-uid", Name: "reader", Generation: 2, ResourceVersion: "2",
+				Revision:   "main@sha1:1111111111111111111111111111111111111111",
+				Finalizers: []string{LifecycleFinalizer},
+			}}
+			if namespaced(kind) {
+				role.Metadata.Namespace = "shop"
+			}
+			if strings.HasSuffix(kind, "Binding") {
+				role.Spec.RoleRef = &RoleRef{Kind: "ClusterRole", Name: "missing"}
+			}
+			role.Status.ObservedGeneration = 1
+			fixture := &lifecycleFixture{resources: map[types.WorkItemKey]Resource{role.Key(): role}}
+			for range 2 {
+				reconciler := NewReconciler(fixture.lookup, fixture)
+				require.IsType(t, types.Success{}, reconciler.Reconcile(t.Context(), role.Key()))
+			}
+			require.Len(t, fixture.writes, 1)
+			current := fixture.resources[role.Key()]
+			require.EqualValues(t, 2, current.Status.ObservedGeneration)
+			require.EqualValues(t, 2, current.Status.Conditions[0].ObservedGeneration)
+			require.Equal(t, role.Metadata.Revision, current.Status.LastAppliedRevision)
+			current.Metadata.Revision = "main@sha1:2222222222222222222222222222222222222222"
+			fixture.resources[role.Key()] = current
+			require.IsType(t, types.Success{}, NewReconciler(fixture.lookup, fixture).Reconcile(t.Context(), role.Key()))
+			require.Len(t, fixture.writes, 2, "same-generation authored revisions still require acknowledgement")
+			require.Equal(t, current.Metadata.Revision, fixture.resources[role.Key()].Status.LastAppliedRevision)
+			require.Empty(t, fixture.completed)
+		})
+	}
+}
+
 func TestReconcilerConcurrentReplicasRetryCASAndOldUIDWorkCannotPublish(t *testing.T) {
 	binding := Resource{Kind: "RoleBinding", Metadata: Metadata{UID: "binding-uid", Name: "access", Namespace: "shop",
 		ResourceVersion: "uid-bound-version", Generation: 1}, Spec: Spec{RoleRef: &RoleRef{Kind: "Role", Name: "reader"}}}
@@ -164,8 +203,8 @@ func TestReconcilerConcurrentReplicasRetryCASAndOldUIDWorkCannotPublish(t *testi
 			switch result := result.(type) {
 			case types.Success:
 				successes++
-			case types.TransientFailure:
-				require.ErrorIs(t, result.Err, types.ErrConflict)
+			case types.RequeueAfter:
+				require.Equal(t, conflictRequeueDelay, result.After)
 				conflicts++
 			default:
 				t.Fatalf("unexpected result %T", result)
@@ -185,8 +224,8 @@ func TestReconcilerConcurrentReplicasRetryCASAndOldUIDWorkCannotPublish(t *testi
 	now := time.Now()
 	binding.Metadata.DeletionTimestamp = &now
 	result := NewReconciler(staleLookup, fixture).Reconcile(ctx, binding.Key())
-	require.IsType(t, types.TransientFailure{}, result)
-	require.ErrorIs(t, result.(types.TransientFailure).Err, types.ErrConflict)
+	require.IsType(t, types.RequeueAfter{}, result)
+	require.Equal(t, conflictRequeueDelay, result.(types.RequeueAfter).After)
 	require.Empty(t, fixture.completed)
 	require.Equal(t, "new-binding-uid", fixture.resources[binding.Key()].Metadata.UID)
 }
@@ -196,6 +235,138 @@ func TestReconcilerDoesNotTreatLookupErrorsAsAbsence(t *testing.T) {
 	NewReconciler(fixture.lookup, fixture).Reconcile(t.Context(), types.WorkItemKey{Kind: "Role", Namespace: "shop", Name: "reader"})
 	require.Empty(t, fixture.writes)
 	require.Empty(t, fixture.completed)
+}
+
+func TestReconcilerChecksAuthorityWhenRoleWatchLags(t *testing.T) {
+	for _, kind := range []string{"Role", "ClusterRole"} {
+		t.Run(kind, func(t *testing.T) {
+			namespace := ""
+			if kind == "Role" {
+				namespace = "shop"
+			}
+			role := Resource{Kind: kind, Metadata: Metadata{UID: "role-uid", Name: "reader", Namespace: namespace}}
+			binding := Resource{Kind: kind + "Binding", Metadata: Metadata{UID: "binding-uid", Name: "access",
+				Namespace: namespace, Generation: 1, ResourceVersion: "1"}, Spec: Spec{RoleRef: &RoleRef{Kind: kind, Name: "reader"}}}
+			fixture := &lifecycleFixture{resources: map[types.WorkItemKey]Resource{binding.Key(): binding}}
+			reads := 0
+			authority := func(_ context.Context, key types.WorkItemKey) (Resource, bool, error) {
+				reads++
+				require.Equal(t, role.Key(), key)
+				return role, true, nil
+			}
+			for range 2 {
+				require.IsType(t, types.Success{}, NewReconciler(fixture.lookup, fixture).
+					WithRoleLookup(authority).Reconcile(t.Context(), binding.Key()))
+			}
+			require.Len(t, fixture.writes, 1, "independent controllers converge before the Role watch catches up")
+			require.Equal(t, role.Metadata.UID, fixture.writes[0].Resolved.RoleUID)
+			require.Equal(t, "TRUE", fixture.writes[0].Conditions[0].Status)
+			require.Equal(t, 2, reads)
+			role.Metadata.UID = "replacement-role"
+			require.IsType(t, types.Success{}, NewReconciler(fixture.lookup, fixture).
+				WithRoleLookup(authority).Reconcile(t.Context(), binding.Key()))
+			current := fixture.resources[binding.Key()]
+			require.Equal(t, "role-uid", current.Status.Resolved.RoleUID)
+			require.Equal(t, "RoleUIDChanged", current.Status.Conditions[0].Reason)
+		})
+	}
+}
+
+func TestReconcilerRoleAuthorityPreservesAbsenceAndFailures(t *testing.T) {
+	for _, outcome := range []string{"absent", "unavailable", "terminating", "wrong-identity", "cached", "checkpoint-error"} {
+		t.Run(outcome, func(t *testing.T) {
+			binding := Resource{Kind: "ClusterRoleBinding", Metadata: Metadata{UID: "binding-uid", Name: "access",
+				Generation: 1, ResourceVersion: "1"}, Spec: Spec{RoleRef: &RoleRef{Kind: "ClusterRole", Name: "reader"}}}
+			role := Resource{Kind: "ClusterRole", Metadata: Metadata{UID: "role-uid", Name: "reader"}}
+			fixture := &lifecycleFixture{resources: map[types.WorkItemKey]Resource{binding.Key(): binding}}
+			if outcome == "cached" {
+				fixture.resources[role.Key()] = role
+			}
+			lookup := func(ctx context.Context, key types.WorkItemKey) (Resource, bool, error) {
+				if key == role.Key() && outcome == "checkpoint-error" {
+					return Resource{}, false, errors.New("checkpoint unavailable")
+				}
+				return fixture.lookup(ctx, key)
+			}
+			reads := 0
+			authority := func(context.Context, types.WorkItemKey) (Resource, bool, error) {
+				reads++
+				switch outcome {
+				case "absent":
+					return Resource{}, false, nil
+				case "unavailable":
+					return Resource{}, false, errors.New("authority unavailable")
+				case "terminating":
+					now := time.Now()
+					role.Metadata.DeletionTimestamp = &now
+				case "wrong-identity":
+					role.Metadata.Name = "other"
+				default:
+					t.Fatal("authority must not replace a checkpoint hit or hide a checkpoint error")
+				}
+				return role, true, nil
+			}
+			result := NewReconciler(lookup, fixture).WithRoleLookup(authority).Reconcile(t.Context(), binding.Key())
+			switch outcome {
+			case "unavailable", "wrong-identity", "checkpoint-error":
+				require.IsType(t, types.TransientFailure{}, result)
+				require.Empty(t, fixture.writes)
+			default:
+				require.IsType(t, types.Success{}, result)
+				require.Len(t, fixture.writes, 1)
+				switch outcome {
+				case "absent":
+					require.Equal(t, "RoleNotFound", fixture.writes[0].Conditions[0].Reason)
+				case "terminating":
+					require.Equal(t, "RoleTerminating", fixture.writes[0].Conditions[0].Reason)
+				case "cached":
+					require.Equal(t, "role-uid", fixture.writes[0].Resolved.RoleUID)
+				}
+			}
+			expectedReads := 1
+			if outcome == "cached" || outcome == "checkpoint-error" {
+				expectedReads = 0
+			}
+			require.Equal(t, expectedReads, reads)
+		})
+	}
+}
+
+func TestReconcilerDefersConcurrentMutationConflictsWithoutRetryExhaustion(t *testing.T) {
+	for _, stage := range []string{"status", "finalizer", "completion"} {
+		t.Run(stage, func(t *testing.T) {
+			resource := Resource{Kind: "Role", Metadata: Metadata{
+				UID: "role-uid", Name: "reader", Namespace: "shop", Generation: 1, ResourceVersion: "1",
+			}}
+			if stage != "status" {
+				now := time.Now()
+				resource.Metadata.DeletionTimestamp = &now
+			}
+			if stage == "finalizer" {
+				resource.Metadata.Finalizers = []string{LifecycleFinalizer}
+			}
+			fixture := &lifecycleFixture{resources: map[types.WorkItemKey]Resource{resource.Key(): resource},
+				err: errors.Join(errors.New("another replica won"), types.ErrConflict)}
+			lookup := func(context.Context, types.WorkItemKey) (Resource, bool, error) {
+				return resource, true, nil
+			}
+			reconciler := NewReconciler(lookup, fixture)
+			for range 8 {
+				result := reconciler.Reconcile(t.Context(), resource.Key())
+				require.IsType(t, types.RequeueAfter{}, result)
+				require.Equal(t, conflictRequeueDelay, result.(types.RequeueAfter).After)
+			}
+			require.Empty(t, fixture.writes)
+			require.Empty(t, fixture.completed)
+			fixture.err = nil
+			require.IsType(t, types.Success{}, reconciler.Reconcile(t.Context(), resource.Key()))
+			if stage == "completion" {
+				require.Equal(t, []string{resource.Metadata.UID}, fixture.completed)
+			} else {
+				require.Len(t, fixture.writes, 1)
+			}
+		})
+	}
 }
 
 func TestReconcilerRecoversUnresolvedAndLostLifecycleRepliesAcrossReplacement(t *testing.T) {

@@ -204,12 +204,16 @@ There is no configuration switch to enable it.
 | Key                             | Env Var                                     | Type     | Default    | Required | Sensitive | Description                                                 |
 |-----------------------------------|------------------------------------------------|----------|------------|----------|-----------|---------------------------------------------------------------|
 | `api.auth.static_users.users_file` | `GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE` | string | users.yaml | When selected | No | YAML file containing local users |
-| `api.auth.jwt.secret`          | `GITSTORE_API__AUTH__JWT__SECRET`          | string   | —          | When `static-users` is selected | **Yes** | JWT signing key (minimum 32 characters)                  |
-| `api.auth.jwt.ttl`             | `GITSTORE_API__AUTH__JWT__TTL`             | duration | `24h`      | No       | No        | JWT token validity                                           |
-| `api.auth.jwt.issuer`          | `GITSTORE_API__AUTH__JWT__ISSUER`          | string   | `gitstore` | No       | No        | JWT `iss` claim value                                       |
-| `api.auth.jwt.refresh_grace`   | `GITSTORE_API__AUTH__JWT__REFRESH_GRACE`   | duration | `60s`      | No       | No        | Window after expiry during which `refreshToken` is accepted |
+| `api.auth.static_users.jwt.secret`          | `GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET`          | string   | —          | When `static-users` is selected | **Yes** | JWT signing key (minimum 32 characters)                  |
+| `api.auth.static_users.jwt.ttl`             | `GITSTORE_API__AUTH__STATIC_USERS__JWT__TTL`             | duration | `24h`      | No       | No        | JWT token validity                                           |
+| `api.auth.static_users.jwt.issuer`          | `GITSTORE_API__AUTH__STATIC_USERS__JWT__ISSUER`          | string   | `gitstore` | No       | No        | JWT `iss` claim value                                       |
+| `api.auth.static_users.jwt.refresh_grace`   | `GITSTORE_API__AUTH__STATIC_USERS__JWT__REFRESH_GRACE`   | duration | `60s`      | No       | No        | Window after expiry during which `refreshToken` is accepted |
 
-For config files, local users are selected with `[api.auth.static_users]` and `users_file = "users.yaml"`; JWT keys remain nested under `[api.auth.jwt]`.
+For config files, local users are selected with `[api.auth.static_users]` and
+`users_file = "users.yaml"`; their session token settings belong under
+`[api.auth.static_users.jwt]`. These JWT settings apply only to the `static-users`
+AuthN provider, not to service-account or OIDC tokens. Selecting `static-users`
+only as the user directory does not require a JWT secret.
 
 `static-users` appends `/static-users` to the configured issuer base when
 minting tokens. Production logout and refresh rotation require the shared
@@ -278,17 +282,64 @@ The embedded engine accepts only the release's fixed policy; operators
 cannot supply Rego source or remote bundles. Its in-memory translations are
 disposable and do not replace durable RBAC resources.
 
+For an explicitly owned acceptance runtime, optional
+`api.auth.opa.evidence_directory`
+(`GITSTORE_API__AUTH__OPA__EVIDENCE_DIRECTORY`) selects an existing clean
+absolute private directory with no group/other permissions. The runtime
+exclusively creates private `source-models.jsonl` and `decisions.jsonl` files,
+bounded to 1 GiB and 8 GiB respectively. The source stream records complete
+canonical snapshots and capture clocks; the decision stream records unsampled
+authorization receipts without changing normal operational-log sampling.
+Concurrent capture writes are coalesced into bounded batches without deferring
+publication past a successful write; shutdown syncs and closes both streams,
+and any capture failure prevents a successful evidence seal.
+Captured policies, subjects and request identifiers are private evidence,
+not public diagnostics. Use a fresh directory per process epoch, preserve failed
+streams, and restart to change capture selection. Empty selection is the default
+and creates no capture files. This setting does not bypass the production
+OPA startup gate or establish capacity acceptance.
+
 Durable journal delivery alone does not establish authorization readiness.
 Serving requires a complete consistent snapshot and verified continuous,
 fresh watch progress; resource update timestamps alone are not freshness
 evidence. Production activation remains gated.
 
+A cold replica requests a bounded rebuild when a namespaced authorization
+snapshot is missing, including for request-scoped authorization captures.
+Requests remain unavailable until the complete snapshot is installed; an
+absent snapshot is never treated as an empty policy.
+
+OPA authorization decision logs distinguish cluster and Namespace origin
+failures as `not installed`, `not verified`, `expired` or `clock ahead`.
+These bounded reasons contain no tier names, UIDs or policy content and retain
+the same fail-closed authorization-unavailable response. An expired proof is
+not evidence that a resource was deleted; diagnose source verification and
+worker progress without extending the freshness limit.
+
+Namespace origin batches reread live identities with at most four concurrent
+identity readers (twelve datastore reads per batch) before requesting signed
+ref proofs. Proof clocks remain stamped before I/O, so slow reads cannot extend
+freshness.
+
+A write-busy Git repository contributes no new ref proof; other repositories
+in the same batch can still be checked. Contention does not prove deletion or
+extend an existing proof's freshness. With matching live identity and healthy
+watch progress, an already complete publication remains usable only until its
+original proof expires while background verification retries. A busy response
+cannot establish readiness or renew that proof. Missing refs, changed identity,
+malformed responses and other verification failures still fail closed.
+
 Background workers alternate queued rebuilds with the oldest due origin checks.
-With at least two workers and installed publications, full Namespace scans leave
-one worker slot for origin checks or shared root replacement. Root rebuilds take
-priority over queued Namespace rebuilds within the same concurrency limit.
-A single worker still serializes checks and rebuilds; overload or slow checks
-still fail closed at the configured freshness bound.
+Once publications are installed, the default four-worker bound permits at most
+two concurrent Namespace rebuilds, leaving separate capacity for Namespace
+origin checks and shared root recovery. Root rebuilds take priority over queued
+Namespace rebuilds within the same concurrency limit. When every Namespace
+worker is occupied, a proof batch can use the remaining shared ref-check capacity
+instead of leaving other workers' unused batch shares idle. Running work still
+counts against that bound, with a separate share reserved for root and recovery.
+Smaller worker bounds
+reduce this separation; a single worker serializes checks and rebuilds.
+Overload or slow checks still fail closed at the configured freshness bound.
 
 Ordinary policy revisions replace complete translations atomically. While a
 replacement is prepared for the same active Namespace, repository and canonical
@@ -394,7 +445,9 @@ is missing or deleted, admission fails closed rather than retaining direct
 subject permissions. Missing ServiceAccount mirrors remain unlinked; GitStore
 still enforces their authoritative UID and enablement. Directory failures fail
 closed without treating valid credentials as invalid. Inactive human profiles
-are denied. WebSocket initialization applies the same checks
+are denied. If a profile lease expires during lookup, enrichment retries once
+within the original two-second directory budget; it never extends the old lease
+or accepts expired memberships. WebSocket initialization applies the same checks
 and caps profile leases below five minutes, never extending the cached
 profile's freshness or a shorter token lifetime.
 
@@ -679,7 +732,7 @@ For projection audits, repairs, and their operational safeguards, see the
 ### Example `config.toml`
 
 See the maintained [API configuration example](../gitstore-api/config.toml.example).
-Keep secrets, including the user-file credentials and `api.auth.jwt.secret`,
+Keep secrets, including the user-file credentials and `api.auth.static_users.jwt.secret`,
 outside committed configuration and inject them through your deployment platform.
 
 ## gitstore-git-service

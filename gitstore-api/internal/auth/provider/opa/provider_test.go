@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -53,6 +54,320 @@ func TestTranslationControllerBuiltinPermissions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func maximumRootBatchTier(t testing.TB) Tier {
+	t.Helper()
+	builtins, err := rbac.ReleaseBuiltins()
+	require.NoError(t, err)
+	resources := make([]*rbac.Resource, rbac.MaxCandidateResources)
+	for index := range resources {
+		name := fmt.Sprintf("maximum-batch-%03d", index)
+		resources[index] = &rbac.Resource{
+			APIVersion: rbac.APIVersion, Kind: rbac.ClusterRole,
+			Metadata: rbac.Metadata{Name: name, UID: testUID(name),
+				Annotations: map[string]string{"capacity.gitstore.dev/padding": strings.Repeat("x", 16000)}},
+			Spec: json.RawMessage(`{"rules":[{"resources":["product"],"verbs":["read"]}]}`),
+		}
+	}
+	require.NoError(t, rbac.ValidateCandidate(resources))
+	return Tier{ID: rbac.ClusterTierID, Active: true, Resources: resources, Builtins: builtins}
+}
+
+func BenchmarkProviderMaximumRootBatchTranslation(b *testing.B) {
+	tier := maximumRootBatchTier(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, err := Translate(tier)
+		require.NoError(b, err)
+	}
+}
+
+func BenchmarkProviderMaximumRootBatchPreparation(b *testing.B) {
+	source := servingTier(b, rbac.ClusterTierID, "", 1, false)
+	source.Resources = maximumRootBatchTier(b).Resources
+	source.State.RoleCount = len(source.Resources)
+	provider, err := NewProvider(b.Context())
+	require.NoError(b, err)
+	b.Cleanup(provider.Close)
+	prepared, err := provider.PrepareTier(b.Context(), source)
+	require.NoError(b, err)
+	prepared.Close()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		prepared, err := provider.PrepareTier(b.Context(), source)
+		require.NoError(b, err)
+		prepared.Close()
+	}
+}
+
+func TestPaddedRootValidationCachePreservesCurrentAuthority(t *testing.T) {
+	source := servingTier(t, rbac.ClusterTierID, "", 1, false)
+	source.Resources = readTier(t, true).Resources
+	source.Resources[0].Metadata.Annotations = map[string]string{"padding": strings.Repeat("x", 16000), "replacement": "\ufffd", "\ufffd": "note"}
+	source.Resources[0].Metadata.Labels = map[string]string{"replacement": "\ufffd"}
+	provider, err := NewProvider(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(provider.Close)
+	require.NoError(t, provider.PublishTier(t.Context(), source))
+	principal := &auth.Principal{Subject: "alice", AuthMethod: "static-users"}
+	resource := auth.ResourceContext{Kind: "product"}
+	decision, err := provider.Authorize(t.Context(), principal, "product.read", resource)
+	require.NoError(t, err)
+	require.Equal(t, auth.OutcomeAllow, decision.Outcome)
+	for _, invalid := range []string{"oversized-annotations", "invalid-utf8", "invalid-key", "invalid-label", "changed-name", "changed-spec"} {
+		t.Run(invalid, func(t *testing.T) {
+			changed := source
+			role, err := rbac.CloneResource(source.Resources[0])
+			require.NoError(t, err)
+			changed.Resources = []*rbac.Resource{role, source.Resources[1]}
+			switch invalid {
+			case "oversized-annotations":
+				role.Metadata.Annotations["padding"] = strings.Repeat("x", rbac.MaxManifestBytes)
+			case "invalid-utf8":
+				role.Metadata.Annotations["replacement"] = "\xff"
+			case "invalid-key":
+				delete(role.Metadata.Annotations, "\ufffd")
+				role.Metadata.Annotations["\xff"] = "note"
+			case "invalid-label":
+				role.Metadata.Labels["replacement"] = "\xff"
+			case "changed-name":
+				role.Metadata.Name = "invalid name"
+			case "changed-spec":
+				role.Spec = json.RawMessage(`{"rules":[{"resources":["product"],"verbs":["read"],"deny":true}]}`)
+			}
+			prepared, err := provider.PrepareTier(t.Context(), changed)
+			if prepared != nil {
+				prepared.Close()
+			}
+			require.ErrorIs(t, err, ErrUnavailable)
+		})
+	}
+	for _, change := range []string{"unresolved-binding", "terminated-role", "recreated-role", "revoked-rule"} {
+		t.Run(change, func(t *testing.T) {
+			changed := source
+			changed.Resources = make([]*rbac.Resource, len(source.Resources))
+			for index, original := range source.Resources {
+				changed.Resources[index], err = rbac.CloneResource(original)
+				require.NoError(t, err)
+			}
+			switch change {
+			case "unresolved-binding":
+				changed.Resources[1].Status = nil
+			case "terminated-role":
+				now := time.Now().UTC()
+				changed.Resources[0].Metadata.DeletionTimestamp = &now
+			case "recreated-role":
+				changed.Resources[0].Metadata.UID = testUID("recreated-root-role")
+			case "revoked-rule":
+				changed.Resources[0].Spec = json.RawMessage(`{"rules":[]}`)
+			}
+			source.State.Revision++
+			changed.State.Revision = source.State.Revision
+			require.NoError(t, provider.PublishTier(t.Context(), changed))
+			decision, err := provider.Authorize(t.Context(), principal, "product.read", resource)
+			require.NoError(t, err)
+			require.Equal(t, auth.OutcomeDeny, decision.Outcome)
+		})
+	}
+}
+
+func TestPaddedRootValidationCacheYieldsSnapshotBudgetAndCloses(t *testing.T) {
+	source := servingTier(t, rbac.ClusterTierID, "", 1, false)
+	source.Resources = maximumRootBatchTier(t).Resources
+	provider, err := NewProvider(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(provider.Close)
+	prepared, err := provider.PrepareTier(t.Context(), source)
+	require.NoError(t, err)
+	prepared.Close()
+	require.Positive(t, provider.MemoryUsage().Reserved)
+	require.LessOrEqual(t, provider.MemoryUsage().Reserved, int64(rbac.ManifestValidationCacheBytes))
+	results := make(chan error, 4)
+	for range 4 {
+		go func() {
+			prepared, err := provider.PrepareTier(t.Context(), source)
+			if prepared != nil {
+				prepared.Close()
+			}
+			results <- err
+		}()
+	}
+	for range 4 {
+		require.NoError(t, <-results)
+	}
+	for _, role := range source.Resources {
+		role.Metadata.Annotations["changed"] = "note"
+	}
+	prepared, err = provider.PrepareTier(t.Context(), source)
+	require.NoError(t, err)
+	prepared.Close()
+	require.LessOrEqual(t, provider.MemoryUsage().Reserved, int64(rbac.ManifestValidationCacheBytes))
+	provider.Close()
+	require.Zero(t, provider.MemoryUsage().Reserved)
+
+	for _, role := range source.Resources {
+		role.Metadata.Annotations = nil
+	}
+	uncached, err := NewProvider(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(uncached.Close)
+	prepared, err = uncached.PrepareTier(t.Context(), source)
+	require.NoError(t, err)
+	required := uncached.MemoryUsage().Reserved
+	prepared.Close()
+	uncached.Close()
+	bounded, err := NewProviderWithMemoryLimit(t.Context(), required)
+	require.NoError(t, err)
+	t.Cleanup(bounded.Close)
+	for _, role := range source.Resources {
+		role.Metadata.Annotations = map[string]string{"padding": strings.Repeat("x", 16000)}
+	}
+	prepared, err = bounded.PrepareTier(t.Context(), source)
+	require.NoError(t, err, "optional validation reuse must yield space needed by a complete publication")
+	prepared.Close()
+	require.LessOrEqual(t, bounded.MemoryUsage().PeakReserved, required)
+}
+
+func TestPreparedTierRebasesEquivalentSourceWithoutReplacingPolicyOrRenewingProof(t *testing.T) {
+	provider, err := NewProvider(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(provider.Close)
+	require.NoError(t, provider.RequireOriginProgress(2*time.Second))
+	source := servingTier(t, rbac.ClusterTierID, "", 1, false)
+	source.Resources = readTier(t, true).Resources
+	source.State.RoleCount, source.State.BindingCount = 1, 1
+	prepared, err := provider.PrepareTier(t.Context(), source)
+	require.NoError(t, err)
+	t.Cleanup(prepared.Close)
+	at := time.Now().Add(-time.Second)
+	require.NoError(t, prepared.SetOriginProgress(at))
+	policy := prepared.tier.data
+	latest := source
+	latest.State.Revision++
+	latest.ContentDigest = strings.Repeat("c", 64)
+	latest.Resources = append([]*rbac.Resource(nil), source.Resources...)
+	latest.Resources[0], err = rbac.CloneResource(source.Resources[0])
+	require.NoError(t, err)
+	latest.Resources[0].Metadata.ResourceVersion = "2"
+	updated := time.Now().UTC()
+	latest.Resources[0].Metadata.UpdateTimestamp = &updated
+	latest.Resources[0].Metadata.UpdateActor = "controller"
+	latest.Resources[0].Metadata.Finalizers = []string{"gitstore.dev/owner-links"}
+	latest.Resources[0].Metadata.OwnerReferences = json.RawMessage(`[{"uid":"owner"}]`)
+	latest.Resources[0].Status = json.RawMessage(`{"observedGeneration":1}`)
+	require.NoError(t, prepared.Rebase(t.Context(), latest))
+	require.Same(t, policy, prepared.tier.data, "catch-up must retain the immutable policy prepared before the live proof")
+	require.False(t, provider.originReady(prepared.tier, at.Add(2*time.Second+time.Nanosecond)),
+		"metadata catch-up cannot extend the original proof's expiry")
+	require.NoError(t, prepared.Install())
+	snapshot, ok := provider.AuthorizationSnapshot()
+	require.True(t, ok)
+	require.Equal(t, uint64(2), snapshot.Tiers[0].Revision)
+	require.Equal(t, latest.ContentDigest, snapshot.Tiers[0].ContentDigest)
+	decision, err := provider.Authorize(t.Context(), &auth.Principal{Subject: "alice", AuthMethod: "static-users"},
+		"product.read", auth.ResourceContext{Kind: "product"})
+	require.NoError(t, err)
+	require.Equal(t, auth.OutcomeAllow, decision.Outcome)
+	latest.State.Revision++
+	require.ErrorIs(t, prepared.Rebase(t.Context(), latest), ErrUnavailable, "installed publications remain immutable")
+}
+
+func TestPreparedTierRebaseRejectsChangedAuthorityOrIdentityWithoutMutation(t *testing.T) {
+	for _, change := range []string{"revocation", "terminating-role", "replaced-role", "canonical", "scope-version", "pending", "retired", "old-revision", "unproved", "cancelled", "closed"} {
+		t.Run(change, func(t *testing.T) {
+			provider, err := NewProvider(t.Context())
+			require.NoError(t, err)
+			t.Cleanup(provider.Close)
+			source := servingTier(t, rbac.ClusterTierID, "", 1, false)
+			source.Resources = readTier(t, true).Resources
+			source.State.RoleCount, source.State.BindingCount = 1, 1
+			prepared, err := provider.PrepareTier(t.Context(), source)
+			require.NoError(t, err)
+			t.Cleanup(prepared.Close)
+			if change != "unproved" {
+				require.NoError(t, prepared.SetOriginProgress(time.Now()))
+			}
+			provider.validations.Clear(false)
+			reserved := provider.MemoryUsage().Reserved
+			latest := source
+			latest.State.Revision++
+			latest.ContentDigest = strings.Repeat("c", 64)
+			ctx := t.Context()
+			switch change {
+			case "revocation":
+				latest.Resources[1].Status = nil
+			case "terminating-role":
+				at := time.Now()
+				latest.Resources[0].Metadata.DeletionTimestamp = &at
+			case "replaced-role":
+				latest.Resources[0].Metadata.UID = testUID("replacement")
+			case "canonical":
+				latest.State.Projection.GitRevision = "main@sha1:" + strings.Repeat("c", 40)
+			case "scope-version":
+				latest.NamespaceVersion = "2"
+			case "pending":
+				latest.State.ProjectionPending = true
+			case "retired":
+				latest.State.NamespaceRetired = true
+			case "old-revision":
+				latest.State.Revision = source.State.Revision
+			case "cancelled":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			case "closed":
+				provider.Close()
+			}
+			require.ErrorIs(t, prepared.Rebase(ctx, latest), ErrUnavailable)
+			provider.validations.Clear(false)
+			require.Equal(t, reserved, provider.MemoryUsage().Reserved, "failed catch-up must release its temporary allocation")
+			if change == "closed" {
+				require.ErrorIs(t, prepared.Install(), ErrUnavailable)
+				return
+			}
+			require.NoError(t, prepared.Install())
+			snapshot, ok := provider.AuthorizationSnapshot()
+			require.True(t, ok)
+			require.Equal(t, uint64(1), snapshot.Tiers[0].Revision)
+			require.Equal(t, source.ContentDigest, snapshot.Tiers[0].ContentDigest)
+		})
+	}
+}
+
+func TestPreparedTierRebaseChargesItsTemporaryTranslationToTheExistingBudget(t *testing.T) {
+	source := servingTier(t, rbac.ClusterTierID, "", 1, false)
+	source.Resources = readTier(t, true).Resources
+	source.State.RoleCount, source.State.BindingCount = 1, 1
+	measured, err := NewProvider(t.Context())
+	require.NoError(t, err)
+	prepared, err := measured.PrepareTier(t.Context(), source)
+	require.NoError(t, err)
+	measured.validations.Clear(false)
+	required := measured.MemoryUsage().Reserved
+	prepared.Close()
+	measured.Close()
+
+	bounded, err := NewProviderWithMemoryLimit(t.Context(), required)
+	require.NoError(t, err)
+	t.Cleanup(bounded.Close)
+	prepared, err = bounded.PrepareTier(t.Context(), source)
+	require.NoError(t, err)
+	t.Cleanup(prepared.Close)
+	require.NoError(t, prepared.SetOriginProgress(time.Now()))
+	bounded.validations.Clear(false)
+	latest := source
+	latest.State.Revision++
+	latest.ContentDigest = strings.Repeat("c", 64)
+	require.ErrorIs(t, prepared.Rebase(t.Context(), latest), ErrUnavailable)
+	require.Equal(t, required, bounded.MemoryUsage().Reserved)
+	require.LessOrEqual(t, bounded.MemoryUsage().PeakReserved, required)
+	require.NoError(t, prepared.Install(), "a failed optional catch-up must leave the original preparation intact")
+	snapshot, ok := bounded.AuthorizationSnapshot()
+	require.True(t, ok)
+	require.Equal(t, uint64(1), snapshot.Tiers[0].Revision)
 }
 
 func servingTier(t testing.TB, tier, namespace string, revision uint64, grant bool) auth.AuthorizationTier {
@@ -184,6 +499,35 @@ func TestProviderReadinessPrecedesTrustedFastPathsAndNamespaceReuse(t *testing.T
 	require.ErrorIs(t, err, ErrUnavailable, "terminating namespace data never becomes a grant")
 }
 
+func TestProviderMissingNamespaceRequestsLoadWithAndWithoutCapture(t *testing.T) {
+	for _, captured := range []bool{false, true} {
+		t.Run(fmt.Sprint(captured), func(t *testing.T) {
+			provider, err := NewProvider(t.Context())
+			require.NoError(t, err)
+			t.Cleanup(provider.Close)
+			require.NoError(t, provider.PublishTier(t.Context(), servingTier(t, rbac.ClusterTierID, "", 1, false)))
+			var requested []string
+			provider.SetNamespaceLoader(func(name string) { requested = append(requested, name) })
+			ctx := t.Context()
+			if captured {
+				var closeCapture func()
+				ctx, closeCapture = auth.ContextWithServingAuthorizationCapture(ctx)
+				defer closeCapture()
+			}
+			actor := &auth.Principal{Subject: "alice", AuthMethod: "static-users"}
+			resource := auth.ResourceContext{Kind: "product", Name: "widget", Attrs: map[string]any{"namespace": "shop"}}
+			decision, err := provider.Authorize(ctx, actor, "product.read", resource)
+			require.ErrorIs(t, err, ErrUnavailable)
+			require.Equal(t, auth.OutcomeDeny, decision.Outcome)
+			require.Equal(t, []string{"shop"}, requested, "missing snapshots must be scheduled even for request-scoped captures")
+			require.NoError(t, provider.PublishTier(t.Context(), servingTier(t, testUID("shop"), "shop", 1, true)))
+			decision, err = provider.Authorize(ctx, actor, "product.read", resource)
+			require.NoError(t, err)
+			require.Equal(t, auth.OutcomeAllow, decision.Outcome)
+		})
+	}
+}
+
 func TestMutationCaptureFinishesWithoutGrantingNewRequestsOrScopes(t *testing.T) {
 	provider, err := NewProvider(t.Context())
 	require.NoError(t, err)
@@ -296,18 +640,65 @@ func TestProviderOriginProofExpiresBeforeTrustedFastPathsAndCannotRefreshAnother
 			provider.tiers[expired].originAt = time.Now().Add(-6 * time.Second)
 			identity := provider.tiers[expired].source.State.Projection
 			provider.mu.Unlock()
-			_, err = provider.Authorize(t.Context(), actor, "product.read", resource)
+			decision, err := provider.Authorize(t.Context(), actor, "product.read", resource)
 			require.ErrorIs(t, err, ErrUnavailable)
+			scope := "namespace"
+			if expired == rbac.ClusterTierID {
+				scope = "cluster"
+			}
+			require.Equal(t, "tier unavailable: "+scope+" origin expired", decision.Reason,
+				"an expired proof must be distinguishable from a missing policy without disclosing its identity")
 			readiness, _ := provider.AuthorizationReadiness(namespace.State.TierID)
 			require.False(t, readiness.Ready)
 			wrong := identity
 			wrong.GitRevision = "other"
 			require.ErrorIs(t, provider.RecordOriginProgress(expired, wrong, time.Now()), ErrUnavailable)
 			require.NoError(t, provider.RecordOriginProgress(expired, identity, time.Now()))
-			decision, err := provider.Authorize(t.Context(), actor, "product.read", resource)
+			decision, err = provider.Authorize(t.Context(), actor, "product.read", resource)
 			require.NoError(t, err)
 			require.Equal(t, auth.OutcomeAllow, decision.Outcome)
 		})
+	}
+}
+
+func TestProviderOriginFailuresDistinguishMissingAndUnverifiedProofs(t *testing.T) {
+	for _, scope := range []string{"cluster", "namespace"} {
+		for _, state := range []string{"not installed", "not verified", "clock ahead"} {
+			t.Run(scope+"/"+state, func(t *testing.T) {
+				provider, err := NewProvider(t.Context())
+				require.NoError(t, err)
+				t.Cleanup(provider.Close)
+				require.NoError(t, provider.RequireOriginProgress(5*time.Second))
+				cluster := servingTier(t, rbac.ClusterTierID, "", 1, false)
+				namespace := servingTier(t, testUID("shop"), "shop", 1, true)
+				for _, source := range []auth.AuthorizationTier{cluster, namespace} {
+					require.NoError(t, provider.PublishTier(t.Context(), source))
+					require.NoError(t, provider.RecordOriginProgress(source.State.TierID, source.State.Projection, time.Now()))
+				}
+				target := namespace.State.TierID
+				if scope == "cluster" {
+					target = rbac.ClusterTierID
+				}
+				if state == "not installed" {
+					provider.InvalidateTier(target)
+				} else {
+					provider.mu.Lock()
+					at := time.Time{}
+					if state == "clock ahead" {
+						at = time.Now().Add(time.Hour)
+					}
+					provider.tiers[target].originAt = at
+					provider.mu.Unlock()
+				}
+				actor := &auth.Principal{Subject: "admin", AuthMethod: "static-users", Groups: []string{"system:masters"}}
+				resource := auth.ResourceContext{Kind: "product", Attrs: map[string]any{"namespace": "shop"}}
+				decision, err := provider.Authorize(t.Context(), actor, "product.read", resource)
+				require.ErrorIs(t, err, ErrUnavailable)
+				require.ErrorIs(t, err, auth.ErrAuthorizationUnavailable)
+				require.Equal(t, auth.OutcomeDeny, decision.Outcome)
+				require.Equal(t, "tier unavailable: "+scope+" origin "+state, decision.Reason)
+			})
+		}
 	}
 }
 
@@ -351,6 +742,46 @@ func TestProviderBuiltinReleaseMismatchCannotReplaceAnInstalledSnapshot(t *testi
 		"namespace.read", auth.ResourceContext{Kind: "namespace"})
 	require.NoError(t, err)
 	require.EqualValues(t, 1, decision.AuthorizationSnapshot.Tiers[0].Revision)
+}
+
+func TestProviderAuthoritativePinsReuseOnlyAuthorValidation(t *testing.T) {
+	provider, err := NewProvider(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(provider.Close)
+	cluster := servingTier(t, rbac.ClusterTierID, "", 1, false)
+	require.NoError(t, provider.PublishTier(t.Context(), cluster))
+	baseline := provider.budget.Used()
+	role := &rbac.Resource{
+		APIVersion: rbac.APIVersion, Kind: rbac.ClusterRole,
+		Metadata: rbac.Metadata{Name: "reader", UID: testUID("pinned-reader"),
+			Annotations: map[string]string{"capacity.gitstore.dev/padding": strings.Repeat("x", 16000)}},
+		Spec: json.RawMessage(`{"rules":[{"resources":["product"],"verbs":["read"]}]}`),
+	}
+	cluster.Resources, cluster.State.RoleCount = []*rbac.Resource{role}, 1
+	model := auth.AuthorizationModel{ModelVersion: rbac.ModelVersion, Cluster: cluster}
+	pinned, err := provider.PinAuthorization(t.Context(), model)
+	require.NoError(t, err)
+	pinned.Close()
+	cached := provider.budget.Used()
+	require.Greater(t, cached, baseline, "author validation should remain cached after releasing the pin")
+	pinned, err = provider.PinAuthorization(t.Context(), model)
+	require.NoError(t, err)
+	pinned.Close()
+	require.Equal(t, cached, provider.budget.Used(), "repeated pins must share the bounded author-content cache")
+
+	model.Cluster.State.ProjectionPending = true
+	_, err = provider.PinAuthorization(t.Context(), model)
+	require.ErrorIs(t, err, ErrUnavailable, "cached author content cannot establish projection readiness")
+	model.Cluster.State.ProjectionPending = false
+	role.Status = json.RawMessage(`{`)
+	_, err = provider.PinAuthorization(t.Context(), model)
+	require.ErrorIs(t, err, ErrUnavailable, "cached author content cannot validate current status")
+	role.Status = nil
+	role.Spec = json.RawMessage(`{"rules":[],"unknown":true}`)
+	_, err = provider.PinAuthorization(t.Context(), model)
+	require.ErrorIs(t, err, ErrUnavailable, "changed author content must be validated again")
+	provider.validations.Clear(false)
+	require.Equal(t, baseline, provider.budget.Used())
 }
 
 func TestProviderConfiguredMemoryLimitFailsClosedWithoutRetainingFailedTranslation(t *testing.T) {

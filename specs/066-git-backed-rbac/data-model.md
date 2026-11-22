@@ -10,6 +10,15 @@ fields cannot be forged in pushed YAML. Generation tracks desired-state
 changes; resourceVersion advances for every conditional mutation. Resource
 IDs encode kind and immutable UID using existing Node conventions.
 
+For all four persisted kinds, controller-owned status includes
+`observedGeneration`, `lastAppliedRevision`, conditions and optional resolved
+role identity. `lastAppliedRevision` acknowledges the reconciled resource's
+`metadata.revision`, not the current repository head. A same-generation authored
+revision still requires acknowledgement. Status writes are UID/resourceVersion
+conditional and may only acknowledge that resource's current revision.
+Unobserved resources may omit the field; virtual built-ins have no mutable
+controller observation.
+
 | Kind | Scope | Spec | Canonical path |
 |---|---|---|---|
 | Role | Namespace UID | `rules[]` | `rbac/roles/<name>.yaml` |
@@ -153,8 +162,8 @@ Do not persist a provider-native policy copy.
 `SubjectAccessReview` is a transient envelope in
 `authorization.gitstore.dev/v1beta1`, separate from the four Git-backed
 kinds. `AccessReviewInput` carries `apiVersion`, `kind` and `spec`;
-`AccessReviewPayload.subjectAccessReview` returns the versioned envelope
-with echoed `spec` and evaluated `status`. No durable metadata, Node ID,
+The `accessReview` query returns `SubjectAccessReview` directly as the versioned
+envelope with echoed `spec` and evaluated `status`. No durable metadata, Node ID,
 Git manifest, projection row, lifecycle or watch is created.
 
 `spec`: target `principal.subject`, optional `principal.groups`, canonical

@@ -116,6 +116,7 @@ Controller-owned observation. A missing resolved link grants no authority.
 """
 type RBACStatus {
   observedGeneration: Int!
+  lastAppliedRevision: String
   conditions: [Condition!]!
   resolved: RBACResolvedRole
 }
@@ -470,10 +471,6 @@ input SubjectAccessReviewResourceRefInput {
   id: ID!
 }
 
-type AccessReviewPayload {
-  subjectAccessReview: SubjectAccessReview
-}
-
 """A non-persisted result evaluated against authoritative policy snapshots."""
 type SubjectAccessReview {
   apiVersion: String!
@@ -518,7 +515,7 @@ type SubjectAccessReviewRevision {
 
 extend type Query {
   """Requires scope review permission even when reviewing oneself."""
-  accessReview(input: AccessReviewInput!): AccessReviewPayload!
+  accessReview(review: AccessReviewInput!): SubjectAccessReview!
   role(by: RoleBy!): Role
   clusterRole(by: ClusterRoleBy!): ClusterRole
   roleBinding(by: RoleBindingBy!): RoleBinding

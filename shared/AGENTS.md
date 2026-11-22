@@ -31,6 +31,8 @@
   authorization catalog drift without rewriting generated files.
 - Keep Go and Rust protobuf stubs consistent with `proto/` definitions using
   the existing Buf generation configurations.
+- Reserve GraphQL `input` arguments and `*Payload` return types for mutations.
+  Queries use descriptive argument names and return their result types directly.
 - GraphQL schema docstrings are consumer-facing: read
   `../.claude/rules/no-internal-refs-in-user-facing-docs.md`. After changes to
   embedded schema docstrings, run `go generate ./...` in `gitstore-api`.

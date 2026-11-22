@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -47,7 +48,10 @@ type directoryGraphQLResponse struct {
 
 func (r *directoryTestRuntime) startAPIs(t *testing.T, operator string, sharedSource ...bool) ([]directoryAPI, func(string) string) {
 	t.Helper()
-	privateDir := t.TempDir()
+	privateDir := r.apiFixtureDirectory
+	if privateDir == "" {
+		privateDir = t.TempDir()
+	}
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
 	keyFile := filepath.Join(privateDir, "issuer.pem")
@@ -132,7 +136,7 @@ clusterRoleBindings:
 		policy = strings.Replace(policy, "resources: [user]\n        verbs: [read]",
 			"resources: [user, serviceAccount]\n        verbs: [read]", 1)
 	}
-	if r.initialAPIBinary != "" {
+	if r.initialAPIBinary != "" && !r.initialAPIHasUserDirectory {
 		r.currentAPIPolicy = policy
 		policy = strings.Replace(policy, "        when: [subjectUsername]\n", "", 1)
 		policy = strings.ReplaceAll(policy, "[user, serviceAccount, namespace]", "[serviceAccount, namespace]")
@@ -276,11 +280,11 @@ keyspace = "gitstore"
 confidence_window = "500ms"
 `, sourceSigningKey)
 		}
-		if r.initialAPIBinary != "" {
+		if r.initialAPIBinary != "" && !r.initialAPIHasUserDirectory {
 			config = strings.Replace(config, `provider = "kratos"`, `provider = "static-users"`, 1)
 			config = strings.Replace(config, `"oidc-jwt", "anonymous"`, `"oidc-jwt", "static-users", "anonymous"`, 1)
 			config += "\n[api.auth.static_users]\nusers_file = \"/fixtures/users.yaml\"\n"
-			config += fmt.Sprintf("\n[api.auth.jwt]\nsecret = %q\n", r.secret)
+			config += fmt.Sprintf("\n[api.auth.static_users.jwt]\nsecret = %q\n", r.secret)
 		}
 		configFile := filepath.Join(privateDir, fmt.Sprintf("api-%d.toml", replica))
 		if r.capacity {
@@ -353,12 +357,17 @@ func (r *directoryTestRuntime) startScylla(t *testing.T, root string) {
 	t.Helper()
 	name := "gitstore-userdir-scylla-" + r.owner[:12]
 	volume := name + "-data"
+	reactorOption := ""
+	if r.scyllaReactorBackend != "" {
+		require.Contains(t, []string{"linux-aio", "epoll"}, r.scyllaReactorBackend)
+		reactorOption = " --reactor-backend=" + r.scyllaReactorBackend
+	}
 	override := fmt.Sprintf(`services:
   scylla:
     container_name: %s
     labels: {dev.gitstore.test_owner: %s}
     ports: !override []
-    command: --developer-mode=1 --overprovisioned=1 --smp=1 --memory=1536M --reserve-memory=0M
+    command: --developer-mode=1 --overprovisioned=1 --smp=1 --memory=1536M --reserve-memory=0M%s
     mem_limit: 2g
     cpus: "1"
   scylla-init:
@@ -374,8 +383,12 @@ volumes:
   scylla-data:
     name: %s
     labels: {dev.gitstore.test_owner: %s}
-`, name, r.owner, name, r.owner, r.network, volume, r.owner)
-	file := filepath.Join(t.TempDir(), "scylla.yml")
+`, name, r.owner, reactorOption, name, r.owner, r.network, volume, r.owner)
+	directory := r.apiFixtureDirectory
+	if directory == "" {
+		directory = t.TempDir()
+	}
+	file := filepath.Join(directory, "scylla.yml")
 	require.NoError(t, os.WriteFile(file, []byte(override), 0600))
 	args := []string{"compose", "--project-name", r.network,
 		"-f", filepath.Join(root, "compose.yml"), "-f", filepath.Join(root, "compose.scylla.yml"), "-f", file}
@@ -395,6 +408,34 @@ volumes:
 		}
 		r.command(t, nil, append(append([]string{}, args...), "down")...)
 		r.command(t, nil, "volume", "rm", volume)
+	})
+	t.Cleanup(func() {
+		if !t.Failed() || r.apiFixtureDirectory == "" {
+			return
+		}
+		for _, container := range []string{name, name + "-init"} {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			label, err := exec.CommandContext(ctx, "docker", "inspect", "--format",
+				`{{index .Config.Labels "dev.gitstore.test_owner"}}`, container).Output()
+			if err != nil || strings.TrimSpace(string(label)) != r.owner {
+				cancel()
+				t.Errorf("cannot capture unverified owned Scylla failure: %s", container)
+				continue
+			}
+			log, logErr := exec.CommandContext(ctx, "docker", "logs", "--tail", "300", container).CombinedOutput()
+			state, stateErr := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{json .State}}", container).Output()
+			cancel()
+			log = []byte(strings.ReplaceAll(string(log), r.secret, "[redacted]"))
+			if err := os.WriteFile(filepath.Join(directory, container+".log"), log, 0600); err != nil {
+				t.Errorf("retain owned Scylla failure log: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(directory, container+"-state.json"), state, 0600); err != nil {
+				t.Errorf("retain owned Scylla failure state: %v", err)
+			}
+			if err := errors.Join(logErr, stateErr); err != nil {
+				t.Errorf("capture owned Scylla startup failure: %v", err)
+			}
+		}
 	})
 	r.command(t, nil, append(append([]string{}, args...), "up", "-d", "--wait", "--wait-timeout", "90", "scylla", "scylla-init")...)
 	for _, container := range []string{name, name + "-init"} {

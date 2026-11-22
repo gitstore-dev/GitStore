@@ -35,10 +35,6 @@ type DirectiveRoot struct {
 }
 
 type ComplexityRoot struct {
-	AccessReviewPayload struct {
-		SubjectAccessReview func(childComplexity int) int
-	}
-
 	ActorConnection struct {
 		Edges    func(childComplexity int) int
 		PageInfo func(childComplexity int) int
@@ -789,7 +785,7 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		AccessReview                  func(childComplexity int, input model.AccessReviewInput) int
+		AccessReview                  func(childComplexity int, review model.AccessReviewInput) int
 		Actor                         func(childComplexity int, by model.ActorBy) int
 		Actors                        func(childComplexity int, first *int32, after *string, last *int32, before *string) int
 		Categories                    func(childComplexity int, namespace string, filter *model.CategoryFilterInput, first *int32, after *string, last *int32, before *string) int
@@ -856,9 +852,10 @@ type ComplexityRoot struct {
 	}
 
 	RBACStatus struct {
-		Conditions         func(childComplexity int) int
-		ObservedGeneration func(childComplexity int) int
-		Resolved           func(childComplexity int) int
+		Conditions          func(childComplexity int) int
+		LastAppliedRevision func(childComplexity int) int
+		ObservedGeneration  func(childComplexity int) int
+		Resolved            func(childComplexity int) int
 	}
 
 	RBACSubject struct {
@@ -1442,13 +1439,6 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 	ec := newExecutionContext(nil, e, nil)
 	_ = ec
 	switch typeName + "." + field {
-
-	case "AccessReviewPayload.subjectAccessReview":
-		if e.ComplexityRoot.AccessReviewPayload.SubjectAccessReview == nil {
-			break
-		}
-
-		return e.ComplexityRoot.AccessReviewPayload.SubjectAccessReview(childComplexity), true
 
 	case "ActorConnection.edges":
 		if e.ComplexityRoot.ActorConnection.Edges == nil {
@@ -4556,7 +4546,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.AccessReview(childComplexity, args["input"].(model.AccessReviewInput)), true
+		return e.ComplexityRoot.Query.AccessReview(childComplexity, args["review"].(model.AccessReviewInput)), true
 
 	case "Query.actor":
 		if e.ComplexityRoot.Query.Actor == nil {
@@ -5065,6 +5055,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.RBACStatus.Conditions(childComplexity), true
+
+	case "RBACStatus.lastAppliedRevision":
+		if e.ComplexityRoot.RBACStatus.LastAppliedRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.RBACStatus.LastAppliedRevision(childComplexity), true
 
 	case "RBACStatus.observedGeneration":
 		if e.ComplexityRoot.RBACStatus.ObservedGeneration == nil {
@@ -9577,6 +9574,7 @@ Controller-owned observation. A missing resolved link grants no authority.
 """
 type RBACStatus {
   observedGeneration: Int!
+  lastAppliedRevision: String
   conditions: [Condition!]!
   resolved: RBACResolvedRole
 }
@@ -9931,10 +9929,6 @@ input SubjectAccessReviewResourceRefInput {
   id: ID!
 }
 
-type AccessReviewPayload {
-  subjectAccessReview: SubjectAccessReview
-}
-
 """A non-persisted result evaluated against authoritative policy snapshots."""
 type SubjectAccessReview {
   apiVersion: String!
@@ -9979,7 +9973,7 @@ type SubjectAccessReviewRevision {
 
 extend type Query {
   """Requires scope review permission even when reviewing oneself."""
-  accessReview(input: AccessReviewInput!): AccessReviewPayload!
+  accessReview(review: AccessReviewInput!): SubjectAccessReview!
   role(by: RoleBy!): Role
   clusterRole(by: ClusterRoleBy!): ClusterRole
   roleBinding(by: RoleBindingBy!): RoleBinding
@@ -11373,14 +11367,6 @@ var parsedSchema = gqlparser.MustLoadSchema(sources...)
 // childFields_* functions provide shared child field context lookups.
 // Each function is generated once per unique object type, deduplicating the
 // switch statements that were previously inlined in every fieldContext_* function.
-
-func (ec *executionContext) childFields_AccessReviewPayload(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-	switch field.Name {
-	case "subjectAccessReview":
-		return ec.fieldContext_AccessReviewPayload_subjectAccessReview(ctx, field)
-	}
-	return nil, fmt.Errorf("no field named %q was found under type AccessReviewPayload", field.Name)
-}
 
 func (ec *executionContext) childFields_ActorConnection(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
@@ -12788,6 +12774,8 @@ func (ec *executionContext) childFields_RBACStatus(ctx context.Context, field gr
 	switch field.Name {
 	case "observedGeneration":
 		return ec.fieldContext_RBACStatus_observedGeneration(ctx, field)
+	case "lastAppliedRevision":
+		return ec.fieldContext_RBACStatus_lastAppliedRevision(ctx, field)
 	case "conditions":
 		return ec.fieldContext_RBACStatus_conditions(ctx, field)
 	case "resolved":

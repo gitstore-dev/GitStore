@@ -629,6 +629,35 @@ func rbacCreatedAt(resource *rbac.Resource) time.Time {
 	return time.Unix(0, 0).UTC()
 }
 
+func readRBACListSnapshot(parent context.Context, store rbac.Store, tier string) (datastore.RBACSnapshot, error) {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+	for attempt := range 3 {
+		if err := ctx.Err(); err != nil {
+			return datastore.RBACSnapshot{}, err
+		}
+		snapshot, retry, err := datastore.ReadRBACSnapshotAttempt(ctx, store, tier)
+		if err != nil {
+			return datastore.RBACSnapshot{}, err
+		}
+		if !retry && !snapshot.State.ProjectionPending {
+			return snapshot, nil
+		}
+		if attempt == 2 {
+			break
+		}
+		// Wait for the committed writer, never repair from a resolver read.
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return datastore.RBACSnapshot{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return datastore.RBACSnapshot{}, rbac.ErrUnavailable
+}
+
 func (r *Resolver) listRBAC(ctx context.Context, kind rbac.Kind, namespace string, first *int32, after *string, selector *model.LabelSelectorInput) ([]model.Node, []string, *model.PageInfo, error) {
 	if first != nil && (*first < 1 || *first > 500) {
 		return nil, nil, nil, admission.NewError(admission.CodeBadUserInput, "INVALID_PAGINATION", "RBAC page size must be between 1 and 500").ToGQLError()
@@ -651,12 +680,9 @@ func (r *Resolver) listRBAC(ctx context.Context, kind rbac.Kind, namespace strin
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	snapshot, err := datastore.ReadRBACSnapshot(ctx, store, tier)
+	snapshot, err := readRBACListSnapshot(ctx, store, tier)
 	if err != nil {
 		return nil, nil, nil, rbacReadError(kind, err)
-	}
-	if snapshot.State.ProjectionPending {
-		return nil, nil, nil, rbacUnavailableError()
 	}
 	selectorJSON, err := json.Marshal(selector)
 	if err != nil {
@@ -774,13 +800,15 @@ func rbacResourceToGraphQL(resource *rbac.Resource) (model.Node, error) {
 	status := &model.RBACStatus{Conditions: []*model.Condition{}}
 	if len(resource.Status) > 0 {
 		var stored struct {
-			ObservedGeneration int32          `json:"observedGeneration"`
-			Conditions         []rawCondition `json:"conditions"`
+			ObservedGeneration  int32          `json:"observedGeneration"`
+			LastAppliedRevision *string        `json:"lastAppliedRevision"`
+			Conditions          []rawCondition `json:"conditions"`
 		}
 		if err := json.Unmarshal(resource.Status, &stored); err != nil {
 			return nil, err
 		}
 		status.ObservedGeneration = stored.ObservedGeneration
+		status.LastAppliedRevision = stored.LastAppliedRevision
 		for _, condition := range stored.Conditions {
 			status.Conditions = append(status.Conditions, conditionFromRaw(condition))
 		}

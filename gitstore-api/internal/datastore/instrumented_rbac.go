@@ -8,6 +8,23 @@ import (
 	"time"
 )
 
+func (d *InstrumentedDatastore) RBACOriginFactsReader() RBACOriginFactsReader {
+	capable, ok := d.next.(RBACOriginFactsCapable)
+	if !ok {
+		return nil
+	}
+	read := capable.RBACOriginFactsReader()
+	if read == nil {
+		return nil
+	}
+	return func(ctx context.Context, lookups []RBACOriginLookup) ([]RBACOriginFacts, error) {
+		start := time.Now()
+		facts, err := read(ctx, lookups)
+		d.observe("ReadRBACOriginFacts", start, err)
+		return facts, err
+	}
+}
+
 func (d *InstrumentedDatastore) RBACStore() RBACStore {
 	capable, ok := d.next.(RBACCapable)
 	if !ok {
@@ -17,7 +34,23 @@ func (d *InstrumentedDatastore) RBACStore() RBACStore {
 	if next == nil {
 		return nil
 	}
-	return &instrumentedRBACStore{next: next, parent: d}
+	store := &instrumentedRBACStore{next: next, parent: d}
+	if capturer, ok := next.(RBACSnapshotCapturer); ok {
+		return &instrumentedRBACSnapshotStore{instrumentedRBACStore: store, capturer: capturer}
+	}
+	return store
+}
+
+type instrumentedRBACSnapshotStore struct {
+	*instrumentedRBACStore
+	capturer RBACSnapshotCapturer
+}
+
+func (s *instrumentedRBACSnapshotStore) CaptureRBACSnapshot(ctx context.Context, tier string, maxBytes int64) (RBACTierState, [][]byte, error) {
+	start := time.Now()
+	state, payloads, err := s.capturer.CaptureRBACSnapshot(ctx, tier, maxBytes)
+	s.parent.observe("CaptureRBACSnapshot", start, err)
+	return state, payloads, err
 }
 
 type instrumentedRBACStore struct {

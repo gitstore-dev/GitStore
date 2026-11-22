@@ -61,12 +61,12 @@ func rbacNativeDecisionMatches(t *testing.T, path string, offset int64, subject,
 	return false
 }
 
-const rbacNativeReviewQuery = `query($input:AccessReviewInput!){
-  accessReview(input:$input){subjectAccessReview{
+const rbacNativeReviewQuery = `query($review:AccessReviewInput!){
+  accessReview(review:$review){
     apiVersion kind spec{principal{subject groups} action resourceRef{id}}
     status{allowed hypothetical catalogDigest builtinDigest
       revisions{tierID namespaceUID gitRevision tierRevision capturedAt}}
-  }}
+  }
 }`
 
 func (f rbacNativeFixture) create(t *testing.T, kind string, manifest map[string]any) rbacNativeResource {
@@ -75,7 +75,7 @@ func (f rbacNativeFixture) create(t *testing.T, kind string, manifest map[string
 		fmt.Sprintf("mutation($input:Create%sInput!){create%s(input:$input){%s{id}}}", kind, kind, rbacNativeField(kind)),
 		map[string]any{"input": manifest})
 	name := manifest["metadata"].(map[string]any)["name"].(string)
-	var committedUID string
+	var committedRevision string
 	if len(response.Errors) != 0 {
 		require.Len(t, response.Errors, 1)
 		var partial struct {
@@ -107,12 +107,13 @@ func (f rbacNativeFixture) create(t *testing.T, kind string, manifest map[string
 		require.NoError(t, yaml.Unmarshal(content, &canonical))
 		require.Equal(t, kind, canonical.Kind)
 		require.Equal(t, name, canonical.Metadata.Name)
-		require.NotEmpty(t, canonical.Metadata.UID)
-		committedUID = canonical.Metadata.UID
+		require.Empty(t, canonical.Metadata.UID, "canonical YAML contains author-owned metadata, not projection identity")
+		committedRevision = commit
 	}
 	resource := f.await(t, kind, name, false)
-	if committedUID != "" {
-		require.Equal(t, committedUID, resource.Metadata.UID, "readback must converge to the exact committed incarnation")
+	if committedRevision != "" {
+		require.True(t, strings.HasSuffix(resource.Metadata.Revision, "@sha1:"+committedRevision),
+			"readback must converge to the exact canonical creation commit")
 	}
 	return resource
 }
@@ -151,13 +152,13 @@ type rbacNativeReview struct {
 
 func (f rbacNativeFixture) review(t *testing.T, api string, input map[string]any) rbacNativeReview {
 	t.Helper()
-	response := f.query(t, api, rbacNativeReviewQuery, map[string]any{"input": input})
+	response := f.query(t, api, rbacNativeReviewQuery, map[string]any{"review": input})
 	require.Empty(t, response.Errors, "access review HTTP status: %d", response.Status)
 	var result struct {
-		AccessReview struct{ SubjectAccessReview rbacNativeReview }
+		AccessReview rbacNativeReview
 	}
 	require.NoError(t, json.Unmarshal(response.Data, &result))
-	review := result.AccessReview.SubjectAccessReview
+	review := result.AccessReview
 	require.Equal(t, "authorization.gitstore.dev/v1beta1", review.APIVersion)
 	require.Equal(t, "SubjectAccessReview", review.Kind)
 	require.NotEmpty(t, review.Status.CatalogDigest)

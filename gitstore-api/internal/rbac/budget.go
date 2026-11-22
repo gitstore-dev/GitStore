@@ -16,7 +16,10 @@ const (
 type MemoryBudget struct {
 	limit int64
 	used  atomic.Int64
+	peak  atomic.Int64
 }
+
+type MemoryBudgetUsage struct{ Reserved, PeakReserved, Limit int64 }
 
 type MemoryReservation struct {
 	mu     sync.Mutex
@@ -37,6 +40,11 @@ func (b *MemoryBudget) Reserve(size int64) (*MemoryReservation, error) {
 
 func (b *MemoryBudget) Used() int64 { return b.used.Load() }
 
+func (b *MemoryBudget) Usage() MemoryBudgetUsage {
+	used := b.used.Load()
+	return MemoryBudgetUsage{used, max(used, b.peak.Load()), b.limit}
+}
+
 func (r *MemoryReservation) Grow(size int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -50,6 +58,11 @@ func (r *MemoryReservation) Grow(size int64) error {
 		}
 		if r.budget.used.CompareAndSwap(current, current+size) {
 			r.bytes += size
+			for peak := r.budget.peak.Load(); current+size > peak; peak = r.budget.peak.Load() {
+				if r.budget.peak.CompareAndSwap(peak, current+size) {
+					break
+				}
+			}
 			return nil
 		}
 	}

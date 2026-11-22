@@ -98,7 +98,7 @@ type QueryResolver interface {
 	Products(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.ProductConnection, error)
 	ProductVariant(ctx context.Context, by model.ProductVariantBy) (*model.ProductVariant, error)
 	ProductVariants(ctx context.Context, namespace string, first *int32, after *string, last *int32, before *string) (*model.ProductVariantConnection, error)
-	AccessReview(ctx context.Context, input model.AccessReviewInput) (*model.AccessReviewPayload, error)
+	AccessReview(ctx context.Context, review model.AccessReviewInput) (*model.SubjectAccessReview, error)
 	Role(ctx context.Context, by model.RoleBy) (*model.Role, error)
 	ClusterRole(ctx context.Context, by model.ClusterRoleBy) (*model.ClusterRole, error)
 	RoleBinding(ctx context.Context, by model.RoleBindingBy) (*model.RoleBinding, error)
@@ -982,14 +982,14 @@ func (ec *executionContext) field_Query___type_args(ctx context.Context, rawArgs
 func (ec *executionContext) field_Query_accessReview_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
-	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "review",
 		func(ctx context.Context, v any) (model.AccessReviewInput, error) {
 			return ec.unmarshalNAccessReviewInput2githubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋadminᚋgraphᚋmodelᚐAccessReviewInput(ctx, v)
 		})
 	if err != nil {
 		return nil, err
 	}
-	args["input"] = arg0
+	args["review"] = arg0
 	return args, nil
 }
 
@@ -6117,11 +6117,11 @@ func (ec *executionContext) _Query_accessReview(ctx context.Context, field graph
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().AccessReview(ctx, fc.Args["input"].(model.AccessReviewInput))
+			return ec.Resolvers.Query().AccessReview(ctx, fc.Args["review"].(model.AccessReviewInput))
 		},
 		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *model.AccessReviewPayload) graphql.Marshaler {
-			return ec.marshalNAccessReviewPayload2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋadminᚋgraphᚋmodelᚐAccessReviewPayload(ctx, selections, v)
+		func(ctx context.Context, selections ast.SelectionSet, v *model.SubjectAccessReview) graphql.Marshaler {
+			return ec.marshalNSubjectAccessReview2ᚖgithubᚗcomᚋgitstoreᚑdevᚋgitstoreᚋapiᚋinternalᚋadminᚋgraphᚋmodelᚐSubjectAccessReview(ctx, selections, v)
 		},
 		true,
 		true,
@@ -6134,7 +6134,7 @@ func (ec *executionContext) fieldContext_Query_accessReview(ctx context.Context,
 		IsMethod:   true,
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.childFields_AccessReviewPayload(ctx, field)
+			return ec.childFields_SubjectAccessReview(ctx, field)
 		},
 	}
 	defer func() {

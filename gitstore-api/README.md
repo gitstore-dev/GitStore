@@ -115,7 +115,7 @@ Required for local API startup unless provided by `.env`:
 | Variable                                        | Default                  | Purpose                  |
 |---------------------------------------------------|--------------------------|--------------------------|
 | `GITSTORE_API__AUTH__STATIC_USERS__USERS_FILE`  | `users.yaml`             | Local users YAML         |
-| `GITSTORE_API__AUTH__JWT__SECRET`               | unset                    | JWT signing secret       |
+| `GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET`               | unset                    | JWT signing secret       |
 | `GITSTORE_API__ADMIN_PORT`                            | `4000`                   | GraphQL HTTP port        |
 | `GITSTORE_API__GIT_PORT`                        | `9000`                   | Git Smart HTTP port      |
 | `GITSTORE_API__GRPC_PORT`                       | `6000`                   | CatalogService gRPC port |

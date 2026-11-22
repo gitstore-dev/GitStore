@@ -185,15 +185,24 @@ func secretTestGraphQLWithTimeout(t *testing.T, api, token, query string, variab
 }
 
 func secretTestGraphQLWithHeaders(t *testing.T, api, token, query string, variables map[string]any, timeout time.Duration, headers map[string]string) gqlResponse {
+	return secretTestGraphQLWithContext(t, context.Background(), api, token, query, variables, timeout, headers)
+}
+
+func secretTestGraphQLWithContext(t *testing.T, parent context.Context, api, token, query string, variables map[string]any, timeout time.Duration, headers map[string]string) gqlResponse {
 	t.Helper()
-	return secretTestGraphQLWithHeadersBounded(t, api, token, query, variables, timeout, headers, 1<<20)
+	return secretTestGraphQLWithContextBounded(t, parent, api, token, query, variables, timeout, headers, 1<<20)
 }
 
 func secretTestGraphQLWithHeadersBounded(t *testing.T, api, token, query string, variables map[string]any, timeout time.Duration, headers map[string]string, limit int64) gqlResponse {
 	t.Helper()
+	return secretTestGraphQLWithContextBounded(t, context.Background(), api, token, query, variables, timeout, headers, limit)
+}
+
+func secretTestGraphQLWithContextBounded(t *testing.T, parent context.Context, api, token, query string, variables map[string]any, timeout time.Duration, headers map[string]string, limit int64) gqlResponse {
+	t.Helper()
 	data, err := json.Marshal(gqlRequest{Query: query, Variables: variables})
 	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, api+"/admin/graphql", bytes.NewReader(data))
 	require.NoError(t, err)

@@ -95,7 +95,7 @@ func TestNamespaceWatchBatchAppendPublishesContiguousRangesAcrossBuckets(t *test
 		require.NoError(t, cleanup.Query("TRUNCATE resource_watch_clock").Exec())
 	})
 
-	store := newTestStoreWithWatchBucket(t, 3)
+	store := newTestStoreWithWatchBucket(t, 35)
 	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
 	batcher := journal.(namespaceWatchBatchAppender)
 	ctx := context.Background()
@@ -104,11 +104,12 @@ func TestNamespaceWatchBatchAppendPublishesContiguousRangesAcrossBuckets(t *test
 	require.True(t, acquired)
 	t.Cleanup(func() { require.NoError(t, journal.ReleaseLease(context.Background(), lease)) })
 
-	events := make([]datastore.NamespaceWatchEvent, 5)
+	events := make([]datastore.NamespaceWatchEvent, 37)
 	for index := range events {
 		events[index] = datastore.NamespaceWatchEvent{
 			Type: datastore.NamespaceWatchAdded, Name: fmt.Sprintf("batch-%d", index+1),
 			DeduplicationKey: fmt.Sprintf("batch-key-%d", index+1), At: time.Now().UTC(),
+			Payload: bytes.Repeat([]byte{byte('a' + index%26)}, 17<<10),
 		}
 	}
 	appended, err := batcher.AppendBatch(ctx, lease, events, time.Hour)
@@ -117,11 +118,12 @@ func TestNamespaceWatchBatchAppendPublishesContiguousRangesAcrossBuckets(t *test
 	for index, event := range appended {
 		require.Equal(t, uint64(index+1), event.Sequence)
 	}
-	read, err := journal.ReadAfter(ctx, datastore.NamespaceWatchCursor{Epoch: appended[0].Epoch}, 10)
+	read, err := journal.ReadAfter(ctx, datastore.NamespaceWatchCursor{Epoch: appended[0].Epoch}, 40)
 	require.NoError(t, err)
 	require.Len(t, read, len(events))
 	for index, event := range read {
 		require.Equal(t, fmt.Sprintf("batch-%d", index+1), event.Name)
+		require.Equal(t, events[index].Payload, event.Payload)
 	}
 }
 

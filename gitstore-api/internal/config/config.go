@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/mail"
 	"net/url"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -73,6 +74,7 @@ type TranslationConfig struct {
 type OPAConfig struct {
 	WritesEnabled       bool          `mapstructure:"writes_enabled"`
 	InitialAdminSubject string        `mapstructure:"initial_admin_subject"`
+	EvidenceDirectory   string        `mapstructure:"evidence_directory"`
 	MaxStaleness        time.Duration `mapstructure:"max_staleness"`
 	ValidationTimeout   time.Duration `mapstructure:"validation_timeout"`
 	RebuildWorkers      int           `mapstructure:"rebuild_workers"`
@@ -85,6 +87,14 @@ type OPAConfig struct {
 }
 
 func (c OPAConfig) ValidateProvider(provider string) error {
+	if c.EvidenceDirectory != "" {
+		if provider != "opa" {
+			return errors.New("api.auth.opa.evidence_directory requires the opa authz provider")
+		}
+		if !filepath.IsAbs(c.EvidenceDirectory) || filepath.Clean(c.EvidenceDirectory) != c.EvidenceDirectory || c.EvidenceDirectory == "/" {
+			return errors.New("api.auth.opa.evidence_directory requires a clean absolute private directory")
+		}
+	}
 	if c.WritesEnabled && provider != "opa" {
 		return errors.New("api.auth.opa.writes_enabled requires the opa authz provider")
 	}
@@ -206,10 +216,9 @@ type GitServiceEndpointConfig struct {
 	Uri string `mapstructure:"uri" validate:"required"`
 }
 
-// AuthConfig holds authentication and JWT settings.
+// AuthConfig holds authentication, authorization and user-directory settings.
 type AuthConfig struct {
 	StaticUsers StaticUsersConfig   `mapstructure:"static_users"`
-	JWT         JWTConfig           `mapstructure:"jwt"`
 	AuthN       AuthNConfig         `mapstructure:"authn"`
 	AuthZ       AuthZConfig         `mapstructure:"authz"`
 	UserDir     UserDirConfig       `mapstructure:"userdir"`
@@ -391,7 +400,7 @@ type RBACConfig struct {
 	PolicyFile string `mapstructure:"policy_file"`
 }
 
-// JWTConfig holds JWT token settings.
+// JWTConfig holds static-users session token settings.
 type JWTConfig struct {
 	Secret       string        `mapstructure:"secret"`
 	TTL          time.Duration `mapstructure:"ttl"`
@@ -399,9 +408,10 @@ type JWTConfig struct {
 	RefreshGrace time.Duration `mapstructure:"refresh_grace"`
 }
 
-// StaticUsersConfig configures the file-backed local user list.
+// StaticUsersConfig configures the local user list and static-users sessions.
 type StaticUsersConfig struct {
-	UsersFile string `mapstructure:"users_file"`
+	UsersFile string    `mapstructure:"users_file"`
+	JWT       JWTConfig `mapstructure:"jwt"`
 }
 
 // WatchConfig holds durable-watch-journal settings shared by every watched
@@ -569,14 +579,15 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("push_limits.max_pack_size", "512MiB")
 	v.SetDefault("push_limits.max_file_size", "100MiB")
 	v.SetDefault("api.auth.static_users.users_file", "users.yaml")
-	v.SetDefault("api.auth.jwt.secret", "")
-	v.SetDefault("api.auth.jwt.ttl", "24h")
-	v.SetDefault("api.auth.jwt.issuer", "gitstore")
-	v.SetDefault("api.auth.jwt.refresh_grace", "60s")
+	v.SetDefault("api.auth.static_users.jwt.secret", "")
+	v.SetDefault("api.auth.static_users.jwt.ttl", "24h")
+	v.SetDefault("api.auth.static_users.jwt.issuer", "gitstore")
+	v.SetDefault("api.auth.static_users.jwt.refresh_grace", "60s")
 	v.SetDefault("api.auth.authn.chain", []string{"static-users", "anonymous"})
 	v.SetDefault("api.auth.authz.provider", "rbac-local")
 	v.SetDefault("api.auth.opa.writes_enabled", false)
 	v.SetDefault("api.auth.opa.initial_admin_subject", "")
+	v.SetDefault("api.auth.opa.evidence_directory", "")
 	v.SetDefault("api.auth.opa.max_staleness", "5s")
 	v.SetDefault("api.auth.opa.validation_timeout", "30s")
 	v.SetDefault("api.auth.opa.rebuild_workers", 4)
@@ -798,8 +809,8 @@ func validateConfig(cfg *Config) error {
 
 func validateAuthChainConfig(cfg *Config) error {
 	for _, provider := range cfg.Api.Auth.AuthN.Chain {
-		if strings.EqualFold(strings.TrimSpace(provider), "static-users") && cfg.Api.Auth.JWT.Secret == "" {
-			return errors.New("startup failed: api.auth.jwt.secret is required\n\n  Problem: static-users is present in api.auth.authn.chain, but api.auth.jwt.secret (env: GITSTORE_API__AUTH__JWT__SECRET) is empty. static-users cannot issue or verify session tokens without it\n\n  To fix, do ONE of the following:\n    1. Set GITSTORE_API__AUTH__JWT__SECRET to a random string (32+ chars). You can generate one with: make secret TARGET=jwt\n    2. If you don't intend to use static-users, remove it from api.auth.authn.chain (GITSTORE_API__AUTH__AUTHN__CHAIN)\n\n  See specs/060-local-multiuser-authn/quickstart.md, step 4, for a worked example")
+		if strings.EqualFold(strings.TrimSpace(provider), "static-users") && cfg.Api.Auth.StaticUsers.JWT.Secret == "" {
+			return errors.New("startup failed: api.auth.static_users.jwt.secret is required\n\n  Problem: static-users is present in api.auth.authn.chain, but api.auth.static_users.jwt.secret (env: GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET) is empty. static-users cannot issue or verify session tokens without it\n\n  To fix, do ONE of the following:\n    1. Set GITSTORE_API__AUTH__STATIC_USERS__JWT__SECRET to a random string (32+ chars). You can generate one with: make secret TARGET=jwt\n    2. If you don't intend to use static-users, remove it from api.auth.authn.chain (GITSTORE_API__AUTH__AUTHN__CHAIN)\n\n  See specs/060-local-multiuser-authn/quickstart.md, step 4, for a worked example")
 		}
 	}
 	return nil
@@ -1066,10 +1077,10 @@ func (c *Config) MarshalLogObject(enc zapcore.ObjectEncoder) error {
 	enc.AddString("api.notification.provider", c.Api.Notification.Provider)
 	enc.AddString("api.notification.api_key", redact(c.Api.Notification.APIKey))
 	enc.AddString("api.auth.static_users.users_file", c.Api.Auth.StaticUsers.UsersFile)
-	enc.AddString("api.auth.jwt.secret", redact(c.Api.Auth.JWT.Secret))
-	enc.AddDuration("api.auth.jwt.ttl", c.Api.Auth.JWT.TTL)
-	enc.AddString("api.auth.jwt.issuer", c.Api.Auth.JWT.Issuer)
-	enc.AddDuration("api.auth.jwt.refresh_grace", c.Api.Auth.JWT.RefreshGrace)
+	enc.AddString("api.auth.static_users.jwt.secret", redact(c.Api.Auth.StaticUsers.JWT.Secret))
+	enc.AddDuration("api.auth.static_users.jwt.ttl", c.Api.Auth.StaticUsers.JWT.TTL)
+	enc.AddString("api.auth.static_users.jwt.issuer", c.Api.Auth.StaticUsers.JWT.Issuer)
+	enc.AddDuration("api.auth.static_users.jwt.refresh_grace", c.Api.Auth.StaticUsers.JWT.RefreshGrace)
 	enc.AddString("grpc_auth.hmac_secret", redact(c.GrpcAuth.HmacSecret))
 	enc.AddString("grpc_auth.hmac_secret_previous", redact(c.GrpcAuth.HmacSecretPrevious))
 	enc.AddString("api.auth.serviceaccount.issuer", c.Api.Auth.ServiceAccount.Issuer)

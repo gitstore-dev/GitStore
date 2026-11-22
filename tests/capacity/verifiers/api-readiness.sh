@@ -3,6 +3,9 @@
 # Copyright (c) 2026 GitStore contributors
 
 set -euo pipefail
+if [[ "${CAPACITY_TRANSLATION_READINESS:-0}" == 1 && "${CAPACITY_RBAC_WORKLOAD:-0}" == 1 ]]; then
+  echo "Translation and RBAC verification must be selected independently" >&2; exit 2
+fi
 if [[ "${CAPACITY_TRANSLATION_READINESS:-0}" == 1 ]]; then
   python3 - "${1:?evidence directory is required}" <<'PY'
 import datetime
@@ -744,6 +747,29 @@ except (OSError, ValueError, KeyError, TypeError, AssertionError) as error:
 PY
   exit $?
 fi
+case "${CAPACITY_RBAC_WORKLOAD:-0}" in
+  0) ;;
+  1)
+    [[ "${CAPACITY_IDENTITY_READINESS:-0}" != 1 && "${CAPACITY_IDENTITY_CHAOS:-0}" != 1 ]] || {
+      echo "RBAC and identity verification must be selected independently" >&2; exit 2;
+    }
+    [[ "${MODE:-diagnostic}" == diagnostic || "${MODE:-diagnostic}" == alpha ]] || {
+      echo "production RBAC verification requires separate interference and fault/recovery acceptance" >&2; exit 2;
+    }
+    [[ -r "${CAPACITY_RBAC_SEED_FILE:-}" ]] || {
+      echo "RBAC verification requires the private independently authored seed declaration" >&2; exit 2;
+    }
+    evidence_dir="$(cd "${1:?evidence directory is required}" && pwd)"
+    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+    cd "${repo_root}/tests/integration"
+    timeout=2m
+    if [[ "${MODE:-diagnostic}" == alpha ]]; then timeout=10m; fi
+    RBAC_TEST_CAPACITY_VERIFY_K6=1 CAPACITY_RBAC_EVIDENCE_DIR="${evidence_dir}" \
+      go test -count=1 "-timeout=${timeout}" -run '^TestRBACCapacityK6EvidenceVerifier$' .
+    exit
+    ;;
+  *) echo "CAPACITY_RBAC_WORKLOAD must be 0 or 1" >&2; exit 2 ;;
+esac
 if [[ "${CAPACITY_IDENTITY_READINESS:-0}" != 1 ]]; then exit 0; fi
 python3 - "${1:?evidence directory is required}" <<'PY'
 import datetime

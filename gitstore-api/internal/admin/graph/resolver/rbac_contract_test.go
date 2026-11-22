@@ -58,12 +58,184 @@ type rbacProjectionFailure struct {
 	fail atomic.Bool
 }
 
+type rbacListSnapshotStore struct {
+	rbac.Store
+	reads, writes int
+	pendingReads  int
+	failure       error
+}
+
+func (s *rbacListSnapshotStore) ReadRBACTier(_ context.Context, tier string) (rbac.TierState, error) {
+	s.reads++
+	if s.failure != nil {
+		return rbac.TierState{}, s.failure
+	}
+	return rbac.TierState{TierID: tier, Revision: 1, ProjectionPending: s.reads <= s.pendingReads}, nil
+}
+
+func (*rbacListSnapshotStore) ListRBAC(context.Context, rbac.ListRequest) (rbac.Page, error) {
+	return rbac.Page{Revision: 1}, nil
+}
+
+func (s *rbacListSnapshotStore) RepairRBACProjection(context.Context, string, uint64) error {
+	s.writes++
+	return rbac.ErrUnavailable
+}
+
+func TestRBACListSnapshotWaitsForCommittedProjectionWithoutSpeculativeRepair(t *testing.T) {
+	store := &rbacListSnapshotStore{pendingReads: 2}
+	snapshot, err := readRBACListSnapshot(t.Context(), store, "namespace-uid")
+	require.NoError(t, err)
+	require.False(t, snapshot.State.ProjectionPending)
+	require.Equal(t, 4, store.reads)
+	require.Zero(t, store.writes)
+
+	store = &rbacListSnapshotStore{pendingReads: 100}
+	_, err = readRBACListSnapshot(t.Context(), store, "namespace-uid")
+	require.ErrorIs(t, err, rbac.ErrUnavailable)
+	require.Equal(t, 6, store.reads, "retain the existing three-attempt snapshot budget")
+	require.Zero(t, store.writes)
+
+	store = &rbacListSnapshotStore{failure: rbac.ErrUnavailable}
+	_, err = readRBACListSnapshot(t.Context(), store, "namespace-uid")
+	require.ErrorIs(t, err, rbac.ErrUnavailable)
+	require.Equal(t, 1, store.reads, "source outages must not trigger retries or repair")
+	require.Zero(t, store.writes)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+	store = &rbacListSnapshotStore{pendingReads: 100}
+	_, err = readRBACListSnapshot(ctx, store, "namespace-uid")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, 2, store.reads)
+	require.Zero(t, store.writes)
+}
+
 type rbacLifecycleDatastore struct {
 	datastore.Datastore
 	rbac rbac.Store
 }
 
 func (s rbacLifecycleDatastore) RBACStore() datastore.RBACStore { return s.rbac }
+
+type rbacStatusContendedStore struct {
+	rbac.Store
+	calls int
+	apply func(context.Context, rbac.TierWrite, int) (rbac.TierState, error)
+}
+
+func (s *rbacStatusContendedStore) ApplyRBAC(ctx context.Context, write rbac.TierWrite) (rbac.TierState, error) {
+	s.calls++
+	return s.apply(ctx, write, s.calls)
+}
+
+func TestRBACStatusRetriesOnlyUnchangedResourceContention(t *testing.T) {
+	for _, scenario := range []string{"transient", "resource-changed", "source-unavailable", "persistent-conflict", "post-commit-pending"} {
+		t.Run(scenario, func(t *testing.T) {
+			root, _, store := newRBACResourceFixture(t)
+			root.registry.AuthZ().(*rbacResourceProvider).allowLifecycle.Store(true)
+			role, failures := rbacMutationRequest(t, root, "Create", "Role", map[string]any{
+				"metadata": map[string]any{"name": "status-peer", "namespace": "shop"},
+				"spec":     map[string]any{"rules": []any{}},
+			})
+			require.Empty(t, failures)
+			binding, failures := rbacMutationRequest(t, root, "Create", "RoleBinding", map[string]any{
+				"metadata": map[string]any{"name": "status-target", "namespace": "shop"},
+				"spec": map[string]any{"roleRef": map[string]any{"kind": "ROLE", "name": "status-peer"},
+					"subjects": []any{map[string]any{"kind": "USER", "name": "alice"}}},
+			})
+			require.Empty(t, failures)
+			parent, err := root.store.GetNamespaceByName(t.Context(), "shop")
+			require.NoError(t, err)
+			key := rbac.ResourceKey{TierID: parent.UID, Kind: rbac.RoleBinding, Name: "status-target"}
+			before, err := store.GetRBAC(t.Context(), key)
+			require.NoError(t, err)
+			peerWrite := func(ctx context.Context, kind rbac.Kind, name string) {
+				current, err := store.GetRBAC(ctx, rbac.ResourceKey{TierID: key.TierID, Kind: kind, Name: name})
+				require.NoError(t, err)
+				after, err := rbac.CloneResource(current)
+				require.NoError(t, err)
+				after.Status = json.RawMessage(`{"observedGeneration":0}`)
+				state, err := store.ReadRBACTier(ctx, key.TierID)
+				require.NoError(t, err)
+				_, err = store.ApplyRBAC(ctx, rbac.TierWrite{TierID: key.TierID, ExpectedRevision: state.Revision,
+					Changes: []rbac.Change{{Resource: after, ExpectedUID: current.Metadata.UID,
+						ExpectedResourceVersion: current.Metadata.ResourceVersion}}})
+				require.NoError(t, err)
+			}
+			contended := &rbacStatusContendedStore{Store: store}
+			contended.apply = func(ctx context.Context, write rbac.TierWrite, attempt int) (rbac.TierState, error) {
+				switch scenario {
+				case "transient":
+					if attempt == 1 {
+						return rbac.TierState{TierID: key.TierID, ProjectionPending: true}, rbac.ErrUnavailable
+					}
+					if attempt == 2 {
+						peerWrite(ctx, rbac.Role, "status-peer")
+					}
+				case "resource-changed":
+					peerWrite(ctx, key.Kind, key.Name)
+				case "source-unavailable":
+					return rbac.TierState{}, rbac.ErrUnavailable
+				case "persistent-conflict":
+					return rbac.TierState{}, rbac.ErrConflict
+				case "post-commit-pending":
+					state, err := store.ApplyRBAC(ctx, write)
+					require.NoError(t, err)
+					state.ProjectionPending = true
+					return state, rbac.ErrUnavailable
+				}
+				return store.ApplyRBAC(ctx, write)
+			}
+			root.store = rbacLifecycleDatastore{Datastore: root.store, rbac: contended}
+			_, failures = rbacGraphQLRequest(t, root,
+				`mutation($input:UpdateResourceStatusInput!){updateResourceStatus(input:$input){object}}`,
+				map[string]any{"kind": "RoleBinding", "name": key.Name, "namespace": "shop",
+					"resourceVersion": binding["metadata"].(map[string]any)["resourceVersion"], "observedGeneration": 1,
+					"resolved": map[string]any{"roleUID": role["metadata"].(map[string]any)["uid"],
+						"roleKind": "Role", "roleName": "status-peer"}})
+			current, err := store.GetRBAC(t.Context(), key)
+			require.NoError(t, err)
+			if scenario == "transient" {
+				require.Empty(t, failures)
+				require.Equal(t, 3, contended.calls)
+				var status struct {
+					ObservedGeneration int64 `json:"observedGeneration"`
+				}
+				require.NoError(t, json.Unmarshal(current.Status, &status))
+				require.EqualValues(t, 1, status.ObservedGeneration)
+				require.NotEmpty(t, mustResolvedRoleUID(t, current))
+				return
+			}
+			require.Len(t, failures, 1)
+			if scenario == "post-commit-pending" {
+				require.Equal(t, 1, contended.calls, "never replay a committed status as a fresh write")
+				require.NotEqual(t, before.Metadata.ResourceVersion, current.Metadata.ResourceVersion)
+				require.NotEmpty(t, mustResolvedRoleUID(t, current))
+				return
+			}
+			require.Empty(t, mustResolvedRoleUID(t, current), "a rejected status must not publish the prepared Role link")
+			if scenario == "persistent-conflict" {
+				require.Equal(t, 3, contended.calls)
+			} else {
+				require.Equal(t, 1, contended.calls)
+			}
+			if scenario == "resource-changed" {
+				require.Equal(t, "CONFLICT", failures[0].Extensions["code"])
+				require.NotEqual(t, before.Metadata.ResourceVersion, current.Metadata.ResourceVersion)
+			} else {
+				require.Equal(t, before.Metadata.ResourceVersion, current.Metadata.ResourceVersion)
+			}
+		})
+	}
+}
+
+func mustResolvedRoleUID(t *testing.T, resource *rbac.Resource) string {
+	t.Helper()
+	uid, err := rbac.ResolvedRoleUID(resource)
+	require.NoError(t, err)
+	return uid
+}
 
 func (s *rbacProjectionFailure) ApplyRBAC(ctx context.Context, write rbac.TierWrite) (rbac.TierState, error) {
 	if s.fail.Load() {
@@ -614,6 +786,17 @@ func TestRBACLifecycleRequiresSeparateAuthorityAndUIDVersion(t *testing.T) {
 			require.Len(t, errors, 1)
 			require.Equal(t, "FORBIDDEN", errors[0].Extensions["code"])
 			root.registry.AuthZ().(*rbacResourceProvider).allowLifecycle.Store(true)
+			revision := node["metadata"].(map[string]any)["revision"].(string)
+			observation := map[string]any{"kind": string(kind), "name": "lifecycle", "namespace": namespace,
+				"resourceVersion": version, "observedGeneration": 1, "lastAppliedRevision": "main@sha1:" + strings.Repeat("f", 40)}
+			_, errors = rbacGraphQLRequest(t, root, statusQuery, observation)
+			require.Len(t, errors, 1, "a status writer cannot acknowledge an unrelated revision")
+			observation["lastAppliedRevision"] = revision
+			observed, errors := rbacGraphQLRequest(t, root, statusQuery, observation)
+			require.Empty(t, errors)
+			object := observed["updateResourceStatus"]["object"].(map[string]any)
+			require.Equal(t, revision, object["status"].(map[string]any)["lastAppliedRevision"])
+			version = object["metadata"].(map[string]any)["resourceVersion"].(string)
 			purge := func(currentVersion string) error {
 				return root.completeRBACDeletion(ctx, kind, id, namespace, "lifecycle", currentVersion)
 			}
@@ -627,6 +810,8 @@ func TestRBACLifecycleRequiresSeparateAuthorityAndUIDVersion(t *testing.T) {
 			data, errors := rbacGraphQLRequest(t, root, statusQuery, input)
 			require.Empty(t, errors)
 			updated := data["updateResourceStatus"]["object"].(map[string]any)
+			require.Equal(t, revision, updated["status"].(map[string]any)["lastAppliedRevision"],
+				"finalizer-only writes preserve the last reconciled revision")
 			nextVersion := updated["metadata"].(map[string]any)["resourceVersion"].(string)
 			require.NotEqual(t, version, nextVersion)
 			_, errors = rbacGraphQLRequest(t, root, statusQuery, input)

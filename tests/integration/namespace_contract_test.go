@@ -325,11 +325,13 @@ func main() {
 		panic(err)
 	}
 	cfg := config.AuthConfig{
-		StaticUsers: config.StaticUsersConfig{UsersFile: usersFile},
-		JWT: config.JWTConfig{
-			Secret:   "namespace-contract-secret",
-			Issuer:   "gitstore",
-			TTL:    2 * time.Hour,
+		StaticUsers: config.StaticUsersConfig{
+			UsersFile: usersFile,
+			JWT: config.JWTConfig{
+				Secret: "namespace-contract-secret",
+				Issuer: "gitstore",
+				TTL:    2 * time.Hour,
+			},
 		},
 		ServiceAccount: config.ServiceAccountConfig{
 			Audience:   "gitstore-api",

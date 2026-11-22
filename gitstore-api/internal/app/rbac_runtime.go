@@ -32,6 +32,7 @@ type rbacRuntime struct {
 	ctx           context.Context
 	initializing  atomic.Bool
 	bootstrapDone chan struct{}
+	metrics       *auth.RBACResourceMetrics
 }
 
 type rbacRuntimeOptions struct {
@@ -40,6 +41,8 @@ type rbacRuntimeOptions struct {
 	observeOnly     bool
 	initializing    bool
 	observeSnapshot func(context.Context, rbac.Snapshot) error
+	checkOrigins    func(context.Context, []rbac.OriginCheck) []error
+	originDigests   *rbac.OriginDigestCache
 }
 
 func newCanonicalRBACRuntime(ctx context.Context, store datastore.Datastore, journal datastore.ResourceWatchJournal, git rbac.OriginGitReader,
@@ -55,10 +58,18 @@ func newCanonicalRBACRuntime(ctx context.Context, store datastore.Datastore, jou
 	if err != nil {
 		return nil, err
 	}
-	source := rbac.OriginReader{Store: store, Git: git, MaxBytes: limits.RebuildMemoryBytes, Digests: new(rbac.OriginDigestCache)}
-	reader := rbac.SnapshotReader{Store: capable.RBACStore(), ReadOrigin: source.ReadOrigin, CheckOrigin: source.CheckOrigin,
+	var option rbacRuntimeOptions
+	if len(options) > 0 {
+		option = options[0]
+	}
+	if option.originDigests == nil {
+		option.originDigests = new(rbac.OriginDigestCache)
+	}
+	source := rbac.OriginReader{Store: store, Git: git, MaxBytes: limits.RebuildMemoryBytes, Digests: option.originDigests}
+	reader := rbac.SnapshotReader{Store: capable.RBACStore(), ReadOrigin: source.ReadProjectedOrigin, CheckOrigin: source.CheckOrigin,
 		CatalogDigest: auth.AuthorizationCatalogDigest(), BuiltinDigest: builtins.Digest()}
-	return newRBACRuntime(ctx, store, journal, reader, limits, source.CheckOrigin, repair, options...)
+	option.checkOrigins = source.CheckOrigins
+	return newRBACRuntime(ctx, store, journal, reader, limits, source.CheckOrigin, repair, option)
 }
 
 // Construction alone does not activate this provider in the serving registry.
@@ -85,6 +96,7 @@ func newRBACRuntime(ctx context.Context, store datastore.Datastore, journal data
 			return nil, err
 		}
 	}
+	reader.Validations = provider.ManifestValidations()
 	progress := watchjournal.NewReadiness(limits.MaxStaleness)
 	runtime := &rbacRuntime{provider: provider, reader: reader, scratch: scratch, timeout: limits.ValidationTimeout}
 	runtime.initializing.Store(option.initializing)
@@ -106,30 +118,37 @@ func newRBACRuntime(ctx context.Context, store datastore.Datastore, journal data
 		}
 	}
 	var recordOrigin func(string, rbac.ProjectionIdentity, time.Time) error
+	readSnapshot := reader.Read
 	if checkOrigin != nil {
 		recordOrigin = provider.RecordOriginProgress
+		readSnapshot = reader.ReadCandidate
 	}
 	manager, err := rbac.NewManager(rbac.ManagerDeps{
 		Journal: journal, Invalidate: provider.InvalidateTier,
 		ReadSnapshot: func(ctx context.Context, tier string) (rbac.Snapshot, error) {
-			snapshot, err := reader.Read(ctx, tier)
+			snapshot, err := readSnapshot(ctx, tier)
 			needsRepair := errors.Is(err, rbac.ErrSnapshotProjectionMismatch) ||
 				err == nil && snapshot.State.ProjectionPending
 			if needsRepair && repair != nil {
 				if ctx.Err() != nil {
 					return rbac.Snapshot{}, ctx.Err()
 				}
-				if err := repair(ctx, tier); err != nil {
+				if err == nil {
+					err = reader.Store.RepairRBACProjection(ctx, tier, snapshot.State.Revision)
+				} else {
+					err = repair(ctx, tier)
+				}
+				if err != nil {
 					return rbac.Snapshot{}, err
 				}
-				snapshot, err = reader.Read(ctx, tier)
+				snapshot, err = readSnapshot(ctx, tier)
 			}
 			if err == nil && option.observeSnapshot != nil {
 				err = option.observeSnapshot(ctx, snapshot)
 			}
 			return snapshot, err
 		},
-		CheckOrigin: checkOrigin, RecordOrigin: recordOrigin,
+		CheckOrigin: checkOrigin, CheckOrigins: option.checkOrigins, RecordOrigin: recordOrigin,
 		Workers: limits.RebuildWorkers, QueueSize: limits.DirtyQueueCapacity,
 		Timeout: limits.ValidationTimeout, MaxStaleness: limits.MaxStaleness,
 		Scratch: scratch, ScratchBytes: limits.RebuildMemoryBytes,
@@ -159,6 +178,19 @@ func newRBACRuntime(ctx context.Context, store datastore.Datastore, journal data
 	provider.SetNamespaceLoader(func(name string) { _ = manager.RequestNamespace(name) })
 	runCtx, cancel := context.WithCancel(ctx)
 	runtime.manager, runtime.cancel, runtime.done, runtime.ctx = manager, cancel, make(chan struct{}), runCtx
+	runtime.metrics, err = auth.NewRBACResourceMetrics(func() auth.RBACResourceUsage {
+		queue := manager.QueueUsage()
+		return auth.RBACResourceUsage{
+			Snapshot: auth.RBACBudgetUsage(provider.MemoryUsage()), Rebuild: auth.RBACBudgetUsage(scratch.Usage()),
+			RebuildBufferLimit: limits.RebuildMemoryBytes,
+			DirtyQueue:         int64(queue.Pending), DirtyQueuePeak: int64(queue.Peak), DirtyQueueLimit: int64(queue.Limit),
+		}
+	})
+	if err != nil {
+		cancel()
+		provider.Close()
+		return nil, err
+	}
 	go func() {
 		defer close(runtime.done)
 		_ = manager.Run(runCtx)
@@ -184,6 +216,9 @@ func (r *rbacRuntime) Shutdown() {
 		<-r.done
 		if r.bootstrapDone != nil {
 			<-r.bootstrapDone
+		}
+		if r.metrics != nil {
+			_ = r.metrics.Close()
 		}
 		r.provider.Close()
 	})

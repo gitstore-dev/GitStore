@@ -40,8 +40,9 @@ func newInitializedCanonicalRBACRuntime(ctx context.Context, store datastore.Dat
 		return nil, err
 	}
 	repairRegistry := auth.NewProviderRegistry(nil, nil, nil)
+	digests := new(rbac.OriginDigestCache)
 	projector, err := cataloggrpc.NewServer(cataloggrpc.ServerDeps{
-		Store: store, GitReader: git, Registry: repairRegistry, Logger: log,
+		Store: store, GitReader: git, Registry: repairRegistry, Logger: log, RBACOriginDigests: digests,
 		RBACValidator: &admission.RBACValidator{Builtins: builtins,
 			Capture: rbac.ValidationCapture{Registry: repairRegistry, Reader: rbac.SnapshotReader{MaxBytes: limits.RebuildMemoryBytes}}},
 	})
@@ -53,6 +54,7 @@ func newInitializedCanonicalRBACRuntime(ctx context.Context, store datastore.Dat
 		option = options[0]
 	}
 	option.initializing = !option.observeOnly
+	option.originDigests = digests
 	runtime, err := newCanonicalRBACRuntime(ctx, store, journal, git, limits, projector.ReconcileRBACTier, option)
 	if err != nil {
 		return nil, err

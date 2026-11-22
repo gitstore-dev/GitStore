@@ -59,9 +59,10 @@ type ResolvedRole struct {
 }
 
 type ResourceStatus struct {
-	ObservedGeneration int64               `json:"observedGeneration"`
-	Conditions         []*status.Condition `json:"conditions"`
-	Resolved           *ResolvedRole       `json:"resolved"`
+	ObservedGeneration  int64               `json:"observedGeneration"`
+	LastAppliedRevision string              `json:"lastAppliedRevision"`
+	Conditions          []*status.Condition `json:"conditions"`
+	Resolved            *ResolvedRole       `json:"resolved"`
 }
 
 type Resource struct {
@@ -107,9 +108,10 @@ func (r Resource) Key() types.WorkItemKey {
 }
 
 type StatusUpdate struct {
-	Resolved   *ResolvedRole
-	Conditions []*status.Condition
-	Finalizers []string
+	LastAppliedRevision string
+	Resolved            *ResolvedRole
+	Conditions          []*status.Condition
+	Finalizers          []string
 }
 
 type GraphQLClient struct{ client *graphqlclient.Client }
@@ -307,7 +309,7 @@ const metadataFields = `id kind metadata {
 }`
 
 func resourceFields(kind string) string {
-	fields := metadataFields + ` status { observedGeneration conditions {
+	fields := metadataFields + ` status { observedGeneration lastAppliedRevision conditions {
   type status observedGeneration lastTransitionTime reason message
 }`
 	if strings.HasSuffix(kind, "Binding") {
@@ -360,7 +362,7 @@ const ownerBindingMutation = `mutation($input: CreateRoleBindingInput!) {
   result: createRoleBinding(input: $input) { roleBinding {
 ` + metadataFields + `
     spec { roleRef { kind name } subjects { kind name } }
-    status { observedGeneration conditions { type status observedGeneration lastTransitionTime reason message } resolved { roleUID roleKind roleName } }
+    status { observedGeneration lastAppliedRevision conditions { type status observedGeneration lastTransitionTime reason message } resolved { roleUID roleKind roleName } }
   } }
 }`
 
@@ -455,6 +457,9 @@ func (c *GraphQLClient) UpdateStatus(ctx context.Context, resource Resource, upd
 	}
 	input := map[string]any{"kind": resource.Kind, "namespace": resource.Metadata.Namespace, "name": resource.Metadata.Name,
 		"resourceVersion": resource.Metadata.ResourceVersion, "observedGeneration": resource.Metadata.Generation}
+	if update.LastAppliedRevision != "" {
+		input["lastAppliedRevision"] = update.LastAppliedRevision
+	}
 	if strings.HasSuffix(resource.Kind, "Binding") && resource.Metadata.DeletionTimestamp == nil &&
 		resource.Status.Resolved == nil && update.Resolved != nil {
 		input["resolved"] = update.Resolved
