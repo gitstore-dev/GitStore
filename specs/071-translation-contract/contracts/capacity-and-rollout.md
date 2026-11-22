@@ -157,6 +157,11 @@ inside an epoch or join a new process to the old process's baseline.
 
 ## Activation and Rollback
 
+Focused migration, fence, binding and replay tests establish alpha PR
+correctness. The complete deployed sequence below is production qualification,
+not a prerequisite to merging every alpha implementation. Deferred qualification
+does not authorize production activation or waive unsafe compatibility.
+
 1. Ship disabled new-kind admission plus additive schemas/catalogs, store
    contracts and migration. New tables are additive; existing applied
    migrations and records remain untouched.
@@ -178,7 +183,9 @@ inside an epoch or join a new process to the old process's baseline.
    until production-mode evidence passes.
 
 Before activation, rollback may return to old binaries with new admission
-still disabled. After any Translation is acknowledged, do not roll readers or
+still disabled only if those binaries accept the migrated ledger. A `database
+is ahead` refusal requires retaining a migration-compatible disabled build,
+not resetting schema/history. After any Translation is acknowledged, do not roll readers or
 replay consumers back to binaries that reject/skip the kind: disable new
 authoring if needed and retain the last capable build while forward-fixing.
 Never delete accepted documents, reset the keyspace or edit Git history to

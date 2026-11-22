@@ -83,6 +83,37 @@ remain unchanged around replay. `TRANSLATION_TEST_EVIDENCE_FILE` optionally
 selects a fresh protected receipt; existing receipts are never overwritten.
 This tests actual callback routing, not process replacement or fault recovery.
 
+### Finite capable rollback verification
+
+`TestTranslationNativeCapableRollback` is an opt-in correctness verifier for a
+completed, explicitly owned capable-only rollback. Use the native fixture
+settings above plus `TRANSLATION_TEST_ROLLOUT_DIR`, `TRANSLATION_TEST_OWNER` and,
+if needed, `TRANSLATION_TEST_DOCKER_CONTEXT`. It does not replace processes,
+reset data or inject a new fault. It temporarily enrolls one independently
+generated controller key and removes only that key on completion.
+
+The protected directory must contain `fixture.json`, exactly one
+`preactivation-proof-*.json` and `rollback-proof-*.json`, and
+`rollback-authority-before.json`/`rollback-authority-after.json`. Captures must
+be regular private files, bounded to eight MiB, attributable to the same run.
+The manifest declares five current role IDs/images, API endpoints, namespace
+and descriptor pin. Replacement records identify predecessor/successor IDs,
+images, start times and mounts; authority captures contain the standard native
+corpus's current Translations, validation snapshots/bindings, five target
+reads/observations and canonical-ref digest from both APIs.
+
+The verifier independently inspects all live/retired Docker roles, checks
+stop-before-start and unchanged writable storage, separate controller
+checkpoints and the unchanged singleton Git lifetime. Fresh authorized queries
+must match the preserved source, binding, target and ref authority on both APIs;
+driver success booleans alone do not pass. Local negative regressions reject
+overlapping processes, live predecessors, replaced checkpoints, unowned
+storage and unrelated predecessor IDs.
+
+This finite check supplements focused migration, fence and replay tests. It is
+not capacity, sustained recovery or complete mixed-version qualification and
+is not a routine PR CI prerequisite.
+
 `TestTranslationNativeCallbackTransportProxy` in the same Catalog test binary
 is a bounded, loopback-only transport injector, selected with
 `TRANSLATION_TEST_CALLBACK_PROXY=1`. It additionally requires explicit owned

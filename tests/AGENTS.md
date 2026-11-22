@@ -6,9 +6,11 @@
 - For capacity, profiling, chaos or owned-deployment work, also read
   [capacity/AGENTS.md](capacity/AGENTS.md). This includes capacity-related Go
   files under `integration/`, not only files inside `capacity/`.
-- Verify concurrent API/controller replica correctness, conflicts and rolling
-  upgrades where applicable. Keep evidence scoped to what the fixture
-  actually exercises; local adapters do not establish deployed behavior.
+- Verify changed API/controller replica, conflict, migration and replay risks
+  with focused tests. Full deployed rolling-upgrade, capacity and chaos
+  qualification is opt-in production work, not a routine alpha PR gate.
+  Keep evidence scoped to what the fixture actually exercises; local adapters
+  do not establish deployed behavior.
 - `make test TARGET=datastore` runs backend-neutral contracts without external
   Scylla. Add `DATASTORE=scylla SCYLLA_TEST_ADDR=<host:port>` for tagged Scylla
   contracts, using an isolated test-owned keyspace. Tagged packages run

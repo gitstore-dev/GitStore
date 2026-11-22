@@ -4,11 +4,16 @@ This contributor guide describes validation requirements and reusable test
 patterns, **not a declaration of production acceptance**. For maintenance and
 recovery procedures, use the [operations index](../runbooks/README.md).
 
-API and controller changes must verify concurrent-replica correctness and
-rolling upgrades on affected paths. Core-service validation must cover
-pluggable authentication/authorization, bounded work and sustained push or
-reconciliation load where applicable. Link the tests and complete deployed
-evidence that establish each claim; record remaining limitations explicitly.
+PR readiness requires focused tests of changed concurrency, authorization,
+migration, replay and recovery risks, compatibility documentation and the full
+default `make pr-ready`. Reuse existing coverage rather than adding a complete
+deployed old/new-version rehearsal to every feature.
+
+Capacity/soak, chaos and full deployed rolling-upgrade rehearsals qualify
+production claims. Run them explicitly for the affected boundaries; they are
+not ordinary alpha PR CI prerequisites. Keep deferred qualification visible,
+preserve bounded work and deployment safety, and never describe a local test
+or partial diagnostic as production acceptance.
 
 The Git service is stateful and singleton-only. Preserve its repositories and
 stop the old process before starting its replacement. Multiple containers,
@@ -76,9 +81,9 @@ For deterministic overlap coverage:
    when a stale status write loses.
 4. Test cancellation, retry, same-name recreation with a new UID, and a
    delayed acknowledgement after newer work arrives.
-5. Separately test retained-checkpoint restart and actual simultaneous
-   deployed replicas. For controller replacement, retain separate checkpoint
-   roots and keep the peer active.
+5. Test changed retained-checkpoint restart behavior. When qualifying deployed
+   replica claims, separately test actual simultaneous replicas; for controller
+   replacement, retain separate checkpoint roots and keep the peer active.
 
 Do not substitute a sequential test or a successful restart for an unverified
 overlap gate.

@@ -91,7 +91,11 @@ repair; a saved successful result is insufficient.
 
 Before any Translation has been accepted, keep admission disabled during
 rollback and retain the additive schema. Verify that every receiving, reading
-and replaying instance remains in the disabled configuration.
+and replaying instance remains in the disabled configuration. The rollback
+build must also accept the existing migration ledger: a pre-feature API may
+refuse startup with `database is ahead` after the additive migration. In that
+case retain a migration-compatible disabled build and forward-fix; do not reset
+the schema or edit migration history to force the old binary to start.
 
 If retained accepted Translation data exists, do not roll readers or replay
 consumers back to a build that rejects or skips the kind. Keep the last capable

@@ -6,12 +6,32 @@
 [authored contract](contracts/authored-resource.md),
 [lifecycle contract](contracts/lifecycle-and-storage.md),
 [capacity contract](contracts/capacity-and-rollout.md), [quickstart.md](quickstart.md).
-**Delivery state**: Implementation in progress; unchecked tasks and deployed acceptance remain incomplete.
+**Delivery state**: Alpha implementation in final PR checks; production qualification remains explicitly deferred and does not block alpha review.
 **Tests**: Required by the specification and constitution. Write each slice's
 tests first, observe the relevant failure, then implement and run the smallest
 covering suite. Capacity and physical-fault acceptance are separate opt-in work.
 
-**Current checked count**: 78/83 complete, 5 open: T077-T080 and T083.
+**Current checked count**: 79/83 complete, 4 open: deferred T077-T079 qualification and final T083 reconciliation.
+
+**Verification stages**: Constitution 4.0.0 separates focused PR correctness
+from deployed production qualification. T080 now covers the changed migration,
+fence, replay and retained rollback risks with the existing focused tests and
+the reusable native correctness verifier. The former requirement to repeat a
+complete deployed mixed-API/populated RF3 backfill rehearsal is deferred
+qualification, not a hidden alpha merge dependency or a claimed pass.
+
+**Finite rollout correctness**: The owned RF3 diagnostic verifies actual
+legacy-controller drain, persisted repair resumption on a peer after an API
+restart between completed turns, consistent diagnostic enablement, native
+ingestion across all five target kinds and capable-only API/controller rollback.
+`TestTranslationNativeCapableRollback` independently verifies live/retired role
+ownership and process lifetimes, retained writable storage/checkpoints and
+singleton Git, plus matching current Translations, snapshots/bindings, five
+targets/observations and refs through both APIs. Its local negative regressions
+reject overlap, a still-running predecessor, replaced/unowned storage and
+unrelated IDs. The native verifier passes on the retained eleven-source corpus.
+This is not live old/new API traffic, in-flight RF3 repair interruption,
+populated RF3 backfill, sustained-load or production-capacity qualification.
 
 **Interrupted migration correctness**: T080's isolated Scylla regression
 reproduced a real restart failure when an additive column committed before its
@@ -25,7 +45,8 @@ and three existing interrupted target-audit/backfill/failure-watermark cases.
 The earlier four-test run also passes read-only validation, migration
 idempotence and refusal of old migration bundles. These use isolated RF1
 test-owned keyspaces on the owned Scylla cluster, not a full deployed
-mixed-version/drain/capable-rollback rehearsal. T080 therefore remains open.
+mixed-version/drain/capable-rollback rehearsal. Their focused correctness scope
+is supplemented by the finite verifier above; no broader qualification is inferred.
 No applied migration file, retained corpus or performance setting changed.
 The full default `GOWORK=off GOFLAGS=-p=1 CARGO_BUILD_JOBS=2 make pr-ready`
 rerun passes after this production correctness fix, including lint/build/test/
@@ -2229,7 +2250,7 @@ targets before/during/after declared faults within unchanged acceptance gates.
 - [ ] T077 [US5] Run `make capacity TARGET=namespace PROFILE=validation MODE=alpha` with the implemented Translation extension and `make capacity TARGET=api PROFILE=readiness MODE=alpha` with the connected domain selector documented in `tests/capacity/README.md`; retain protected receipts meeting the complete 30-minute windows, 10 pushes/minute, at most 20 documents/push/two workers, 20 reads/s, read p95 <1s/p99 <3s, visibility/convergence p95 <=1s/p99 <=3s and all stricter existing gates (after T076).
 - [ ] T078 [US5] Run the owned API/controller restart, journal interruption, callback-loss and post-acknowledgement scenarios from `tests/integration/translation_recovery_test.go` during sustained connected load via existing `make chaos` selectors; verify recovery <=30s with at least five seconds of correct domain traffic, replay without resubmission, retained UIDs/history/targets and no overlapping Git replacement, recording unexercised faults explicitly (after T077).
 - [ ] T079 [US5] Run `make capacity TARGET=api PROFILE=readiness MODE=production` with the connected mode documented in `tests/capacity/README.md` against an exclusively owned retained baseline of at least 5,000,000 Products, at least a 60-minute Translation window, 50 pushes/minute, at least five bounded push workers and 100 reads/s; preserve all stricter profile/resource gates and baseline identities/history, and withhold production claims if unavailable or failing (after T078).
-- [ ] T080 [US5] Rehearse additive migration, interrupted repair/fence backfill, pre-activation mixed versions, old-replica drain and capable-only post-activation rollback in `tests/integration/translation_recovery_test.go`; prove every enabled target writer is fenced and all read/replay roles are capable before enabling admission consistently, using T075's runbook and protected topology receipts (correctness rehearsal may proceed after T072/T075 without capacity qualification; full sustained acceptance still joins T078, and production claims additionally require T079).
+- [X] T080 [US5] Verify changed additive-migration restart, interrupted repair/fence, activation/replay and rollback integrity risks with the existing focused Catalog/datastore tests and reusable `TestTranslationNativeCapableRollback` in `tests/integration/translation_recovery_test.go`; retain ownership, capable readers, consistent pins, unchanged accepted sources/targets/refs and independent checkpoint storage. Record the finite exercised scope without claiming complete mixed-API or populated RF3 backfill qualification. Full deployed rehearsals remain production qualification alongside T078/T079, not alpha PR prerequisites (after T072/T075).
 
 **Checkpoint**: Connected correctness, security, replica/recovery and documentation
 support boundaries are verified. Alpha/helper evidence never substitutes for
@@ -2239,7 +2260,7 @@ production acceptance. Failed or unavailable owned-deployment gates stay open.
 
 - [X] T081 Run `make generate TARGET=all`, scoped formatter/lint/test commands and the full default `make pr-ready` before creating an implementation PR, including schema/action drift, Rust forwarding and Go race regressions; use `specs/071-translation-contract/contracts/capacity-and-rollout.md` to keep deployed evidence separate rather than substituting it for the default suite (after all story implementation).
 - [X] T082 Refresh the AST-only graph with `graphify update .` after code changes and reconcile contributor navigation in `AGENTS.md` and `specs/071-translation-contract/plan.md` without modifying unrelated instructions or presenting generated planning as runtime support (after T081).
-- [ ] T083 Reconcile final FR/PR/SC and #188-#191 coverage in `specs/071-translation-contract/tasks.md` and `specs/071-translation-contract/spec.md`; link only redacted result summaries, preserve private failed/success evidence, and close the implemented spec/issues only when their required gates pass. Keep ADRs 0007/0008/0013/0014/0016/0018 Proposed as specified by `docs/ADRs/README.md`; if scope actually implements a proposed ADR core, add and execute its explicit status/date/index task in that implementing PR instead of silently claiming acceptance (after T079-T082).
+- [ ] T083 Reconcile alpha implementation FR/PR/SC and #188-#191 coverage in `specs/071-translation-contract/tasks.md` and `specs/071-translation-contract/spec.md`; preserve private failed/success evidence and distinguish focused correctness from deferred T077-T079/full deployed qualification. Prepare implemented-scope closure for review/merge without claiming qualification or closing issues whose production gates remain unmet. Keep ADRs 0007/0008/0013/0014/0016/0018 Proposed as specified by `docs/ADRs/README.md`; any separately implemented ADR core requires its explicit status/date/index task (after T080-T082; not T079).
 
 ## Dependencies and execution order
 
@@ -2287,8 +2308,8 @@ can ship without shared validation, authorization or freshness prerequisites.
 | US5 connected implementation | US1-US4; T064-T067 are disjoint test lanes |
 | US5 harness branches | T068 and T069 after their contracts; T070 joins driver, T073 joins faults/metrics/wiring |
 | US5 docs | T074/T075 independent files after specified correctness tests; T076 joins them |
-| US5 acceptance | T080 correctness rehearsal may run after T072/T075 independently of capacity; full qualification retains T077->T078 and T079 for production |
-| Final | All story implementation; T083 waits for production/rollout/default-suite evidence |
+| US5 acceptance | T080 focused correctness follows T072/T075; deployed qualification retains T077->T078 and T079 separately |
+| Final | All story implementation; T083 waits for focused correctness/default-suite checks, not production qualification |
 
 Within each lane, tests precede implementations. Edits to shared
 `manifest_validator.go`, `schema.resolvers.go`, `status_generic.go`,
@@ -2298,8 +2319,9 @@ parallelized. Generated output is regenerated after merging source contracts.
 The current user-directed priority is correctness without premature
 optimization. T076/T081/T082 are complete; rerun affected standard checks when
 new correctness changes require them, not capacity work to postpone closure.
-T077-T079 are deferred qualification, while T080's correctness work can
-proceed independently. Keep unmet rollout and final-closure gates explicit.
+T077-T079 and complete deployed rehearsals are deferred qualification. T080's
+focused correctness is complete; T083 reconciles the alpha implementation.
+Keep unqualified production claims explicitly unavailable.
 
 The current scope does not wait for capacity qualification to begin T080's
 correctness rehearsal. Full sustained acceptance retains T073->T076->T077->T078,
@@ -2309,7 +2331,8 @@ preparation may overlap implementation, but their final completion still joins
 the stated prerequisites. Owned acceptance/fault workloads on the same
 deployment run sequentially; preparation and partial diagnostics never close
 their acceptance tasks. Final source checks/navigation and requirement
-reconciliation retain T081-T083's existing completion gates.
+reconciliation retain focused T081-T083 completion gates; deferred qualification
+does not block alpha implementation completion.
 
 ### Parallel execution examples
 

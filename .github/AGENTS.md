@@ -12,6 +12,9 @@
   smoke validation or rollback; those remain operator procedures.
 - Preserve shared-module standalone `GOWORK=off` checks and the full default
   `make pr-ready` suite. Capacity runs do not replace that suite.
+- Ordinary PR CI covers correctness, build, lint and security. Do not add
+  deployed capacity, soak, chaos or full rollout qualification to routine PR
+  checks; select that work explicitly for production qualification.
 - CI's API image matrix measures expanded image bytes for amd64/arm64 against
   an 80 MiB ceiling; retain exact byte counts in the job summary. The default
   `runtime` target is shell-less/non-root; the Alpine `debug` target is opt-in

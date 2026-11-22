@@ -72,8 +72,11 @@ graph TD
 `gitstore-api`, `gitstore-controller-manager`, and
 `gitstore-git-service` are the three core services. Features affecting them
 must define behavior for their actual service topology. API/controller changes
-must verify concurrent-replica behavior and rolling upgrades, naming any
-unverified paths. Git is stateful and singleton-only; repository sharding and
+must test changed concurrent-replica, migration, replay and recovery risks
+and document compatibility, naming any unverified paths. Full deployed
+rolling-upgrade, capacity and soak qualification is separate from ordinary
+alpha PR readiness; deferred evidence does not establish production support.
+Git is stateful and singleton-only; repository sharding and
 placement-aware routing are not implemented. Keep one active Git process,
 retain repository storage and use non-overlapping replacement. Do not turn
 generic replica requirements into multi-Git or Git HA scope.

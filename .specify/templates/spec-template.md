@@ -129,3 +129,10 @@ API/controller multi-replica correctness, authorization isolation, sustained-loa
 behavior, backpressure and recovery against the declared production dataset.
 Git evidence uses one active instance; separate Git volumes do not prove
 supported sharding, replication or HA.
+
+Label outcomes as **implementation/PR readiness** or **production qualification**.
+Implementation requires focused tests of the changed correctness risks, not a
+complete deployed rolling-upgrade or load rehearsal for every feature.
+Production capacity, soak and deployed fault/upgrade evidence may remain
+explicitly deferred for alpha delivery; it is required before the corresponding
+production claims and must not be reported as passing while deferred.

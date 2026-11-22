@@ -15,6 +15,22 @@ the catalog-frontmatter initiative #40, rather than only its contract slice
 boundary, integration acceptance and documentation required by #188-#191.
 Writing this specification does not implement or close those issues.
 
+### Verification stages
+
+The alpha implementation requires focused correctness, authorization,
+concurrency, migration/replay and recovery tests, executable documentation and
+the full default `make pr-ready`. Production dataset, sustained-load,
+recovery-time and full deployed mixed-version/backfill qualification remain
+separate, explicitly deferred work under constitution 4.0.0. Deferred results
+are not passes or production support claims and do not block this alpha PR.
+Known unsafe compatibility or data-loss paths still block implementation.
+
+FR-001-FR-023 and SC-001-SC-004/SC-007-SC-008 describe implementation behavior
+or documented design handoffs. PR-003/PR-005 and full-window SC-005/SC-006
+describe production qualification. PR-001/PR-002/PR-004/PR-006/PR-007 retain
+their implementation safety requirements; deployment timing, scale and
+complete fault/upgrade claims additionally require qualification evidence.
+
 | Issue | Delivery covered by this specification | Requirements | Dependency |
 | --- | --- | --- | --- |
 | #188 | Canonical envelope, fields, ownership, examples and error contract | FR-001 through FR-005, FR-018 | Baseline for #189 and #190 |

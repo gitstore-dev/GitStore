@@ -2,7 +2,7 @@
 
 **Branch**: `071-translation-contract` | **Date**: 2026-11-18 | **Spec**: [spec.md](spec.md)
 **Input**: Reviewed specification covering #78 and #188-#191, including #492's related-resource design.
-**Delivery state**: Implementation in progress; public Translation admission remains disabled.
+**Delivery state**: Alpha implementation in final PR checks; admission remains disabled by default and production qualification is deferred.
 
 ## Summary
 
@@ -80,14 +80,24 @@ production capacity certification a blocker for dependent ProductVariant work.
 The original performance requirements remain future qualification gates, not
 waived or passing results. Correctness failures, unsafe rollouts and source or
 UID loss remain blockers; bounded work and ownership safeguards still apply.
-Deferred capacity and deployment qualification stay explicitly incomplete.
+Deferred capacity and full deployed qualification stay explicitly incomplete,
+but do not block alpha implementation/PR readiness under constitution 4.0.0.
+Focused migration, replay, fence, binding and concurrent-replica correctness
+tests remain required; known unsafe rollouts or data loss are not waived.
 
 The interrupted additive-migration rehearsal found and fixed the DDL-before-
 ledger crash boundary. Normal locked migration startup now conditionally
 recovers unfinished simple column additions only after unchanged-history,
 checksum and exact schema checks; read-only validation stays non-mutating.
-Isolated native Scylla tests cover this boundary and interrupted target repair,
-not the still-open full mixed-version/drain/capable-rollback topology rehearsal.
+Isolated native Scylla tests cover this boundary and interrupted target repair.
+The finite owned RF3 diagnostic also verifies old-controller drain, saved
+between-turn repair recovery after an API restart, consistent diagnostic
+enablement, all-five-target ingestion and capable rollback. The reusable
+`TestTranslationNativeCapableRollback` checks live source/snapshot/binding/
+target/ref equality and retained process/storage lifetimes independently of
+operator success flags. This is not a complete live mixed-API or populated RF3
+interrupted-backfill rehearsal; those remain deployed qualification, not alpha
+merge prerequisites.
 
 The public diagnostic oracle now supports independently declared API/controller
 replacement epochs and bounded original-scrape gaps, with per-process resource

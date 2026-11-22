@@ -9,10 +9,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +24,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 )
 
 func readTranslationRecoveryPrivateJSON(path string, value any) error {
@@ -36,6 +40,327 @@ func readTranslationRecoveryPrivateJSON(path string, value any) error {
 		return err
 	}
 	return json.Unmarshal(raw, value)
+}
+
+type translationRolloutMount struct {
+	Source, Destination string
+	RW                  bool
+}
+
+type translationRolloutEpoch struct {
+	ID, Image string
+	StartedAt time.Time
+	Mounts    []translationRolloutMount
+}
+
+type translationRolloutContainer struct {
+	ID, Image string
+	Config    struct {
+		Labels map[string]string
+		Env    []string
+	}
+	State struct {
+		Running, OOMKilled bool
+		StartedAt          time.Time
+		FinishedAt         time.Time
+	}
+	Mounts []translationRolloutMount
+}
+
+func validateTranslationRolloutReplacement(root string, old translationRolloutEpoch, stopped, current translationRolloutContainer) error {
+	if old.ID == "" || old.Image == "" || stopped.ID != old.ID || stopped.Image != old.Image ||
+		stopped.State.Running || stopped.State.FinishedAt.IsZero() || old.StartedAt.IsZero() ||
+		stopped.State.FinishedAt.Before(old.StartedAt) || current.ID == "" || current.ID == old.ID ||
+		current.Image == "" || current.Image == old.Image || !current.State.Running || current.State.OOMKilled ||
+		current.State.StartedAt.Before(stopped.State.FinishedAt) {
+		return fmt.Errorf("translation rollout: invalid replacement lifetime")
+	}
+	writable := func(mounts []translationRolloutMount) []translationRolloutMount {
+		var result []translationRolloutMount
+		for _, mount := range mounts {
+			if mount.RW {
+				result = append(result, mount)
+			}
+		}
+		return result
+	}
+	previous, next := writable(old.Mounts), writable(current.Mounts)
+	if !reflect.DeepEqual(previous, writable(stopped.Mounts)) || !reflect.DeepEqual(previous, next) {
+		return fmt.Errorf("translation rollout: writable storage changed")
+	}
+	for _, mount := range next {
+		relative, err := filepath.Rel(root, mount.Source)
+		if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("translation rollout: storage is outside the owned fixture")
+		}
+	}
+	return nil
+}
+
+func TestTranslationRolloutReplacementRejectsUnsafeLifetimesAndStorage(t *testing.T) {
+	root := t.TempDir()
+	start := time.Now().UTC().Add(-time.Minute)
+	mounts := []translationRolloutMount{{Source: filepath.Join(root, "checkpoints"), Destination: "/checkpoints", RW: true}}
+	old := translationRolloutEpoch{ID: "old", Image: "previous", StartedAt: start, Mounts: mounts}
+	stopped := translationRolloutContainer{ID: old.ID, Image: old.Image, Mounts: slices.Clone(mounts)}
+	stopped.State.StartedAt, stopped.State.FinishedAt = start, start.Add(time.Second)
+	current := translationRolloutContainer{ID: "current", Image: "capable", Mounts: slices.Clone(mounts)}
+	current.State.Running, current.State.StartedAt = true, start.Add(2*time.Second)
+	require.NoError(t, validateTranslationRolloutReplacement(root, old, stopped, current))
+	for _, fault := range []string{"overlap", "still-running", "checkpoint-replaced", "unowned-storage", "wrong-predecessor"} {
+		t.Run(fault, func(t *testing.T) {
+			before, after, original := stopped, current, old
+			after.Mounts = slices.Clone(current.Mounts)
+			switch fault {
+			case "overlap":
+				after.State.StartedAt = start
+			case "still-running":
+				before.State.Running = true
+			case "checkpoint-replaced":
+				after.Mounts[0].Source = filepath.Join(root, "new-checkpoints")
+			case "unowned-storage":
+				original.Mounts = []translationRolloutMount{{Source: filepath.Dir(root), Destination: "/checkpoints", RW: true}}
+				before.Mounts, after.Mounts = original.Mounts, original.Mounts
+			case "wrong-predecessor":
+				before.ID = "unrelated"
+			}
+			require.Error(t, validateTranslationRolloutReplacement(root, original, before, after))
+		})
+	}
+}
+
+func readTranslationRolloutJSON(path string, value any) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() > 8<<20 {
+		return fmt.Errorf("translation rollout: invalid protected capture")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(io.LimitReader(file, (8<<20)+1))
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return fmt.Errorf("translation rollout: trailing capture content")
+	}
+	return nil
+}
+
+func TestTranslationNativeCapableRollback(t *testing.T) {
+	root := os.Getenv("TRANSLATION_TEST_ROLLOUT_DIR")
+	if root == "" {
+		t.Skip("owned finite rollout captures not selected")
+	}
+	require.True(t, filepath.IsAbs(root))
+	info, err := os.Lstat(root)
+	require.NoError(t, err)
+	require.True(t, info.IsDir() && info.Mode().Perm()&0o077 == 0)
+	owner := os.Getenv("TRANSLATION_TEST_OWNER")
+	require.NotEmpty(t, owner)
+	fixture, _ := ownedTranslationNativeFixture(t)
+	var manifest struct {
+		RunID, Project, Namespace, Phase string
+		APIA, APIB                       string
+		Containers                       map[string]struct{ ID, Image string }
+		VerifiedTargetRepair             struct{ DescriptorDigest string }
+	}
+	require.NoError(t, readTranslationRolloutJSON(filepath.Join(root, "fixture.json"), &manifest))
+	require.Equal(t, "capable-rollback", manifest.Phase)
+	require.Equal(t, fixture.namespace, manifest.Namespace)
+	require.Equal(t, fixture.apis, []string{manifest.APIA, manifest.APIB})
+	require.True(t, strings.HasPrefix(manifest.Project, "gitstore-rollout-"))
+	require.NotEmpty(t, manifest.RunID)
+	require.Len(t, manifest.Containers, 5)
+	capture := func(pattern string, value any) {
+		t.Helper()
+		paths, err := filepath.Glob(filepath.Join(root, pattern))
+		require.NoError(t, err)
+		require.Len(t, paths, 1, "select exactly one attributable rollout receipt")
+		require.NoError(t, readTranslationRolloutJSON(paths[0], value))
+	}
+	var rollback struct {
+		RunID, Scope string
+		Replacements []struct {
+			Role         string
+			Old, Current translationRolloutEpoch
+		}
+	}
+	capture("rollback-proof-*.json", &rollback)
+	require.Equal(t, manifest.RunID, rollback.RunID)
+	require.Equal(t, "finite-capable-only-rollback", rollback.Scope)
+	require.Len(t, rollback.Replacements, 4)
+	docker := func(args ...string) []byte {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		command := exec.CommandContext(ctx, "docker",
+			append([]string{"--context", getEnv("TRANSLATION_TEST_DOCKER_CONTEXT", "default")}, args...)...)
+		output, err := command.Output()
+		require.NoError(t, err, "owned topology command failed")
+		require.LessOrEqual(t, len(output), 8<<20)
+		return output
+	}
+	inspect := func(id string) translationRolloutContainer {
+		t.Helper()
+		var containers []translationRolloutContainer
+		require.NoError(t, json.Unmarshal(docker("inspect", id), &containers))
+		require.Len(t, containers, 1)
+		return containers[0]
+	}
+	liveIDs := strings.Fields(string(docker("ps", "-q", "--no-trunc", "--filter",
+		"label=com.docker.compose.project="+manifest.Project)))
+	expectedIDs := make([]string, 0, 5)
+	for _, container := range manifest.Containers {
+		expectedIDs = append(expectedIDs, container.ID)
+	}
+	require.ElementsMatch(t, expectedIDs, liveIDs, "every live fixture role must be declared")
+	checkOwner := func(container translationRolloutContainer) {
+		t.Helper()
+		require.Equal(t, owner, container.Config.Labels["gitstore.test.session"])
+		require.Equal(t, manifest.RunID, container.Config.Labels["gitstore.test.fixture"])
+	}
+	roles, checkpoints := map[string]bool{}, []string{}
+	for _, replacement := range rollback.Replacements {
+		require.Contains(t, []string{"api-a", "api-b", "controller-a", "controller-b"}, replacement.Role)
+		require.False(t, roles[replacement.Role])
+		roles[replacement.Role] = true
+		require.Equal(t, manifest.Containers[replacement.Role].ID, replacement.Current.ID)
+		require.Equal(t, manifest.Containers[replacement.Role].Image, replacement.Current.Image)
+		stopped, current := inspect(replacement.Old.ID), inspect(replacement.Current.ID)
+		checkOwner(stopped)
+		checkOwner(current)
+		require.NoError(t, validateTranslationRolloutReplacement(root, replacement.Old, stopped, current))
+		require.Equal(t, replacement.Current.StartedAt, current.State.StartedAt, "no unrecorded restart")
+		component := "API"
+		if strings.HasPrefix(replacement.Role, "controller-") {
+			component = "CONTROLLER"
+			for _, mount := range current.Mounts {
+				if mount.RW {
+					checkpoints = append(checkpoints, mount.Source)
+				}
+			}
+		}
+		require.Contains(t, current.Config.Env, "GITSTORE_"+component+"__TRANSLATION__ENABLED=true")
+		require.NotEmpty(t, manifest.VerifiedTargetRepair.DescriptorDigest)
+		require.Contains(t, current.Config.Env, "GITSTORE_"+component+"__TRANSLATION__DESCRIPTOR_DIGEST="+manifest.VerifiedTargetRepair.DescriptorDigest)
+	}
+	require.Len(t, checkpoints, 2)
+	require.NotEqual(t, checkpoints[0], checkpoints[1])
+	for _, pair := range [][2]string{{checkpoints[0], checkpoints[1]}, {checkpoints[1], checkpoints[0]}} {
+		relative, err := filepath.Rel(pair[0], pair[1])
+		require.NoError(t, err)
+		require.True(t, relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)),
+			"controller writable checkpoint directories must not overlap")
+	}
+	var preactivation struct {
+		RunID    string
+		Topology []struct {
+			Role string
+			translationRolloutEpoch
+		}
+	}
+	capture("preactivation-proof-*.json", &preactivation)
+	require.Equal(t, manifest.RunID, preactivation.RunID)
+	git := inspect(manifest.Containers["git"].ID)
+	checkOwner(git)
+	require.True(t, git.State.Running)
+	require.False(t, git.State.OOMKilled)
+	var gitBefore *translationRolloutEpoch
+	for _, role := range preactivation.Topology {
+		if role.Role == "git" {
+			require.Nil(t, gitBefore)
+			epoch := role.translationRolloutEpoch
+			gitBefore = &epoch
+		}
+	}
+	require.NotNil(t, gitBefore)
+	require.Equal(t, *gitBefore, translationRolloutEpoch{
+		ID: git.ID, Image: git.Image, StartedAt: git.State.StartedAt, Mounts: git.Mounts})
+	type authority struct {
+		Namespace string
+		APIs      map[string]struct {
+			Translations, Snapshots, Targets, Observations map[string]json.RawMessage
+		}
+		ReferencesSha256 string
+	}
+	var before, after authority
+	require.NoError(t, readTranslationRolloutJSON(filepath.Join(root, "rollback-authority-before.json"), &before))
+	require.NoError(t, readTranslationRolloutJSON(filepath.Join(root, "rollback-authority-after.json"), &after))
+	require.Equal(t, before, after, "accepted sources, bindings, target material and refs must survive rollback")
+	require.Equal(t, fixture.namespace, after.Namespace)
+	require.Len(t, after.APIs, 2)
+	require.Equal(t, after.APIs["apiA"], after.APIs["apiB"])
+	require.NotEmpty(t, after.APIs["apiA"].Translations)
+	targetKinds := make([]string, 0, 5)
+	for kind := range after.APIs["apiA"].Targets {
+		targetKinds = append(targetKinds, kind)
+	}
+	require.ElementsMatch(t, []string{"Product", "ProductVariant", "CategoryTaxonomy", "Collection", "File"}, targetKinds)
+	raw, err := os.ReadFile("../../gitstore-api/internal/cataloggrpc/testdata/translation/corpus.json")
+	require.NoError(t, err)
+	var corpus struct{ Targets map[string]string }
+	require.NoError(t, json.Unmarshal(raw, &corpus))
+	targets := map[string]translationIntegrationResource{}
+	for kind, source := range corpus.Targets {
+		header, _, err := translationIntegrationDocument([]byte(source))
+		require.NoError(t, err)
+		var authored translationIntegrationResource
+		require.NoError(t, yaml.Unmarshal(header, &authored))
+		targets[kind] = authored
+	}
+	_, credential, _ := newTranslationCapacityReader(t, fixture)
+	for index, api := range fixture.apis {
+		expected := after.APIs[[]string{"apiA", "apiB"}[index]]
+		read := func(key string, variables map[string]any, field string, controller bool) json.RawMessage {
+			t.Helper()
+			client := fixture
+			if controller {
+				client.token, err = credential.current(t.Context())
+				require.NoError(t, err)
+			}
+			response := client.queryBounded(t, api, translationIntegrationQuery(t, key), variables, 8<<20)
+			require.Empty(t, response.Errors, "live capable reader must serve stored authority")
+			var data map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(response.Data, &data))
+			require.Contains(t, data, field)
+			return data[field]
+		}
+		for name, source := range expected.Translations {
+			current := read("translation", map[string]any{"by": map[string]any{"namespacePath": map[string]any{"namespace": fixture.namespace, "name": name}}}, "translation", false)
+			require.JSONEq(t, string(source), string(current))
+			var resource translationIntegrationResource
+			require.NoError(t, json.Unmarshal(current, &resource))
+			snapshot := read("snapshot", map[string]any{"namespace": fixture.namespace, "name": name,
+				"sourceID": resource.Metadata.UID, "sourceVersion": resource.Metadata.ResourceVersion},
+				"translationValidationSnapshot", true)
+			require.Contains(t, expected.Snapshots, name)
+			require.JSONEq(t, string(expected.Snapshots[name]), string(snapshot))
+		}
+		for kind, target := range expected.Targets {
+			resource := targets[kind]
+			require.NotEmpty(t, resource.Metadata.Name)
+			current := read("target."+kind, map[string]any{"by": map[string]any{"namespacePath": map[string]any{"namespace": fixture.namespace, "name": resource.Metadata.Name}}}, "target", true)
+			require.JSONEq(t, string(target), string(current))
+			observation := read("targetObservation", map[string]any{"namespace": fixture.namespace,
+				"apiVersion": resource.APIVersion, "kind": kind, "name": resource.Metadata.Name}, "translationTargetObservation", true)
+			require.Contains(t, expected.Observations, kind)
+			require.JSONEq(t, string(expected.Observations[kind]), string(observation))
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	references, err := secretCapacityGit(ctx, t.TempDir(), fixture.token, "ls-remote", "--refs",
+		fixture.gitURL+"/"+fixture.namespace+"/gitstore-system")
+	require.NoError(t, err)
+	require.Equal(t, after.ReferencesSha256, fmt.Sprintf("%x", sha256.Sum256(references)))
+	t.Log("Finite capable rollback verified against live sources, snapshots, bindings, five targets, refs and owned process/storage lifetimes; not sustained acceptance")
 }
 
 type translationCapacityCallbackFault struct {
