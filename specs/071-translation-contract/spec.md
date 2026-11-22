@@ -2,7 +2,7 @@
 
 **Feature Branch**: `071-translation-contract`
 **Created**: 2026-11-18
-**Status**: Draft
+**Status**: Alpha implemented; PR review/merge pending; production qualification deferred
 **Input**: User description: "Expand spec-071 to cover the parent #78."
 Consider related resources, including #492's inline/reusable options; regard
 the envelope in #78 as a proposal.
@@ -13,7 +13,8 @@ This feature covers the complete Translation frontmatter initiative #78, under
 the catalog-frontmatter initiative #40, rather than only its contract slice
 #188. It defines the resource, parsing and validation behavior, target-resolution
 boundary, integration acceptance and documentation required by #188-#191.
-Writing this specification does not implement or close those issues.
+The alpha implementation delivers the contracts described below. This does not
+automatically close those issues or certify their production qualification.
 
 ### Verification stages
 
@@ -30,6 +31,31 @@ or documented design handoffs. PR-003/PR-005 and full-window SC-005/SC-006
 describe production qualification. PR-001/PR-002/PR-004/PR-006/PR-007 retain
 their implementation safety requirements; deployment timing, scale and
 complete fault/upgrade claims additionally require qualification evidence.
+
+### Alpha implementation reconciliation
+
+The full default `make pr-ready` passes on the main-integrated implementation,
+including the focused race regressions for callback/snapshot proof boundaries
+and the near-limit helper corpus. The finite native rollback verifier also
+passes using the merged bounded GraphQL reader. Review and merge remain pending.
+
+| Contract | Implemented or verified alpha scope |
+| --- | --- |
+| FR-001-FR-005; #188; #40; #549 | Reviewed authored envelope, ownership, common status, enum projection, examples and typed/generic read contracts |
+| FR-006-FR-009; #189 | Bounded field grammar, stable selectors, conflict checks and exact Markdown-body preservation |
+| FR-010-FR-018; #190 | Locale and target eligibility, namespace/UID lifetime binding, freshness masking, deterministic diagnostics and limits across the five delivered kinds |
+| FR-019-FR-021; #191 | Canonical ingestion/replay, durable watch/controller integration, authorization/concurrency regressions, target invariance and published authoring guidance |
+| FR-022-FR-023; SC-008 | Documented handoffs for ProductVariant, shared definitions, release snapshots and custom kinds; those proposed features are not implemented here |
+| SC-001-SC-004; SC-007 | Focused corpus, negative, ordering, replica and documentation checks; full deployed timing/upgrade claims are not inferred |
+
+Only T077-T079 remains unchecked in the 83-task plan: sustained alpha load,
+connected fault/recovery qualification and production capacity. Complete deployed
+mixed-version/populated-backfill qualification is likewise deferred, not claimed
+as passing. Admission stays disabled by default; controlled activation still
+requires the documented migration, audit, capability and drain prerequisites.
+The related proposed ADRs remain Proposed, and no issue is closed by this
+reconciliation. The established source/status/watch and fenced-writer contracts
+can inform #482 without implementing ProductVariant lifecycle in this feature.
 
 | Issue | Delivery covered by this specification | Requirements | Dependency |
 | --- | --- | --- | --- |

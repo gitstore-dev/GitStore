@@ -2,7 +2,7 @@
 
 **Branch**: `071-translation-contract` | **Date**: 2026-11-18 | **Spec**: [spec.md](spec.md)
 **Input**: Reviewed specification covering #78 and #188-#191, including #492's related-resource design.
-**Delivery state**: Alpha implementation in final PR checks; admission remains disabled by default and production qualification is deferred.
+**Delivery state**: Alpha implementation and default PR checks complete; review/merge pending. Admission remains disabled by default and production qualification is deferred.
 
 ## Summary
 

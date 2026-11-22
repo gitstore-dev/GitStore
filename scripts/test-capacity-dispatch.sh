@@ -1844,6 +1844,7 @@ const vm = require('node:vm');
 const crypto = require('node:crypto');
 const source = fs.readFileSync(process.argv[2], 'utf8')
   .replace(/^import .*;\r?\n/gm, '')
+  .replace(/^export function /gm, 'function ')
   .replace('export const options', 'const options')
   .replace('export default function ()', 'function runIteration()');
 const cases = Array.from({ length: 10 }, (_, index) => ({
@@ -1897,6 +1898,7 @@ function load(overrides = {}, fixtureCases = cases) {
     rawResponse(value) { response = value; },
   };
 }
+assert.throws(() => load({ CAPACITY_TRANSLATION_READINESS: '1' }), /select one readiness domain/);
 const workload = load();
 assert.deepEqual(Object.keys(workload.options.scenarios), ['rbac_0', 'rbac_1']);
 for (const scenario of Object.values(workload.options.scenarios)) {

@@ -187,7 +187,8 @@ func TestRBACProjectionSharesOnlyVerifiedTreeDigestWithSnapshotReader(t *testing
 			} else {
 				require.NoError(t, f.server.ReconcileRBACTier(t.Context(), rbac.ClusterTierID))
 			}
-			require.Equal(t, 1, reads)
+			verifiedTreeReads := reads
+			require.Positive(t, verifiedTreeReads)
 			source := rbac.OriginReader{Store: f.ds, Git: f.git, Digests: cache}
 			builtins, err := rbac.ReleaseBuiltins()
 			require.NoError(t, err)
@@ -196,14 +197,14 @@ func TestRBACProjectionSharesOnlyVerifiedTreeDigestWithSnapshotReader(t *testing
 			snapshot, err := reader.Read(t.Context(), rbac.ClusterTierID)
 			require.NoError(t, err)
 			require.Len(t, snapshot.Resources, 1)
-			require.Equal(t, 1, reads, "projection's fully verified immutable tree must not be scanned again")
+			require.Equal(t, verifiedTreeReads, reads, "projection's fully verified immutable tree must not be scanned again")
 
 			f.tip = strings.Repeat("c", 40)
 			f.trees[f.tip] = map[string][]byte{path: rbacProjectionRole("reader", "create")}
 			snapshot, err = reader.Read(t.Context(), rbac.ClusterTierID)
 			require.ErrorIs(t, err, rbac.ErrSnapshotProjectionMismatch, "cached bytes cannot hide a live canonical change")
 			require.Empty(t, snapshot.Resources)
-			require.Equal(t, 1, reads, "unprojected canonical changes still route to recovery first")
+			require.Equal(t, verifiedTreeReads, reads, "unprojected canonical changes still route to recovery first")
 			f.git.resolveRefFunc = func(context.Context, string, string) (string, error) { return "", rbac.ErrUnavailable }
 			_, err = reader.Read(t.Context(), rbac.ClusterTierID)
 			require.ErrorIs(t, err, rbac.ErrUnavailable, "cached digests cannot replace a live origin proof")

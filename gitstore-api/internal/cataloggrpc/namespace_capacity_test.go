@@ -200,7 +200,7 @@ func TestNamespaceCapacityTranslationCorpusAcrossHelperProcesses(t *testing.T) {
 		replica := startNamespaceCapacityReplica(t, name)
 		t.Cleanup(func() { stopNamespaceCapacityReplica(replica) })
 		for _, entry := range cases {
-			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			response, err := replica.validate(ctx, entry.request)
 			cancel()
 			require.NoError(t, err)

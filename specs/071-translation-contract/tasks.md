@@ -6,12 +6,12 @@
 [authored contract](contracts/authored-resource.md),
 [lifecycle contract](contracts/lifecycle-and-storage.md),
 [capacity contract](contracts/capacity-and-rollout.md), [quickstart.md](quickstart.md).
-**Delivery state**: Alpha implementation in final PR checks; production qualification remains explicitly deferred and does not block alpha review.
+**Delivery state**: Alpha implementation and default PR checks complete; review/merge remains pending. Production qualification is explicitly deferred and does not block alpha review.
 **Tests**: Required by the specification and constitution. Write each slice's
 tests first, observe the relevant failure, then implement and run the smallest
 covering suite. Capacity and physical-fault acceptance are separate opt-in work.
 
-**Current checked count**: 79/83 complete, 4 open: deferred T077-T079 qualification and final T083 reconciliation.
+**Current checked count**: 80/83 complete. Only T077-T079 production qualification remains open and deferred.
 
 **Verification stages**: Constitution 4.0.0 separates focused PR correctness
 from deployed production qualification. T080 now covers the changed migration,
@@ -49,10 +49,20 @@ mixed-version/drain/capable-rollback rehearsal. Their focused correctness scope
 is supplemented by the finite verifier above; no broader qualification is inferred.
 No applied migration file, retained corpus or performance setting changed.
 The full default `GOWORK=off GOFLAGS=-p=1 CARGO_BUILD_JOBS=2 make pr-ready`
-rerun passes after this production correctness fix, including lint/build/test/
+rerun passes on the main-integrated source after the correctness and test-harness fixes, including lint/build/test/
 race/license and credential-leakage checks. Whitespace and user-facing
-reference checks pass. The refreshed AST graph has 30,369 nodes, 77,215 edges
-and 1,460 communities with the existing optional-parser/zero-node warnings.
+reference checks pass. The AST graph is refreshed with the existing
+optional-parser/zero-node warnings.
+
+**Alpha reconciliation**: T083 is complete under the approved verification-stage
+split. The coverage table below and the specification distinguish implemented
+FR/SC contracts, focused concurrency/authorization/recovery evidence, design-only
+handoffs and deferred production qualification. The main merge preserves RBAC
+and Translation wiring together. Snapshot-cache regressions retain zero extra
+reads after verified projection without counting callback source verification
+as cache reads; the helper-process corpus has a bounded race-test deadline, not
+a changed production limit. No performance tuning, issue closure, ADR acceptance
+or production activation is included.
 
 **Current priority**: Correctness only for this delivery scope; capacity failures
 are acceptable and do not trigger premature performance tuning. Finish safe
@@ -242,11 +252,10 @@ One full rerun exposed three permission-fixture failures caused by a private-log
 the normal fixture `umask`; the subsequent full default rerun passes while its
 log remains private. No production code or security checks were weakened.
 
-T081/T082's current-source check and navigation work is verified, but their
-final checkboxes retain the declared story-completion prerequisites: remaining
-implementation changes must rerun standard checks and refresh the graph before
-an implementation PR. T073/T076-T080 and final T083 acceptance remain open.
-Capacity workloads and runtime replacements are deferred, not certified.
+This earlier checkpoint preceded final story reconciliation. T073, T076,
+T080-T083 and the final standard checks are now complete under the current
+alpha scope; T077-T079 and complete deployed qualification remain deferred,
+not certified.
 
 T064 is complete. The opt-in native fixture now covers both configured Smart
 HTTP ingress URLs, exact source/body/patch reads and durable watch joins through
@@ -2260,7 +2269,7 @@ production acceptance. Failed or unavailable owned-deployment gates stay open.
 
 - [X] T081 Run `make generate TARGET=all`, scoped formatter/lint/test commands and the full default `make pr-ready` before creating an implementation PR, including schema/action drift, Rust forwarding and Go race regressions; use `specs/071-translation-contract/contracts/capacity-and-rollout.md` to keep deployed evidence separate rather than substituting it for the default suite (after all story implementation).
 - [X] T082 Refresh the AST-only graph with `graphify update .` after code changes and reconcile contributor navigation in `AGENTS.md` and `specs/071-translation-contract/plan.md` without modifying unrelated instructions or presenting generated planning as runtime support (after T081).
-- [ ] T083 Reconcile alpha implementation FR/PR/SC and #188-#191 coverage in `specs/071-translation-contract/tasks.md` and `specs/071-translation-contract/spec.md`; preserve private failed/success evidence and distinguish focused correctness from deferred T077-T079/full deployed qualification. Prepare implemented-scope closure for review/merge without claiming qualification or closing issues whose production gates remain unmet. Keep ADRs 0007/0008/0013/0014/0016/0018 Proposed as specified by `docs/ADRs/README.md`; any separately implemented ADR core requires its explicit status/date/index task (after T080-T082; not T079).
+- [X] T083 Reconcile alpha implementation FR/PR/SC and #188-#191 coverage in `specs/071-translation-contract/tasks.md` and `specs/071-translation-contract/spec.md`; preserve private failed/success evidence and distinguish focused correctness from deferred T077-T079/full deployed qualification. Prepare implemented-scope closure for review/merge without claiming qualification or closing issues whose production gates remain unmet. Keep ADRs 0007/0008/0013/0014/0016/0018 Proposed as specified by `docs/ADRs/README.md`; any separately implemented ADR core requires its explicit status/date/index task (after T080-T082; not T079).
 
 ## Dependencies and execution order
 
