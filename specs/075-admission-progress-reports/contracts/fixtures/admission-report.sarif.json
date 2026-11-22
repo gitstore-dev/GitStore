@@ -1,0 +1,51 @@
+{
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "gitstore-builtin-admission",
+          "version": "v1"
+        }
+      },
+      "columnKind": "unicodeCodePoints",
+      "versionControlProvenance": [
+        {
+          "repositoryUri": "https://git.example.test/store/catalog.git",
+          "revisionId": "0123456789abcdef0123456789abcdef01234567",
+          "branch": "refs/heads/main"
+        }
+      ],
+      "results": [
+        {
+          "ruleId": "MISSING_REQUIRED_FIELD",
+          "level": "error",
+          "message": {"text": "A required field is missing"},
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {"uri": "products/coat.md"},
+                "region": {"startLine": 7, "startColumn": 3, "endLine": 7, "endColumn": 4}
+              }
+            }
+          ],
+          "properties": {"gitstore": {"field": "spec.example"}}
+        }
+      ],
+      "properties": {
+        "gitstore": {
+          "schemaVersion": "1",
+          "reportId": "fixture-report",
+          "executionId": "fixture-execution",
+          "attempt": 1,
+          "conclusion": "FAILURE",
+          "diagnosticsKnown": 1,
+          "diagnosticsRetained": 1,
+          "diagnosticsOmitted": 0,
+          "diagnosticsIncomplete": false
+        }
+      }
+    }
+  ]
+}

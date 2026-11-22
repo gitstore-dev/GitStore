@@ -1,0 +1,128 @@
+# Proposed additive Admin overlay; canonical schema/generated files are unchanged.
+# Reuse existing Node, ObjectMeta, Condition, PageInfo and references.
+
+extend type Query {
+  admissionReport(id: ID!): AdmissionReport
+  admissionReports(namespace: String!, first: Int, after: String, last: Int, before: String, query: String): AdmissionReportConnection!
+}
+
+extend type Mutation {
+  rerunAdmissionReport(input: RerunAdmissionReportInput!): RerunAdmissionReportPayload!
+  exportAdmissionReports(input: ExportAdmissionReportsInput!): ExportAdmissionReportsPayload!
+}
+
+extend type Subscription {
+  watchAdmissionReports(namespace: String, resourceVersion: String, query: String): AdmissionReportWatchEvent!
+}
+
+type AdmissionReport implements Node {
+  id: ID!
+  apiVersion: String!
+  kind: String!
+  metadata: ObjectMeta!
+  spec: AdmissionReportSpec!
+  status: AdmissionReportStatus!
+  body: String
+}
+
+type AdmissionReportSpec {
+  repositoryRef: CatalogObjectReference!
+  executionId: ID!
+  batchId: ID!
+  attempt: Int!
+  previousAttemptRef: CatalogObjectReference
+  phase: AdmissionReportPhase!
+  producer: AdmissionReportProducer!
+  target: AdmissionReportTarget!
+}
+
+enum AdmissionReportPhase { POST_RECEIVE }
+enum AdmissionReportTargetOrigin { COMMITTED_TRANSITION RECONCILIATION }
+type AdmissionReportProducer { name: String!, version: String! }
+type AdmissionReportTarget {
+  origin: AdmissionReportTargetOrigin!
+  ref: String!
+  commit: String
+  previousCommit: String
+  sourceCursor: String
+  inputDigest: String!
+  scopeDigest: String!
+}
+
+type AdmissionReportStatus {
+  observedGeneration: Int
+  lastAppliedRevision: String
+  conditions: [Condition!]!
+  resolved: ResolvedAdmissionReport!
+}
+
+enum AdmissionReportState { QUEUED IN_PROGRESS COMPLETED }
+enum AdmissionReportConclusion { SUCCESS FAILURE NEUTRAL SKIPPED TIMED_OUT }
+type ResolvedAdmissionReport {
+  state: AdmissionReportState!
+  conclusion: AdmissionReportConclusion
+  acceptedAt: DateTime!
+  startedAt: DateTime
+  completedAt: DateTime
+  observedAt: DateTime!
+  expiresAt: DateTime
+  summary: String!
+  counts: AdmissionReportCounts!
+  diagnosticsSnapshot: String!
+  diagnostics(first: Int, after: String, last: Int, before: String, query: String): AdmissionDiagnosticConnection!
+}
+
+type AdmissionReportCounts {
+  planned: Long!
+  accepted: Long!
+  noOp: Long!
+  denied: Long!
+  failed: Long!
+  skipped: Long!
+  unresolved: Long!
+  diagnosticsKnown: Long!
+  diagnosticsRetained: Int!
+  diagnosticsOmitted: Long!
+  diagnosticsIncomplete: Boolean!
+}
+
+# Shared admission.Diagnostic projection: paginated value objects, not resources/Nodes.
+# An edge's node field does not require the globally addressable Node interface.
+enum AdmissionDiagnosticLevel { FAILURE WARNING NOTICE }
+type AdmissionDiagnostic {
+  reason: String!
+  message: String!
+  level: AdmissionDiagnosticLevel!
+  file: String
+  field: String
+  region: AdmissionDiagnosticRegion
+}
+type AdmissionDiagnosticRegion {
+  startLine: Int!
+  startColumn: Int
+  endLine: Int
+  endColumn: Int
+}
+type AdmissionDiagnosticEdge { cursor: String!, node: AdmissionDiagnostic! }
+type AdmissionDiagnosticConnection { edges: [AdmissionDiagnosticEdge!]!, pageInfo: PageInfo! }
+type AdmissionReportEdge { cursor: String!, node: AdmissionReport! }
+type AdmissionReportConnection { edges: [AdmissionReportEdge!]!, pageInfo: PageInfo! }
+
+type AdmissionReportWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+  report: AdmissionReport
+}
+
+input RerunAdmissionReportInput { reportId: ID!, idempotencyKey: String! }
+type RerunAdmissionReportPayload { report: AdmissionReport! }
+
+# Each page is a complete bounded SARIF document, not an arbitrary JSON fragment.
+input ExportAdmissionReportsInput {
+  reportIds: [ID!]!
+  idempotencyKey: String!
+  after: String
+}
+type ExportAdmissionReportsPayload { exportId: ID!, document: JSON!, nextCursor: String }

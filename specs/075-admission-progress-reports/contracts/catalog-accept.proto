@@ -1,0 +1,22 @@
+// Add AcceptAdmission(AcceptAdmissionRequest) returns (AcceptAdmissionResponse)
+// to existing CatalogService. Legacy AdmitResources is not run as a second engine.
+// Merge messages into canonical catalog_service.proto during implementation.
+syntax = "proto3";
+package gitstore.catalog.v1;
+
+import "gitstore/catalog/v1/catalog_service.proto";
+import "gitstore/git/v1/git_service.proto";
+
+message AcceptAdmissionRequest {
+  gitstore.git.v1.AdmissionSourceReceipt source = 1;
+  string operation_id = 2;
+  CallbackAuthorization authorization = 7;
+  string repository_id = 15;
+}
+message AcceptAdmissionResponse {
+  enum State { STATE_UNSPECIFIED = 0; ACCEPTED = 1; ALREADY_ACCEPTED = 2; }
+  State state = 1;
+  string execution_id = 2;
+  repeated string report_ids = 3;
+  string accepted_input_digest = 4;
+}
