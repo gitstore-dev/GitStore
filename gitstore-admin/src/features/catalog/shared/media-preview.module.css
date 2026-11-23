@@ -1,0 +1,38 @@
+.mediaImage {
+  background: var(--hover);
+  border-radius: 3px;
+  overflow: hidden;
+  aspect-ratio: 4/3;
+  display: grid;
+  place-items: center;
+  width: 100%;
+}
+.mediaImage img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+.mediaImage > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 15px;
+}
+.mediaImage[data-compact] {
+  width: 56px;
+  height: 56px;
+  flex: none;
+}
+.mediaImage[data-demo-image='basin-image'] img {
+  transform: scale(2);
+  transform-origin: 50% 35%;
+}
+.mediaImage[data-demo-image='lookbook'] img {
+  transform: scale(1.4);
+  transform-origin: 50% 55%;
+}

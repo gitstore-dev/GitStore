@@ -1,3 +1,4 @@
+import { Link } from '@tanstack/react-router'
 import { ActionButton } from '../../../components/controls'
 import { TechnicalDetails } from '../../../components/TechnicalDetails'
 import { ChangePreview } from '../../demo/ChangePreview'
@@ -66,6 +67,14 @@ export function ActivityInspector({
         <section className={styles.note}>
           <h3>Current demo item</h3>
           <p>{snapshotTitle(current)}</p>
+          {current.kind === 'File' && (
+            <Link
+              to="/w/$namespace/catalog/media/$itemId"
+              params={{ namespace: session.namespace, itemId: event.itemId }}
+            >
+              Open current media file
+            </Link>
+          )}
           <p>
             Historical outcomes do not describe current readiness or
             publication.

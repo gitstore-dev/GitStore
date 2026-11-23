@@ -1,4 +1,4 @@
-import { CardMediaBackdrop } from '../products/CardMediaBackdrop'
+import { CardMediaBackdrop } from '../shared/CardMediaBackdrop'
 import { ActiveFilters } from '../../../components/ActiveFilters'
 import {
   useCatalogView,

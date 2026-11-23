@@ -1,3 +1,12 @@
+import {
+  structureRoute,
+  structureEntryForPath,
+  structureReturnSearch,
+  structurePaths,
+} from '../features/catalog/structure/model'
+import type { StructureSearch } from '../features/catalog/structure/model'
+import { mediaEntries, mediaSearch } from '../features/catalog/media/model'
+import type { MediaSearch } from '../features/catalog/media/model'
 import { BreadcrumbLink, ShellBreadcrumbs } from './ShellBreadcrumbs'
 import type { ShellCrumb } from './ShellBreadcrumbs'
 import { productSearch } from '../features/catalog/products/model'
@@ -81,10 +90,15 @@ export function AppShell({ children }: { children?: ReactNode }) {
           : product.spec.title
         : 'Product unavailable'
 
+  const structureLocation = structureRoute(pathname)
+  const nestedStructure = !!structureLocation?.id
   const nestedCatalog =
-    ['catalog.variants', 'catalog.categories', 'catalog.collections'].includes(
-      active?.id ?? '',
-    ) && productSegments.length > 4
+    [
+      'catalog.variants',
+      'catalog.categories',
+      'catalog.collections',
+      'catalog.media',
+    ].includes(active?.id ?? '') && productSegments.length > 4
   const catalogItemTitle =
     product?.kind !== 'File' && product && 'spec' in product
       ? product.spec.title
@@ -92,11 +106,23 @@ export function AppShell({ children }: { children?: ReactNode }) {
   const pageTitle =
     routeNamespace && !isDemoNamespace(routeNamespace)
       ? 'Unknown demo workspace'
-      : nestedProduct
-        ? productPageTitle
-        : nestedCatalog
-          ? (catalogItemTitle ?? 'Item unavailable')
-          : (active?.label ?? 'Not found')
+      : nestedStructure
+        ? (structureEntryForPath(
+            productSession,
+            pathname,
+            router.options.context.structureScenario,
+          )?.title ?? 'Catalog entry unavailable')
+        : nestedProduct
+          ? productPageTitle
+          : nestedCatalog
+            ? active?.id === 'catalog.media'
+              ? (mediaEntries(
+                  productSession,
+                  router.options.context.mediaScenario,
+                ).find((item) => item.id === productSegments[4])?.name ??
+                'Media unavailable')
+              : (catalogItemTitle ?? 'Item unavailable')
+            : (active?.label ?? 'Not found')
   const currentSearch = useSearch({ strict: false })
   const ancestors: ShellCrumb[] = []
   if (active) {
@@ -131,6 +157,59 @@ export function AppShell({ children }: { children?: ReactNode }) {
         onSelect: () => {
           void navigate({
             to: '/w/$namespace/catalog/products',
+            params: { namespace },
+            search,
+            resetScroll: false,
+          })
+        },
+      })
+    } else if (nestedStructure && structureLocation) {
+      const domain = structureLocation.domain
+      const search =
+        router.options.context.productNavigation?.returnSearch<StructureSearch>(
+          pathname,
+        ) ?? structureReturnSearch(currentSearch, domain, pathname)
+      ancestors.push({
+        label: active.label,
+        link: (
+          <BreadcrumbLink
+            to={structurePaths[domain]}
+            params={{ namespace }}
+            search={search}
+            resetScroll={false}
+          >
+            {active.label}
+          </BreadcrumbLink>
+        ),
+        onSelect: () => {
+          void navigate({
+            to: structurePaths[domain],
+            params: { namespace },
+            search,
+            resetScroll: false,
+          })
+        },
+      })
+    } else if (nestedCatalog && active.id === 'catalog.media') {
+      const search =
+        router.options.context.productNavigation?.returnSearch<MediaSearch>(
+          pathname,
+        ) ?? mediaSearch(currentSearch)
+      ancestors.push({
+        label: 'Media',
+        link: (
+          <BreadcrumbLink
+            to="/w/$namespace/catalog/media"
+            params={{ namespace }}
+            search={search}
+            resetScroll={false}
+          >
+            Media
+          </BreadcrumbLink>
+        ),
+        onSelect: () => {
+          void navigate({
+            to: '/w/$namespace/catalog/media',
             params: { namespace },
             search,
             resetScroll: false,

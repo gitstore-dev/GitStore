@@ -26,6 +26,21 @@ describe('Product navigation boundaries', () => {
     ).toBeUndefined()
     expect(productJourney('/platform/namespaces', base)).toBeUndefined()
   })
+  it('pairs Media list/detail without crossing catalog domains or stores', () => {
+    const media = '/w/atelier-kyoto/catalog/media'
+    expect(productRoute(media)).toMatchObject({ catalog: 'media' })
+    expect(productJourney(media, `${media}/lookbook`)).toMatchObject({
+      id: 'lookbook',
+      direction: 'open',
+    })
+    expect(productJourney(`${media}/lookbook`, media)).toMatchObject({
+      direction: 'return',
+    })
+    expect(productJourney(base, `${media}/lookbook`)).toBeUndefined()
+    expect(
+      productJourney(media, '/w/studio-berlin/catalog/media/lookbook'),
+    ).toBeUndefined()
+  })
   it('retains loaded batches by list URL and invalidates them on store reset', () => {
     const navigation = new ProductNavigation()
     navigation.remember(`${base}?q=stone`, {

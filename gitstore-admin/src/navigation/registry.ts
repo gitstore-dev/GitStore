@@ -219,13 +219,20 @@ export const destinations: readonly NavigationDestination[] = groups
       'catalog.variants',
       'catalog.categories',
       'catalog.collections',
+      'catalog.media',
+      'catalog.attributes-options',
+      'catalog.product-types',
     ].includes(destination.id)
       ? 'mock'
       : 'placeholder',
     description:
       destination.id === 'home.overview'
         ? 'Resource work, readiness, and activity in your demo workspace.'
-        : destination.description,
+        : destination.id === 'catalog.attributes-options'
+          ? 'Inspect saved Product options and reusable-definition design examples.'
+          : destination.id === 'catalog.product-types'
+            ? 'Explore read-only Product-type examples and their relationships.'
+            : destination.description,
   }))
 export function destinationById(id: string) {
   const result = destinations.find((destination) => destination.id === id)
@@ -250,6 +257,9 @@ export function destinationAtPath(pathname: string) {
         'catalog.variants',
         'catalog.categories',
         'catalog.collections',
+        'catalog.media',
+        'catalog.attributes-options',
+        'catalog.product-types',
       ].includes(destination.id) &&
         normalized.startsWith(`${destination.to}/`)),
   )

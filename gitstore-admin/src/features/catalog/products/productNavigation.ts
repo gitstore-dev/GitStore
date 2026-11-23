@@ -1,3 +1,4 @@
+import { structureRoute } from '../structure/model'
 import type { ParsedLocation } from '@tanstack/react-router'
 import { motionReduced } from '../../../shell/motion/focusTransition'
 import type { ProductSearch } from './model'
@@ -9,8 +10,15 @@ interface ProductRoute {
   catalog?: string
 }
 export function productRoute(path: string): ProductRoute | undefined {
+  const structure = structureRoute(path)
+  if (structure)
+    return {
+      namespace: structure.namespace,
+      id: structure.id,
+      catalog: structure.domain,
+    }
   const match =
-    /^\/w\/([^/]+)\/catalog\/(products|variants|categories|collections)(?:\/([^/]+))?\/?$/.exec(
+    /^\/w\/([^/]+)\/catalog\/(products|variants|categories|collections|media)(?:\/([^/]+))?\/?$/.exec(
       path,
     )
   if (!match || match[3] === 'new') return
@@ -197,12 +205,14 @@ export class ProductNavigation {
       })
     }
     // Also use the actual pseudo-element animations to observe completion in
-    // engines that support snapshots but not activeViewTransition.
+    // engines that support snapshots but not activeViewTransition. Query only
+    // the root that owns these pseudo-elements: WebKit can crash while sorting
+    // document-wide animations across removed tab panels and active snapshots.
     const owner = this.owner
     let attempts = 0
     const observeSnapshots = () => {
       if (owner !== this.owner) return
-      const snapshots = document
+      const snapshots = document.documentElement
         .getAnimations()
         .filter((animation) =>
           (
@@ -265,7 +275,7 @@ export class ProductNavigation {
     ++this.owner
     this.active?.skipTransition()
     if (document.documentElement.dataset.productTransition) {
-      document.getAnimations().forEach((animation) => {
+      document.documentElement.getAnimations().forEach((animation) => {
         if (
           (
             animation.effect as KeyframeEffect | null

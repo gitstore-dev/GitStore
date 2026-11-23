@@ -122,6 +122,14 @@ export function ResourceInspector({
         >
           Open product <ArrowUpRight size={13} aria-hidden="true" />
         </Link>
+      ) : resource.kind === 'File' ? (
+        <Link
+          className={styles.textLink}
+          to="/w/$namespace/catalog/media/$itemId"
+          params={{ namespace, itemId: resource.id }}
+        >
+          Open media <ArrowUpRight size={13} aria-hidden="true" />
+        </Link>
       ) : (
         <Link
           className={styles.textLink}

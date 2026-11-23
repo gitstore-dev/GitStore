@@ -120,36 +120,6 @@
   color: var(--muted);
   font-size: 12px;
 }
-.mediaImage {
-  background: var(--hover);
-  border-radius: 3px;
-  overflow: hidden;
-  aspect-ratio: 4/3;
-  display: grid;
-  place-items: center;
-  width: 100%;
-}
-.mediaImage img {
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: cover;
-}
-.mediaImage > span {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 12px;
-  color: var(--muted);
-  font-size: 12px;
-  padding: 15px;
-}
-.mediaImage[data-compact] {
-  width: 56px;
-  height: 56px;
-  flex: none;
-}
 .productList[data-view='grid'] {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -176,7 +146,7 @@
   align-items: stretch;
   width: 100%;
 }
-.productList[data-view='grid'] .mediaImage {
+.productList[data-view='grid'] :global([data-media-preview]) {
   width: 100%;
   height: auto;
   aspect-ratio: 4/3;
@@ -477,7 +447,7 @@
   .productList[data-view='grid'] {
     display: block;
   }
-  .productList[data-view='grid'] .mediaImage {
+  .productList[data-view='grid'] :global([data-media-preview]) {
     width: 56px;
     height: 56px;
   }
@@ -547,15 +517,6 @@
 }
 
 /* The supplied generated images include a frame; show only their photographic region. */
-.mediaImage[data-demo-image='basin-image'] img {
-  transform: scale(2);
-  transform-origin: 50% 35%;
-}
-.mediaImage[data-demo-image='lookbook'] img {
-  transform: scale(1.4);
-  transform-origin: 50% 55%;
-}
-
 .pageActions {
   display: flex;
   justify-content: flex-end;

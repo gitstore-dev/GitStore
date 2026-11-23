@@ -1,0 +1,188 @@
+.page {
+  min-width: 0;
+}
+.tabs {
+  min-width: 0;
+}
+.tabList {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.tab {
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.tab[data-selected] {
+  background: var(--ink);
+  color: var(--canvas);
+}
+.tab[data-focus-visible] {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+.tab span {
+  font: 11px var(--mono);
+}
+.notice {
+  border-left: 2px solid var(--accent);
+  background: var(--surface);
+  padding: 12px 16px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 0 0 22px;
+}
+.notice strong {
+  color: var(--ink);
+  display: block;
+  font-size: 13px;
+}
+.rows {
+  display: grid;
+  gap: 12px;
+}
+.row {
+  color: var(--ink);
+  text-decoration: none;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  min-width: 0;
+  transition:
+    background 140ms,
+    box-shadow 140ms;
+}
+.row:hover {
+  background: var(--hover);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.rowContents {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 20px;
+  padding: 22px;
+}
+.identity {
+  min-width: 0;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+.identity svg {
+  flex: none;
+  color: var(--muted);
+}
+.identity strong {
+  display: block;
+  font: 500 24px/1.25 var(--display);
+  overflow-wrap: anywhere;
+}
+.identity small,
+.secondary {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.identity small {
+  margin-top: 6px;
+}
+.values {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.values span,
+.badge {
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font: 10px/1.5 var(--mono);
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+.badge {
+  color: var(--muted);
+  white-space: normal;
+}
+.related {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.related li {
+  font-size: 13px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.related a {
+  color: var(--accent-ink);
+  text-decoration: none;
+}
+.related a:hover {
+  text-decoration: underline;
+}
+.related small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+.designDetails {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+  margin-top: 26px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.designDetails summary {
+  cursor: pointer;
+  color: var(--ink);
+}
+.designDetails code {
+  display: block;
+  overflow-wrap: anywhere;
+  margin-top: 14px;
+}
+@media (max-width: 760px) {
+  .rowContents {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    padding: 18px;
+  }
+  .row .badge {
+    justify-self: start;
+  }
+  .identity strong {
+    font-size: 23px;
+  }
+  .tab {
+    min-height: 44px;
+    padding: 8px 10px;
+  }
+  .rowContents .values {
+    min-width: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .row {
+    transition: none;
+  }
+}
+:global([data-motion='reduced']) .row {
+  transition: none;
+}

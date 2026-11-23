@@ -351,7 +351,13 @@ export function ProductPage({
                             key={id}
                             data-product-image={index === 0 ? '' : undefined}
                           >
-                            <ProductMedia id={id} priority={index === 0} />
+                            <Link
+                              to="/w/$namespace/catalog/media/$itemId"
+                              params={{ namespace, itemId: id }}
+                              aria-label={`Open media ${session.catalog[id]?.kind === 'File' ? session.catalog[id].name : id}`}
+                            >
+                              <ProductMedia id={id} priority={index === 0} />
+                            </Link>
                           </div>
                         ))
                       ) : (

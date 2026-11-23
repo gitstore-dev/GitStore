@@ -187,10 +187,23 @@ export function CatalogDetailPage({
                 <h2>Category images</h2>
                 <div className={styles.categoryGallery}>
                   <span data-product-image="">
-                    <ProductMedia
-                      id={categoryMediaId(session, itemId)}
-                      emptyLabel="No category image"
-                    />
+                    {categoryMediaId(session, itemId) ? (
+                      <Link
+                        to="/w/$namespace/catalog/media/$itemId"
+                        params={{
+                          namespace,
+                          itemId: categoryMediaId(session, itemId)!,
+                        }}
+                        aria-label="Open category media file"
+                      >
+                        <ProductMedia
+                          id={categoryMediaId(session, itemId)}
+                          emptyLabel="No category image"
+                        />
+                      </Link>
+                    ) : (
+                      <ProductMedia emptyLabel="No category image" />
+                    )}
                   </span>
                 </div>
               </section>

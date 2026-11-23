@@ -2,7 +2,7 @@
 
 ![GitStore Admin — browse category images and hierarchy in Columns view](gitstore-admin/docs/images/categories-overview.png)
 
-An isolated, mock-first Admin foundation: React, strict TypeScript, Vite, TanStack Router, React Aria, and custom CSS Modules. All 79 PRD destinations are navigable: Catalog / Products, Variants, Categories, Collections, and Home / Overview, My work, Recent activity, and Setup guide are interactive mock destinations; the other 71 remain placeholders. My work includes a limited, demo-only product Title/description editor and personal review workflow. There is no authentication, backend connection, or GraphQL runtime.
+An isolated, mock-first Admin foundation: React, strict TypeScript, Vite, TanStack Router, React Aria, and custom CSS Modules. All 79 PRD destinations are navigable: Catalog / Products, Variants, Categories, Collections, Attributes & options, Product types, Media, and Home / Overview, My work, Recent activity, and Setup guide are interactive mock destinations; the other 68 remain placeholders. My work includes a limited, demo-only product Title/description editor and personal review workflow. There is no authentication, backend connection, or GraphQL runtime.
 
 ## Start
 
@@ -63,3 +63,11 @@ The document canvas follows [Product Canvas (Focus Mode)](https://stitch.google.
 Home / Setup guide completes the four Home destinations. Its four-step checklist shares progress with Overview. Confirming a demo review records guidance read, not configuration or readiness. Product completion follows the saved, non-deleting catalog. Task links support `?step=store-details|categories|first-product|catalog-checks`; setup reviews reset with the shared per-store demo.
 
 Catalog / Variants, Categories, and Collections share the in-memory store session. Browse full detail URLs; variants show SKU/options and declared pricing/inventory. Categories offers Columns, Tree, and Cards without relationship editing. Category images resolve from their own media references; Cards share the catalog’s full-card image-pan interaction. Collections uses label selectors, a current demo preview, and separate recorded fixture membership. These pages do not create, edit, delete, or publish resources.
+
+## Media browser
+
+Catalog / Media provides Cards and Rows, file-name search, status/usage filters, cursor-style Load more, File details, an enlarged image preview, and direct Used by links. Products, Categories, Overview and File activity link into the browser. It uses the existing two File records and representative bundled images; declared processing requests remain separate from available demo outputs. Uploading, editing, attaching, deleting and processing files are outside this read-only increment.
+
+## Catalog structure prototypes
+
+Attributes & options separates saved Product options from reusable-definition design examples. Inspect offered values, the owning Product and declared Variant selections. Product types shows Apparel/Homeware design examples and links to their example definitions and Products. These examples do not assign types, enforce constraints or create backend resources; #492 remains a design proposal. Both pages support Rows/Cards, URL filters, bounded Load more, direct details and responsive read-only inspection. All seven Catalog destinations now have prototypes: 11 mock destinations and 68 placeholders overall.

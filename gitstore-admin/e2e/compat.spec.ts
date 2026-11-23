@@ -92,3 +92,49 @@ test('My work mobile editor confirms unsaved dismissal across engines', async ({
     page.getByRole('button', { name: 'View details for Mobile basin' }),
   ).toBeFocused()
 })
+
+test('Media preview and keyboard dismissal work across engines', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/w/atelier-kyoto/catalog/media/lookbook')
+  const trigger = page.getByRole('button', { name: 'Enlarge preview' })
+  await trigger.focus()
+  await trigger.press('Enter')
+  const dialog = page.getByRole('dialog', {
+    name: 'Preview lookbook-hero.webp',
+  })
+  await expect(dialog).toBeVisible()
+  await dialog.getByRole('button', { name: '100%', exact: true }).click()
+  await expect(
+    dialog.getByRole('button', { name: '100%', exact: true }),
+  ).toHaveAttribute('aria-pressed', 'true')
+  await page.keyboard.press('Escape')
+  await expect(dialog).toHaveCount(0)
+  await expect(trigger).toBeFocused()
+})
+
+test('Catalog structure tabs and option inspection work across engines', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/w/atelier-kyoto/catalog/attributes-options')
+  const options = page.getByRole('tab', { name: /Product options/ })
+  await options.focus()
+  await options.press('ArrowRight')
+  await expect(
+    page.getByRole('tab', { name: /Reusable definitions/ }),
+  ).toHaveAttribute('aria-selected', 'true')
+  await page.locator('[data-resource-id="definition:color"]').click()
+  await expect(page.locator('main h1')).toHaveText('Color')
+  await expect(
+    page.getByRole('heading', { name: 'Example choices' }),
+  ).toBeVisible()
+  await page
+    .getByRole('link', { name: 'Attributes & options', exact: true })
+    .last()
+    .click()
+  await expect(
+    page.getByRole('tab', { name: /Reusable definitions/ }),
+  ).toHaveAttribute('aria-selected', 'true')
+})

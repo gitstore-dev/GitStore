@@ -35,10 +35,13 @@ describe('PRD navigation contract', () => {
       'catalog.variants',
       'catalog.categories',
       'catalog.collections',
+      'catalog.attributes-options',
+      'catalog.product-types',
+      'catalog.media',
     ])
     expect(
       destinations.filter((d) => d.implementation === 'placeholder'),
-    ).toHaveLength(71)
+    ).toHaveLength(68)
     for (const d of destinations) {
       expect(
         d.to.startsWith(

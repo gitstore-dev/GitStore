@@ -1,5 +1,12 @@
 import { useEffect } from 'react'
-type Domain = 'products' | 'variants' | 'categories' | 'collections'
+type Domain =
+  | 'products'
+  | 'variants'
+  | 'categories'
+  | 'collections'
+  | 'media'
+  | 'attributes-options'
+  | 'product-types'
 export function readCatalogView(domain: Domain) {
   try {
     const view = localStorage.getItem(`gitstore.view.${domain}`)

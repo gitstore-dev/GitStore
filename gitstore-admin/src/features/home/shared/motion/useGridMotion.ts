@@ -51,5 +51,6 @@ export function useGridMotion() {
   const capture = useCallback(() => {
     if (!paused.current && !motionReduced()) controller.current?.capture()
   }, [])
-  return { stage, capture }
+  const cancel = useCallback(() => controller.current?.dispose(), [])
+  return { stage, capture, cancel }
 }

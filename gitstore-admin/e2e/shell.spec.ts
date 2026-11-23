@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test'
 import AxeBuilder from '@axe-core/playwright'
 import { destinations, destinationHref } from '../src/navigation/registry'
 const home = '/w/atelier-kyoto/home/overview'
-test('all 79 destinations are reachable with eight mock destinations and 71 placeholders', async ({
+test('all 79 destinations are reachable with eleven mock destinations and 68 placeholders', async ({
   page,
 }) => {
   test.setTimeout(120000)
@@ -41,9 +41,13 @@ test('all 79 destinations are reachable with eight mock destinations and 71 plac
             name:
               destination.id === 'catalog.products'
                 ? 'Search products'
-                : destination.id.startsWith('catalog.')
-                  ? `Search ${destination.id.split('.')[1]}`
-                  : 'Search activity',
+                : destination.id === 'catalog.attributes-options'
+                  ? 'Search attributes and options'
+                  : destination.id === 'catalog.product-types'
+                    ? 'Search product types'
+                    : destination.id.startsWith('catalog.')
+                      ? `Search ${destination.id.split('.')[1]}`
+                      : 'Search activity',
           }),
         ).toBeVisible()
     } else {
