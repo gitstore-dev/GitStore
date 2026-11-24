@@ -1,4 +1,4 @@
-# GitStore Resource Schemas (v1beta1)
+# GitStore Resource Schemas
 
 JSON Schema (2020-12) definitions for the YAML frontmatter of GitStore
 resource manifests. These schemas exist primarily so that **LLMs and
@@ -59,22 +59,33 @@ Free-form Markdown description goes here.
 ```
 
 Only the YAML object between the two `---` lines is validated against the
-corresponding schema in this directory.
+corresponding schema under this directory.
 
 ## Files
 
+Schemas live at `schemas/<apiVersion>/<filename>.schema.json`, where
+`apiVersion` contains both the API group and version. For example, Product
+uses `schemas/catalog.gitstore.dev/v1beta1/product.schema.json`.
+Each schema's `$id` uses the same group, version, and filename beneath
+`https://schemas.gitstore.dev/`.
+
 | Schema | Kind | apiVersion | Git-pushable today? |
 |---|---|---|---|
-| `product.schema.json` | `Product` | `catalog.gitstore.dev/v1beta1` | Yes |
-| `variant.schema.json` | `ProductVariant` | `catalog.gitstore.dev/v1beta1` | Yes |
-| `category.schema.json` | `CategoryTaxonomy` | `catalog.gitstore.dev/v1beta1` | Yes |
-| `collection.schema.json` | `Collection` | `catalog.gitstore.dev/v1beta1` | Yes |
-| `file.schema.json` | `File` | `storage.gitstore.dev/v1beta1` | Yes |
-| `namespace.schema.json` | `Namespace` | `gitstore.dev/v1beta1` | Yes |
-| `repository.schema.json` | `Repository` | `gitstore.dev/v1beta1` | **No** — see below |
+| [product.schema.json](catalog.gitstore.dev/v1beta1/product.schema.json) | `Product` | `catalog.gitstore.dev/v1beta1` | Yes |
+| [variant.schema.json](catalog.gitstore.dev/v1beta1/variant.schema.json) | `ProductVariant` | `catalog.gitstore.dev/v1beta1` | Yes |
+| [category.schema.json](catalog.gitstore.dev/v1beta1/category.schema.json) | `CategoryTaxonomy` | `catalog.gitstore.dev/v1beta1` | Yes |
+| [collection.schema.json](catalog.gitstore.dev/v1beta1/collection.schema.json) | `Collection` | `catalog.gitstore.dev/v1beta1` | Yes |
+| [file.schema.json](storage.gitstore.dev/v1beta1/file.schema.json) | `File` | `storage.gitstore.dev/v1beta1` | Yes |
+| [namespace.schema.json](gitstore.dev/v1beta1/namespace.schema.json) | `Namespace` | `gitstore.dev/v1beta1` | Yes |
+| [repository.schema.json](gitstore.dev/v1beta1/repository.schema.json) | `Repository` | `gitstore.dev/v1beta1` | **No** — see below |
 
-Each schema is self-contained (no cross-file `$ref`s) so a single file gives
-an LLM or IDE everything it needs, at the cost of duplicating shared
+Translation and RBAC schemas follow the same layout under
+`i18n.gitstore.dev/v1beta1/` and
+`rbac.authorization.gitstore.dev/v1beta1/`, respectively.
+
+The seven schemas listed above are self-contained (no cross-file `$ref`s),
+so a single file gives an LLM or IDE everything it needs, at the cost of
+duplicating shared
 definitions (`ObjectMeta`, `ObjectReference`, `FileReference`,
 `MediaDefinition`, etc.) across files. All schemas use `additionalProperties:
 false` throughout, so unknown/system-managed fields (e.g. `status`, `uid`,
@@ -118,6 +129,7 @@ validates it against the appropriate schema file in this directory.
 pip install jsonschema pyyaml
 python3 - <<'EOF'
 import json, re, sys, yaml
+from pathlib import Path
 from jsonschema import Draft202012Validator
 
 path = sys.argv[1] if len(sys.argv) > 1 else "example.md"
@@ -125,12 +137,15 @@ raw = open(path).read()
 frontmatter = re.match(r"^---\n(.*?)\n---\n", raw, re.S).group(1)
 doc = yaml.safe_load(frontmatter)
 
-schema = json.load(open(f"schemas/gitstore/v1beta1/{doc['kind'].lower()}.schema.json"))
+filename = {"ProductVariant": "variant", "CategoryTaxonomy": "category"}.get(
+    doc["kind"], doc["kind"].lower()
+)
+schema_path = Path("schemas") / doc["apiVersion"] / f"{filename}.schema.json"
+schema = json.loads(schema_path.read_text())
 Draft202012Validator(schema).validate(doc)
 print("valid")
 EOF
 ```
 
-(Adjust the schema filename lookup for `ProductVariant` → `variant.schema.json`
-and `CategoryTaxonomy` → `category.schema.json`, since filenames are
-shortened relative to `kind`.)
+The lookup uses both `apiVersion` and `kind`, including kinds whose
+schema filenames are shortened.

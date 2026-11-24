@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.gitstore.dev/gitstore/v1beta1/file.schema.json",
+  "$id": "https://schemas.gitstore.dev/storage.gitstore.dev/v1beta1/file.schema.json",
   "title": "GitStore File",
   "description": "YAML frontmatter for a GitStore File resource. A File resource is a Markdown file: this schema validates only the frontmatter object between the opening and closing '---' delimiters. The remaining Markdown content is free-form notes about the file and is not covered by this schema. A File resource describes a piece of external or repository-tracked binary content (e.g. an image) that other resources reference via fileRef. Note: apiVersion for File is a distinct API group (\"storage.gitstore.dev\") from the catalog resources (\"catalog.gitstore.dev\").",
   "type": "object",

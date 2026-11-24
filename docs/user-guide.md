@@ -146,7 +146,7 @@ Frontmatter enum values use UpperCamelCase; GraphQL enums use
 SCREAMING_SNAKE_CASE. For example, author `Retired`, `Deny` and `NotIn` in Git;
 GraphQL returns `RETIRED`, `DENY` and `NOT_IN`. Existing uppercase/lowercase
 manifest spellings remain accepted through explicit compatibility mappings.
-See the [enum spelling reference](../schemas/gitstore/v1beta1/README.md#enum-spelling)
+See the [enum spelling reference](../schemas/README.md#enum-spelling)
 for the complete list. Labels, names, option values, URIs and Markdown are
 never case-converted.
 

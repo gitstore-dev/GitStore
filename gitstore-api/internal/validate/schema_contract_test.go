@@ -24,20 +24,20 @@ func TestResourceSchemaEnumSpellingsRoundTrip(t *testing.T) {
 		schema, definition, field string
 		newSpec                   func() any
 	}{
-		{"namespace", "NamespaceSpec", "tier", func() any { return &catalog.NamespaceSpec{} }},
-		{"namespace", "RepositoryDefaults", "visibility", func() any { return &catalog.NamespaceRepositoryDefaults{} }},
-		{"repository", "RepositorySpec", "visibility", func() any { return &catalog.RepositorySpec{} }},
-		{"product", "ProductSpec", "state", func() any { return &catalog.ProductLifecycleSpec{} }},
-		{"variant", "InventoryDefinition", "policy", func() any { return &catalog.InventoryDefinition{} }},
-		{"variant", "StrategyDefinition", "type", func() any { return &catalog.StrategyDefinition{} }},
-		{"variant", "EligibilityDefinition", "operator", func() any { return &catalog.EligibilityDefinition{} }},
-		{"collection", "LabelSelectorRequirement", "operator", func() any { return &catalog.LabelSelectorRequirement{Key: "tier"} }},
-		{"file", "FileSpec", "provider", func() any {
+		{"gitstore.dev/v1beta1/namespace", "NamespaceSpec", "tier", func() any { return &catalog.NamespaceSpec{} }},
+		{"gitstore.dev/v1beta1/namespace", "RepositoryDefaults", "visibility", func() any { return &catalog.NamespaceRepositoryDefaults{} }},
+		{"gitstore.dev/v1beta1/repository", "RepositorySpec", "visibility", func() any { return &catalog.RepositorySpec{} }},
+		{"catalog.gitstore.dev/v1beta1/product", "ProductSpec", "state", func() any { return &catalog.ProductLifecycleSpec{} }},
+		{"catalog.gitstore.dev/v1beta1/variant", "InventoryDefinition", "policy", func() any { return &catalog.InventoryDefinition{} }},
+		{"catalog.gitstore.dev/v1beta1/variant", "StrategyDefinition", "type", func() any { return &catalog.StrategyDefinition{} }},
+		{"catalog.gitstore.dev/v1beta1/variant", "EligibilityDefinition", "operator", func() any { return &catalog.EligibilityDefinition{} }},
+		{"catalog.gitstore.dev/v1beta1/collection", "LabelSelectorRequirement", "operator", func() any { return &catalog.LabelSelectorRequirement{Key: "tier"} }},
+		{"storage.gitstore.dev/v1beta1/file", "FileSpec", "provider", func() any {
 			return &catalog.FileSpec{ContentType: "image/png", Source: catalog.FileSourceDefinition{URI: "git:///hero.png"}}
 		}},
 	} {
 		t.Run(tt.schema+"/"+tt.definition+"/"+tt.field, func(t *testing.T) {
-			raw, err := os.ReadFile(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "schemas", "gitstore", "v1beta1", tt.schema+".schema.json"))
+			raw, err := os.ReadFile(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "schemas", filepath.FromSlash(tt.schema)+".schema.json"))
 			require.NoError(t, err)
 			var schema map[string]any
 			require.NoError(t, json.Unmarshal(raw, &schema))
@@ -66,8 +66,13 @@ func TestResourceSchemasRejectEmptyRequiredStrings(t *testing.T) {
 
 	_, currentFile, _, ok := runtime.Caller(0)
 	require.True(t, ok)
-	schemaFiles, err := filepath.Glob(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "schemas", "gitstore", "v1beta1", "*.schema.json"))
-	require.NoError(t, err)
+	var schemaFiles []string
+	for _, group := range []string{"catalog.gitstore.dev", "gitstore.dev", "storage.gitstore.dev"} {
+		matches, err := filepath.Glob(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "schemas", group, "v1beta1", "*.schema.json"))
+		require.NoError(t, err)
+		require.NotEmpty(t, matches)
+		schemaFiles = append(schemaFiles, matches...)
+	}
 	require.NotEmpty(t, schemaFiles)
 
 	for _, schemaFile := range schemaFiles {
@@ -86,7 +91,7 @@ func TestResourceSchemasRejectEmptyRequiredStrings(t *testing.T) {
 func TestFileSchemaCredentialForm(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	require.True(t, ok)
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "schemas", "gitstore", "v1beta1", "file.schema.json"))
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "schemas", "storage.gitstore.dev", "v1beta1", "file.schema.json"))
 	require.NoError(t, err)
 	var schema map[string]any
 	require.NoError(t, json.Unmarshal(raw, &schema))

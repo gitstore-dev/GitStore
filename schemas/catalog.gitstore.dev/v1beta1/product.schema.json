@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.gitstore.dev/gitstore/v1beta1/category.schema.json",
-  "title": "GitStore CategoryTaxonomy",
-  "description": "YAML frontmatter for a GitStore CategoryTaxonomy resource. A CategoryTaxonomy resource is a Markdown file: this schema validates only the frontmatter object between the opening and closing '---' delimiters. The remaining Markdown content is the free-form category description body and is not covered by this schema. Categories may nest via spec.parentRef to form a taxonomy tree. See docs/categories/category-taxonomy-spec.md for the full authoring contract.",
+  "$id": "https://schemas.gitstore.dev/catalog.gitstore.dev/v1beta1/product.schema.json",
+  "title": "GitStore Product",
+  "description": "YAML frontmatter for a GitStore Product resource. A Product resource is a Markdown file: this schema validates only the frontmatter object between the opening and closing '---' delimiters. The remaining Markdown content is the free-form product description body and is not covered by this schema. See docs/products/product-spec.md for the full authoring contract.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "metadata", "spec"],
@@ -12,14 +12,14 @@
       "description": "Must be exactly \"catalog.gitstore.dev/v1beta1\"."
     },
     "kind": {
-      "const": "CategoryTaxonomy",
-      "description": "Must be exactly \"CategoryTaxonomy\" (case-sensitive)."
+      "const": "Product",
+      "description": "Must be exactly \"Product\" (case-sensitive)."
     },
     "metadata": {
       "$ref": "#/$defs/ObjectMeta"
     },
     "spec": {
-      "$ref": "#/$defs/CategoryTaxonomySpec"
+      "$ref": "#/$defs/ProductSpec"
     }
   },
   "$defs": {
@@ -33,7 +33,7 @@
           "type": "string",
           "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
           "maxLength": 63,
-          "description": "DNS label format: lowercase alphanumeric and hyphens, 1-63 characters, no leading/trailing hyphen. Identifies this CategoryTaxonomy uniquely within its namespace."
+          "description": "DNS label format: lowercase alphanumeric and hyphens, 1-63 characters, no leading/trailing hyphen. Identifies this Product uniquely within its namespace."
         },
         "namespace": {
           "type": "string",
@@ -85,32 +85,65 @@
     },
     "MediaDefinition": {
       "type": "object",
-      "description": "A media slot referencing a File resource.",
+      "description": "A product media slot referencing a File resource.",
       "additionalProperties": false,
       "required": ["fileRef"],
       "properties": {
         "fileRef": { "$ref": "#/$defs/FileReference" }
       }
     },
-    "CategoryTaxonomySpec": {
+    "ProductOptionDefinition": {
       "type": "object",
-      "description": "Author-controlled declarative specification for a category taxonomy node.",
+      "description": "A variant dimension (e.g. Colour, Size). \"name\" must be unique within the enclosing spec.options list.",
       "additionalProperties": false,
-      "required": ["title"],
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "description": "Required. Must be unique within spec.options." },
+        "title": { "type": "string" },
+        "values": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "ProductSpec": {
+      "type": "object",
+      "description": "Author-controlled declarative specification for a product. All fields are individually optional; spec may be an empty object.",
+      "additionalProperties": false,
       "properties": {
         "title": {
           "type": "string",
-          "minLength": 1,
           "maxLength": 200,
-          "description": "Required. Human-readable display title. Max 200 characters."
+          "description": "Human-readable display title. Max 200 characters."
         },
-        "parentRef": {
+        "categoryRef": {
           "$ref": "#/$defs/ObjectReference",
-          "description": "Reference to a parent CategoryTaxonomy, forming a tree. Omit for a root-level category. Cycles are rejected at admission."
+          "description": "Reference to the parent CategoryTaxonomy. If present, categoryRef.name is required."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Free-form tag list. No per-tag length constraint."
         },
         "media": {
           "type": "array",
           "items": { "$ref": "#/$defs/MediaDefinition" }
+        },
+        "lifecycle": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "type": "string",
+              "enum": ["Active", "Retired", "ACTIVE", "RETIRED"],
+              "description": "Desired lifecycle state; defaults to Active. Uppercase legacy spellings remain accepted."
+            }
+          }
+        },
+        "options": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ProductOptionDefinition" },
+          "description": "Variant dimensions (e.g. colour, size). Each entry's name must be unique within this list."
         }
       }
     }
@@ -118,18 +151,33 @@
   "examples": [
     {
       "apiVersion": "catalog.gitstore.dev/v1beta1",
-      "kind": "CategoryTaxonomy",
+      "kind": "Product",
       "metadata": {
-        "name": "personal-computers",
+        "name": "macbook-pro-m4-max",
         "namespace": "acme-store",
-        "labels": { "gitstore.dev/department": "electronics" }
+        "labels": {
+          "gitstore.dev/brand": "Apple",
+          "gitstore.dev/tier": "premium"
+        },
+        "annotations": {
+          "gitstore.dev/notes": "flagship laptop"
+        }
       },
       "spec": {
-        "title": "Personal Computers",
-        "parentRef": {
+        "title": "MacBook Pro M4 Max",
+        "categoryRef": {
           "kind": "CategoryTaxonomy",
-          "name": "electronics"
-        }
+          "name": "personal-computers"
+        },
+        "tags": ["laptop", "apple-silicon", "pro"],
+        "options": [
+          { "name": "color", "title": "Colour", "values": ["silver", "space-black"] },
+          { "name": "ram", "title": "RAM", "values": ["36GB", "64GB", "128GB"] },
+          { "name": "storage", "title": "Storage", "values": ["1TB", "2TB", "4TB"] }
+        ],
+        "media": [
+          { "fileRef": { "kind": "File", "name": "hero-image" } }
+        ]
       }
     }
   ]

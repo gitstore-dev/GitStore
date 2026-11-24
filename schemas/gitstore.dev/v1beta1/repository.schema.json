@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.gitstore.dev/gitstore/v1beta1/repository.schema.json",
+  "$id": "https://schemas.gitstore.dev/gitstore.dev/v1beta1/repository.schema.json",
   "title": "GitStore Repository",
   "description": "IMPORTANT: unlike Product, ProductVariant, CategoryTaxonomy, Collection, File, and Namespace, a Repository is NOT currently created by pushing a Markdown+frontmatter manifest through git — the git-push markdown/frontmatter parser has no case for kind \"Repository\" today. Repositories are created via the GraphQL `createRepository` mutation (inputs: namespace, name, defaultBranch). This schema models the declarative envelope of a Repository as it is read back from the API today (e.g. via a `repository` query), for documentation/tooling purposes, and anticipates a possible future git-authored form. Do not expect a file matching this schema to be accepted by `git push` yet.",
   "type": "object",
