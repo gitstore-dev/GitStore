@@ -55,6 +55,7 @@ type SnapshotReader struct {
 	Retries       int
 	Timeout       time.Duration
 	MaxBytes      int64
+	Validations   *ManifestValidationCache
 }
 
 func validDigest(value string, bytes int) bool {
@@ -79,9 +80,19 @@ func (o SnapshotOrigin) valid(tier string) bool {
 		ok && branch != "" && len(o.GitRef) <= 256 && revisionOK && validDigest(oid, 20) && validDigest(o.TreeDigest, 32)
 }
 
+// ReadCandidate constructs a complete candidate for a caller that rechecks the
+// live origin after preparation and before publication. It is not an authority proof.
+func (r SnapshotReader) ReadCandidate(ctx context.Context, tier string) (Snapshot, error) {
+	return r.read(ctx, tier, false)
+}
+
 // Read captures a complete model, not watch readiness or a globally fenced
 // transaction. Identity and row retries share one three-attempt budget.
 func (r SnapshotReader) Read(ctx context.Context, tier string) (Snapshot, error) {
+	return r.read(ctx, tier, true)
+}
+
+func (r SnapshotReader) read(ctx context.Context, tier string, checkOrigin bool) (Snapshot, error) {
 	if r.Timeout == 0 {
 		r.Timeout = 30 * time.Second
 	}
@@ -100,21 +111,38 @@ func (r SnapshotReader) Read(ctx context.Context, tier string) (Snapshot, error)
 		!validDigest(r.CatalogDigest, 32) || !validDigest(r.BuiltinDigest, 32) {
 		return Snapshot{}, datastore.RBACError(ErrUnavailable)
 	}
+	var retryOrigin *SnapshotOrigin
 	for range r.Retries {
 		if err := ctx.Err(); err != nil {
 			return Snapshot{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 		}
-		before, err := r.ReadOrigin(ctx, tier)
-		if err != nil || !before.valid(tier) {
-			return Snapshot{}, snapshotUnavailable(err)
+		var before SnapshotOrigin
+		if retryOrigin != nil && r.CheckOrigin != nil {
+			// Reuse immutable tree proof only after rechecking every live origin fact.
+			if err := r.CheckOrigin(ctx, tier, *retryOrigin); err != nil {
+				if ctx.Err() != nil {
+					return Snapshot{}, snapshotUnavailable(err)
+				}
+				retryOrigin = nil
+				continue
+			}
+			before = *retryOrigin
+		} else {
+			var err error
+			before, err = r.ReadOrigin(ctx, tier)
+			if err != nil || !before.valid(tier) {
+				return Snapshot{}, snapshotUnavailable(err)
+			}
 		}
 		stored, retry, err := datastore.ReadRBACSnapshotAttemptWithLimit(ctx, r.Store, tier, r.MaxBytes)
 		if err != nil {
 			return Snapshot{}, snapshotUnavailable(err)
 		}
 		if retry {
+			retryOrigin = &before
 			continue
 		}
+		retryOrigin = nil
 		if stored.State.NamespaceRetired {
 			return Snapshot{}, snapshotUnavailable(nil)
 		}
@@ -123,20 +151,26 @@ func (r SnapshotReader) Read(ctx context.Context, tier string) (Snapshot, error)
 			p.GitRevision != before.GitRevision || p.TreeDigest != before.TreeDigest {
 			return Snapshot{}, datastore.RBACError(ErrSnapshotProjectionMismatch)
 		}
-		if r.CheckOrigin != nil {
-			if err := r.CheckOrigin(ctx, tier, before); err != nil {
-				if ctx.Err() != nil {
+		if checkOrigin && stored.State.ProjectionPending {
+			retryOrigin = &before
+			continue
+		}
+		if checkOrigin {
+			if r.CheckOrigin != nil {
+				if err := r.CheckOrigin(ctx, tier, before); err != nil {
+					if ctx.Err() != nil {
+						return Snapshot{}, snapshotUnavailable(err)
+					}
+					continue
+				}
+			} else {
+				after, err := r.ReadOrigin(ctx, tier)
+				if err != nil {
 					return Snapshot{}, snapshotUnavailable(err)
 				}
-				continue
-			}
-		} else {
-			after, err := r.ReadOrigin(ctx, tier)
-			if err != nil {
-				return Snapshot{}, snapshotUnavailable(err)
-			}
-			if before != after {
-				continue
+				if before != after {
+					continue
+				}
 			}
 		}
 		result := Snapshot{
@@ -166,12 +200,7 @@ func (r SnapshotReader) Read(ctx context.Context, tier string) (Snapshot, error)
 			if resource.Metadata.Namespace != namespace {
 				return Snapshot{}, datastore.RBACError(ErrUnavailable)
 			}
-			manifest, err := CanonicalManifest(resource)
-			path, pathErr := CanonicalPath(resource.Kind, resource.Metadata.Name)
-			if err != nil || pathErr != nil {
-				return Snapshot{}, datastore.RBACError(ErrUnavailable)
-			}
-			if _, err := ParseManifest(manifest, path, RepositoryScope{
+			if _, _, err := r.Validations.Validate(resource, RepositoryScope{
 				Namespace: namespace, NamespaceUID: before.NamespaceUID, Root: before.Root,
 			}); err != nil {
 				return Snapshot{}, snapshotUnavailable(err)

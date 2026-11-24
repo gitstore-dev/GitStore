@@ -40,7 +40,7 @@ func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.Commi
 	result, err := s.admitCommittedManifest(ctx, req)
 	// Constructor dependencies and request shape are not post-commit failures;
 	// attempting repair for either can dereference an unavailable Git reader.
-	if err == nil || isCommittedAdmissionDenied(err) || s.git == nil || s.store == nil ||
+	if err == nil || errors.Is(err, errTranslationInactive) || isCommittedAdmissionDenied(err) || s.git == nil || s.store == nil ||
 		req.RepositoryID == "" || req.CommitSHA == "" || req.RefName == "" || req.Path == "" {
 		return result, err
 	}
@@ -81,6 +81,12 @@ func isCommittedAdmissionDenied(err error) bool {
 // admitCommittedManifest performs one admission attempt.  Its public wrapper
 // is responsible for best-effort repair while preserving this attempt's error.
 func (s *Server) admitCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	if req.Kind == "Translation" && !s.translationActivation.Enabled {
+		return nil, errTranslationInactive
+	}
+	if err := s.translationInactive(req.Content); err != nil {
+		return nil, err
+	}
 	if s.git == nil || s.store == nil {
 		return nil, fmt.Errorf("committed admission is unavailable")
 	}
@@ -101,6 +107,9 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 		}
 		if req.Kind == "CategoryTaxonomy" {
 			return s.admitCommittedCategoryDeletion(ctx, req)
+		}
+		if req.Kind == "Translation" {
+			return s.admitCommittedTranslationDeletion(ctx, req)
 		}
 
 		return s.admitCommittedProductDeletion(ctx, req)
@@ -288,6 +297,12 @@ func committedResourceMatches(resource any, req admission.CommittedManifestReque
 	var labels, annotations map[string]string
 	var storedSpec []byte
 	switch v := resource.(type) {
+	case *datastore.Translation:
+		if v == nil || entry.parsed == nil || !bytes.Equal(v.RawSource, entry.parsed.RawSource) {
+			return false
+		}
+		repositoryID, sourcePath, gitRef, commitSHA = v.RepositoryID, v.SourcePath, v.GitRef, v.GitCommitSHA
+		apiVersion, kind, namespace, name, labels, annotations, body, storedSpec = v.APIVersion, v.Kind, v.Namespace, v.Name, v.Labels, v.Annotations, v.Body, v.Spec
 	case *datastore.CategoryTaxonomy:
 		repositoryID, sourcePath, gitRef, commitSHA = v.RepositoryID, v.SourcePath, v.GitRef, v.GitCommitSHA
 		apiVersion, kind, namespace, name, labels, annotations, body, storedSpec = v.APIVersion, v.Kind, v.Namespace, v.Name, v.Labels, v.Annotations, v.Body, v.Spec
@@ -349,6 +364,65 @@ func errorText(err error) string {
 		return "unknown error"
 	}
 	return err.Error()
+}
+
+func (s *Server) admitCommittedTranslationDeletion(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	if req.ExpectedUID == "" || req.Namespace == "" || req.Name == "" {
+		return nil, fmt.Errorf("%w: Translation removal requires its namespace, name and expected UID", datastore.ErrInvalidArgument)
+	}
+	if !s.isAdmissionCommitCurrent(ctx, req.RepositoryID, req.RefName, req.CommitSHA) {
+		return nil, ErrCommittedManifestSuperseded
+	}
+	capable, ok := s.store.(datastore.TranslationCapable)
+	if !ok || capable.TranslationStore() == nil {
+		return nil, fmt.Errorf("translation source datastore unavailable")
+	}
+	source, err := capable.TranslationStore().GetTranslationByName(ctx, req.Namespace, req.Name)
+	if err != nil && !errors.Is(err, datastore.ErrNotFound) {
+		return nil, err
+	}
+	if err == nil && source == nil {
+		return nil, datastore.ErrRepairRequired
+	}
+	if errors.Is(err, datastore.ErrNotFound) {
+		source = nil
+	}
+	if source != nil && (source.UID != req.ExpectedUID || source.RepositoryID != req.RepositoryID ||
+		source.GitRef != req.RefName || source.SourcePath != req.Path) {
+		return nil, admission.NewError(admission.CodeConflict, "DELETION_IDENTITY_MISMATCH", "Translation removal does not match its lifetime and provenance")
+	}
+	if _, err := s.git.ReadFile(ctx, req.RepositoryID, req.Path, req.CommitSHA); status.Code(err) != codes.NotFound {
+		if err != nil {
+			return nil, err
+		}
+		return nil, admission.NewError(admission.CodeFailedPrecondition, "MANIFEST_PRESENT", "deletion commit still contains the Translation manifest")
+	}
+	result := &admission.CommittedManifestResult{
+		Kind: req.Kind, Namespace: req.Namespace, Name: req.Name, CommitSHA: req.CommitSHA, NoOp: source == nil,
+	}
+	superseded := false
+	admCtx := AdmissionContext{
+		RepositoryID: req.RepositoryID, Namespace: req.Namespace, RefName: req.RefName, CommitSHA: req.CommitSHA,
+		ActorSubject: req.ActorSubject, Now: s.clock.Now().UTC(), superseded: &superseded,
+	}
+	if source != nil {
+		parsed, body, err := s.parser.ParseResource(bytes.NewReader(source.RawSource))
+		if err != nil || parsed == nil {
+			return nil, datastore.ErrRepairRequired
+		}
+		old, supported, err := newParsedEntry(req.Path, parsed, body, req.Namespace)
+		if err != nil || !supported || old.identity.Kind != req.Kind || old.identity.Namespace != req.Namespace || old.identity.Name != req.Name {
+			return nil, datastore.ErrRepairRequired
+		}
+		operation := resourceAdmissionOperation{operation: admission.OperationDelete, identity: old.identity, oldEntry: old}
+		if err := s.deleteTranslation(ctx, operation, admCtx, source); err != nil {
+			return nil, err
+		}
+	}
+	if admCtx.wasSuperseded() || !s.isAdmissionCommitCurrent(ctx, req.RepositoryID, req.RefName, req.CommitSHA) {
+		return nil, ErrCommittedManifestSuperseded
+	}
+	return result, nil
 }
 
 func (s *Server) admitCommittedInfrastructureDeletion(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {

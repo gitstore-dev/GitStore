@@ -54,6 +54,45 @@ type Namespace struct {
 	ID string
 }
 
+// Translation retains accepted source independently of controller observations.
+type Translation struct {
+	APIVersion string
+	Kind       string
+	UID        string
+	Namespace  string
+	Name       string
+
+	Generation      int64
+	ResourceVersion string
+	Revision        string
+
+	CreationTimestamp time.Time
+	CreationActor     string
+	UpdateTimestamp   time.Time
+	UpdateActor       string
+
+	Labels          map[string]string
+	Annotations     map[string]string
+	OwnerReferences json.RawMessage
+	Finalizers      []string
+
+	DeletionTimestamp *time.Time
+
+	NamespaceID  string
+	RepositoryID string
+	SourcePath   string
+	GitCommitSHA string
+	GitRef       string
+
+	SourceBlobOID string
+	SourceDigest  string
+	RawSource     []byte
+
+	Spec   json.RawMessage
+	Body   string
+	Status json.RawMessage
+}
+
 // ResourceWatchEventType is the normalized durable resource transition. A
 // single journal is deliberately shared by all GitStore resource kinds: its
 // cursor establishes a total order across kinds, while Kind and Namespace
@@ -200,34 +239,36 @@ type Product struct {
 	Body string
 
 	// Status — system-only JSON blob
-	Status json.RawMessage
+	Status                  json.RawMessage
+	TranslationTargetSource TranslationTargetSourceIdentity `json:"-" yaml:"-"`
 }
 
 type File struct {
-	UID               string
-	Namespace         string
-	Name              string
-	APIVersion        string
-	Kind              string
-	Generation        int64
-	ResourceVersion   string
-	CreationTimestamp time.Time
-	CreationActor     string
-	UpdateTimestamp   time.Time
-	UpdateActor       string
-	Revision          string
-	Labels            map[string]string
-	Annotations       map[string]string
-	OwnerReferences   json.RawMessage
-	Finalizers        []string
-	DeletionTimestamp *time.Time
-	RepositoryID      string
-	SourcePath        string
-	GitCommitSHA      string
-	GitRef            string
-	Spec              json.RawMessage
-	Body              string
-	Status            json.RawMessage
+	UID                     string
+	Namespace               string
+	Name                    string
+	APIVersion              string
+	Kind                    string
+	Generation              int64
+	ResourceVersion         string
+	CreationTimestamp       time.Time
+	CreationActor           string
+	UpdateTimestamp         time.Time
+	UpdateActor             string
+	Revision                string
+	Labels                  map[string]string
+	Annotations             map[string]string
+	OwnerReferences         json.RawMessage
+	Finalizers              []string
+	DeletionTimestamp       *time.Time
+	RepositoryID            string
+	SourcePath              string
+	GitCommitSHA            string
+	GitRef                  string
+	Spec                    json.RawMessage
+	Body                    string
+	Status                  json.RawMessage
+	TranslationTargetSource TranslationTargetSourceIdentity `json:"-" yaml:"-"`
 }
 
 // CategoryTaxonomy is the git-backed Kubernetes-style category resource.
@@ -275,7 +316,8 @@ type CategoryTaxonomy struct {
 	Body string          // Markdown description
 
 	// Status — system-only JSON blob (written at admission; controller fills Resolved fields)
-	Status json.RawMessage
+	Status                  json.RawMessage
+	TranslationTargetSource TranslationTargetSourceIdentity `json:"-" yaml:"-"`
 }
 
 // Collection is the git-backed Kubernetes-style collection resource.
@@ -320,7 +362,8 @@ type Collection struct {
 	Body string          // Markdown description
 
 	// Status — system-only JSON blob
-	Status json.RawMessage
+	Status                  json.RawMessage
+	TranslationTargetSource TranslationTargetSourceIdentity `json:"-" yaml:"-"`
 }
 
 // ProductVariant is the purchasable SKU unit. A Product is the non-sellable
@@ -372,7 +415,8 @@ type ProductVariant struct {
 	Body string          // Markdown description
 
 	// Status — system-only JSON blob
-	Status json.RawMessage
+	Status                  json.RawMessage
+	TranslationTargetSource TranslationTargetSourceIdentity `json:"-" yaml:"-"`
 }
 
 // Repository represents a git repository with a stable internal identity.
@@ -505,6 +549,10 @@ func (c *Collection) EffectiveOwnerSub() string {
 // Namespace.EffectiveOwnerSub).
 func (f *File) EffectiveOwnerSub() string {
 	return effectiveOwnerSub(f.Annotations, f.CreationActor)
+}
+
+func (t *Translation) EffectiveOwnerSub() string {
+	return effectiveOwnerSub(t.Annotations, t.CreationActor)
 }
 
 func effectiveOwnerSub(annotations map[string]string, creationActor string) string {

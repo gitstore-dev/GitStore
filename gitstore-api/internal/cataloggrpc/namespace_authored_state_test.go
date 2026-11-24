@@ -19,6 +19,8 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/gitclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 func TestCommittedNamespaceCallbackWaitsOnlyForUnavailableAuthorization(t *testing.T) {
@@ -27,10 +29,11 @@ func TestCommittedNamespaceCallbackWaitsOnlyForUnavailableAuthorization(t *testi
 		failure     error
 		cancelEarly bool
 		created     bool
+		code        codes.Code
 	}{
 		{name: "publication recovers", failure: auth.ErrAuthorizationUnavailable, created: true},
-		{name: "denial is not retried", failure: gitclient.ErrAuthorizationDenied},
-		{name: "cancellation stops waiting", failure: auth.ErrAuthorizationUnavailable, cancelEarly: true},
+		{name: "denial is not retried", failure: gitclient.ErrAuthorizationDenied, code: codes.PermissionDenied},
+		{name: "cancellation stops waiting", failure: auth.ErrAuthorizationUnavailable, cancelEarly: true, code: codes.DeadlineExceeded},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			store := newNamespacePolicyDatastore(t)
@@ -60,7 +63,7 @@ func TestCommittedNamespaceCallbackWaitsOnlyForUnavailableAuthorization(t *testi
 					Subject: "alice", AuthMethod: "static-users",
 				}},
 			})
-			require.NoError(t, err)
+			require.Equal(t, test.code, grpcstatus.Code(err))
 			stored, err := store.GetNamespaceByName(t.Context(), "publication-retry")
 			if test.created {
 				require.NoError(t, err)

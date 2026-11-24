@@ -35,6 +35,43 @@ type PreparedTier struct {
 
 func (t *PreparedTier) Install() error { return t.owner.InstallTier(t) }
 
+// Rebase advances source metadata only when the already-prepared policy is unchanged.
+// The caller must fence the exact canonical/lifecycle origin. Rebasing must not
+// replace the policy or renew its live-origin proof.
+func (t *PreparedTier) Rebase(ctx context.Context, source auth.AuthorizationTier) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.consumed || t.tier == nil || t.tier.originAt.IsZero() || ctx.Err() != nil {
+		return ErrUnavailable
+	}
+	previous := t.tier.source
+	if source.State.TierID != previous.State.TierID || source.State.Revision <= previous.State.Revision ||
+		source.State.Projection != previous.State.Projection || source.State.ProjectionPending || source.State.NamespaceRetired ||
+		source.State.RoleCount != previous.State.RoleCount || source.State.BindingCount != previous.State.BindingCount ||
+		source.Namespace != previous.Namespace || source.NamespaceVersion != previous.NamespaceVersion ||
+		source.Active != previous.Active || source.CatalogDigest != previous.CatalogDigest || source.BuiltinDigest != previous.BuiltinDigest {
+		return ErrUnavailable
+	}
+	t.owner.mu.Lock()
+	closed := t.owner.closed
+	t.owner.mu.Unlock()
+	if closed {
+		return ErrUnavailable
+	}
+	reservation, err := t.owner.budget.Reserve(0)
+	if err != nil {
+		return ErrUnavailable
+	}
+	defer reservation.Close()
+	data, err := translateAuthorizationTier(source, t.owner.builtins, t.owner.reserveAllocation(ctx, reservation), t.owner.validations)
+	if err != nil || ctx.Err() != nil || data.digest != t.tier.data.digest {
+		return ErrUnavailable
+	}
+	source.Resources = nil
+	t.tier.source = source
+	return nil
+}
+
 func (t *PreparedTier) SetOriginProgress(at time.Time) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -64,6 +101,7 @@ type Provider struct {
 	engine          *Engine
 	builtins        *rbac.BuiltinSet
 	budget          *rbac.MemoryBudget
+	validations     *rbac.ManifestValidationCache
 	tiers           map[string]*publishedTier
 	namespaces      map[string]string
 	evaluating      chan struct{}
@@ -89,12 +127,17 @@ func NewProviderWithMemoryLimit(ctx context.Context, bytes int64) (*Provider, er
 	if err != nil {
 		return nil, err
 	}
-	return &Provider{engine: engine, builtins: builtins, budget: rbac.NewMemoryBudget(bytes),
+	budget := rbac.NewMemoryBudget(bytes)
+	return &Provider{engine: engine, builtins: builtins, budget: budget, validations: rbac.NewManifestValidationCache(budget),
 		tiers: map[string]*publishedTier{}, namespaces: map[string]string{},
 		evaluating: make(chan struct{}, evaluationConcurrency)}, nil
 }
 
 func (*Provider) Name() string { return "opa" }
+
+func (p *Provider) MemoryUsage() rbac.MemoryBudgetUsage { return p.budget.Usage() }
+
+func (p *Provider) ManifestValidations() *rbac.ManifestValidationCache { return p.validations }
 
 func (p *Provider) SetNamespaceLoader(loader func(string)) {
 	p.mu.Lock()
@@ -135,9 +178,34 @@ func (p *Provider) originReady(tier *publishedTier, now time.Time) bool {
 	return tier != nil && (p.originMaxAge == 0 || !tier.originAt.IsZero() && !tier.originAt.After(now) && now.Sub(tier.originAt) <= p.originMaxAge)
 }
 
+type originUnavailable string
+
+func (e originUnavailable) Error() string { return string(e) }
+func (originUnavailable) Unwrap() error   { return ErrUnavailable }
+
+func unavailableOrigin(scope string, tier *publishedTier, now time.Time) error {
+	state := "expired"
+	switch {
+	case tier == nil:
+		state = "not installed"
+	case tier.originAt.IsZero():
+		state = "not verified"
+	case tier.originAt.After(now):
+		state = "clock ahead"
+	}
+	return originUnavailable("tier unavailable: " + scope + " origin " + state)
+}
+
 func (p *Provider) reserveAllocation(ctx context.Context, reservation *rbac.MemoryReservation) func(int) bool {
 	return func(size int) bool {
-		return ctx.Err() == nil && reservation.Grow(int64(size)*translatedAllocationFactor) == nil
+		if ctx.Err() != nil {
+			return false
+		}
+		if reservation.Grow(int64(size)*translatedAllocationFactor) == nil {
+			return true
+		}
+		p.validations.Clear(false)
+		return reservation.Grow(int64(size)*translatedAllocationFactor) == nil
 	}
 }
 
@@ -152,7 +220,7 @@ func (p *Provider) PrepareTier(ctx context.Context, source auth.AuthorizationTie
 	if err != nil {
 		return nil, err
 	}
-	data, err := translateAuthorizationTier(source, p.builtins, p.reserveAllocation(ctx, reservation))
+	data, err := translateAuthorizationTier(source, p.builtins, p.reserveAllocation(ctx, reservation), p.validations)
 	if err != nil || ctx.Err() != nil {
 		reservation.Close()
 		return nil, ErrUnavailable
@@ -237,7 +305,15 @@ func (p *Provider) pinServing(ctx context.Context, resource auth.ResourceContext
 	defer p.mu.Unlock()
 	cluster := p.tiers[rbac.ClusterTierID]
 	now := time.Now()
-	if p.closed || !p.originReady(cluster, now) || ctx.Err() != nil || p.checkProgress != nil && p.checkProgress(now) != nil {
+	if p.closed || ctx.Err() != nil {
+		return nil, ErrUnavailable
+	}
+	if !p.originReady(cluster, now) {
+		auth.ObserveRBACSourceFailure(ctx, "cluster-origin")
+		return nil, unavailableOrigin("cluster", cluster, now)
+	}
+	if p.checkProgress != nil && p.checkProgress(now) != nil {
+		auth.ObserveRBACSourceFailure(ctx, "serving-progress")
 		return nil, ErrUnavailable
 	}
 	var namespace *publishedTier
@@ -246,7 +322,8 @@ func (p *Provider) pinServing(ctx context.Context, resource auth.ResourceContext
 	if name != "" && name != "gitstore-system" {
 		namespace = p.tiers[p.namespaces[name]]
 		if !p.originReady(namespace, now) {
-			return nil, ErrUnavailable
+			auth.ObserveRBACSourceFailure(ctx, "namespace-origin")
+			return nil, unavailableOrigin("namespace", namespace, now)
 		}
 		sources = append(sources, namespace.source)
 	}
@@ -297,7 +374,11 @@ func (p *Provider) Authorize(ctx context.Context, principal *auth.Principal, act
 	if err != nil {
 		auth.ObserveRBACUnavailable(ctx, "tier", proofScope.Attrs["namespace"] == nil || proofScope.Attrs["namespace"] == "")
 		p.requestNamespace(proofScope)
-		return auth.Deny("opa", "tier unavailable"), err
+		reason := "tier unavailable"
+		if origin, ok := err.(originUnavailable); ok {
+			reason = string(origin)
+		}
+		return auth.Deny("opa", reason), err
 	}
 	defer pinned.Close()
 	return pinned.Authorize(ctx, principal, action, resource)
@@ -344,7 +425,7 @@ func (p *Provider) PinAuthorization(ctx context.Context, model auth.Authorizatio
 	if err != nil {
 		return nil, err
 	}
-	pinned, err := p.engine.pinAuthorization(ctx, model, p.reserveAllocation(ctx, reservation))
+	pinned, err := p.engine.pinAuthorization(ctx, model, p.reserveAllocation(ctx, reservation), p.validations)
 	if err != nil {
 		reservation.Close()
 		return nil, err
@@ -383,6 +464,7 @@ func (p *Provider) Close() {
 	defer p.mu.Unlock()
 	if !p.closed {
 		p.closed = true
+		p.validations.Clear(true)
 		for _, tier := range p.tiers {
 			p.releaseLocked(tier)
 		}

@@ -11,7 +11,9 @@ import (
 	"unicode"
 
 	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
+	"github.com/gitstore-dev/gitstore/api/internal/admission"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/validate"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -26,25 +28,82 @@ func validationRefs(trees []*catalogv1.ResourceValidationTree) []*catalogv1.Rece
 	return refs
 }
 
-func (s *Server) authorizeValidationTrees(ctx context.Context, repositoryID string, trees []*catalogv1.ResourceValidationTree) error {
+func (s *Server) validateAuthorizedTrees(ctx context.Context, repositoryID string, trees []*catalogv1.ResourceValidationTree) ([]*catalogv1.ValidationError, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
 	namespace, err := s.resolveNamespaceIdentifier(ctx, repositoryID)
 	if err != nil {
-		return status.Error(codes.Unavailable, "repository authorization facts unavailable")
+		return nil, status.Error(codes.Unavailable, "repository authorization facts unavailable")
 	}
+	type candidateTree struct {
+		entries    []*parsedEntry
+		operations map[string]resourceAdmissionOperation
+	}
+	var candidates []candidateTree
 	for _, tree := range trees {
-		oldEntries, err := s.parseDeletionTreeEntries(tree.GetOldBlobs(), namespace)
+		oldEntries, err := s.parseDeletionTreeEntries(ctx, tree.GetOldBlobs(), namespace)
 		if err != nil {
-			return status.Error(codes.InvalidArgument, "invalid old resource tree")
+			if ctx.Err() != nil {
+				return nil, status.FromContextError(ctx.Err()).Err()
+			}
+			return nil, status.Error(codes.InvalidArgument, "invalid old resource tree")
 		}
-		newEntries, err := s.parseDeletionTreeEntries(tree.GetProposedBlobs(), namespace)
+		newEntries, err := s.parseDeletionTreeEntries(ctx, tree.GetProposedBlobs(), namespace)
 		if err != nil {
-			return status.Error(codes.InvalidArgument, "invalid proposed resource tree")
+			if ctx.Err() != nil {
+				return nil, status.FromContextError(ctx.Err()).Err()
+			}
+			return nil, status.Error(codes.InvalidArgument, "invalid proposed resource tree")
 		}
-		if err := s.authorizeOperations(ctx, deriveResourceAdmissionOperations(oldEntries, newEntries, nil)); err != nil {
-			return err
+		changes := deriveResourceAdmissionOperations(oldEntries, newEntries, nil)
+		if err := s.authorizeOperations(ctx, changes); err != nil {
+			return nil, err
+		}
+		hasTranslation := false
+		for _, change := range changes {
+			hasTranslation = hasTranslation || (change.newEntry != nil && change.newEntry.parsed.Translation != nil)
+		}
+		if !hasTranslation {
+			continue
+		}
+		operations := make(map[string]resourceAdmissionOperation, len(newEntries)+len(changes))
+		for _, entry := range newEntries {
+			operations[entry.identity.key()] = resourceAdmissionOperation{
+				operation: admission.Operation("READ"), identity: entry.identity, newEntry: entry,
+			}
+		}
+		for _, change := range changes {
+			operations[change.identity.key()] = change
+		}
+		candidates = append(candidates, candidateTree{entries: newEntries, operations: operations})
+	}
+	var findings []*catalogv1.ValidationError
+	for _, candidate := range candidates {
+		for _, entry := range candidate.entries {
+			if err := ctx.Err(); err != nil {
+				return nil, status.FromContextError(err).Err()
+			}
+			if entry.parsed.Translation == nil || candidate.operations[entry.identity.key()].operation == admission.Operation("READ") {
+				continue
+			}
+			_, err := validate.ValidateTranslationSnapshot(ctx, entry.parsed.Translation, entry.body, namespace, nil)
+			if err == nil {
+				_, err = s.validateTranslationManifestTarget(ctx, entry.parsed, entry.body, namespace, candidate.operations)
+			}
+			if ctx.Err() != nil {
+				return nil, status.FromContextError(ctx.Err()).Err()
+			}
+			if err != nil {
+				issues, typed := validate.TranslationValidationErrors(entry.path, err)
+				if !typed {
+					return nil, err
+				}
+				findings = append(findings, issues...)
+			}
 		}
 	}
-	return nil
+	return findings, nil
 }
 
 // The service credential authenticates transport, not a cached grant. Every

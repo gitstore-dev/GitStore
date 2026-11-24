@@ -152,17 +152,24 @@ Examples of foundational tasks (adjust based on your project):
 
 - [ ] TXXX [P] Documentation updates in docs/
 - [ ] TXXX Code cleanup and refactoring
-- [ ] TXXX Performance optimization across all stories
+- [ ] TXXX Fix demonstrated regressions; do not add speculative performance work
 - [ ] TXXX [P] Additional unit tests (if requested) in tests/unit/
 - [ ] TXXX Security hardening
-- [ ] TXXX API/controller concurrent-replica and process-replacement integration tests; document unverified paths
-- [ ] TXXX API/controller rolling-upgrade validation; Git singleton persistent-storage recovery and non-overlapping replacement where affected
+- [ ] TXXX Focused tests for changed replica, migration, replay and recovery risks; reuse existing coverage and document compatibility/limitations
 - [ ] TXXX Multi-user AuthN/AuthZ and isolation tests
-- [ ] TXXX Sustained load/soak and backpressure validation
-- [ ] TXXX Record a passing `make capacity TARGET=<target> PROFILE=<scenario> MODE=<alpha|production>` evidence bundle, including topology/dataset proof and domain-verifier result
-- [ ] TXXX Record passing declared `make chaos CHAOS_PROFILE=<profile>` recovery experiments while the capacity workload is active
 - [ ] TXXX Operational dashboards, alerts, and runbook updates
 - [ ] TXXX Run quickstart.md validation
+
+## Production Qualification (separate from alpha PR completion)
+
+Include only the qualification required for the production claims of this
+delivery. Reuse attributable evidence for unchanged paths. If production
+qualification is outside the delivery scope, record these tasks as deferred,
+not as implementation dependencies or passing results.
+
+- [ ] TXXX Validate declared capacity/soak objectives with the existing `make capacity` selectors
+- [ ] TXXX Rehearse relevant deployed faults and full old/new-version rollouts with retained data
+- [ ] TXXX Retain attributable topology, workload and domain-correctness evidence before claiming production readiness
 
 ---
 
@@ -253,10 +260,10 @@ With multiple developers:
 - [Story] label maps task to specific user story for traceability
 - Each user story should be independently completable and testable
 - Verify tests fail before implementing
-- For API/controller changes, include replica safety and process-replacement tasks
+- For API/controller changes, test changed replica/recovery risks; do not automatically require a full deployed rollout rehearsal
 - Git is singleton-only: do not add multi-Git topology, autoscaling or HA tasks unless repository sharding/routing/writer safety is explicitly approved feature scope; disjoint volumes do not make it supported
 - For protected paths, include multi-user AuthN/AuthZ and isolation tasks
-- For load-bearing paths, include sustained-load, backpressure, and recovery tasks
+- For load-bearing paths, preserve bounded work and correctness; track sustained-load/deployed qualification separately from alpha implementation completion
 - Commit after each task or logical group
 - Stop at any checkpoint to validate story independently
 - Avoid: vague tasks, same file conflicts, cross-story dependencies that break independence

@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func newID() string { return uuid.New().String() }
@@ -223,6 +224,120 @@ func runOwnerReferenceLifecycleContract(t *testing.T, ds datastore.Datastore) {
 func RunContractSuite(t *testing.T, ds datastore.Datastore) {
 	t.Helper()
 	ctx := context.Background()
+
+	t.Run("Translation/SourceCAS", func(t *testing.T) {
+		runTranslationSourceContract(t, ds)
+	})
+	t.Run("Translation/InstrumentedSourceCAS", func(t *testing.T) {
+		runTranslationSourceContract(t, datastore.NewInstrumentedDatastore(ds, "contract", zap.NewNop()))
+	})
+	t.Run("Translation/SourceAuditDiscovery", func(t *testing.T) {
+		runTranslationSourceAuditContract(t, ds)
+	})
+	t.Run("Translation/TargetSourceAudit", func(t *testing.T) {
+		runTranslationTargetSourceAuditContract(t, ds)
+	})
+	t.Run("Translation/InstrumentedTargetSourceAudit", func(t *testing.T) {
+		runTranslationTargetSourceAuditContract(t, datastore.NewInstrumentedDatastore(ds, "contract", zap.NewNop()))
+	})
+	t.Run("Translation/TargetSourceBackfill", func(t *testing.T) {
+		runTranslationTargetSourceBackfillContract(t, ds)
+	})
+	t.Run("Translation/InstrumentedTargetSourceBackfill", func(t *testing.T) {
+		runTranslationTargetSourceBackfillContract(t, datastore.NewInstrumentedDatastore(ds, "contract", zap.NewNop()))
+	})
+	t.Run("Translation/SourceAuditRecovery", func(t *testing.T) {
+		runTranslationSourceAuditRecoveryContract(t, ds)
+	})
+	t.Run("Translation/InstrumentedSourceAuditRecovery", func(t *testing.T) {
+		runTranslationSourceAuditRecoveryContract(t, datastore.NewInstrumentedDatastore(ds, "contract", zap.NewNop()))
+	})
+	t.Run("Translation/InstrumentedSourceAuditDiscovery", func(t *testing.T) {
+		runTranslationSourceAuditContract(t, datastore.NewInstrumentedDatastore(ds, "contract", zap.NewNop()))
+	})
+	t.Run("Translation/IndexAudit", func(t *testing.T) {
+		runTranslationIndexAuditContract(t, ds)
+	})
+	t.Run("Translation/InstrumentedIndexAudit", func(t *testing.T) {
+		runTranslationIndexAuditContract(t, datastore.NewInstrumentedDatastore(ds, "contract", zap.NewNop()))
+	})
+	t.Run("Translation/CellAudit", func(t *testing.T) {
+		runTranslationIndexCellAuditContract(t, ds)
+	})
+	t.Run("Translation/InstrumentedCellAudit", func(t *testing.T) {
+		runTranslationIndexCellAuditContract(t, datastore.NewInstrumentedDatastore(ds, "contract", zap.NewNop()))
+	})
+	t.Run("Translation/BoundedPages", func(t *testing.T) {
+		runTranslationPagesContract(t, ds)
+	})
+	t.Run("Translation/JournalAndSourceUpdate", func(t *testing.T) {
+		runTranslationJournalContract(t, ds)
+	})
+	t.Run("Translation/BindingCAS", func(t *testing.T) {
+		runTranslationBindingContract(t, ds)
+	})
+	t.Run("Translation/InstrumentedBindingCAS", func(t *testing.T) {
+		runTranslationBindingContract(t, datastore.NewInstrumentedDatastore(ds, "contract", zap.NewNop()))
+	})
+	t.Run("Translation/EpochBudget", func(t *testing.T) {
+		runTranslationEpochBudgetContract(t, ds)
+	})
+	t.Run("Translation/BindingByteBudget", func(t *testing.T) {
+		runTranslationBindingByteBudgetContract(t, ds)
+	})
+	t.Run("Translation/IndexReservations", func(t *testing.T) {
+		runTranslationIndexReservationContract(t, ds)
+	})
+	t.Run("Translation/IndexPublication", func(t *testing.T) {
+		runTranslationIndexPublicationContract(t, ds)
+	})
+	t.Run("Translation/DependentPaging", func(t *testing.T) {
+		runTranslationDependentPagingContract(t, ds)
+	})
+	t.Run("Translation/SourceIndexes", func(t *testing.T) {
+		runTranslationSourceIndexesContract(t, ds)
+	})
+	t.Run("Translation/MaintenanceDiscovery", func(t *testing.T) {
+		runTranslationMaintenanceContract(t, ds)
+	})
+	t.Run("Translation/Ownership", func(t *testing.T) {
+		runTranslationOwnershipContract(t, ds)
+	})
+	t.Run("Translation/InstrumentedIndexes", func(t *testing.T) {
+		decorated := datastore.NewInstrumentedDatastore(ds, "contract", zap.NewNop())
+		runTranslationIndexReservationContract(t, decorated)
+		runTranslationIndexPublicationContract(t, decorated)
+		runTranslationDependentPagingContract(t, decorated)
+		runTranslationSourceIndexesContract(t, decorated)
+		runTranslationMaintenanceContract(t, decorated)
+	})
+	t.Run("Translation/TargetWriteFences", func(t *testing.T) {
+		runTranslationTargetFenceContract(t, ds)
+	})
+	t.Run("Translation/TargetWriteFenceRaces", func(t *testing.T) {
+		runTranslationTargetFenceRaceContract(t, ds)
+	})
+	t.Run("Translation/TargetWriteFenceValidation", func(t *testing.T) {
+		runTranslationTargetFenceValidationContract(t, ds)
+	})
+	t.Run("Translation/InstrumentedTargetWriteFences", func(t *testing.T) {
+		runTranslationTargetFenceContract(t, datastore.NewInstrumentedDatastore(ds, "contract", zap.NewNop()))
+	})
+	t.Run("Translation/TargetWriteFenceStatusRetry", func(t *testing.T) {
+		runTranslationTargetFenceStatusRetryContract(t, ds)
+	})
+	t.Run("Translation/TargetRetiredUID", func(t *testing.T) {
+		runTranslationTargetRetiredUIDContract(t, ds)
+	})
+	t.Run("Translation/TargetNamespacePageValidation", func(t *testing.T) {
+		runTranslationTargetPageValidationContract(t, ds)
+	})
+	t.Run("Translation/TargetEvidenceProtocol", func(t *testing.T) {
+		runTranslationTargetEvidenceProtocolContract(t, ds)
+	})
+	t.Run("Translation/InstrumentedTargetEvidenceProtocol", func(t *testing.T) {
+		runTranslationTargetEvidenceProtocolContract(t, datastore.NewInstrumentedDatastore(ds, "contract", zap.NewNop()))
+	})
 
 	t.Run("Namespace/RBACBootstrapReceipt", func(t *testing.T) {
 		namespace := newNamespace(datastore.NamespaceTierOrganization)

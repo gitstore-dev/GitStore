@@ -11,6 +11,7 @@ import (
 
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/generated"
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 	"github.com/vektah/gqlparser/v2/gqlerror"
 )
@@ -36,6 +37,11 @@ func (r *mutationResolver) UpdateResourceStatus(ctx context.Context, input model
 		return r.updateRepositoryStatusGeneric(ctx, input)
 	case "File":
 		return r.updateFileStatusGeneric(ctx, input)
+	case "Translation":
+		if !r.translationActivation.Enabled {
+			return nil, translationNotActivated()
+		}
+		return r.updateTranslationStatusGeneric(ctx, input)
 	default:
 		// No generic CRD-kind datastore backend exists yet (research.md
 		// R7 scopes CRD-shape genericity at the datastore layer out of
@@ -80,11 +86,22 @@ func (r *subscriptionResolver) WatchResources(ctx context.Context, kind string, 
 	if kind == "Product" {
 		return r.watchProductGenericResources(ctx, namespace, selector, resourceVersion)
 	}
+	if kind == "ProductVariant" || kind == "Collection" {
+		return watchCatalogJournal(ctx, r.Resolver, kind, namespace, selector, resourceVersion, "generic", func(event datastore.ResourceWatchEvent) (*model.WatchEvent, error) {
+			return catalogTargetJournalEventToGeneric(kind, event)
+		})
+	}
 	if kind == "File" {
 		return watchCatalogJournal(ctx, r.Resolver, "File", namespace, selector, resourceVersion, "generic", fileJournalEventToGeneric)
 	}
 	if kind == "CategoryTaxonomy" {
 		return watchCatalogJournal(ctx, r.Resolver, "CategoryTaxonomy", namespace, selector, resourceVersion, "generic", categoryJournalEventToGeneric)
+	}
+	if kind == "Translation" {
+		if !r.translationActivation.Enabled {
+			return nil, translationNotActivated()
+		}
+		return r.watchTranslationResources(ctx, namespace, selector, resourceVersion)
 	}
 	return nil, &gqlerror.Error{
 		Message:    fmt.Sprintf("watchResources does not support kind %q", kind),

@@ -424,6 +424,55 @@
       "verb": "transfer"
     },
     {
+      "action": "translation.create",
+      "kind": "translation",
+      "scope": "namespace",
+      "resource": "translation",
+      "verb": "create"
+    },
+    {
+      "action": "translation.read",
+      "kind": "translation",
+      "scope": "namespace",
+      "resource": "translation",
+      "verb": "read"
+    },
+    {
+      "action": "translation.list",
+      "kind": "translation",
+      "scope": "namespace",
+      "resource": "translation",
+      "verb": "list"
+    },
+    {
+      "action": "translation.watch",
+      "kind": "translation",
+      "scope": "namespace",
+      "resource": "translation",
+      "verb": "watch"
+    },
+    {
+      "action": "translation.update",
+      "kind": "translation",
+      "scope": "namespace",
+      "resource": "translation",
+      "verb": "update"
+    },
+    {
+      "action": "translation.delete",
+      "kind": "translation",
+      "scope": "namespace",
+      "resource": "translation",
+      "verb": "delete"
+    },
+    {
+      "action": "translation.status.write",
+      "kind": "translation",
+      "scope": "namespace",
+      "resource": "translation/status",
+      "verb": "write"
+    },
+    {
       "action": "repository.contents.read",
       "kind": "repository",
       "scope": "namespace",

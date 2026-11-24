@@ -27,6 +27,8 @@ func clearEnv(t *testing.T) func() {
 		"GITSTORE_API__STOREFRONT_PORT",
 		"GITSTORE_API__GIT_PORT",
 		"GITSTORE_API__GRPC_PORT",
+		"GITSTORE_API__TRANSLATION__ENABLED",
+		"GITSTORE_API__TRANSLATION__DESCRIPTOR_DIGEST",
 		"GITSTORE_API__PROFILING__URI",
 		"GITSTORE_API__PROFILING__TOKEN",
 		"GITSTORE_API__RATE_LIMIT__PER_SECOND",
@@ -122,6 +124,29 @@ func clearEnv(t *testing.T) func() {
 	}
 }
 
+func TestTranslationRolloutConfiguration(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.False(t, cfg.Api.Translation.Enabled)
+	require.Empty(t, cfg.Api.Translation.DescriptorDigest)
+
+	path := filepath.Join(t.TempDir(), "translation.toml")
+	require.NoError(t, os.WriteFile(path, []byte("[api.translation]\nenabled = false\ndescriptor_digest = \"file-descriptor\"\n"), 0o600))
+	cfg, err = LoadFrom(path)
+	require.NoError(t, err)
+	require.False(t, cfg.Api.Translation.Enabled)
+	require.Equal(t, "file-descriptor", cfg.Api.Translation.DescriptorDigest)
+
+	t.Setenv("GITSTORE_API__TRANSLATION__ENABLED", "true")
+	t.Setenv("GITSTORE_API__TRANSLATION__DESCRIPTOR_DIGEST", "environment-descriptor")
+	cfg, err = LoadFrom(path)
+	require.NoError(t, err)
+	require.True(t, cfg.Api.Translation.Enabled)
+	require.Equal(t, "environment-descriptor", cfg.Api.Translation.DescriptorDigest)
+}
+
 func TestDynamicRBACRolloutConfiguration(t *testing.T) {
 	defer clearEnv(t)()
 	setRequiredAuth(t)
@@ -171,6 +196,27 @@ func TestDynamicRBACBoundedOverrides(t *testing.T) {
 	require.Equal(t, int64(128<<20), cfg.Api.Auth.OPA.SnapshotMemoryBytes)
 	require.Equal(t, int64(32<<20), cfg.Api.Auth.OPA.RebuildMemoryBytes)
 	require.False(t, cfg.Api.Auth.OPA.WritesEnabled)
+}
+
+func TestRBACPrivateEvidenceConfigurationIsExplicit(t *testing.T) {
+	defer clearEnv(t)()
+	setRequiredAuth(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Empty(t, cfg.Api.Auth.OPA.EvidenceDirectory)
+	directory := t.TempDir()
+	t.Setenv("GITSTORE_API__AUTH__OPA__EVIDENCE_DIRECTORY", directory)
+	_, err = Load()
+	require.ErrorContains(t, err, "evidence_directory requires the opa")
+	t.Setenv("GITSTORE_API__AUTH__AUTHZ__PROVIDER", "opa")
+	cfg, err = Load()
+	require.NoError(t, err)
+	require.Equal(t, directory, cfg.Api.Auth.OPA.EvidenceDirectory)
+	for _, invalid := range []string{"relative", directory + "/../alias"} {
+		t.Setenv("GITSTORE_API__AUTH__OPA__EVIDENCE_DIRECTORY", invalid)
+		_, err = Load()
+		require.ErrorContains(t, err, "clean absolute private directory")
+	}
 }
 
 func TestOPAConfigurationFileUsesProviderNamespaceAndEntryCount(t *testing.T) {

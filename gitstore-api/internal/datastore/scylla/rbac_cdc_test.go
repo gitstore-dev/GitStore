@@ -154,6 +154,189 @@ func TestRBACCDCRejectsDeltaWithoutFullImages(t *testing.T) {
 	require.Empty(t, changes)
 }
 
+func TestRBACCDCRetainsRoleMetadataEventsWithoutDirtyingAuthorization(t *testing.T) {
+	for _, change := range []string{"status", "owner-links", "binding-status", "termination", "spec", "labels", "generation",
+		"projection", "retirement", "pending-repair", "partial-header", "resource-count", "revision-gap", "invalid-projection"} {
+		t.Run(change, func(t *testing.T) {
+			kind := rbac.ClusterRole
+			if change == "binding-status" {
+				kind = rbac.ClusterRoleBinding
+			}
+			before := rbacCDCFixture(t, rbac.ClusterTierID, kind, "1")
+			var resource rbac.Resource
+			require.NoError(t, json.Unmarshal(before.Payload, &resource))
+			resource.Metadata.ResourceVersion = "2"
+			now := time.Now().UTC()
+			resource.Metadata.UpdateTimestamp, resource.Metadata.UpdateActor = &now, "controller"
+			resource.Status = json.RawMessage(`{"observedGeneration":1}`)
+			projection, err := json.Marshal(rbac.ProjectionIdentity{RepositoryID: uuid.NewString(),
+				GitRef: "refs/heads/main", GitRevision: "main@sha1:" + fmt.Sprintf("%040x", 1),
+				TreeDigest: fmt.Sprintf("%064x", 1), Actor: "author"})
+			require.NoError(t, err)
+			oldState := &rbacCDCImage{Tier: rbac.ClusterTierID, Revision: 1, Projection: projection,
+				RoleCount: 1, BindingCount: 1, CompleteState: true}
+			newState := *oldState
+			newState.Revision++
+			switch change {
+			case "owner-links":
+				resource.Metadata.Finalizers = []string{"gitstore.dev/owner-links"}
+				resource.Metadata.OwnerReferences = json.RawMessage(`[{"uid":"owner"}]`)
+			case "termination":
+				resource.Metadata.DeletionTimestamp = &now
+			case "spec":
+				resource.Spec = json.RawMessage(`{"rules":[{"resources":["product"],"verbs":["read"]}]}`)
+			case "labels":
+				resource.Metadata.Labels["team"] = "changed"
+			case "generation":
+				resource.Metadata.Generation++
+			case "projection":
+				newState.Projection = []byte(`{"gitRevision":"changed"}`)
+			case "retirement":
+				newState.Retired = true
+			case "pending-repair":
+				newState.Repair = []byte(`[{"uid":"repair"}]`)
+			case "partial-header":
+				oldState.CompleteState = false
+			case "resource-count":
+				newState.RoleCount++
+			case "revision-gap":
+				newState.Revision++
+			case "invalid-projection":
+				oldState.Projection, newState.Projection = []byte(`{}`), []byte(`{}`)
+			}
+			after := *before
+			after.Revision = newState.Revision
+			after.Payload, err = json.Marshal(resource)
+			require.NoError(t, err)
+			changes, err := rbacCDCFrameChanges("stream", gocql.TimeUUID(),
+				[]*rbacCDCImage{before, oldState}, []*rbacCDCImage{&after, &newState})
+			require.NoError(t, err)
+			event, ok := watchjournal.ClassifyResource(changes[0], nil)
+			require.True(t, ok)
+			require.Equal(t, datastore.ResourceWatchModified, event.Type)
+			var observed rbac.Resource
+			require.NoError(t, json.Unmarshal(event.Payload, &observed))
+			require.Equal(t, resource.Metadata.ResourceVersion, observed.Metadata.ResourceVersion)
+			require.JSONEq(t, string(resource.Status), string(observed.Status))
+			if change == "status" || change == "owner-links" {
+				require.Len(t, changes, 1, "pure Role metadata remains durable, but cannot supersede a prepared policy")
+			} else {
+				require.Len(t, changes, 2, "authority changes and uncertain frames retain the newer-revision publication fence")
+				require.EqualValues(t, newState.Revision, changes[1].TierProgress.Revision)
+			}
+		})
+	}
+}
+
+func TestRBACCDCPurgedRolesRetainDeletionWithoutDirtyingAuthorization(t *testing.T) {
+	for _, tier := range []string{rbac.ClusterTierID, uuid.NewString()} {
+		for _, scenario := range []string{"purge", "purge-batch", "live", "finalizer", "binding", "wrong-count", "wrong-uid",
+			"wrong-repair-kind", "repair-claim", "missing-repair", "duplicate-repair", "unknown-repair-field",
+			"pending-before", "projection", "retired", "partial-header"} {
+			t.Run(tier+"/"+scenario, func(t *testing.T) {
+				kind := rbac.ClusterRole
+				if tier != rbac.ClusterTierID {
+					kind = rbac.Role
+				}
+				if scenario == "binding" {
+					kind = rbac.ClusterRoleBinding
+					if tier != rbac.ClusterTierID {
+						kind = rbac.RoleBinding
+					}
+				}
+				before := rbacCDCFixture(t, tier, kind, "1")
+				var resource rbac.Resource
+				require.NoError(t, json.Unmarshal(before.Payload, &resource))
+				if kind.IsRole() {
+					resource.Spec = json.RawMessage(`{"rules":[{"resources":["product"],"verbs":["read"]}]}`)
+				}
+				now := time.Now().UTC()
+				resource.Metadata.DeletionTimestamp = &now
+				if scenario == "live" {
+					resource.Metadata.DeletionTimestamp = nil
+				}
+				if scenario == "finalizer" {
+					resource.Metadata.Finalizers = []string{"gitstore.dev/owner-links"}
+				}
+				var err error
+				before.Payload, err = json.Marshal(resource)
+				require.NoError(t, err)
+				projection, err := json.Marshal(rbac.ProjectionIdentity{RepositoryID: uuid.NewString(),
+					GitRef: "refs/heads/main", GitRevision: "main@sha1:" + fmt.Sprintf("%040x", 1),
+					TreeDigest: fmt.Sprintf("%064x", 1), Actor: "author"})
+				require.NoError(t, err)
+				oldState := &rbacCDCImage{Tier: tier, Revision: 1, Projection: projection,
+					RoleCount: 1, BindingCount: 1, CompleteState: true}
+				newState := *oldState
+				newState.Revision++
+				newState.RoleCount--
+				step := rbacRepairStep{Key: rbac.ResourceKey{TierID: tier, Kind: kind, Name: resource.Metadata.Name},
+					UID: resource.Metadata.UID, Removed: true}
+				switch scenario {
+				case "binding":
+					newState.RoleCount, newState.BindingCount = 1, 0
+				case "wrong-count":
+					newState.RoleCount++
+				case "wrong-uid":
+					step.UID = uuid.NewString()
+				case "wrong-repair-kind":
+					step.Key.Kind = rbac.ClusterRoleBinding
+				case "repair-claim":
+					step.BeforeRoleUID = uuid.NewString()
+				case "pending-before":
+					oldState.Repair = []byte(`[{"UID":"unrepaired"}]`)
+				case "projection":
+					newState.Projection = []byte(`{"gitRevision":"changed"}`)
+				case "retired":
+					newState.Retired = true
+				case "partial-header":
+					oldState.CompleteState = false
+				}
+				preimages := []*rbacCDCImage{before, oldState}
+				steps := []rbacRepairStep{step}
+				switch scenario {
+				case "purge-batch":
+					second, secondResource := *before, resource
+					secondResource.Metadata.Name, secondResource.Metadata.UID = "z-reader", uuid.NewString()
+					second.Entry, second.UID = string(kind)+"/z-reader", secondResource.Metadata.UID
+					second.Payload, err = json.Marshal(secondResource)
+					require.NoError(t, err)
+					oldState.RoleCount++
+					preimages = append(preimages, &second)
+					steps = append([]rbacRepairStep{{
+						Key: rbac.ResourceKey{TierID: tier, Kind: kind, Name: "z-reader"},
+						UID: second.UID, Removed: true,
+					}}, steps...)
+				case "missing-repair":
+					steps = nil
+				case "duplicate-repair":
+					steps = append(steps, step)
+				}
+				newState.Repair, err = json.Marshal(steps)
+				require.NoError(t, err)
+				if scenario == "unknown-repair-field" {
+					newState.Repair = append(newState.Repair[:len(newState.Repair)-2], []byte(`,"Unproven":true}]`)...)
+				}
+				changes, err := rbacCDCFrameChanges("stream", gocql.TimeUUID(),
+					preimages, []*rbacCDCImage{&newState})
+				require.NoError(t, err)
+				event, ok := watchjournal.ClassifyResource(changes[0], nil)
+				require.True(t, ok)
+				require.Equal(t, datastore.ResourceWatchDeleted, event.Type)
+				var deleted rbac.Resource
+				require.NoError(t, json.Unmarshal(event.Payload, &deleted))
+				require.Equal(t, resource.Metadata.UID, deleted.Metadata.UID)
+				if scenario == "purge" || scenario == "purge-batch" {
+					require.Len(t, changes, len(preimages)-1, "removing already-denying Roles must not supersede prepared authority")
+				} else {
+					require.Len(t, changes, 2, "uncertain lifecycle, counts, identity or repair retain the publication fence")
+					require.EqualValues(t, newState.Revision, changes[1].TierProgress.Revision)
+				}
+			})
+		}
+	}
+}
+
 func TestRBACCDCRepairIsProgressOnlyAndSharesSequencer(t *testing.T) {
 	sentinel := &rbacCDCImage{Tier: rbac.ClusterTierID, Revision: 1}
 	changes, err := rbacCDCFrameChanges("stream", gocql.TimeUUID(), []*rbacCDCImage{sentinel}, []*rbacCDCImage{sentinel})

@@ -545,6 +545,143 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_translation_corpus_is_forwarded_without_semantic_parsing() {
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../gitstore-api/internal/cataloggrpc/testdata/translation/corpus.json"
+        ))
+        .unwrap();
+        let mut blobs: Vec<_> = corpus["valid"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(name, source)| {
+                make_blob(
+                    &format!("translations/{name}.md"),
+                    source.as_str().unwrap().as_bytes(),
+                )
+            })
+            .collect();
+        for group in ["negative", "targetNegative"] {
+            for case in corpus[group].as_array().unwrap() {
+                let base = corpus["valid"][case["base"].as_str().unwrap()]
+                    .as_str()
+                    .unwrap();
+                let source = base.replacen(
+                    case["old"].as_str().unwrap(),
+                    case["new"].as_str().unwrap(),
+                    1,
+                );
+                blobs.push(make_blob(
+                    &format!("translations/{}.md", case["name"].as_str().unwrap()),
+                    source.as_bytes(),
+                ));
+            }
+        }
+        for (name, case) in corpus["deferred"].as_object().unwrap() {
+            let source = corpus["valid"][case["base"].as_str().unwrap()]
+                .as_str()
+                .unwrap()
+                .replacen(
+                    case["old"].as_str().unwrap(),
+                    case["new"].as_str().unwrap(),
+                    1,
+                );
+            blobs.push(make_blob(
+                &format!("translations/deferred-{name}.md"),
+                source.as_bytes(),
+            ));
+        }
+        let mut invalid_encoding = corpus["valid"]["product-combined"]
+            .as_str()
+            .unwrap()
+            .as_bytes()
+            .to_vec();
+        invalid_encoding.push(0xff);
+        blobs.push(make_blob("translations/invalid-utf8.md", &invalid_encoding));
+        let expected = blobs.clone();
+        let addr = start_mock_server(move |req| {
+            assert_eq!(req.repository_id, "translation-repository");
+            assert_eq!(req.trees.len(), 1);
+            assert_eq!(req.trees[0].proposed_blobs.len(), expected.len());
+            for (actual, expected) in req.trees[0].proposed_blobs.iter().zip(&expected) {
+                assert_eq!(actual.path, expected.path);
+                assert_eq!(actual.blob_oid, expected.blob_oid);
+                assert_eq!(actual.content, expected.content);
+            }
+            Ok(ValidateResourcesResponse {
+                accepted: true,
+                errors: vec![],
+            })
+        })
+        .await;
+        let handler = SchemaValidationHandler::connect(
+            &addr,
+            Duration::from_secs(5),
+            "translation-repository".into(),
+        )
+        .await
+        .unwrap()
+        .with_service_token("fixture-key");
+        let result = handler
+            .validate(&blobs, &HookContext::default())
+            .await
+            .unwrap();
+        assert!(matches!(result, AdmissionDecision::Accept));
+    }
+
+    #[tokio::test]
+    async fn test_translation_go_rejection_is_forwarded_unchanged() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/admission-rejection-golden.json"
+        ))
+        .unwrap();
+        let case = fixture["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "translation_safe_diagnostics")
+            .unwrap();
+        let expected = case["expected"].as_str().unwrap().to_owned();
+        let errors = case["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|error| ValidationError {
+                file_path: error["filePath"].as_str().unwrap().into(),
+                field: error["field"].as_str().unwrap().into(),
+                constraint: error["constraint"].as_str().unwrap().into(),
+                message: error["message"].as_str().unwrap().into(),
+            })
+            .collect::<Vec<_>>();
+        let addr = start_mock_server(move |_| {
+            Ok(ValidateResourcesResponse {
+                accepted: false,
+                errors: errors.clone(),
+            })
+        })
+        .await;
+        let handler = SchemaValidationHandler::connect(
+            &addr,
+            Duration::from_secs(5),
+            "translation-repository".into(),
+        )
+        .await
+        .unwrap()
+        .with_service_token("fixture-key");
+        let result = handler
+            .validate(
+                &[make_blob(
+                    "translations/de.md",
+                    b"---\nkind: Translation\n---\n",
+                )],
+                &HookContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, AdmissionDecision::Reject(message) if message == expected));
+    }
+
     // T010a: mock server returning accepted=true → Accept
     #[tokio::test]
     async fn test_accepted_response_returns_accept() {

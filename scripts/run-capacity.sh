@@ -5,6 +5,14 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+load_timestamp() {
+  if [[ "${CAPACITY_TRANSLATION_READINESS:-0}" == 1 ]]; then
+    python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z"))'
+  else
+    date -u +%Y-%m-%dT%H:%M:%SZ
+  fi
+}
+
 if [[ -n "${CAPACITY_TOKEN_FILE:-}" ]]; then
   if [[ ! -r "${CAPACITY_TOKEN_FILE}" ]]; then
     echo "CAPACITY_TOKEN_FILE is not readable" >&2
@@ -40,6 +48,14 @@ evidence_root="${CAPACITY_EVIDENCE_DIR:-${repo_root}/.gitstore/capacity}"
 target="${CAPACITY_TARGET:-api}"
 scenario="${CAPACITY_SCENARIO:-readiness}"
 evidence_dir="${evidence_root}/${target}/${scenario}/${mode}/${run_id}"
+if [[ "${CAPACITY_TRANSLATION_READINESS:-0}" == 1 ]]; then
+  [[ "${profile}" == api-readiness ]] || { echo "Translation mode requires api/readiness" >&2; exit 2; }
+  umask 077
+  [[ ! -e "${evidence_dir}/metadata.json" ]] || { echo "Translation evidence requires a fresh run ID" >&2; exit 2; }
+  if [[ "${CAPACITY_TRANSLATION_PUSHES:-0}" == 1 ]]; then
+    export CAPACITY_DURATION="${CAPACITY_DURATION:-10s}"
+  fi
+fi
 mkdir -p "${evidence_dir}"
 if [[ "${profile}" == api-endpoint-split && -e "${evidence_dir}/metadata.json" ]]; then
   echo 'endpoint-split evidence requires a fresh run ID' >&2;exit 2
@@ -146,6 +162,43 @@ cleanup_profile_children() {
 trap cleanup_profile_children EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+wait_profile_file() {
+  local file="$1" child="$2" deadline=$((SECONDS + 600))
+  until [[ -r "${file}" ]]; do
+    kill -0 "${child}" 2>/dev/null || { echo 'owned workload failed before its load barrier; see connected logs' >&2;exit 1; }
+    (( SECONDS < deadline )) || { echo 'owned workload setup exceeded ten minutes' >&2;exit 1; }
+    sleep 1
+  done
+}
+if [[ "${profile}" == api-readiness && "${CAPACITY_TRANSLATION_PUSHES:-0}" == 1 ]]; then
+  [[ "${CAPACITY_TRANSLATION_READINESS:-0}" == 1 && "${mode}" == diagnostic ]] || {
+    echo "connected Translation diagnostics require the explicit Translation domain" >&2; exit 2;
+  }
+  IFS=',' read -r -a translation_apis <<<"${CAPACITY_API_ENDPOINTS}"
+  export TRANSLATION_TEST_API_A="${translation_apis[0]}"
+  export TRANSLATION_TEST_API_B="${translation_apis[1]}"
+  export TRANSLATION_TEST_NAMESPACE="$(jq -er '.cases[0].expected.translation.metadata.namespace' "${CAPACITY_TRANSLATION_FIXTURE_FILE}")"
+  export TRANSLATION_TEST_TOKEN_FILE="${CAPACITY_TOKEN_FILE:?a private token file is required for connected pushes}"
+  export TRANSLATION_TEST_RUN=1
+  export CAPACITY_TRANSLATION_START_FILE="${evidence_dir}/translation-load-start.json"
+  (cd "${repo_root}/tests/integration" && GOWORK=off go test -c -o "${evidence_dir}/translation-workload.test" .)
+  (cd "${repo_root}/tests/integration" && MODE="${mode}" \
+    python3 "${repo_root}/scripts/capacity-child.py" 7200 "${evidence_dir}/translation-workload.log" \
+      "${evidence_dir}/translation-workload.test" -test.v -test.timeout=2h -test.run='^TestTranslationNativeCapacityConnectedPushes$') &
+  translation_pid=$!
+  profile_children+=("${translation_pid}")
+  wait_profile_file "${evidence_dir}/translation-ready.json" "${translation_pid}"
+  jq -e --arg run "${run_id}" --arg source "${source_state_sha256}" \
+    '.runId==$run and .sourceStateSha256==$source and .warmupSeconds==30 and .cooldownSeconds==15 and .warmupPushes==20' \
+    "${evidence_dir}/translation-ready.json" >/dev/null
+  python3 - "${run_id}" >"${CAPACITY_TRANSLATION_START_FILE}.tmp" <<'PY'
+import datetime,json,sys
+warmup = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=10)
+at = warmup + datetime.timedelta(seconds=30)
+print(json.dumps({"runId": sys.argv[1], "startAt": at.isoformat(), "warmupStartAt": warmup.isoformat()}))
+PY
+  mv "${CAPACITY_TRANSLATION_START_FILE}.tmp" "${CAPACITY_TRANSLATION_START_FILE}"
+fi
 if [[ "${profile}" == api-endpoint-split && "${mode}" != diagnostic ]]; then
   connected_dir="$(cd "${evidence_dir}" && pwd)/connected"
   mkdir -p "${connected_dir}"
@@ -171,14 +224,6 @@ if [[ "${profile}" == api-endpoint-split && "${mode}" != diagnostic ]]; then
       "${connected_dir}/workload.test" -test.v -test.timeout=75m -test.run='^TestEndpointSplitConnectedEvidenceGate$' &
   connected_pid=$!
   profile_children+=("${connected_pid}")
-  wait_profile_file() {
-    local file="$1" child="$2" deadline=$((SECONDS + 600))
-    until [[ -r "${file}" ]]; do
-      kill -0 "${child}" 2>/dev/null || { echo 'owned workload failed before its load barrier; see connected logs' >&2;exit 1; }
-      (( SECONDS < deadline )) || { echo 'owned workload setup exceeded ten minutes' >&2;exit 1; }
-      sleep 1
-    done
-  }
   wait_profile_file "${CAPACITY_CONNECTED_READY_FILE}" "${connected_pid}"
   export CAPACITY_PUSH_EVIDENCE="${connected_dir}/push-load.json"
   CAPACITY_PUSH_DRIVER=1 CAPACITY_PUSH_DURATION=36m CAPACITY_PUSH_INTERVAL=1s \
@@ -210,7 +255,7 @@ if [[ -n "${CAPACITY_CHAOS_PROFILE:-}" ]]; then
   chaos_pid=$!
 fi
 
-jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '. + {loadStartedAt:$at}' "${metadata}" >"${metadata}.tmp"
+jq --arg at "$(load_timestamp)" '. + {loadStartedAt:$at}' "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
 set +e
 if [[ -n "${K6_BIN:-}" ]]; then
@@ -228,6 +273,12 @@ else
     [[ -r "${CAPACITY_IDENTITY_FIXTURE_FILE:-}" ]] || { echo "private identity fixture is required" >&2; exit 2; }
     docker_args+=(-v "${CAPACITY_IDENTITY_FIXTURE_FILE}:/identity-fixture.json:ro")
   fi
+  if [[ "${profile}" == api-readiness && "${CAPACITY_TRANSLATION_READINESS:-0}" == 1 ]]; then
+    docker_args+=(-v "${CAPACITY_TRANSLATION_FIXTURE_FILE}:/translation-fixture.json:ro")
+    if [[ "${CAPACITY_TRANSLATION_PUSHES:-0}" == 1 ]]; then
+      docker_args+=(-v "${CAPACITY_TRANSLATION_START_FILE}:/translation-start.json:ro")
+    fi
+  fi
   while IFS='=' read -r name _; do
     case "${name}" in
       CAPACITY_*|PRODUCT_CAPACITY_*|K6_*) docker_args+=(-e "${name}") ;;
@@ -235,6 +286,12 @@ else
   done < <(env)
   if [[ "${profile}" == api-readiness && "${CAPACITY_IDENTITY_READINESS:-0}" == 1 ]]; then
     docker_args+=(-e CAPACITY_IDENTITY_FIXTURE_FILE=/identity-fixture.json)
+  fi
+  if [[ "${profile}" == api-readiness && "${CAPACITY_TRANSLATION_READINESS:-0}" == 1 ]]; then
+    docker_args+=(-e CAPACITY_TRANSLATION_FIXTURE_FILE=/translation-fixture.json)
+    if [[ "${CAPACITY_TRANSLATION_PUSHES:-0}" == 1 ]]; then
+      docker_args+=(-e CAPACITY_TRANSLATION_START_FILE=/translation-start.json)
+    fi
   fi
   docker "${docker_args[@]}" "${k6_image}" run --summary-export /evidence/summary.json "/workspace/tests/capacity/profiles/${profile}.js" 2>&1 | tee "${evidence_dir}/k6.log"
   status=${PIPESTATUS[0]}
@@ -253,8 +310,18 @@ if [[ "${profile}" == api-readiness && "${CAPACITY_IDENTITY_READINESS:-0}" == 1 
   done
   cp "${CAPACITY_IDENTITY_CONNECTED_FILE}" "${evidence_dir}/identity-connected.json"
 fi
-jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '. + {loadCompletedAt:$at}' "${metadata}" >"${metadata}.tmp"
+jq --arg at "$(load_timestamp)" '. + {loadCompletedAt:$at}' "${metadata}" >"${metadata}.tmp"
 mv "${metadata}.tmp" "${metadata}"
+if [[ "${profile}" == api-readiness && "${CAPACITY_TRANSLATION_PUSHES:-0}" == 1 ]]; then
+  set +e
+  wait "${translation_pid}"
+  translation_status=$?
+  set -e
+  jq --arg at "$(load_timestamp)" '. + {translationCompletedAt:$at}' "${metadata}" >"${metadata}.tmp"
+  mv "${metadata}.tmp" "${metadata}"
+  profile_children=()
+  if (( status == 0 && translation_status != 0 )); then status=${translation_status}; fi
+fi
 if [[ "${profile}" == api-endpoint-split && "${mode}" != diagnostic ]]; then
   set +e
   wait "${connected_pid}"; connected_status=$?
@@ -299,13 +366,16 @@ export_prometheus() {
     set -e
   fi
 }
-# This verifier consumes the same run's SDK resource samples. Preserve the
+# These verifiers consume the same run's SDK resource samples. Preserve the
 # existing export order for profiles whose domain verifier precedes capture.
 if [[ "${profile}" == api-endpoint-split ]]; then
   if [[ "${mode}" != diagnostic ]]; then
     cp "${evidence_dir}/preflight-environment.json" "${evidence_dir}/preflight-environment-before.json"
     "${preflight}" "${evidence_dir}" >"${evidence_dir}/postflight-environment.log" 2>&1
   fi
+fi
+if [[ "${profile}" == api-endpoint-split ||
+      ( "${profile}" == api-readiness && "${CAPACITY_TRANSLATION_READINESS:-0}" == 1 ) ]]; then
   export_prometheus
 fi
 
@@ -315,6 +385,7 @@ if [[ "${profile}" != "api-readiness" && "${mode}" != "diagnostic" ]]; then
   verifier_required=true
 fi
 if [[ "${profile}" == api-readiness && "${CAPACITY_IDENTITY_READINESS:-0}" == 1 ]]; then verifier_required=true; fi
+if [[ "${profile}" == api-readiness && "${CAPACITY_TRANSLATION_READINESS:-0}" == 1 ]]; then verifier_required=true; fi
 
 verifier_status=0
 if [[ -x "${verifier}" ]]; then
@@ -327,7 +398,10 @@ elif [[ "${verifier_required}" == "true" ]]; then
   verifier_status=2
 fi
 
-if [[ "${profile}" != api-endpoint-split ]]; then export_prometheus; fi
+if [[ "${profile}" != api-endpoint-split &&
+      !( "${profile}" == api-readiness && "${CAPACITY_TRANSLATION_READINESS:-0}" == 1 ) ]]; then
+  export_prometheus
+fi
 
 if (( status == 0 && chaos_status != 0 )); then
   status=${chaos_status}

@@ -4,6 +4,40 @@ This reference documents the current GraphQL contract exposed by `gitstore-api`.
 
 Catalogue reads are GraphQL-first. Catalogue writes are Git-driven today: author Markdown/frontmatter resources, commit them, and push through Git Smart HTTP. Category GraphQL mutations (`createCategory`, `updateCategory`, `deleteCategory`) commit to Git on the caller's behalf. Product, collection, and variant GraphQL write operations are intentionally not documented as supported catalogue write APIs while Git-backed CRUD over GraphQL is being finalized.
 
+## Translations
+
+Translation admission and reads are disabled by default and require compatible,
+explicit activation. The implemented behavior is validation/resolution only:
+there is no localized application or Storefront locale selection. See
+[Translation authoring](storage-groups/translations.md) for executable manifest
+examples, locales, eligible targets and exact body semantics.
+
+On an enabled Admin deployment, `translation(by:)` returns one source and
+`translations(namespace:, first:, after:, last:, before:)` uses the ordinary
+Relay connection (`edges`, `pageInfo`). Connection metadata does not carry a
+resource version; each resource's `metadata.resourceVersion` identifies that
+resource. `watchTranslations` supplies durable event cursors independently.
+
+Public status exposes only `conditions`, `observedGeneration`,
+`lastAppliedRevision` and `resolved`. The applied revision belongs to the
+Translation source; it is not evidence that target content was changed.
+Current reads guard freshness and mask stale Ready without exposing private
+target evidence. Authored enum spelling and GraphQL enum projection remain
+distinct; GraphQL condition statuses use `TRUE`, `FALSE` and `UNKNOWN`.
+
+Controller status and binding writes use input/payload mutation contracts:
+`updateTranslationStatus(input: UpdateTranslationStatusInput!):
+UpdateTranslationStatusPayload!` and
+`bindTranslationTarget(input: BindTranslationTargetInput!):
+BindTranslationTargetPayload!`. They require enrolled controller authority and
+source/binding preconditions, not only a human read grant.
+
+`scanTranslationDependents(target:, limit:, continuation:)` is an explicit
+bounded controller scan returning `TranslationDependentScan { items,
+continuation }`. It is not a Relay connection: its opaque continuation may
+advance even when an inspected physical page produces no items. It does not
+add `first`/`after` arguments or edge cursors to that helper.
+
 ## Endpoint
 
 This page describes Admin. Storefront has an isolated schema at
@@ -210,6 +244,8 @@ mutation Logout {
 | `categories(namespace: String!, filter, ...)` | List categories in a namespace, or the subtree below one category |
 | `collection(by: CollectionBy!)`            | Fetch one collection resource           |
 | `collections(namespace: String!, ...)`     | List collections in a namespace         |
+| `file(by: FileBy!)`                        | Fetch one File resource                 |
+| `files(namespace: String!, ...)`           | List Files in a namespace               |
 
 ### Mutations
 
@@ -244,6 +280,8 @@ mutation Logout {
 | `watchNamespaces(resourceVersion: String, selector: LabelSelectorInput)` | Cluster-scoped durable Namespace watch |
 | `watchRepositories(namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Durable Repository watch |
 | `watchProducts(namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Durable Product watch |
+| `watchProductVariants(namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Durable ProductVariant watch |
+| `watchCollections(namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Durable Collection watch |
 | `watchFiles(namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Durable File watch |
 | `watchResources(kind: String!, namespace: String, selector: LabelSelectorInput, resourceVersion: String)` | Generic durable watch for registered kinds; unsupported kinds fail closed |
 
@@ -465,6 +503,12 @@ query ListRepositories($namespace: String!) {
 ### product
 
 `Product` is the non-sellable parent descriptor. SKU, pricing, and inventory are on `ProductVariant`.
+
+Product and ProductVariant reads and lists accept either the ordinary or the
+corresponding management capability; neither requires both. With Git-backed
+authorization, these alternative checks use one captured serving model for the
+authorization operation. A policy publication between them cannot change that
+operation's verdict; a later request captures the current model.
 
 ```graphql
 query GetProduct {
@@ -1250,6 +1294,16 @@ it does not promise every API has already consumed it. A committed write with
 projection failure returns partial-outcome diagnostics rather than pretending
 to roll Git back.
 
+Annotation metadata counts toward manifest and snapshot limits even when
+unchanged root-manifest validation is reused. Validation reuse never caches
+authorization decisions or bypasses current source identity, lifecycle,
+controller status or publication-revision checks.
+
+Binding resolution uses the controller's local Role projection. When independent
+kind watches deliver a binding before its Role, the controller confirms the
+missing reference with a single scoped API lookup instead of waiting for the
+Role watch to catch up. Lookup failures remain retryable; a resolved binding
+never switches to a recreated Role with the same name.
 Role UID and termination-state changes schedule durable reconciliation of
 dependent bindings. Status-only Role updates do not trigger this fan-out.
 

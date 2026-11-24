@@ -39,10 +39,11 @@ while keeping shared identity storage and the one Git process unchanged.
 Missed workload mirror events may remain discarded indefinitely; no orphan
 repair or replay guarantee is part of this fault.
 
-## Owned RBAC fault windows
+## Owned resource fault windows
 
-Select `CHAOS_RBAC=1` with `api-restart`, `controller-restart` or
-`journal-interruption`. The target must match its role and ownership label,
+Select either `CHAOS_RBAC=1` or `CHAOS_TRANSLATION=1` with `api-restart`,
+`controller-restart` or `journal-interruption`; the selectors cannot be combined.
+The target must match its role and ownership label,
 already be running and unpaused, and have a process epoch. Declare Unix
 milliseconds in `CHAOS_WINDOW_START_MILLIS` and `CHAOS_WINDOW_END_MILLIS`;
 the current time must be inside that window, which cannot exceed 30 seconds.
@@ -51,9 +52,18 @@ The injector is bounded to 20 seconds and reserves restoration time.
 Controller restart additionally requires `CHAOS_PEER_TARGET` naming a distinct
 owned running controller. Both must have non-overlapping writable checkpoint
 mounts at `/var/lib/gitstore/checkpoints`, or the explicit
-`CHAOS_CHECKPOINT_DESTINATION`. The peer's identity, epoch and checkpoint mount
-must remain unchanged. These profiles never target or overlap singleton Git
-replacement.
+`CHAOS_CHECKPOINT_DESTINATION`. Both target and peer checkpoint mounts must
+remain unchanged. Sanitized before/after captures retain their checkpoint
+source, volume, destination and verified writable state, separately from
+process epochs. The peer's identity and epoch must also remain unchanged.
+These profiles never target or overlap singleton Git replacement.
+
+Translation API restart also requires `CHAOS_PEER_TARGET` naming a distinct
+owned running API replica whose identity and process epoch remain unchanged.
+Translation uses the same bounded injector and restoration implementation as
+RBAC; its physical fault receipts are labeled `domain: "translation"` and
+`kind: "physical"`. This selector does not itself run a Translation workload or
+certify accepted-source replay.
 
 `journal-interruption` pauses a journal-source container for six seconds by
 default. `CHAOS_DURATION=2500ms` selects a below-five-second interruption;

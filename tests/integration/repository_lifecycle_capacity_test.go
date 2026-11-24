@@ -2269,11 +2269,16 @@ Capacity metadata only; no payload operation is requested.
 type secretCapacityGitOutput struct {
 	buffer   bytes.Buffer
 	overflow bool
+	limit    int
 }
 
 func (output *secretCapacityGitOutput) Write(data []byte) (int, error) {
 	size := len(data)
-	remaining := 128*1024 - output.buffer.Len()
+	limit := output.limit
+	if limit == 0 {
+		limit = 128 * 1024
+	}
+	remaining := limit - output.buffer.Len()
 	if size > remaining {
 		output.overflow = true
 		data = data[:remaining]
@@ -2283,6 +2288,13 @@ func (output *secretCapacityGitOutput) Write(data []byte) (int, error) {
 }
 
 func secretCapacityGit(ctx context.Context, directory, token string, args ...string) ([]byte, error) {
+	return secretCapacityGitBounded(ctx, directory, token, 128*1024, args...)
+}
+
+func secretCapacityGitBounded(ctx context.Context, directory, token string, limit int, args ...string) ([]byte, error) {
+	if limit < 1 || limit > 8<<20 {
+		return nil, errors.New("secret capacity: invalid Git output allowance")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, "git", args...)
@@ -2299,7 +2311,7 @@ func secretCapacityGit(ctx context.Context, directory, token string, args ...str
 		command.Env = append(command.Env, "GIT_CONFIG_COUNT=2", "GIT_CONFIG_KEY_1=http.extraHeader",
 			"GIT_CONFIG_VALUE_1=Authorization: Bearer "+token)
 	}
-	var output secretCapacityGitOutput
+	output := secretCapacityGitOutput{limit: limit}
 	command.Stdout, command.Stderr = &output, &output
 	err := command.Run()
 	if ctx.Err() != nil {

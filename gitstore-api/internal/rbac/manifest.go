@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
@@ -21,6 +22,162 @@ import (
 )
 
 var resourceNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+const ManifestValidationCacheBytes = 512 << 10
+
+type validatedManifest struct {
+	spec        json.RawMessage
+	wireBytes   int
+	reservation *MemoryReservation
+}
+
+// ManifestValidationCache reuses only author-content validation, never source
+// identity, lifecycle, status, revision or publication authority.
+type ManifestValidationCache struct {
+	mu      sync.Mutex
+	budget  *MemoryBudget
+	entries map[[32]byte]validatedManifest
+	order   [][32]byte
+	bytes   int64
+	closed  bool
+}
+
+func NewManifestValidationCache(budget *MemoryBudget) *ManifestValidationCache {
+	if budget == nil {
+		return nil
+	}
+	return &ManifestValidationCache{budget: budget}
+}
+
+func manifestValidationKey(resource *Resource) ([32]byte, error) {
+	for _, annotations := range []map[string]string{resource.Metadata.Labels, resource.Metadata.Annotations} {
+		for key, value := range annotations {
+			if strings.TrimSpace(key) == "" || !utf8.ValidString(key) || !utf8.ValidString(value) {
+				return [32]byte{}, ErrUnavailable
+			}
+		}
+	}
+	if !utf8.Valid(resource.Spec) {
+		return [32]byte{}, ErrUnavailable
+	}
+	content, err := json.Marshal(struct {
+		Version, Name, Namespace, NamespaceUID string
+		Kind                                   Kind
+		Labels, Annotations                    map[string]string
+		Spec                                   json.RawMessage
+	}{resource.APIVersion, resource.Metadata.Name, resource.Metadata.Namespace, resource.NamespaceUID,
+		resource.Kind, resource.Metadata.Labels, resource.Metadata.Annotations, resource.Spec})
+	if err != nil {
+		return [32]byte{}, ErrUnavailable
+	}
+	return sha256.Sum256(content), nil
+}
+
+// Validate returns a canonical spec and the full canonical manifest size.
+// A nil cache still performs validation, without retaining its result.
+func (c *ManifestValidationCache) Validate(resource *Resource, scope RepositoryScope) (json.RawMessage, int, error) {
+	if resource == nil || resource.APIVersion != APIVersion ||
+		resource.Kind.Namespaced() && (scope.Namespace == "" || scope.NamespaceUID == "" || resource.Metadata.Namespace != scope.Namespace) ||
+		!resource.Kind.Namespaced() && (!scope.Root || resource.Metadata.Namespace != "") {
+		return nil, 0, ErrUnavailable
+	}
+	path, err := CanonicalPath(resource.Kind, resource.Metadata.Name)
+	if err != nil {
+		return nil, 0, err
+	}
+	cacheable := c != nil && scope.Root && !resource.Kind.Namespaced() && len(resource.Metadata.Annotations) > 0
+	var key [32]byte
+	if cacheable {
+		key, err = manifestValidationKey(resource)
+		if err != nil {
+			return nil, 0, err
+		}
+		c.mu.Lock()
+		entry, found := c.entries[key]
+		if found && !c.closed {
+			spec := append(json.RawMessage(nil), entry.spec...)
+			c.mu.Unlock()
+			return spec, entry.wireBytes, nil
+		}
+		c.mu.Unlock()
+	}
+	encoded, err := CanonicalManifest(resource)
+	if err != nil {
+		return nil, 0, err
+	}
+	wireBytes := len(encoded)
+	if wireBytes > MaxManifestBytes {
+		return nil, 0, ErrUnavailable
+	}
+	if len(resource.Metadata.Annotations) > 0 {
+		for key, value := range resource.Metadata.Annotations {
+			if strings.TrimSpace(key) == "" || !utf8.ValidString(key) || !utf8.ValidString(value) {
+				return nil, 0, ErrUnavailable
+			}
+		}
+		// Count annotations in the wire bound without reparsing their padding.
+		validation := *resource
+		validation.Metadata.Annotations = nil
+		encoded, err = CanonicalManifest(&validation)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	parsed, err := ParseManifest(encoded, path, scope)
+	if err != nil {
+		return nil, 0, err
+	}
+	if cacheable {
+		c.put(key, parsed.Spec, wireBytes)
+	}
+	return parsed.Spec, wireBytes, nil
+}
+
+func (c *ManifestValidationCache) put(key [32]byte, spec json.RawMessage, wireBytes int) {
+	size := int64(len(spec)+128) * 8
+	if size > ManifestValidationCacheBytes {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	if _, found := c.entries[key]; found {
+		return
+	}
+	for len(c.order) >= MaxCandidateResources || c.bytes+size > ManifestValidationCacheBytes {
+		old := c.entries[c.order[0]]
+		c.bytes -= int64(len(old.spec)+128) * 8
+		old.reservation.Close()
+		delete(c.entries, c.order[0])
+		c.order = c.order[1:]
+	}
+	reservation, err := c.budget.Reserve(size)
+	if err != nil {
+		return
+	}
+	if c.entries == nil {
+		c.entries = make(map[[32]byte]validatedManifest)
+	}
+	c.entries[key] = validatedManifest{append(json.RawMessage(nil), spec...), wireBytes, reservation}
+	c.order = append(c.order, key)
+	c.bytes += size
+}
+
+// Clear yields optional retained validation data to required publications.
+func (c *ManifestValidationCache) Clear(closeCache bool) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, entry := range c.entries {
+		entry.reservation.Close()
+	}
+	c.entries, c.order, c.bytes = nil, nil, 0
+	c.closed = c.closed || closeCache
+}
 
 type authorMetadata struct {
 	Name        string            `yaml:"name"`

@@ -47,19 +47,29 @@ type ParsedResource struct {
 	Namespace        *catalog.NamespaceResource
 	File             *catalog.FileResource
 	Repository       *catalog.RepositoryResource
+	Translation      *catalog.TranslationResource
+	RawSource        []byte `json:"-" yaml:"-"`
 }
 
 // ParseResource reads a Markdown document, extracts YAML frontmatter,
 // dispatches on the kind field, validates the resource, and returns a
 // ParsedResource.
 func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
-	raw, err := io.ReadAll(r)
+	raw, err := readResourceSource(r)
 	if err != nil {
-		return nil, nil, fmt.Errorf("validate: read: %w", err)
+		return nil, nil, err
 	}
 
 	if !bytes.HasPrefix(bytes.TrimLeftFunc(raw, unicode.IsSpace), []byte("---")) {
 		return nil, raw, nil
+	}
+
+	if IsTranslationDocument(raw) {
+		parsed, body, err := p.parseTranslation(raw)
+		if err == nil && parsed != nil {
+			parsed.RawSource = bytes.Clone(raw)
+		}
+		return parsed, body, err
 	}
 
 	fmRaw, err := extractFrontmatterBlock(raw)

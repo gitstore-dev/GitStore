@@ -26,6 +26,8 @@ type SubscriberConfig struct {
 type Stream struct {
 	Events <-chan datastore.NamespaceWatchEvent
 	Errors <-chan error
+	// ReplayHighWater is the immutable registration-time replay boundary.
+	ReplayHighWater uint64
 }
 
 type Subscriber struct {
@@ -120,7 +122,7 @@ func (s *Subscriber) SubscribePath(ctx context.Context, rawCursor, path string) 
 		s.cfg.Metrics.IncSubscribers(path)
 	}
 	go s.run(ctx, start, replayHighWater, path, live, events, errorsOut)
-	return &Stream{Events: events, Errors: errorsOut}, nil
+	return &Stream{Events: events, Errors: errorsOut, ReplayHighWater: replayHighWater}, nil
 }
 
 func (s *Subscriber) run(ctx context.Context, cursor datastore.NamespaceWatchCursor, replayHighWater uint64, path string, live *liveSubscriber, events chan datastore.NamespaceWatchEvent, errorsOut chan error) {

@@ -14,6 +14,7 @@ use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
 
 use crate::auth::interceptor::RPCVerifier;
+use crate::git::hooks::admission_receipts::{AdmissionReceiptStore, ReceiptPhase};
 use crate::git::hooks::{HookPipeline, NoopAdmissionHandler, NoopValidationHandler, RefUpdate};
 use crate::git::repo::{create_repository, delete_repository, fanout_path, list_tags};
 use tracing::{debug, error, info};
@@ -43,6 +44,7 @@ const DELETE_RECEIPT_PREFIX: &str = "refs/gitstore/deletions/";
 const DELETE_RECEIPT_HISTORY_LIMIT: usize = 4096;
 const FILE_PROVENANCE_HISTORY_LIMIT: usize = 256;
 static FILE_PROVENANCE_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+static FILE_BATCH_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(8);
 
 /// T047: Convert a proto PushContext into a HookContext for the pipeline.
 impl From<&PushContext> for HookContext {
@@ -140,6 +142,8 @@ pub struct GitServiceImpl {
     pub repo_locks: Arc<DashMap<String, Arc<RwLock<()>>>>,
     pub hook_pipeline: Arc<HookPipeline>,
     pub push_limits: PushLimits,
+    admission_receipts: Option<Arc<AdmissionReceiptStore>>,
+    receipt_ready: Arc<tokio::sync::Notify>,
 }
 
 impl GitServiceImpl {
@@ -168,6 +172,129 @@ impl GitServiceImpl {
             repo_locks: Arc::new(DashMap::new()),
             hook_pipeline,
             push_limits,
+            admission_receipts: None,
+            receipt_ready: Arc::new(tokio::sync::Notify::new()),
+        }
+    }
+
+    pub fn with_receipts(mut self, receipts: Arc<AdmissionReceiptStore>) -> Self {
+        self.admission_receipts = Some(receipts);
+        self
+    }
+
+    async fn mutation_guard(
+        &self,
+        repository_id: &str,
+    ) -> Result<tokio::sync::OwnedRwLockWriteGuard<()>, Status> {
+        let guard = get_or_insert_lock(&self.repo_locks, repository_id)
+            .write_owned()
+            .await;
+        let Some(receipts) = self.admission_receipts.clone() else {
+            return Ok(guard);
+        };
+        let data_root = self.data_root.clone();
+        let repository_id = repository_id.to_owned();
+        crate::spawn_blocking(move || {
+            let result = (|| -> anyhow::Result<()> {
+                let pending = receipts.pending_for_repository(&repository_id)?;
+                if pending.is_empty() && !receipts.retains_repository(&repository_id)? {
+                    return Ok(());
+                }
+                let path = fanout_path(&data_root, &repository_id)?;
+                ensure_repository_not_deleted(&path)?;
+                let repository = crate::git::repo::open_repository(&path)?;
+                for (id, phase) in pending {
+                    match phase {
+                        ReceiptPhase::Prepared => receipts.recover_prepared(&repository, &id)?,
+                        ReceiptPhase::Acknowledged => {
+                            receipts.acknowledge_fenced(&repository, &id)?
+                        }
+                        ReceiptPhase::Committed => {
+                            unreachable!("pending receipt cannot be committed")
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            result.map_err(|error| {
+                error!(repository_id, %error, "repository receive recovery failed");
+                Status::unavailable("repository receive recovery requires retry")
+            })?;
+            Ok(guard)
+        })
+        .await
+        .map_err(|error| Status::internal(format!("recovery task join: {error}")))?
+    }
+
+    pub async fn recover_receipts_before_serving(&self) -> anyhow::Result<()> {
+        let Some(receipts) = &self.admission_receipts else {
+            return Ok(());
+        };
+        let mut after = None;
+        loop {
+            let store = receipts.clone();
+            let page = crate::spawn_blocking(move || store.list(after.as_ref(), 32)).await??;
+            for (id, _) in page.entries {
+                let repository_id = receipts.repository_id(&id)?;
+                drop(self.mutation_guard(&repository_id).await?);
+            }
+            after = page.next;
+            if after.is_none() {
+                return Ok(());
+            }
+        }
+    }
+
+    pub async fn replay_receipts(
+        &self,
+        handler: &crate::git::hooks::admission_handler::AdmissionControlHandler,
+    ) -> anyhow::Result<()> {
+        let Some(receipts) = &self.admission_receipts else {
+            return Ok(());
+        };
+        let mut after = None;
+        loop {
+            let store = receipts.clone();
+            let page = crate::spawn_blocking(move || store.list(after.as_ref(), 32)).await??;
+            for (id, phase) in page.entries {
+                let result = async {
+                    let repository_id = receipts.repository_id(&id)?;
+                    drop(self.mutation_guard(&repository_id).await?);
+                    if phase != ReceiptPhase::Acknowledged {
+                        handler
+                            .replay_committed(
+                                receipts.clone(),
+                                id,
+                                &self.data_root,
+                                get_or_insert_lock(&self.repo_locks, &repository_id),
+                            )
+                            .await?;
+                    }
+                    Ok::<_, anyhow::Error>(())
+                }
+                .await;
+                if let Err(error) = result {
+                    tracing::warn!(%error, "accepted-source delivery retained for retry");
+                }
+            }
+            after = page.next;
+            if after.is_none() {
+                return Ok(());
+            }
+        }
+    }
+    pub async fn run_receipt_replay(
+        &self,
+        handler: &crate::git::hooks::admission_handler::AdmissionControlHandler,
+    ) {
+        loop {
+            if let Err(error) = self.replay_receipts(handler).await {
+                tracing::warn!(%error, "accepted-source receipt scan will retry");
+            }
+            tokio::select! {
+                _ = self.receipt_ready.notified() => {}
+                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+            }
         }
     }
 }
@@ -973,8 +1100,7 @@ impl GitService for GitServiceImpl {
             &["repository.create"],
         )?;
         let repo_path = fanout_path(&self.data_root, &req.repository_id)?;
-        let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
-        let guard = lock.write_owned().await;
+        let guard = self.mutation_guard(&req.repository_id).await?;
 
         tokio::task::spawn_blocking(move || {
             let _guard = guard;
@@ -1031,12 +1157,22 @@ impl GitService for GitServiceImpl {
         )?;
         let repo_path = fanout_path(&self.data_root, &req.repository_id)?;
 
-        let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
-        let guard = lock.write_owned().await;
+        let guard = self.mutation_guard(&req.repository_id).await?;
         let data_root = Arc::clone(&self.data_root);
+        let receipts = self.admission_receipts.clone();
 
         tokio::task::spawn_blocking(move || {
             let _guard = guard;
+            if let Some(receipts) = receipts {
+                if receipts
+                    .retains_repository(&req.repository_id)
+                    .map_err(|_| Status::unavailable("repository delivery state unavailable"))?
+                {
+                    return Err(Status::unavailable(
+                        "repository accepted-source delivery is pending",
+                    ));
+                }
+            }
             persist_repository_tombstone(&data_root, &repo_path)
                 .map_err(|e| Status::internal(format!("persist repository tombstone: {e}")))?;
             info!(
@@ -1134,6 +1270,93 @@ impl GitService for GitServiceImpl {
         })
         .await
         .map_err(|e| Status::internal(format!("task join error: {}", e)))?
+    }
+
+    async fn get_files(
+        &self,
+        request: Request<GetFilesRequest>,
+    ) -> Result<Response<GetFilesResponse>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/GetFiles",
+                request.get_ref(),
+            )
+            .await?;
+        let req = request.into_inner();
+        validate_request_authorization(
+            req.authorization.as_ref(),
+            &req.repository_id,
+            &["repository.contents.read"],
+        )?;
+        if req.paths.is_empty()
+            || req.paths.len() > 32
+            || req.commit_sha.len() != 40
+            || !req
+                .commit_sha
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(Status::invalid_argument(
+                "one exact commit and 1..32 paths required",
+            ));
+        }
+        let mut seen = std::collections::HashSet::with_capacity(req.paths.len());
+        for path in &req.paths {
+            validate_file_path(path)?;
+            if path.len() > 1024
+                || path.split('/').any(|part| part.is_empty() || part == ".")
+                || path.chars().any(char::is_control)
+                || !seen.insert(path)
+            {
+                return Err(Status::invalid_argument("distinct bounded paths required"));
+            }
+        }
+        let commit = gix::ObjectId::from_hex(req.commit_sha.as_bytes())
+            .map_err(|_| Status::invalid_argument("invalid commit"))?;
+        let permit = FILE_BATCH_SLOTS
+            .try_acquire()
+            .map_err(|_| Status::resource_exhausted("file batch capacity unavailable"))?;
+        let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)
+            .map_err(file_read_target_error)?;
+        let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
+        let guard = tokio::time::timeout(std::time::Duration::from_secs(5), lock.read_owned())
+            .await
+            .map_err(|_| Status::deadline_exceeded("repository lock unavailable"))?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let _guard = guard;
+            let repo = crate::git::repo::open_repository(&repo_path)
+                .map_err(|_| Status::unavailable("repository unavailable"))?;
+            let commit = repo
+                .find_commit(commit)
+                .map_err(|_| Status::failed_precondition("commit unavailable"))?;
+            let tree = commit
+                .tree_id()
+                .map_err(|_| Status::failed_precondition("commit tree unavailable"))?
+                .detach();
+            let mut files = Vec::with_capacity(req.paths.len());
+            for path in req.paths {
+                let id = find_blob_in_tree(&repo, tree, &path)?;
+                let size_bytes = crate::git::hooks::validation_handler::rbac_blob_size(&repo, id)
+                    .map_err(|_| Status::resource_exhausted("file exceeds 64 KiB"))?;
+                let blob = repo
+                    .find_blob(id)
+                    .map_err(|_| Status::unavailable("file unavailable"))?;
+                files.push(GetFileResponse {
+                    path,
+                    content: blob.data.clone(),
+                    blob_sha: id.to_string(),
+                    size_bytes,
+                });
+            }
+            Ok(Response::new(GetFilesResponse {
+                commit_sha: req.commit_sha,
+                files,
+            }))
+        })
+        .await
+        .map_err(|_| Status::internal("file batch task failed"))?
     }
 
     async fn get_file_provenance(
@@ -1320,6 +1543,91 @@ impl GitService for GitServiceImpl {
         )))
     }
 
+    async fn resolve_refs(
+        &self,
+        request: Request<ResolveRefsRequest>,
+    ) -> Result<Response<ResolveRefsResponse>, Status> {
+        self.rpc_auth
+            .verify(
+                request.metadata(),
+                "/gitstore.git.v1.GitService/ResolveRefs",
+                request.get_ref(),
+            )
+            .await?;
+        let req = request.into_inner();
+        if req.refs.is_empty() || req.refs.len() > 32 {
+            return Err(Status::invalid_argument("expected 1..32 repository refs"));
+        }
+        for query in &req.refs {
+            validate_request_authorization(
+                query.authorization.as_ref(),
+                &query.repository_id,
+                &["repository.contents.read"],
+            )?;
+            if !query.r#ref.starts_with("refs/heads/") || query.r#ref.len() > 1024 {
+                return Err(Status::invalid_argument("expected a bounded branch ref"));
+            }
+            let _: gix::refs::FullName = query
+                .r#ref
+                .as_str()
+                .try_into()
+                .map_err(|e: gix::refs::name::Error| Status::invalid_argument(e.to_string()))?;
+        }
+        let data_root = Arc::clone(&self.data_root);
+        let repo_locks = Arc::clone(&self.repo_locks);
+        let proofs = tokio::task::spawn_blocking(move || {
+            let mut proofs = Vec::with_capacity(req.refs.len());
+            for query in req.refs {
+                let mut busy = false;
+                let commit_sha =
+                    if let Ok(path) = resolve_repo_path(&data_root, &query.repository_id) {
+                        let lock = get_or_insert_lock(&repo_locks, &query.repository_id);
+                        // A busy repository cannot hold unrelated freshness proofs.
+                        // Returning no proof must never bypass the repository lock.
+                        let guard = lock.try_read();
+                        match guard {
+                            Ok(_guard) => crate::git::repo::open_repository(&path)
+                                .ok()
+                                .and_then(|repo| {
+                                    let mut reference =
+                                        repo.find_reference(query.r#ref.as_str()).ok()?;
+                                    if reference.name().as_bstr()
+                                        != gix::bstr::BStr::new(query.r#ref.as_bytes())
+                                    {
+                                        return None;
+                                    }
+                                    reference
+                                        .follow_to_object()
+                                        .ok()?
+                                        .object()
+                                        .ok()?
+                                        .try_into_commit()
+                                        .ok()
+                                        .map(|commit| commit.id.to_string())
+                                })
+                                .unwrap_or_default(),
+                            Err(_) => {
+                                busy = true;
+                                String::new()
+                            }
+                        }
+                    } else {
+                        String::new()
+                    };
+                proofs.push(RepositoryRefProof {
+                    repository_id: query.repository_id,
+                    r#ref: query.r#ref,
+                    commit_sha,
+                    busy,
+                });
+            }
+            proofs
+        })
+        .await
+        .map_err(|_| Status::unavailable("ref proof task failed"))?;
+        Ok(Response::new(ResolveRefsResponse { proofs }))
+    }
+
     async fn list_files(
         &self,
         request: Request<ListFilesRequest>,
@@ -1382,10 +1690,10 @@ impl GitService for GitServiceImpl {
             &["repository.contents.write"],
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
-        let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
-        let _guard = lock.write().await;
+        let guard = self.mutation_guard(&req.repository_id).await?;
 
-        tokio::task::spawn_blocking(move || {
+        crate::spawn_blocking(move || {
+            let _guard = guard;
             validate_file_path(&req.path)?;
 
             // The async lock above coordinates this service instance. This
@@ -1556,9 +1864,9 @@ impl GitService for GitServiceImpl {
             ));
         }
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
-        let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
-        let _guard = lock.write().await;
-        tokio::task::spawn_blocking(move || {
+        let guard = self.mutation_guard(&req.repository_id).await?;
+        crate::spawn_blocking(move || {
+            let _guard = guard;
             let _repository_guard = acquire_repository_commit_lock(
                 &repo_path.join("gitstore-commit.lock"),
                 COMMIT_FILE_LOCK_TIMEOUT,
@@ -1753,8 +2061,7 @@ impl GitService for GitServiceImpl {
             }
         };
         let repo_path = fanout_path(&self.data_root, &req.repository_id)?;
-        let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
-        let guard = lock.write_owned().await;
+        let guard = self.mutation_guard(&req.repository_id).await?;
 
         tokio::task::spawn_blocking(move || {
             let _guard = guard;
@@ -1943,10 +2250,10 @@ impl GitService for GitServiceImpl {
             &["repository.contents.write"],
         )?;
         let repo_path = resolve_repo_path(&self.data_root, &req.repository_id)?;
-        let lock = get_or_insert_lock(&self.repo_locks, &req.repository_id);
-        let _guard = lock.write().await;
+        let guard = self.mutation_guard(&req.repository_id).await?;
 
-        tokio::task::spawn_blocking(move || {
+        crate::spawn_blocking(move || {
+            let _guard = guard;
             let repo = crate::git::repo::open_repository(&repo_path)
                 .map_err(|e| Status::internal(format!("failed to open repo: {}", e)))?;
 
@@ -2156,8 +2463,7 @@ impl GitService for GitServiceImpl {
         let hook_ctx = crate::git::hooks::HookContext::from(push_ctx);
 
         let repo_path = resolve_repo_path(&self.data_root, &repo_id)?;
-        let lock = get_or_insert_lock(&self.repo_locks, &repo_id);
-        let write_guard = lock.write().await;
+        let write_guard = self.mutation_guard(&repo_id).await?;
 
         info!(repo_id = %repo_id, "receive_pack: stream start");
 
@@ -2364,12 +2670,48 @@ impl GitService for GitServiceImpl {
         let accepted_updates_for_callbacks = accepted_updates.clone();
         let repo_path_commit = repo_path.clone();
         let hook_ctx_post = hook_ctx.clone();
-        let write_guard = lock.write().await;
-        tokio::task::spawn_blocking(move || {
+        let repo_id_for_callbacks = repo_id.clone();
+        let write_guard = self.mutation_guard(&repo_id).await?;
+        let receipts = self.admission_receipts.clone();
+        let receipt_ready = self.receipt_ready.clone();
+        let catalog_refs = pipeline
+            .admission_handler
+            .receipt_catalog_refs(&accepted_updates);
+        crate::spawn_blocking(move || {
             use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 
             let repo = crate::git::repo::open_repository(&repo_path_commit)
                 .map_err(|e| Status::internal(format!("open repo for commit: {}", e)))?;
+
+            if let Some(receipts) = receipts {
+                if !accepted_updates_for_callbacks.is_empty() {
+                    if let Some(quarantine) = quarantine {
+                        crate::git::pack_server::promote_quarantine_durable(&repo, quarantine)
+                            .map_err(|error| {
+                                Status::internal(format!("retain accepted objects: {error}"))
+                            })?;
+                    }
+                    let authorization = hook_ctx_post.callback_authorization(
+                        accepted_updates_for_callbacks
+                            .iter()
+                            .map(Into::into)
+                            .collect(),
+                    );
+                    let id = receipts
+                        .prepare_fenced_with_catalog_refs(&repo, &authorization, &catalog_refs)
+                        .map_err(|error| {
+                            error!(%error, "durable receive preparation failed");
+                            Status::unavailable("durable receive preparation failed")
+                        })?;
+                    receipts.recover_prepared(&repo, &id).map_err(|error| {
+                        error!(%error, "durable receive publication requires recovery");
+                        Status::unavailable("durable receive publication requires recovery")
+                    })?;
+                    receipt_ready.notify_one();
+                }
+                drop(write_guard);
+                return Ok(());
+            }
 
             let mut ref_edits: Vec<RefEdit> = Vec::new();
             for i in &accepted_indices_clone {
@@ -2418,43 +2760,42 @@ impl GitService for GitServiceImpl {
                 });
             }
 
-            if ref_edits.is_empty() {
-                return Ok::<(), Status>(());
+            if !ref_edits.is_empty() {
+                let file_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
+                    std::time::Duration::from_millis(100),
+                );
+                let packed_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
+                    std::time::Duration::from_millis(1000),
+                );
+                // Ref lock files are acquired here — this is the "prepared" state.
+                let txn = repo
+                    .refs
+                    .transaction()
+                    .prepare(ref_edits, file_lock_fail, packed_lock_fail)
+                    .map_err(|e| Status::internal(format!("prepare ref transaction: {}", e)))?;
+
+                if let Some(q) = quarantine {
+                    crate::git::pack_server::promote_quarantine(&repo, q)
+                        .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
+                }
+                txn.commit(None)
+                    .map_err(|e| Status::internal(format!("commit ref transaction: {}", e)))?;
             }
 
-            let file_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
-                std::time::Duration::from_millis(100),
-            );
-            let packed_lock_fail = gix::lock::acquire::Fail::AfterDurationWithBackoff(
-                std::time::Duration::from_millis(1000),
-            );
-            // Ref lock files are acquired here — this is the "prepared" state.
-            let txn = repo
-                .refs
-                .transaction()
-                .prepare(ref_edits, file_lock_fail, packed_lock_fail)
-                .map_err(|e| Status::internal(format!("prepare ref transaction: {}", e)))?;
+            info!(repo_id = %repo_id_for_callbacks, "receive_pack: refs committed");
 
-            if let Some(q) = quarantine {
-                crate::git::pack_server::promote_quarantine(&repo, q)
-                    .map_err(|e| Status::internal(format!("promote quarantine: {}", e)))?;
-            }
-            txn.commit(None)
-                .map_err(|e| Status::internal(format!("commit ref transaction: {}", e)))?;
-            Ok(())
+            // Cancellation must not unlock an active commit or skip its callback.
+            drop(write_guard);
+            pipeline.run_post_receive(
+                &repo_path_commit,
+                &accepted_updates_for_callbacks,
+                &repo_id_for_callbacks,
+                &hook_ctx_post,
+            );
+            Ok::<(), Status>(())
         })
         .await
         .map_err(|e| Status::internal(format!("commit join: {}", e)))??;
-
-        info!(repo_id = %repo_id, "receive_pack: refs committed");
-
-        drop(write_guard);
-        pipeline.run_post_receive(
-            &repo_path,
-            &accepted_updates_for_callbacks,
-            &repo_id,
-            &hook_ctx_post,
-        );
 
         let report_status = build_report_status(
             &ref_updates,
@@ -2861,6 +3202,17 @@ pub fn verify_data_root(data_root: &Path) -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
+    fn test_service_secret() -> &'static str {
+        static SECRET: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        SECRET
+            .get_or_init(|| {
+                let mut bytes = [0u8; 32];
+                getrandom::fill(&mut bytes).expect("test service entropy");
+                bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+            })
+            .as_str()
+    }
+
     use super::*;
     use tempfile::TempDir;
 
@@ -2872,7 +3224,7 @@ mod tests {
             .trim_end_matches("Request");
         crate::auth::interceptor::sign_request(
             message,
-            "fixture-key",
+            test_service_secret(),
             "gitstore-git",
             &format!("/gitstore.git.v1.GitService/{name}"),
         )
@@ -2888,10 +3240,218 @@ mod tests {
         request
     }
 
+    #[tokio::test]
+    async fn resolve_refs_rejects_revision_expressions_and_malformed_branch_refs() {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_A);
+        let service = make_test_service(dir.path());
+        for name in [
+            "refs/heads/main~1",
+            "refs/heads/main~1000000000",
+            "refs/heads/main^0",
+            "refs/heads/main^{commit}",
+            "refs/heads/main:products/p1.md",
+            "refs/heads/main@{0}",
+            "refs/heads/main..other",
+            "refs/heads/main.lock",
+            "refs/heads/release//main",
+            "refs/heads/",
+            "refs/tags/v1.0.0",
+            "HEAD",
+        ] {
+            let request = ResolveRefsRequest {
+                refs: vec![RepositoryRef {
+                    repository_id: TEST_REPO_A.into(),
+                    r#ref: name.into(),
+                    authorization: test_authorization(TEST_REPO_A, "repository.contents.read"),
+                }],
+            };
+            assert_eq!(
+                service
+                    .resolve_refs(signed_test_request(request))
+                    .await
+                    .expect_err(name)
+                    .code(),
+                tonic::Code::InvalidArgument,
+                "{name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_refs_returns_only_exact_branch_commit_tips() {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_A);
+        let repo =
+            crate::git::repo::open_repository(&fanout_path(dir.path(), TEST_REPO_A).unwrap())
+                .unwrap();
+        let parent = repo.head_commit().unwrap();
+        let original = parent.id.to_string();
+        let tip = repo
+            .commit_as(
+                parent.author().unwrap(),
+                parent.committer().unwrap(),
+                "refs/heads/main",
+                "advance main",
+                parent.tree_id().unwrap().detach(),
+                [parent.id],
+            )
+            .unwrap()
+            .detach();
+        for (name, id) in [
+            ("refs/heads/release/v1.0", parent.id),
+            ("refs/tags/refs/heads/missing", tip),
+            (
+                "refs/heads/not-a-commit",
+                repo.write_blob(b"not a commit").unwrap().detach(),
+            ),
+        ] {
+            repo.reference(
+                name,
+                id,
+                gix::refs::transaction::PreviousValue::MustNotExist,
+                "fixture",
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            repo.path().join("refs/heads/alias"),
+            "ref: refs/heads/release/v1.0\n",
+        )
+        .unwrap();
+        let names = [
+            "refs/heads/main",
+            "refs/heads/release/v1.0",
+            "refs/heads/alias",
+            "refs/heads/missing",
+            "refs/heads/not-a-commit",
+        ];
+        let refs = names
+            .iter()
+            .map(|name| RepositoryRef {
+                repository_id: TEST_REPO_A.into(),
+                r#ref: (*name).into(),
+                authorization: test_authorization(TEST_REPO_A, "repository.contents.read"),
+            })
+            .collect();
+        let response = make_test_service(dir.path())
+            .resolve_refs(signed_test_request(ResolveRefsRequest { refs }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.proofs.len(), names.len());
+        for ((proof, name), expected) in response.proofs.iter().zip(names).zip([
+            tip.to_string(),
+            original.clone(),
+            original,
+            String::new(),
+            String::new(),
+        ]) {
+            assert_eq!(proof.r#ref, name);
+            assert_eq!(proof.commit_sha, expected, "{name}");
+            assert!(!proof.busy);
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_refs_binds_every_repository_and_preserves_independent_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_A);
+        let service = make_test_service(dir.path());
+        let query = |id: &str| RepositoryRef {
+            repository_id: id.into(),
+            r#ref: "refs/heads/main".into(),
+            authorization: test_authorization(id, "repository.contents.read"),
+        };
+        let request = ResolveRefsRequest {
+            refs: vec![query(TEST_REPO_A), query(TEST_REPO_D)],
+        };
+        let signed = signed_test_request(request.clone());
+        let mut replay = Request::new(request.clone());
+        *replay.metadata_mut() = signed.metadata().clone();
+        let proofs = service
+            .resolve_refs(signed)
+            .await
+            .unwrap()
+            .into_inner()
+            .proofs;
+        assert_eq!(proofs.len(), 2);
+        assert_eq!(proofs[0].repository_id, TEST_REPO_A);
+        assert_eq!(proofs[0].r#ref, "refs/heads/main");
+        assert_eq!(proofs[0].commit_sha.len(), 40);
+        assert!(proofs[1].commit_sha.is_empty());
+        assert!(!proofs[1].busy);
+        assert_eq!(
+            service.resolve_refs(replay).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+
+        let mut substituted = request.clone();
+        substituted.refs[1].authorization =
+            test_authorization(TEST_REPO_A, "repository.contents.read");
+        assert_eq!(
+            service
+                .resolve_refs(signed_test_request(substituted))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        );
+        let mut tampered = signed_test_request(request.clone());
+        tampered.get_mut().refs[0].r#ref = "refs/heads/another".into();
+        assert_eq!(
+            service.resolve_refs(tampered).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+        for refs in [vec![], vec![query(TEST_REPO_A); 33]] {
+            assert_eq!(
+                service
+                    .resolve_refs(signed_test_request(ResolveRefsRequest { refs }))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::InvalidArgument
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_refs_does_not_block_independent_proofs_on_a_busy_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_A);
+        repo_with_commit(dir.path(), TEST_REPO_D);
+        let service = make_test_service(dir.path());
+        let lock = get_or_insert_lock(&service.repo_locks, TEST_REPO_A);
+        let _writer = lock.write().await;
+        let refs = [TEST_REPO_A, TEST_REPO_D]
+            .into_iter()
+            .map(|id| RepositoryRef {
+                repository_id: id.into(),
+                r#ref: "refs/heads/main".into(),
+                authorization: test_authorization(id, "repository.contents.read"),
+            })
+            .collect();
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            service.resolve_refs(signed_test_request(ResolveRefsRequest { refs })),
+        )
+        .await
+        .expect("one busy repository must not consume unrelated freshness deadlines")
+        .unwrap()
+        .into_inner();
+        assert_eq!(response.proofs.len(), 2);
+        assert_eq!(response.proofs[0].repository_id, TEST_REPO_A);
+        assert!(response.proofs[0].commit_sha.is_empty());
+        assert!(response.proofs[0].busy);
+        assert_eq!(response.proofs[1].repository_id, TEST_REPO_D);
+        assert_eq!(response.proofs[1].commit_sha.len(), 40);
+        assert!(!response.proofs[1].busy);
+    }
+
     fn make_test_service(data_root: &std::path::Path) -> GitServiceImpl {
         GitServiceImpl::new(
             data_root.to_path_buf(),
-            RPCVerifier::new("fixture-key", None, data_root).unwrap(),
+            RPCVerifier::new(test_service_secret(), None, data_root).unwrap(),
         )
     }
 
@@ -2907,7 +3467,7 @@ mod tests {
                 Arc::new(NoopAdmissionHandler),
             )),
             push_limits,
-            RPCVerifier::new("fixture-key", None, data_root).unwrap(),
+            RPCVerifier::new(test_service_secret(), None, data_root).unwrap(),
         )
     }
 
@@ -3406,6 +3966,193 @@ mod tests {
 
     // --- create/delete repository tests ---
 
+    fn pending_receive(
+        root: &Path,
+    ) -> (
+        Arc<crate::git::hooks::admission_receipts::AdmissionReceiptStore>,
+        crate::git::hooks::admission_receipts::ReceiptId,
+        gix::ObjectId,
+    ) {
+        use crate::git::hooks::admission_receipts::AdmissionReceiptStore;
+        repo_with_commit(root, TEST_REPO_A);
+        let repo =
+            crate::git::repo::open_repository(&fanout_path(root, TEST_REPO_A).unwrap()).unwrap();
+        let initial = repo.head_id().unwrap().detach();
+        let context = HookContext {
+            repository_id: TEST_REPO_A.into(),
+            actor_subject: "original-author".into(),
+            actor_auth_method: "oidc".into(),
+            actor_issuer: "fixture".into(),
+            receive_id: "interrupted-receive".into(),
+            ..Default::default()
+        };
+        let authorization = context.callback_authorization(vec![(&RefUpdate {
+            ref_name: "refs/heads/main".into(),
+            old_oid: initial.to_string(),
+            new_oid: "0".repeat(40),
+        })
+            .into()]);
+        let store = AdmissionReceiptStore::open(root).unwrap();
+        let id = store.prepare_fenced(&repo, &authorization).unwrap();
+        drop(store);
+        (
+            Arc::new(AdmissionReceiptStore::open(root).unwrap()),
+            id,
+            initial,
+        )
+    }
+
+    #[tokio::test]
+    async fn native_mutation_barrier_recovers_before_write_and_retains_delivery() {
+        for startup in [false, true] {
+            let root = TempDir::new().unwrap();
+            let (store, id, initial) = pending_receive(root.path());
+            let service = make_test_service(root.path()).with_receipts(store.clone());
+            if startup {
+                service.recover_receipts_before_serving().await.unwrap();
+                store.load_committed(&id).unwrap();
+            }
+            service
+                .create_tag(signed_test_request(CreateTagRequest {
+                    repository_id: TEST_REPO_A.into(),
+                    tag_name: "after-recovery".into(),
+                    target_commit_sha: initial.to_string(),
+                    authorization: test_authorization(TEST_REPO_A, "repository.contents.write"),
+                    ..Default::default()
+                }))
+                .await
+                .unwrap();
+            let path = fanout_path(root.path(), TEST_REPO_A).unwrap();
+            let repo = crate::git::repo::open_repository(&path).unwrap();
+            assert!(repo
+                .try_find_reference("refs/heads/main")
+                .unwrap()
+                .is_none());
+            assert_eq!(
+                store.load_committed(&id).unwrap().actor.unwrap().subject,
+                "original-author"
+            );
+            let deletion = || {
+                signed_test_request(DeleteRepositoryRequest {
+                    repository_id: TEST_REPO_A.into(),
+                    authorization: test_authorization(TEST_REPO_A, "repository.delete"),
+                })
+            };
+            assert_eq!(
+                service
+                    .delete_repository(deletion())
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::Unavailable
+            );
+            assert!(path.exists());
+            assert!(!path.with_extension("git.deleted").exists());
+            let offline = path.with_extension("git.offline");
+            std::fs::rename(&path, &offline).unwrap();
+            assert_eq!(
+                service
+                    .create_repository(make_create_req(TEST_REPO_A))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                tonic::Code::Unavailable
+            );
+            std::fs::rename(&offline, &path).unwrap();
+            {
+                let _guard = get_or_insert_lock(&service.repo_locks, TEST_REPO_A)
+                    .write_owned()
+                    .await;
+                store.acknowledge_fenced(&repo, &id).unwrap();
+            }
+            service.delete_repository(deletion()).await.unwrap();
+            assert!(!path.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn corrupt_pending_receive_blocks_every_native_mutation() {
+        let root = TempDir::new().unwrap();
+        let (store, _, initial) = pending_receive(root.path());
+        let record = std::fs::read_dir(root.path().join(".admission-receipts-v1"))
+            .unwrap()
+            .map(Result::unwrap)
+            .find(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "prepared")
+            })
+            .unwrap()
+            .path();
+        std::fs::write(&record, b"corrupt").unwrap();
+        let service = make_test_service(root.path()).with_receipts(store);
+        let file = CommitFileRequest {
+            repository_id: TEST_REPO_A.into(),
+            path: "products/p1.md".into(),
+            content: b"replacement".to_vec(),
+            authorization: test_authorization(TEST_REPO_A, "repository.contents.write"),
+            ..Default::default()
+        };
+        let errors = [
+            service
+                .create_repository(make_create_req(TEST_REPO_A))
+                .await
+                .unwrap_err(),
+            service
+                .delete_repository(signed_test_request(DeleteRepositoryRequest {
+                    repository_id: TEST_REPO_A.into(),
+                    authorization: test_authorization(TEST_REPO_A, "repository.delete"),
+                }))
+                .await
+                .unwrap_err(),
+            service
+                .commit_file(signed_test_request(file.clone()))
+                .await
+                .unwrap_err(),
+            service
+                .commit_file_at_revision(signed_test_request(CommitFileAtRevisionRequest {
+                    file: Some(file),
+                    ref_name: "refs/heads/main".into(),
+                    expected_commit_sha: initial.to_string(),
+                    ..Default::default()
+                }))
+                .await
+                .unwrap_err(),
+            service
+                .delete_file(signed_test_request(DeleteFileRequest {
+                    repository_id: TEST_REPO_A.into(),
+                    path: "products/p1.md".into(),
+                    authorization: test_authorization(TEST_REPO_A, "repository.contents.write"),
+                    ..Default::default()
+                }))
+                .await
+                .unwrap_err(),
+            service
+                .create_tag(signed_test_request(CreateTagRequest {
+                    repository_id: TEST_REPO_A.into(),
+                    tag_name: "must-not-exist".into(),
+                    target_commit_sha: initial.to_string(),
+                    authorization: test_authorization(TEST_REPO_A, "repository.contents.write"),
+                    ..Default::default()
+                }))
+                .await
+                .unwrap_err(),
+        ];
+        for error in errors {
+            assert_eq!(error.code(), tonic::Code::Unavailable);
+        }
+        let path = fanout_path(root.path(), TEST_REPO_A).unwrap();
+        let repo = crate::git::repo::open_repository(&path).unwrap();
+        assert_eq!(repo.head_id().unwrap().detach(), initial);
+        assert!(repo
+            .try_find_reference("refs/tags/must-not-exist")
+            .unwrap()
+            .is_none());
+        assert!(!path.with_extension("git.deleted").exists());
+        assert_eq!(std::fs::read(record).unwrap(), b"corrupt");
+    }
+
     #[tokio::test]
     async fn test_create_repository_succeeds() {
         let dir = TempDir::new().unwrap();
@@ -3670,6 +4417,155 @@ mod tests {
         });
         let resp = svc.get_file(req).await.unwrap();
         assert_eq!(resp.into_inner().content, b"---\nid: p1\n---\nhello");
+    }
+
+    #[tokio::test]
+    async fn get_files_pins_commit_and_enforces_signed_bounds() {
+        let dir = TempDir::new().unwrap();
+        repo_with_commit(dir.path(), TEST_REPO_D);
+        let repo =
+            crate::git::repo::open_repository(&fanout_path(dir.path(), TEST_REPO_D).unwrap())
+                .unwrap();
+        let original = resolve_ref_to_commit_id(&repo, "HEAD").unwrap();
+        let mut tree = repo
+            .edit_tree(
+                repo.find_commit(original)
+                    .unwrap()
+                    .tree_id()
+                    .unwrap()
+                    .detach(),
+            )
+            .unwrap();
+        let small = repo.write_blob(b"manifest").unwrap().detach();
+        let large = repo.write_blob(vec![b'x'; 65_537]).unwrap().detach();
+        for index in 0..32 {
+            tree.upsert(
+                format!("manifest-{index:02}.yaml"),
+                gix::object::tree::EntryKind::Blob,
+                small,
+            )
+            .unwrap();
+        }
+        tree.upsert("large.yaml", gix::object::tree::EntryKind::Blob, large)
+            .unwrap();
+        tree.upsert("link.yaml", gix::object::tree::EntryKind::Link, small)
+            .unwrap();
+        let tree = tree.write().unwrap().detach();
+        let signature = gix::actor::Signature {
+            name: "test".into(),
+            email: "test@example.com".into(),
+            time: gix::date::Time::now_local_or_utc(),
+        };
+        let mut time_buf = gix::date::parse::TimeBuf::default();
+        let signature = signature.to_ref(&mut time_buf);
+        let commit = repo
+            .commit_as(
+                signature,
+                signature,
+                "HEAD",
+                "bounded files",
+                tree,
+                [original],
+            )
+            .unwrap()
+            .detach()
+            .to_string();
+        let service = make_test_service(dir.path());
+        let request = GetFilesRequest {
+            repository_id: TEST_REPO_D.into(),
+            authorization: test_authorization(TEST_REPO_D, "repository.contents.read"),
+            commit_sha: commit.clone(),
+            paths: (0..32)
+                .map(|index| format!("manifest-{index:02}.yaml"))
+                .collect(),
+        };
+        let signed = signed_test_request(request.clone());
+        let mut replay = Request::new(request.clone());
+        *replay.metadata_mut() = signed.metadata().clone();
+        let response = service.get_files(signed).await.unwrap().into_inner();
+        assert_eq!(response.commit_sha, commit);
+        assert_eq!(response.files.len(), 32);
+        for (index, file) in response.files.iter().enumerate() {
+            assert_eq!(file.path, request.paths[index]);
+            assert_eq!(file.content, b"manifest");
+            assert_eq!(file.blob_sha, small.to_string());
+            assert_eq!(file.size_bytes, 8);
+        }
+        assert_eq!(
+            service.get_files(replay).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+        let mut pinned = request.clone();
+        pinned.commit_sha = original.to_string();
+        pinned.paths = vec!["products/p1.md".into()];
+        assert_eq!(
+            service
+                .get_files(signed_test_request(pinned))
+                .await
+                .unwrap()
+                .into_inner()
+                .files[0]
+                .content,
+            b"---\nid: p1\n---\nhello"
+        );
+        let mut tampered = signed_test_request(request.clone());
+        tampered.get_mut().paths.reverse();
+        assert_eq!(
+            service.get_files(tampered).await.unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+        let mut foreign = request.clone();
+        foreign.authorization = test_authorization(TEST_REPO_A, "repository.contents.read");
+        assert_eq!(
+            service
+                .get_files(signed_test_request(foreign))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::PermissionDenied
+        );
+        for (paths, code) in [
+            (vec![], tonic::Code::InvalidArgument),
+            (
+                vec!["products/p1.md".into(); 33],
+                tonic::Code::InvalidArgument,
+            ),
+            (
+                vec!["products/p1.md".into(); 2],
+                tonic::Code::InvalidArgument,
+            ),
+            (
+                vec!["../products/p1.md".into()],
+                tonic::Code::InvalidArgument,
+            ),
+            (vec!["large.yaml".into()], tonic::Code::ResourceExhausted),
+            (vec!["link.yaml".into()], tonic::Code::FailedPrecondition),
+            (
+                vec!["products/p1.md".into(), "missing.yaml".into()],
+                tonic::Code::NotFound,
+            ),
+        ] {
+            let mut invalid = request.clone();
+            invalid.paths = paths;
+            assert_eq!(
+                service
+                    .get_files(signed_test_request(invalid))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                code
+            );
+        }
+        let mut mutable = request;
+        mutable.commit_sha = "HEAD".into();
+        assert_eq!(
+            service
+                .get_files(signed_test_request(mutable))
+                .await
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[tokio::test]
@@ -4108,6 +5004,104 @@ mod tests {
             .unwrap()
             .detach();
         find_blob_in_tree(&repo, tree_id, "products/new.md").unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_canceled_file_writes_retain_repository_lock() {
+        for guarded in [false, true] {
+            let dir = TempDir::new().unwrap();
+            bare_repo_with_main(dir.path(), TEST_REPO_E);
+            let path = fanout_path(dir.path(), TEST_REPO_E).unwrap();
+            let before = gix::open(&path).unwrap().head_id().unwrap().to_string();
+            let service = Arc::new(make_test_service(dir.path()));
+            let lock = get_or_insert_lock(&service.repo_locks, TEST_REPO_E);
+            let marker = acquire_repository_commit_lock(
+                &path.join("gitstore-commit.lock"),
+                std::time::Duration::from_secs(2),
+            )
+            .unwrap();
+            let file = CommitFileRequest {
+                repository_id: TEST_REPO_E.to_string(),
+                path: "products/accepted.md".to_string(),
+                content: b"---\nkind: Product\n---\nExact accepted body\r\n".to_vec(),
+                commit_message: "accepted source".to_string(),
+                author_name: "Accepted author".to_string(),
+                author_email: "fixture@example.invalid".to_string(),
+                authorization: test_authorization(TEST_REPO_E, "repository.contents.write"),
+            };
+            let admitted = CommitFileAtRevisionRequest {
+                file: Some(file.clone()),
+                ref_name: "refs/heads/main".to_string(),
+                expected_commit_sha: before.clone(),
+                retain_receipt: true,
+                receipt_only: false,
+            };
+            let writer = Arc::clone(&service);
+            let file_to_write = file.clone();
+            let admitted_to_write = admitted.clone();
+            let task = tokio::spawn(async move {
+                if guarded {
+                    writer
+                        .commit_file_at_revision(signed_test_request(admitted_to_write))
+                        .await
+                        .map(|_| ())
+                } else {
+                    writer
+                        .commit_file(signed_test_request(file_to_write))
+                        .await
+                        .map(|_| ())
+                }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while lock.try_read().is_ok() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("file mutation must acquire the repository write lock");
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            let prematurely_unlocked = lock.try_write().is_ok();
+            drop(marker);
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while !std::fs::read_to_string(path.join("refs/heads/main"))
+                    .is_ok_and(|tip| tip.trim() != before)
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                }
+            })
+            .await
+            .expect("the already-started file mutation must finish");
+            assert!(
+                !prematurely_unlocked,
+                "guarded={guarded}: cancellation unlocked a still-running file mutation"
+            );
+            let stored = service
+                .get_file(signed_test_request(GetFileRequest {
+                    repository_id: TEST_REPO_E.to_string(),
+                    path: file.path.clone(),
+                    r#ref: "refs/heads/main".to_string(),
+                    authorization: test_authorization(TEST_REPO_E, "repository.contents.read"),
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(stored.content, file.content);
+            if guarded {
+                let receipt = service
+                    .commit_file_at_revision(signed_test_request(CommitFileAtRevisionRequest {
+                        receipt_only: true,
+                        ..admitted
+                    }))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                assert_eq!(
+                    receipt.commit_sha,
+                    gix::open(&path).unwrap().head_id().unwrap().to_string()
+                );
+            }
+        }
     }
 
     #[test]
@@ -5449,6 +6443,188 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn receive_pack_persists_accepted_vector_before_success() {
+        let root = TempDir::new().unwrap();
+        let source_root = TempDir::new().unwrap();
+        repo_with_commit(root.path(), TEST_REPO_A);
+        bare_repo_with_main(source_root.path(), TEST_REPO_A);
+        let destination_path = fanout_path(root.path(), TEST_REPO_A).unwrap();
+        let initial = crate::git::repo::open_repository(&destination_path)
+            .unwrap()
+            .head_id()
+            .unwrap()
+            .detach();
+        let source = crate::git::repo::open_repository(
+            &fanout_path(source_root.path(), TEST_REPO_A).unwrap(),
+        )
+        .unwrap();
+        let new = source.head_id().unwrap().detach();
+        assert_ne!(initial, new);
+        let pack = build_pack_bytes_from_repo(&source, new);
+        let store = Arc::new(AdmissionReceiptStore::open(root.path()).unwrap());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let handler = Arc::new(
+            crate::git::hooks::admission_handler::AdmissionControlHandler::connect(
+                &format!("http://{address}"),
+                "^refs/heads/accepted$".into(),
+            )
+            .await
+            .unwrap()
+            .with_service_token(test_service_secret()),
+        );
+        let mut service = make_test_service(root.path()).with_receipts(store.clone());
+        service.hook_pipeline = Arc::new(HookPipeline::new(
+            std::time::Duration::from_secs(10),
+            Arc::new(NoopValidationHandler),
+            handler.clone(),
+        ));
+        let service = Arc::new(service);
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let serving = service.clone();
+        let server = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(proto::git_service_server::GitServiceServer::from_arc(
+                    serving,
+                ))
+                .serve_with_incoming_shutdown(
+                    tokio_stream::wrappers::TcpListenerStream::new(listener),
+                    async {
+                        let _ = stopped.await;
+                    },
+                )
+                .await
+                .unwrap();
+        });
+        let mut client =
+            proto::git_service_client::GitServiceClient::connect(format!("http://{address}"))
+                .await
+                .unwrap();
+        let context = minimal_push_ctx(TEST_REPO_A);
+        let actor = context
+            .authorization
+            .as_ref()
+            .unwrap()
+            .actor
+            .as_ref()
+            .unwrap()
+            .clone();
+        let commands = vec![
+            RefCommand {
+                ref_name: "refs/heads/accepted".into(),
+                old_oid: "0".repeat(40),
+                new_oid: new.to_string(),
+            },
+            RefCommand {
+                ref_name: "refs/heads/main".into(),
+                old_oid: initial.to_string(),
+                new_oid: "0".repeat(40),
+            },
+        ];
+        let response = client
+            .receive_pack(signed_test_stream(vec![ReceivePackRequest {
+                repository_id: TEST_REPO_A.into(),
+                ref_commands: commands.clone(),
+                pack_data: pack,
+                is_last: true,
+                push_context: Some(context),
+            }]))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(String::from_utf8_lossy(&response.report_status).contains("ok refs/heads/accepted"));
+        let receipt = &store.list(None, 1).unwrap().entries[0].0;
+        assert_eq!(
+            store.load_committed_delivery(receipt).unwrap().1,
+            vec!["refs/heads/accepted"]
+        );
+        repo_with_commit(root.path(), TEST_REPO_B);
+        let other =
+            crate::git::repo::open_repository(&fanout_path(root.path(), TEST_REPO_B).unwrap())
+                .unwrap();
+        let tag_receive = HookContext {
+            repository_id: TEST_REPO_B.into(),
+            actor_subject: "tag-author".into(),
+            actor_auth_method: "oidc".into(),
+            receive_id: "tag-deletion".into(),
+            ..Default::default()
+        }
+        .callback_authorization(vec![(&RefUpdate {
+            ref_name: "refs/tags/v1.0.0".into(),
+            old_oid: other
+                .find_reference("refs/tags/v1.0.0")
+                .unwrap()
+                .target()
+                .try_id()
+                .unwrap()
+                .to_string(),
+            new_oid: "0".repeat(40),
+        })
+            .into()]);
+        let tag_id = store.prepare_fenced(&other, &tag_receive).unwrap();
+        store.recover_prepared(&other, &tag_id).unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            service.replay_receipts(&handler),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            store.load_committed(&tag_id).is_err(),
+            "a failed delivery must not block unrelated acknowledged cleanup"
+        );
+        assert_eq!(store.list(None, 32).unwrap().entries.len(), 1);
+        drop(handler);
+        drop(client);
+        shutdown.send(()).unwrap();
+        server.await.unwrap();
+        drop(service);
+        drop(store);
+        let replacement = AdmissionReceiptStore::open(root.path()).unwrap();
+        let page = replacement.list(None, 1).unwrap();
+        assert_eq!(
+            page.entries.len(),
+            1,
+            "successful native publication must retain acknowledged-delivery work"
+        );
+        let (id, phase) = &page.entries[0];
+        assert_eq!(*phase, ReceiptPhase::Committed);
+        let snapshot = replacement.load_committed(id).unwrap();
+        assert!(!snapshot.receive_id.is_empty());
+        assert_eq!(snapshot.actor.unwrap().subject, actor.subject);
+        for (accepted, command) in snapshot.refs.iter().zip(&commands) {
+            assert_eq!(accepted.ref_name, command.ref_name);
+            assert_eq!(accepted.old_commit_sha, command.old_oid);
+            assert_eq!(accepted.new_commit_sha, command.new_oid);
+        }
+        assert_eq!(snapshot.refs.len(), commands.len());
+        let repository = crate::git::repo::open_repository(&destination_path).unwrap();
+        assert!(repository
+            .try_find_reference("refs/heads/main")
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            resolve_ref_to_commit_id(&repository, "refs/heads/accepted").unwrap(),
+            new
+        );
+        assert_eq!(
+            repository
+                .find_commit(new)
+                .unwrap()
+                .tree()
+                .unwrap()
+                .lookup_entry_by_path("README.md")
+                .unwrap()
+                .unwrap()
+                .object()
+                .unwrap()
+                .data,
+            b"initial"
+        );
+    }
+
     /// Build a full pack file containing all objects reachable from `tip_oid` in `src_repo`.
     /// Returns raw PACK bytes suitable for inclusion in a ReceivePackRequest.
     fn build_pack_bytes_from_repo(src_repo: &gix::Repository, tip_oid: gix::ObjectId) -> Vec<u8> {
@@ -5557,6 +6733,217 @@ mod tests {
                 let report = result.unwrap().into_inner().report_status;
                 assert!(String::from_utf8_lossy(&report).contains("ok refs/heads/main"));
                 assert!(repo.find_reference("refs/heads/main").is_err());
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[allow(
+        clippy::await_holding_lock,
+        reason = "The gate intentionally pauses a separate blocking publication worker."
+    )]
+    async fn test_canceled_receive_retains_commit_lock_and_schedules_admission() {
+        use crate::git::hooks::{
+            AdmissionDecision, AdmissionHandler, HookContext, ResourceBlob, ValidationHandler,
+        };
+        use prost::Message;
+        use tonic::codec::Codec;
+
+        struct Accepted {
+            ready: tokio::sync::Notify,
+            context: std::sync::Mutex<Option<HookContext>>,
+        }
+
+        #[async_trait::async_trait]
+        impl ValidationHandler for Accepted {
+            async fn validate(
+                &self,
+                _: &[ResourceBlob],
+                context: &HookContext,
+            ) -> anyhow::Result<AdmissionDecision> {
+                *self.context.lock().unwrap() = Some(context.clone());
+                self.ready.notify_one();
+                Ok(AdmissionDecision::Accept)
+            }
+        }
+
+        struct RecordAdmission(tokio::sync::mpsc::UnboundedSender<(Vec<RefUpdate>, HookContext)>);
+
+        #[async_trait::async_trait]
+        impl AdmissionHandler for RecordAdmission {
+            async fn admit(
+                &self,
+                phase: &str,
+                updates: &[RefUpdate],
+                repository_id: &str,
+                _: &std::path::Path,
+                context: &HookContext,
+            ) -> anyhow::Result<AdmissionDecision> {
+                assert_eq!(phase, "post-receive");
+                assert_eq!(repository_id, TEST_REPO_H);
+                self.0.send((updates.to_vec(), context.clone())).unwrap();
+                Ok(AdmissionDecision::Accept)
+            }
+        }
+
+        for durable in [false, true] {
+            for release_ref_lock in [true, false] {
+                let dir = TempDir::new().unwrap();
+                bare_repo_with_main(dir.path(), TEST_REPO_H);
+                let path = fanout_path(dir.path(), TEST_REPO_H).unwrap();
+                let initial = gix::open(&path).unwrap().head_id().unwrap().to_string();
+                let validation = Arc::new(Accepted {
+                    ready: tokio::sync::Notify::new(),
+                    context: std::sync::Mutex::new(None),
+                });
+                let (sender, mut admissions) = tokio::sync::mpsc::unbounded_channel();
+                let mut service = make_test_service(dir.path());
+                let receipts =
+                    durable.then(|| Arc::new(AdmissionReceiptStore::open(dir.path()).unwrap()));
+                if let Some(receipts) = &receipts {
+                    service = service.with_receipts(receipts.clone());
+                }
+                let publication_guard = receipts
+                    .as_ref()
+                    .map(|receipts| receipts.pause_publication_for_test());
+                let receipt_ready = service.receipt_ready.clone();
+                let lock = get_or_insert_lock(&service.repo_locks, TEST_REPO_H);
+                service.hook_pipeline = Arc::new(HookPipeline::new(
+                    std::time::Duration::from_secs(2),
+                    validation.clone(),
+                    Arc::new(RecordAdmission(sender)),
+                ));
+                let chunk = delete_ref_cmd_with_ctx(
+                    TEST_REPO_H,
+                    "refs/heads/main",
+                    &initial,
+                    minimal_push_ctx(TEST_REPO_H),
+                );
+                let signed = signed_test_request(chunk.clone());
+                let encoded = chunk.encode_to_vec();
+                let mut frame = vec![0];
+                frame.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
+                frame.extend_from_slice(&encoded);
+                let decoder =
+                    tonic_prost::ProstCodec::<ReceivePackResponse, ReceivePackRequest>::default()
+                        .decoder();
+                let stream = tonic::Streaming::new_request(
+                    decoder,
+                    axum::body::Body::from(frame),
+                    None,
+                    None,
+                );
+                let mut request = Request::new(stream);
+                *request.metadata_mut() = signed.metadata().clone();
+
+                // Block publication after the blocking transaction takes ownership.
+                let ref_lock = path.join("refs/heads/main.lock");
+                if !durable || !release_ref_lock {
+                    std::fs::write(&ref_lock, b"fixture").unwrap();
+                }
+                let task = tokio::spawn(async move { service.receive_pack(request).await });
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    validation.ready.notified(),
+                )
+                .await
+                .expect("receive must reach admission");
+                let expected_context = validation.context.lock().unwrap().clone().unwrap();
+                if let Some((_, entered)) = &publication_guard {
+                    tokio::time::timeout(std::time::Duration::from_secs(2), entered.notified())
+                        .await
+                        .expect("publication must own the guard before canceling");
+                }
+                assert!(
+                    lock.try_read().is_err(),
+                    "accepted commit must hold its lock"
+                );
+                task.abort();
+                assert!(task.await.unwrap_err().is_cancelled());
+                let prematurely_unlocked = lock.try_write().is_ok();
+                drop(publication_guard);
+                if release_ref_lock {
+                    if !durable {
+                        std::fs::remove_file(&ref_lock).unwrap();
+                    }
+                    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                        while path.join("refs/heads/main").exists() {
+                            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                        }
+                    })
+                    .await
+                    .expect("the already-started ref commit must finish");
+                } else {
+                    assert!(tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        admissions.recv(),
+                    )
+                    .await
+                    .expect("failed commit must drop its callback without scheduling it")
+                    .is_none());
+                    std::fs::remove_file(&ref_lock).unwrap();
+                    assert!(path.join("refs/heads/main").exists());
+                }
+                assert!(
+                    !prematurely_unlocked,
+                    "request cancellation released the repository lock before ref commit"
+                );
+                if release_ref_lock {
+                    if let Some(receipts) = receipts {
+                        tokio::time::timeout(
+                            std::time::Duration::from_secs(2),
+                            receipt_ready.notified(),
+                        )
+                        .await
+                        .expect("cancellation must not lose durable publication notification");
+                        assert!(
+                            tokio::time::timeout(
+                                std::time::Duration::from_secs(2),
+                                admissions.recv(),
+                            )
+                            .await
+                            .unwrap()
+                            .is_none(),
+                            "durable delivery must not also schedule the legacy callback"
+                        );
+                        drop(receipts);
+                        let replacement = AdmissionReceiptStore::open(dir.path()).unwrap();
+                        let page = replacement.list(None, 1).unwrap();
+                        assert_eq!(page.entries.len(), 1);
+                        let (id, phase) = &page.entries[0];
+                        assert_eq!(*phase, ReceiptPhase::Committed);
+                        let authorization = replacement.load_committed(id).unwrap();
+                        assert_eq!(
+                            authorization.actor.unwrap().subject,
+                            expected_context.actor_subject
+                        );
+                        assert_eq!(authorization.receive_id, expected_context.receive_id);
+                        assert_eq!(authorization.refs.len(), 1);
+                        assert_eq!(authorization.refs[0].ref_name, "refs/heads/main");
+                        assert_eq!(authorization.refs[0].old_commit_sha, initial);
+                        assert_eq!(authorization.refs[0].new_commit_sha, "0".repeat(40));
+                        continue;
+                    }
+                    let (updates, context) =
+                        tokio::time::timeout(std::time::Duration::from_secs(2), admissions.recv())
+                            .await
+                            .expect(
+                                "a committed receive must schedule admission despite cancellation",
+                            )
+                            .unwrap();
+                    assert_eq!(updates.len(), 1);
+                    assert_eq!(updates[0].ref_name, "refs/heads/main");
+                    assert_eq!(updates[0].old_oid, initial);
+                    assert_eq!(
+                        updates[0].new_oid,
+                        "0000000000000000000000000000000000000000"
+                    );
+                    assert_eq!(context.actor_subject, expected_context.actor_subject);
+                    assert_eq!(context.receive_id, expected_context.receive_id);
+                    assert!(admissions.try_recv().is_err());
+                } else if let Some(receipts) = receipts {
+                    assert!(receipts.list(None, 1).unwrap().entries.is_empty());
+                }
             }
         }
     }

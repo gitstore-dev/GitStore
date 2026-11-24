@@ -41,6 +41,9 @@ type ReaderConfig struct {
 }
 
 func (rc *ReaderConfig) validate() error {
+	if rc.Advanced.MaxStreamsPerBatch < 0 || rc.Advanced.MaxStreamsPerBatch > 256 {
+		return errors.New("MaxStreamsPerBatch must be within [0, 256]")
+	}
 	if len(rc.TableNames) == 0 {
 		return errors.New("no table names specified to read from")
 	}
@@ -71,6 +74,10 @@ func (rc *ReaderConfig) setDefaults() {
 // necessary. They have carefully selected default values that should work for
 // most cases. Changing these parameters need to be done carefully.
 type AdvancedReaderConfig struct {
+	// MaxStreamsPerBatch optionally coalesces vnode groups into bounded
+	// multi-partition queries. Zero preserves the generation's original groups.
+	MaxStreamsPerBatch int
+
 	// ConfidenceWindowSize defines a minimal age a change must have in order
 	// to be read.
 	//
@@ -203,6 +210,27 @@ func (rc *ReaderConfig) Copy() *ReaderConfig {
 	newRC := &ReaderConfig{}
 	*newRC = *rc
 	return newRC
+}
+
+func coalesceStreamBatches(groups [][]StreamID, maximum int) [][]StreamID {
+	if maximum == 0 {
+		return groups
+	}
+	var batches [][]StreamID
+	var batch []StreamID
+	for _, group := range groups {
+		for _, stream := range group {
+			if len(batch) == maximum {
+				batches = append(batches, batch)
+				batch = nil
+			}
+			batch = append(batch, stream)
+		}
+	}
+	if len(batch) > 0 {
+		batches = append(batches, batch)
+	}
+	return batches
 }
 
 const (
@@ -340,7 +368,7 @@ func (r *Reader) Run(ctx context.Context) error {
 
 			// Start batch readers for this generation
 			// Use pre-grouped streams from generation fetcher
-			split := gen.streams
+			split := coalesceStreamBatches(gen.streams, r.config.Advanced.MaxStreamsPerBatch)
 			totalStreams := 0
 			for _, group := range split {
 				totalStreams += len(group)

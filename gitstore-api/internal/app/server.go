@@ -72,21 +72,23 @@ type providerShutdowner interface {
 
 // Server is the composed API runtime.
 type Server struct {
-	cfg              *config.Config
-	log              *zap.Logger
-	store            datastore.Datastore
-	gitClient        *gitclient.Client
-	httpServers      []httpEndpoint
-	connections      *wsregistry.Registry
-	grpcServer       *grpc.Server
-	grpcListener     net.Listener
-	authReloader     authReloader
-	providerShutdown []providerShutdowner
-	namespaceWatch   *namespaceWatchRuntime
-	endpointCleanup  []func()
-	bootstrap        *bootstrapRuntime
-	roleReady        *roleReadiness
-	runtimeCancel    context.CancelFunc
+	cfg                   *config.Config
+	log                   *zap.Logger
+	store                 datastore.Datastore
+	gitClient             *gitclient.Client
+	httpServers           []httpEndpoint
+	connections           *wsregistry.Registry
+	grpcServer            *grpc.Server
+	grpcListener          net.Listener
+	authReloader          authReloader
+	providerShutdown      []providerShutdowner
+	namespaceWatch        *namespaceWatchRuntime
+	endpointCleanup       []func()
+	bootstrap             *bootstrapRuntime
+	roleReady             *roleReadiness
+	runtimeCancel         context.CancelFunc
+	targetMaintenanceDone chan struct{}
+	rbacEvidence          *rbacRuntimeEvidence
 }
 
 type namespaceCDCRunner interface {
@@ -176,6 +178,13 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 	if log == nil {
 		return nil, fmt.Errorf("app: logger is required")
 	}
+	translationActivation := cataloggrpc.TranslationActivation{
+		Enabled:          cfg.Api.Translation.Enabled,
+		DescriptorDigest: cfg.Api.Translation.DescriptorDigest,
+	}
+	if err := translationActivation.Validate(); err != nil {
+		return nil, err
+	}
 	if err := cfg.Api.ValidateRuntime(); err != nil {
 		return nil, err
 	}
@@ -190,6 +199,12 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 	}
 	if cfg.Api.Auth.AuthZ.Provider == "opa" && !enableDynamic {
 		return nil, errors.New("opa authz provider is unavailable: production acceptance is pending")
+	}
+	if err := cfg.Api.Auth.OPA.ValidateProvider(cfg.Api.Auth.AuthZ.Provider); err != nil {
+		return nil, err
+	}
+	if cfg.Api.Auth.OPA.EvidenceDirectory != "" && len(runtimeOptions) > 0 && runtimeOptions[0].observeSnapshot != nil {
+		return nil, errors.New("configured RBAC evidence and an injected snapshot observer cannot both be selected")
 	}
 	constructed := false
 	var prepared *opa.Provider
@@ -215,6 +230,15 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 			}
 		}
 	}
+	evidence, log, err := newRBACRuntimeEvidence(cfg.Api.Auth.OPA.EvidenceDirectory, log)
+	if err != nil {
+		return nil, fmt.Errorf("open private RBAC evidence: %w", err)
+	}
+	defer func() {
+		if !constructed && evidence != nil {
+			_ = evidence.close()
+		}
+	}()
 	clock := apiruntime.SystemClock{}
 	instanceID := uuid.NewString()
 
@@ -322,7 +346,9 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 		option := rbacRuntimeOptions{provider: prepared, prepare: func(ctx context.Context) error {
 			return ensureBootstrapResources(ctx, store, recovery, clock, ids, log)
 		}, observeOnly: !cfg.Api.HasRole(config.RoleAdmin) && !cfg.Api.HasRole(config.RoleCatalog)}
-		if len(runtimeOptions) > 0 {
+		if evidence != nil {
+			option.observeSnapshot = evidence.source.observe
+		} else if len(runtimeOptions) > 0 {
 			option.observeSnapshot = runtimeOptions[0].observeSnapshot
 		}
 		dynamic, err = newInitializedCanonicalRBACRuntime(context.Background(), store, resourceJournal, recovery, cfg.Api.Auth.OPA, log,
@@ -372,6 +398,7 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 			RBACGitReader:         recoveryReader,
 			Logger:                log,
 			Clock:                 clock,
+			TranslationActivation: translationActivation,
 		})
 		if err != nil {
 			return nil, err
@@ -409,6 +436,7 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 			Clock:                        clock,
 			IDs:                          ids,
 			CommittedManifestAdmitter:    catalogServer,
+			TranslationActivation:        translationActivation,
 			RBACValidator:                validator,
 			ResourceJournal:              resourceJournal,
 			NamespaceWatch:               cfg.Api.Watch.Journal,
@@ -533,6 +561,7 @@ func newServer(cfg *config.Config, log *zap.Logger, enableDynamic bool, runtimeO
 		endpointCleanup:  endpointCleanup,
 		bootstrap:        bootstrap,
 		roleReady:        roleReady,
+		rbacEvidence:     evidence,
 	}, nil
 }
 
@@ -603,6 +632,7 @@ func buildProviderRegistryWithOPA(cfg *config.Config, store serviceAccountStore,
 	}
 	runtime := &providerRegistryRuntime{
 		cfg: cfg, store: store, log: log, revocations: revocations, registry: registry, shutdowns: shutdowns, preparedOPA: prepared,
+		evidenceDirectory: cfg.Api.Auth.OPA.EvidenceDirectory,
 	}
 	if len(journals) > 0 {
 		runtime.journal = journals[0]
@@ -623,6 +653,7 @@ type providerRegistryRuntime struct {
 	invalidateConnections func()
 	sendInvitation        func(context.Context, *auth.UserProfile, string) error
 	preparedOPA           *opa.Provider
+	evidenceDirectory     string
 }
 
 func (r *providerRegistryRuntime) setInvalidationHandler(handler func()) {
@@ -668,6 +699,9 @@ func (r *providerRegistryRuntime) Reload() (err error) {
 	}()
 	if r.closed {
 		return errors.New("auth provider registry is closed")
+	}
+	if r.cfg.Api.Auth.OPA.EvidenceDirectory != r.evidenceDirectory {
+		return errors.New("changing private RBAC evidence capture requires a controlled restart")
 	}
 	current := r.registry.AuthZ()
 	if current != nil && current.Name() != r.cfg.Api.Auth.AuthZ.Provider &&
@@ -860,6 +894,15 @@ func constructProviderRegistryWithOPA(cfg *config.Config, store serviceAccountSt
 func (s *Server) Start() {
 	runCtx, runCancel := context.WithCancel(context.Background())
 	s.runtimeCancel = runCancel
+	if capable, ok := s.store.(datastore.TranslationTargetMaintenanceCapable); ok {
+		if maintenance := capable.TranslationTargetMaintenanceStore(); maintenance != nil {
+			s.targetMaintenanceDone = make(chan struct{})
+			go func() {
+				defer close(s.targetMaintenanceDone)
+				runTranslationTargetMaintenance(runCtx, maintenance, s.log)
+			}()
+		}
+	}
 	if s.bootstrap != nil {
 		s.bootstrap.start()
 	}
@@ -946,6 +989,15 @@ func (s *Server) Close() {
 	if s.runtimeCancel != nil {
 		s.runtimeCancel()
 	}
+	if s.targetMaintenanceDone != nil {
+		timer := time.NewTimer(namespaceWatchStopTimeout)
+		select {
+		case <-s.targetMaintenanceDone:
+		case <-timer.C:
+			s.log.Warn("Translation target maintenance shutdown timed out")
+		}
+		timer.Stop()
+	}
 	if s.bootstrap != nil {
 		s.bootstrap.close()
 	}
@@ -988,6 +1040,11 @@ func (s *Server) Close() {
 	}
 	if s.store != nil {
 		_ = s.store.Close()
+	}
+	if s.rbacEvidence != nil {
+		if err := s.rbacEvidence.close(); err != nil {
+			s.log.Warn("private RBAC evidence failed to seal", zap.Error(err))
+		}
 	}
 }
 

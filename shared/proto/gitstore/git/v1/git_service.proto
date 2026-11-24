@@ -117,11 +117,17 @@ service GitService {
   // GetFile returns the raw bytes of a single file at the given ref.
   rpc GetFile(GetFileRequest) returns (GetFileResponse);
 
+  // Read at most 32 regular files, each at most 64 KiB, at one exact commit.
+  rpc GetFiles(GetFilesRequest) returns (GetFilesResponse);
+
   // GetFileStream returns a file as a stream of byte chunks.
   rpc GetFileStream(GetFileStreamRequest) returns (stream GetFileStreamResponse);
 
   // ListFiles enumerates file paths under an optional prefix at the given ref.
   rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
+
+  // Resolve at most 32 independently authorized repository refs without listing trees.
+  rpc ResolveRefs(ResolveRefsRequest) returns (ResolveRefsResponse);
 
   // Bounded first-parent provenance for a canonical RBAC path at an exact commit.
   rpc GetFileProvenance(GetFileProvenanceRequest) returns (GetFileProvenanceResponse);
@@ -147,6 +153,18 @@ service GitService {
 
   // GetLatestTag returns the latest semver release tag by version ordering.
   rpc GetLatestTag(GetLatestTagRequest) returns (GetLatestTagResponse);
+}
+
+message GetFilesRequest {
+  repeated string paths = 1;
+  string commit_sha = 2;
+  RequestAuthorization authorization = 14;
+  string repository_id = 15;
+}
+
+message GetFilesResponse {
+  string commit_sha = 1;
+  repeated GetFileResponse files = 2;
 }
 
 message GetFileProvenanceRequest {
@@ -310,6 +328,29 @@ message ListFilesRequest {
 message ListFilesResponse {
   repeated FileEntry files          = 1;
   string             ref_commit_sha = 2;
+}
+
+message RepositoryRef {
+  string repository_id = 1;
+  string ref = 2;
+  RequestAuthorization authorization = 14;
+}
+
+message ResolveRefsRequest {
+  repeated RepositoryRef refs = 1;
+}
+
+message RepositoryRefProof {
+  string repository_id = 1;
+  string ref = 2;
+  // Empty when this ref cannot be proved; other proofs remain independent.
+  string commit_sha = 3;
+  // A held repository write lock prevented verification; this is not a proof.
+  bool busy = 4;
+}
+
+message ResolveRefsResponse {
+  repeated RepositoryRefProof proofs = 1;
 }
 
 message FileEntry {

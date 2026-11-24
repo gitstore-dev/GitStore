@@ -71,12 +71,13 @@ func ReleaseBuiltins() (*BuiltinSet, error) {
 		"cluster-admin": {rule([]string{"*"}, []string{"*"})},
 		"admin": {
 			rule(core, []string{"create", "read", "list", "watch", "update", "delete", "transfer"}),
+			rule([]string{"translation"}, write),
 			rule([]string{"repository", "categoryTaxonomy", "product"}, []string{"purge"}), management,
 			rule([]string{"role", "roleBinding"}, write),
 			rule([]string{"role/access-review"}, []string{"create"}),
 		},
-		"edit": {rule(core, write), management},
-		"view": {rule(core, read), management},
+		"edit": {rule(core, write), rule([]string{"translation"}, write), management},
+		"view": {rule(core, read), rule([]string{"translation"}, read), management},
 		"namespace-owner": {{
 			Resources: []string{"namespace"}, Verbs: []string{"read", "update", "delete", "transfer"},
 			When: []Condition{{Token: "owner"}},
@@ -86,8 +87,8 @@ func ReleaseBuiltins() (*BuiltinSet, error) {
 			When: []Condition{{Token: "subjectUsername"}, {Attr: "tier", Op: "eq", Value: &userTier}},
 		}},
 		"controller": {
-			rule([]string{"namespace", "repository", "categoryTaxonomy", "product", "file"}, read),
-			rule([]string{"namespace/status", "repository/status", "categoryTaxonomy/status", "product/status", "file/status"}, []string{"write"}),
+			rule([]string{"namespace", "repository", "categoryTaxonomy", "product", "productVariant", "collection", "file", "translation"}, read),
+			rule([]string{"namespace/status", "repository/status", "categoryTaxonomy/status", "product/status", "file/status", "translation/status"}, []string{"write"}),
 			rule([]string{"namespace", "repository", "categoryTaxonomy", "product"}, []string{"purge"}),
 			rule([]string{"namespace/system-repository"}, []string{"provision"}),
 			rule([]string{"repository"}, []string{"create"}),

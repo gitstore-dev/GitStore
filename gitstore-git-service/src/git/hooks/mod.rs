@@ -2,6 +2,7 @@
 // Copyright (c) 2026 GitStore contributors
 
 pub mod admission_handler;
+pub mod admission_receipts;
 pub mod category_taxonomy_deletion_handler;
 pub mod validation_handler;
 
@@ -223,6 +224,10 @@ impl ValidationHandler for ChainedValidationHandler {
 /// Called in the post-receive phase (fire-and-forget).
 #[async_trait]
 pub trait AdmissionHandler: Send + Sync {
+    fn receipt_catalog_refs(&self, _updates: &[RefUpdate]) -> Vec<String> {
+        Vec::new()
+    }
+
     async fn admit(
         &self,
         phase: &str,

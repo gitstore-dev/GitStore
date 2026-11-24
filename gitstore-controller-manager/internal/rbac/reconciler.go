@@ -22,12 +22,20 @@ type LifecycleClient interface {
 }
 
 type Reconciler struct {
-	lookup cache.LookupFunc[Resource]
-	client LifecycleClient
+	lookup     cache.LookupFunc[Resource]
+	roleLookup cache.LookupFunc[Resource]
+	client     LifecycleClient
 }
+
+const conflictRequeueDelay = 100 * time.Millisecond
 
 func NewReconciler(lookup cache.LookupFunc[Resource], client LifecycleClient) *Reconciler {
 	return &Reconciler{lookup: lookup, client: client}
+}
+
+func (r *Reconciler) WithRoleLookup(lookup cache.LookupFunc[Resource]) *Reconciler {
+	r.roleLookup = lookup
+	return r
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types.ReconcileResult {
@@ -61,8 +69,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 			target.Namespace = resource.Metadata.Namespace
 		}
 		role, exists, err := r.lookup(ctx, target)
+		if err == nil && !exists && r.roleLookup != nil {
+			// Independent kind watches can deliver a binding before its Role.
+			// Confirm a cache miss with one scoped read, never a tier scan.
+			role, exists, err = r.roleLookup(ctx, target)
+		}
 		if err != nil {
 			return types.ResultTransient(err)
+		}
+		if exists && role.Key() != target {
+			return types.ResultTransient(errors.New("rbac: inconsistent role identity"))
 		}
 		switch {
 		case !exists:
@@ -85,6 +101,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, key types.WorkItemKey) types
 		return types.ResultOK()
 	}
 	if err := r.client.UpdateStatus(ctx, resource, update); err != nil {
+		if errors.Is(err, types.ErrConflict) {
+			return types.ResultAfter(conflictRequeueDelay)
+		}
 		return types.ResultTransient(err)
 	}
 	return types.ResultOK()
@@ -99,6 +118,9 @@ func (r *Reconciler) finalize(ctx context.Context, resource Resource) types.Reco
 			}
 		}
 		if err := r.client.UpdateStatus(ctx, resource, StatusUpdate{Finalizers: finalizers}); err != nil {
+			if errors.Is(err, types.ErrConflict) {
+				return types.ResultAfter(conflictRequeueDelay)
+			}
 			return types.ResultTransient(err)
 		}
 		// Completion must use the new UID-bound version delivered by the watch.
@@ -108,6 +130,9 @@ func (r *Reconciler) finalize(ctx context.Context, resource Resource) types.Reco
 		return types.ResultOK()
 	}
 	if err := r.client.CompleteDeletion(ctx, resource); err != nil {
+		if errors.Is(err, types.ErrConflict) {
+			return types.ResultAfter(conflictRequeueDelay)
+		}
 		return types.ResultTransient(err)
 	}
 	return types.ResultOK()

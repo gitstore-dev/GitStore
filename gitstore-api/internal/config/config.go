@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/mail"
 	"net/url"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -60,13 +61,20 @@ type ApiConfig struct {
 	Notification NotificationConfig            `mapstructure:"notification"`
 	Datastore    DatastoreConfig               `mapstructure:"datastore"`
 	Watch        WatchConfig                   `mapstructure:"watch"`
+	Translation  TranslationConfig             `mapstructure:"translation"`
 	Profiling    observability.ProfilingConfig `mapstructure:"profiling"`
+}
+
+type TranslationConfig struct {
+	Enabled          bool   `mapstructure:"enabled"`
+	DescriptorDigest string `mapstructure:"descriptor_digest"`
 }
 
 // OPAConfig holds the OPA provider's dynamic-RBAC rollout and runtime bounds.
 type OPAConfig struct {
 	WritesEnabled       bool          `mapstructure:"writes_enabled"`
 	InitialAdminSubject string        `mapstructure:"initial_admin_subject"`
+	EvidenceDirectory   string        `mapstructure:"evidence_directory"`
 	MaxStaleness        time.Duration `mapstructure:"max_staleness"`
 	ValidationTimeout   time.Duration `mapstructure:"validation_timeout"`
 	RebuildWorkers      int           `mapstructure:"rebuild_workers"`
@@ -79,6 +87,14 @@ type OPAConfig struct {
 }
 
 func (c OPAConfig) ValidateProvider(provider string) error {
+	if c.EvidenceDirectory != "" {
+		if provider != "opa" {
+			return errors.New("api.auth.opa.evidence_directory requires the opa authz provider")
+		}
+		if !filepath.IsAbs(c.EvidenceDirectory) || filepath.Clean(c.EvidenceDirectory) != c.EvidenceDirectory || c.EvidenceDirectory == "/" {
+			return errors.New("api.auth.opa.evidence_directory requires a clean absolute private directory")
+		}
+	}
 	if c.WritesEnabled && provider != "opa" {
 		return errors.New("api.auth.opa.writes_enabled requires the opa authz provider")
 	}
@@ -547,6 +563,8 @@ func load(paths []string) (*Config, error) {
 	setEndpointDefaults(v)
 	v.SetDefault("api.git_port", 9000)
 	v.SetDefault("api.grpc_port", 6000)
+	v.SetDefault("api.translation.enabled", false)
+	v.SetDefault("api.translation.descriptor_digest", "")
 	v.SetDefault("api.rate_limit.per_second", 50)
 	v.SetDefault("api.rate_limit.burst", 100)
 	v.SetDefault("api.git_service.uri", "dns:///localhost:50051")
@@ -569,6 +587,7 @@ func load(paths []string) (*Config, error) {
 	v.SetDefault("api.auth.authz.provider", "rbac-local")
 	v.SetDefault("api.auth.opa.writes_enabled", false)
 	v.SetDefault("api.auth.opa.initial_admin_subject", "")
+	v.SetDefault("api.auth.opa.evidence_directory", "")
 	v.SetDefault("api.auth.opa.max_staleness", "5s")
 	v.SetDefault("api.auth.opa.validation_timeout", "30s")
 	v.SetDefault("api.auth.opa.rebuild_workers", 4)

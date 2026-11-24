@@ -50,7 +50,7 @@ export GITSTORE_API__DATASTORE__SCYLLA__USERNAME=gitstore_operator
 export GITSTORE_API__DATASTORE__SCYLLA__PASSWORD='<from-secret-manager>'
 
 go run ./cmd/server gitctl scylla-projection-audit > projection-audit.json
-jq '{findings: (.findings | length), actions: (.actions | length)}' projection-audit.json
+jq '{findings: (.findings | length), actions: (.actions | length), retiredTargetRows: (.retiredTargetRows | length)}' projection-audit.json
 ```
 
 The Scylla driver fetches audit rows in 1,000-row pages and has no fixed
@@ -65,7 +65,8 @@ catalogue query projections, including the CategoryTaxonomy
 [Category ancestor index](#category-ancestor-index)). Findings are deterministic:
 
 - `missing`: an authoritative row requires a projection that is absent;
-- `dangling`: a projection owner has no authoritative row;
+- `dangling`: a projection owner has no live authoritative row, or a retained
+  physical target row belongs to a permanently retired UID;
 - `stale`: the projection key or values disagree with the authoritative row;
 - `duplicate`: the correct projection exists and an extra projection points to
   the same resource.
@@ -75,6 +76,67 @@ the same unique key or the projection participates in an in-flight write
 reservation. Do not delete or overwrite it online. Resolve authoritative
 conflicts first; investigate reservation findings against mutation logs before
 performing any manual cleanup.
+
+### Retired target rows
+
+A delayed write can reintroduce a physical Product, ProductVariant,
+CategoryTaxonomy, Collection or File row after UID retirement. Point reads
+continue to return not found. Raw namespace pages fail with repair-required
+rather than return that retired resource or truncate pagination.
+
+Interrupted deletion can also leave a private source retirement marker before
+permanent UID retirement is published. A prepared UID claim by itself does not
+prove deletion: a failed version check leaves the source live.
+
+Review `retiredTargetRows` in the audit and dry-run output. Confirmed repair
+rechecks permanent UID retirement or the exact source retirement marker with
+a SERIAL read. It publishes permanent UID retirement before conditionally
+deleting only the exact namespace/creation-timestamp/UID keys and cleaning lookup
+reservations. It never removes UID claims or deletes an active resource based
+on an ordinary missing lookup. Missing retirement authority or an I/O failure
+stops repair; do not bypass that check with manual cleanup. Re-audit after
+repair and retry the affected namespace page.
+
+### Bounded Translation maintenance
+
+Use `--kind Translation --namespace-uid <uid>` for a namespace lifetime rather
+than the unbounded general projection comparison. The default
+`--audit-scope indexes` traverses Translation sources, reservations and cells;
+its terminal Scanned phase is traversal history, not a consistency certificate.
+`--audit-scope targets` repairs and verifies material proof for all five target
+kinds. Both scopes accept `--page-size 1..256` and a positive `--timeout`.
+Set `NAMESPACE_UID` to the current Namespace UID, not its name.
+
+```bash
+go run ./cmd/server gitctl scylla-projection-audit \
+  --kind Translation --audit-scope targets --namespace-uid "$NAMESPACE_UID" \
+  --page-size 256 --timeout 1m
+go run ./cmd/server gitctl scylla-projection-repair --confirm \
+  --kind Translation --audit-scope targets --namespace-uid "$NAMESPACE_UID" \
+  --page-size 256 --timeout 1m
+```
+
+Audit and `--dry-run` only preview the next bounded page; they do not initialize
+progress or repair records. Confirmed repair performs one server-resumed turn.
+Repeat confirmed turns as needed. A conflict or uncertain response requires
+reloading persisted progress, not supplying a cursor or replaying an old plan.
+Backfill preserves public source metadata, body and status; missing original
+namespace birth authority fails closed and must not be inferred from its name.
+Permanently retired UIDs are excluded, including retained cancellation markers
+and delayed physical replays. An unfinished retirement without permanent proof
+blocks the page instead of being treated as absence.
+
+The target scope reaches Verified only after a complete verification pass under
+one coverage epoch. Proved material updates, fenced births and retirement
+preserve coverage; unproved or invalidating writes restart repair. Pending proved
+heads remain unavailable for positive material reads even when covered. An
+unproved source grant blocks verification; a confirmed turn fences that exact
+grant and returns a conflict so the next turn reloads it. Proved grants are not
+canceled. A malformed grant fails closed and needs investigation.
+A saved result is not current coverage and is not proof that all deployed writers
+participate. Never use these maintenance results
+to enable Translation admission, which remains disabled, or to bypass replica
+capability and rollout checks.
 
 ### Category ancestor index
 
@@ -125,6 +187,7 @@ previous path; unfiltered category reads are unaffected. Categories with
 go run ./cmd/server gitctl scylla-projection-repair --dry-run > projection-repair-plan.json
 jq '.findings[] | select(.repairable == false)' projection-repair-plan.json
 jq '.actions[] | {type,kind,uid,table: (.after.table // .before.table)}' projection-repair-plan.json
+jq '.retiredTargetRows // [] | .[] | {kind,uid,namespace,creationTimestamp}' projection-repair-plan.json
 ```
 
 Review every unrepairable finding and compare the plan with recent mutation
@@ -143,7 +206,8 @@ jq '{plannedActions,appliedActions,remaining: (.verification.findings | length)}
 ```
 
 Apply is confirmation-gated. It checks the authoritative resource version (or
-continued absence for dangling owners), uses identity-conditional deletes and
+continued absence for dangling owners, or permanent retirement for
+[retired target rows](#retired-target-rows)), uses identity-conditional deletes and
 updates, and uses `IF NOT EXISTS` inserts. A conditional miss or concurrent
 writer is an error; it is never silently skipped. Re-audit and generate a fresh
 plan rather than replaying a stale plan. Repository writes that

@@ -24,6 +24,7 @@ import (
 	"github.com/gocql/gocql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 type namespaceCDCTestRunner interface {
@@ -94,7 +95,7 @@ func TestNamespaceWatchBatchAppendPublishesContiguousRangesAcrossBuckets(t *test
 		require.NoError(t, cleanup.Query("TRUNCATE resource_watch_clock").Exec())
 	})
 
-	store := newTestStoreWithWatchBucket(t, 3)
+	store := newTestStoreWithWatchBucket(t, 35)
 	journal := store.(datastore.NamespaceWatchCapable).NamespaceWatchJournal()
 	batcher := journal.(namespaceWatchBatchAppender)
 	ctx := context.Background()
@@ -103,11 +104,12 @@ func TestNamespaceWatchBatchAppendPublishesContiguousRangesAcrossBuckets(t *test
 	require.True(t, acquired)
 	t.Cleanup(func() { require.NoError(t, journal.ReleaseLease(context.Background(), lease)) })
 
-	events := make([]datastore.NamespaceWatchEvent, 5)
+	events := make([]datastore.NamespaceWatchEvent, 37)
 	for index := range events {
 		events[index] = datastore.NamespaceWatchEvent{
 			Type: datastore.NamespaceWatchAdded, Name: fmt.Sprintf("batch-%d", index+1),
 			DeduplicationKey: fmt.Sprintf("batch-key-%d", index+1), At: time.Now().UTC(),
+			Payload: bytes.Repeat([]byte{byte('a' + index%26)}, 17<<10),
 		}
 	}
 	appended, err := batcher.AppendBatch(ctx, lease, events, time.Hour)
@@ -116,11 +118,12 @@ func TestNamespaceWatchBatchAppendPublishesContiguousRangesAcrossBuckets(t *test
 	for index, event := range appended {
 		require.Equal(t, uint64(index+1), event.Sequence)
 	}
-	read, err := journal.ReadAfter(ctx, datastore.NamespaceWatchCursor{Epoch: appended[0].Epoch}, 10)
+	read, err := journal.ReadAfter(ctx, datastore.NamespaceWatchCursor{Epoch: appended[0].Epoch}, 40)
 	require.NoError(t, err)
 	require.Len(t, read, len(events))
 	for index, event := range read {
 		require.Equal(t, fmt.Sprintf("batch-%d", index+1), event.Name)
+		require.Equal(t, events[index].Payload, event.Payload)
 	}
 }
 
@@ -1013,6 +1016,122 @@ func TestFileCDCReaderReplaysCommittedWritesAcrossMaterializerReplacement(t *tes
 	stopPeer()
 }
 
+func TestTranslationAdditionalTargetCDCUsesSharedJournal(t *testing.T) {
+	for _, kind := range []string{"ProductVariant", "Collection"} {
+		t.Run(kind, func(t *testing.T) {
+			store, peer := newTestStores(t)
+			journal := store.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+			peerJournal := peer.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+			lease, acquired, err := journal.AcquireLease(t.Context(), "translation-target-"+kind, time.Now().UTC(), 5*time.Minute)
+			require.NoError(t, err)
+			require.True(t, acquired)
+			ctx, cancel := context.WithCancel(t.Context())
+			ready, done := make(chan struct{}, 1), make(chan error, 1)
+			go func() {
+				done <- store.(catalogCDCTestRunner).RunCatalogCDC(ctx, kind,
+					watchjournal.NewMaterializer(journal, watchjournal.MaterializerConfig{EventTTL: time.Hour}),
+					lease, 14*24*time.Hour, 500*time.Millisecond, func() {
+						select {
+						case ready <- struct{}{}:
+						default:
+						}
+					})
+			}()
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case err := <-done:
+					if err != nil {
+						require.ErrorIs(t, err, context.Canceled)
+					}
+				case <-time.After(10 * time.Second):
+					t.Fatal("target CDC reader did not stop")
+				}
+				releaseCtx, releaseCancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
+				defer releaseCancel()
+				require.NoError(t, journal.ReleaseLease(releaseCtx, lease))
+			})
+			select {
+			case <-ready:
+			case err := <-done:
+				done <- err
+				t.Fatalf("target CDC reader stopped before readiness: %v", err)
+			case <-time.After(30 * time.Second):
+				t.Fatal("target CDC reader did not become ready")
+			}
+			bounds, err := peerJournal.Bounds(t.Context())
+			require.NoError(t, err)
+			cursor := datastore.ResourceWatchCursor{Epoch: bounds.Epoch, Sequence: bounds.HighWater}
+			uid, namespace, name := newID(), "target-"+newID()[:8], "target"
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			require.NoError(t, store.CreateNamespace(t.Context(), &datastore.Namespace{
+				UID: newID(), Name: namespace, CreationTimestamp: now,
+			}))
+			var create, update, remove func() error
+			switch kind {
+			case "ProductVariant":
+				resource := &datastore.ProductVariant{
+					UID: uid, Namespace: namespace, Name: name, ResourceVersion: "1", Generation: 1,
+					APIVersion: "catalog.gitstore.dev/v1beta1", Kind: kind, CreationTimestamp: now,
+					SKU: "sku", ProductRefName: "parent", Body: "\r\nexact target\r\n",
+					Spec: json.RawMessage(`{"title":"initial","sku":"sku","productRef":{"name":"parent"}}`),
+				}
+				create = func() error { return store.CreateProductVariant(t.Context(), resource) }
+				update = func() error {
+					resource.ResourceVersion, resource.Generation = "2", 2
+					resource.Body = "\r\nupdated target\r\n"
+					return store.UpdateProductVariant(t.Context(), resource, "1")
+				}
+				remove = func() error { return store.DeleteProductVariantWithResourceVersion(t.Context(), uid, "2") }
+			case "Collection":
+				resource := &datastore.Collection{
+					UID: uid, Namespace: namespace, Name: name, ResourceVersion: "1", Generation: 1,
+					APIVersion: "catalog.gitstore.dev/v1beta1", Kind: kind, CreationTimestamp: now,
+					Body: "\r\nexact target\r\n", Spec: json.RawMessage(`{"title":"initial"}`),
+				}
+				create = func() error { return store.CreateCollection(t.Context(), resource) }
+				update = func() error {
+					resource.ResourceVersion, resource.Generation = "2", 2
+					resource.Body = "\r\nupdated target\r\n"
+					return store.UpdateCollection(t.Context(), resource, "1")
+				}
+				remove = func() error { return store.DeleteCollectionWithResourceVersion(t.Context(), uid, "2") }
+			}
+			for i, write := range []func() error{create, update, remove} {
+				require.NoError(t, write())
+				want := []datastore.ResourceWatchEventType{datastore.ResourceWatchAdded, datastore.ResourceWatchModified, datastore.ResourceWatchDeleted}[i]
+				require.Eventually(t, func() bool {
+					events, err := peerJournal.ReadAfter(t.Context(), cursor, 256)
+					require.NoError(t, err)
+					for _, event := range events {
+						cursor.Sequence = event.Sequence
+						if event.Kind != kind || event.Namespace != namespace || event.Name != name || event.Type != want {
+							continue
+						}
+						if i == 2 {
+							require.Empty(t, event.Payload)
+							return true
+						}
+						var observed struct {
+							UID, Body, ResourceVersion, SKU, ProductRefName string
+						}
+						require.NoError(t, json.Unmarshal(event.Payload, &observed))
+						require.Equal(t, uid, observed.UID)
+						require.Equal(t, fmt.Sprint(i+1), observed.ResourceVersion)
+						require.Equal(t, []string{"\r\nexact target\r\n", "\r\nupdated target\r\n"}[i], observed.Body)
+						if kind == "ProductVariant" {
+							require.Equal(t, "sku", observed.SKU)
+							require.Equal(t, "parent", observed.ProductRefName)
+						}
+						return true
+					}
+					return false
+				}, 75*time.Second, 100*time.Millisecond, "%s %s was not persisted", kind, want)
+			}
+		})
+	}
+}
+
 func namespaceCDCRowCount(t *testing.T) int64 {
 	t.Helper()
 	session := newRawSession(t)
@@ -1123,4 +1242,133 @@ func TestCategoryTaxonomyCDCReaderMaterializesLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	deleted := next(datastore.ResourceWatchDeleted)
 	require.Empty(t, deleted.Payload)
+}
+
+func TestTranslationCDCReaderPublishesOnlyCommittedPublicSourceAcrossReplacement(t *testing.T) {
+	cfg := testScyllaConfig(t)
+	cfg.Keyspace += "_translation_cdc"
+	provisionKeyspace(scyllaAddr, cfg.Keyspace)
+	t.Cleanup(func() { dropKeyspace(scyllaAddr, cfg.Keyspace) })
+	open := func() datastore.Datastore {
+		store, err := scylla.New(cfg, zap.NewNop(), 0)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
+		return store
+	}
+	first, second := open(), open()
+	a, b := first.(datastore.TranslationStore), second.(datastore.TranslationStore)
+	journal := first.(datastore.ResourceWatchCapable).ResourceWatchJournal()
+	start := func(backend datastore.Datastore, holder string) func() {
+		t.Helper()
+		lease, acquired, err := journal.AcquireLease(t.Context(), holder, time.Now().UTC(), 2*time.Minute)
+		require.NoError(t, err)
+		require.True(t, acquired)
+		ctx, cancel := context.WithCancel(t.Context())
+		done, ready := make(chan struct{}), make(chan struct{})
+		var runErr error
+		go func() {
+			runErr = backend.(catalogCDCTestRunner).RunCatalogCDC(ctx, "Translation",
+				watchjournal.NewMaterializer(backend.(datastore.ResourceWatchCapable).ResourceWatchJournal(),
+					watchjournal.MaterializerConfig{EventTTL: time.Hour}),
+				lease, 14*24*time.Hour, 500*time.Millisecond, func() { close(ready) })
+			close(done)
+		}()
+		stop := sync.OnceFunc(func() {
+			cancel()
+			select {
+			case <-done:
+				require.True(t, runErr == nil || errors.Is(runErr, context.Canceled), "CDC reader: %v", runErr)
+			case <-time.After(5 * time.Second):
+				t.Error("owned Translation CDC reader did not stop")
+			}
+			require.NoError(t, journal.ReleaseLease(context.Background(), lease))
+		})
+		t.Cleanup(stop)
+		select {
+		case <-ready:
+		case <-done:
+			t.Fatalf("Translation CDC reader failed: %v", runErr)
+		case <-time.After(10 * time.Second):
+			t.Fatal("Translation CDC reader did not become ready")
+		}
+		return stop
+	}
+	stop := start(first, "translation-cdc-first")
+	source := newTranslationCreationSource(t, first)
+	source.Finalizers, source.OwnerReferences = nil, nil
+	cursor := datastore.ResourceWatchCursor{}
+	var observed []datastore.ResourceWatchEvent
+	wait := func(kind datastore.ResourceWatchEventType, uid, version string) datastore.Translation {
+		t.Helper()
+		deadline := time.NewTimer(30 * time.Second)
+		defer deadline.Stop()
+		for {
+			events, err := journal.ReadAfter(t.Context(), cursor, 256)
+			require.NoError(t, err)
+			for _, event := range events {
+				cursor = datastore.ResourceWatchCursor{Epoch: event.Epoch, Sequence: event.Sequence}
+				if event.Kind != "Translation" || event.Namespace != source.Namespace {
+					continue
+				}
+				observed = append(observed, event)
+				var payload datastore.Translation
+				require.NoError(t, json.Unmarshal(event.Payload, &payload))
+				if event.Type == kind && payload.UID == uid && payload.ResourceVersion == version {
+					return payload
+				}
+			}
+			select {
+			case <-deadline.C:
+				t.Fatalf("Translation %s event for %s at version %s was not materialized", kind, uid, version)
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}
+	require.NoError(t, a.CreateTranslation(t.Context(), source))
+	added := wait(datastore.ResourceWatchAdded, source.UID, "1")
+	require.Equal(t, source.RawSource, added.RawSource)
+	require.Equal(t, source.Body, added.Body)
+	collision := *source
+	collision.UID = newID()
+	require.ErrorIs(t, b.CreateTranslation(t.Context(), &collision), datastore.ErrAlreadyExists)
+	bindings := second.(datastore.TranslationBindingStore)
+	binding, err := bindings.GetTranslationBinding(t.Context(), source.UID)
+	require.NoError(t, err)
+	expected := binding.ResourceVersion
+	binding.ResourceVersion, err = datastore.AdvanceTranslationIndexVersion(expected)
+	require.NoError(t, err)
+	binding.Epochs[len(binding.Epochs)-1].BoundUID = newID()
+	require.NoError(t, bindings.CompareAndSwapTranslationBinding(t.Context(), binding, expected))
+	_, err = b.UpdateTranslationStatus(t.Context(), source.UID, "1",
+		json.RawMessage(`{"conditions":[],"observedGeneration":1,"lastAppliedRevision":"main@sha1:accepted"}`))
+	require.NoError(t, err)
+	status := wait(datastore.ResourceWatchModified, source.UID, "2")
+	require.NotEmpty(t, status.Status)
+	require.Len(t, observed, 2, "binding and rejected provisional sources must not publish")
+	stop()
+	updated, err := b.GetTranslation(t.Context(), source.UID)
+	require.NoError(t, err)
+	updated.ResourceVersion, updated.Generation = "3", 2
+	updated.Revision, updated.GitCommitSHA, updated.SourceBlobOID = "main@sha1:new", "new", "new-blob"
+	updated.RawSource, updated.Body, updated.SourceDigest = []byte("new accepted source\r\n"), "\r\nNeu\r\n", "new-digest"
+	require.NoError(t, b.UpdateTranslation(t.Context(), updated, "2"))
+	require.NoError(t, b.DeleteTranslation(t.Context(), source.UID, "3"))
+	start(open(), "translation-cdc-replacement")
+	modified := wait(datastore.ResourceWatchModified, source.UID, "3")
+	require.Equal(t, updated.RawSource, modified.RawSource)
+	require.Equal(t, updated.Body, modified.Body)
+	deleted := wait(datastore.ResourceWatchDeleted, source.UID, "3")
+	require.Equal(t, updated.RawSource, deleted.RawSource)
+	require.Equal(t, updated.Body, deleted.Body)
+	replacement := *source
+	replacement.UID = newID()
+	require.NoError(t, a.CreateTranslation(t.Context(), &replacement))
+	wait(datastore.ResourceWatchAdded, replacement.UID, "1")
+	require.Len(t, observed, 5, "replacement must resume durable CDC without replaying public or private transitions")
+	keys := map[string]bool{}
+	for _, event := range observed {
+		require.NotEmpty(t, event.DeduplicationKey)
+		require.False(t, keys[event.DeduplicationKey])
+		keys[event.DeduplicationKey] = true
+	}
 }

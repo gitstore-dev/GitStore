@@ -22,6 +22,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
+	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 	"github.com/gocql/gocql"
 	"github.com/google/uuid"
 	"github.com/scylladb/gocqlx/v3/table"
@@ -106,10 +107,12 @@ func provisionKeyspace(addr, keyspace string) {
 			`AND durable_writes = true`,
 		keyspace,
 	)
-	if err := session.Query(stmt).Exec(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := session.Query(stmt).WithContext(ctx).SetRequestTimeout(30 * time.Second).Exec(); err != nil {
 		panic("provisionKeyspace: create keyspace: " + err.Error())
 	}
-	if err := session.AwaitSchemaAgreement(context.Background()); err != nil {
+	if err := session.AwaitSchemaAgreement(ctx); err != nil {
 		panic("provisionKeyspace: await schema agreement: " + err.Error())
 	}
 }
@@ -120,7 +123,10 @@ func dropKeyspace(addr, keyspace string) {
 		return
 	}
 	defer session.Close()
-	_ = session.Query(fmt.Sprintf(`DROP KEYSPACE IF EXISTS %s`, keyspace)).Exec()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_ = session.Query(fmt.Sprintf(`DROP KEYSPACE IF EXISTS %s`, keyspace)).
+		WithContext(ctx).SetRequestTimeout(30 * time.Second).Exec()
 }
 
 func openRootSession(addr string) (*gocql.Session, error) {
@@ -176,6 +182,226 @@ func testScyllaConfig(t *testing.T) config.ScyllaConfig {
 func newTestStores(t *testing.T) (datastore.Datastore, datastore.Datastore) {
 	t.Helper()
 	return newTestStore(t), newTestStore(t)
+}
+
+func TestRBACOriginFactsBatchAcrossReplicas(t *testing.T) {
+	writer, reader := newTestStores(t)
+	read := reader.(datastore.RBACOriginFactsCapable).RBACOriginFactsReader()
+	ctx := t.Context()
+	lookups := make([]datastore.RBACOriginLookup, datastore.MaxRBACOriginLookups)
+	for i := range lookups {
+		created := time.Now().UTC().Truncate(time.Millisecond)
+		namespace := &datastore.Namespace{UID: newID(), Name: "origin-" + newID(),
+			ResourceVersion: "1", CreationTimestamp: created}
+		repository := &datastore.Repository{UID: newID(), Namespace: namespace.Name, Name: "gitstore-system", DefaultBranch: "main",
+			ResourceVersion: "1", CreationTimestamp: created}
+		require.NoError(t, writer.CreateNamespace(ctx, namespace))
+		require.NoError(t, writer.CreateRepository(ctx, repository))
+		require.NoError(t, writer.CreateNamespaceMapping(ctx, &datastore.NamespaceMapping{
+			Namespace: namespace.Name, Name: repository.Name, RepositoryID: repository.UID,
+		}))
+		lookups[i] = datastore.RBACOriginLookup{NamespaceUID: namespace.UID, Namespace: namespace.Name, RepositoryID: repository.UID}
+	}
+	assertFacts := func() []datastore.RBACOriginFacts {
+		t.Helper()
+		facts, err := read(ctx, lookups)
+		require.NoError(t, err)
+		require.Len(t, facts, len(lookups))
+		for i, fact := range facts {
+			namespace, err := reader.GetNamespace(ctx, lookups[i].NamespaceUID)
+			require.NoError(t, err)
+			mapping, err := reader.LookupRepository(ctx, lookups[i].Namespace, "gitstore-system")
+			require.NoError(t, err)
+			repository, err := reader.GetRepository(ctx, lookups[i].RepositoryID)
+			require.NoError(t, err)
+			require.Equal(t, namespace, fact.Namespace)
+			require.Equal(t, mapping, fact.Mapping)
+			require.Equal(t, repository, fact.Repository)
+		}
+		return facts
+	}
+	assertFacts()
+	lookups[0], lookups[len(lookups)-1] = lookups[len(lookups)-1], lookups[0]
+	assertFacts()
+	namespace, err := writer.GetNamespace(ctx, lookups[0].NamespaceUID)
+	require.NoError(t, err)
+	before := namespace.ResourceVersion
+	namespace.Annotations = map[string]string{"changed": "true"}
+	namespace.ResourceVersion = "2"
+	require.NoError(t, writer.UpdateNamespace(ctx, namespace, before))
+	require.Equal(t, "2", assertFacts()[0].Namespace.ResourceVersion, "another replica's metadata must never be cached")
+	raw, err := openRootSession(scyllaAddr)
+	require.NoError(t, err)
+	t.Cleanup(raw.Close)
+	namespaceID, err := gocql.ParseUUID(lookups[0].NamespaceUID)
+	require.NoError(t, err)
+	repositoryID, err := gocql.ParseUUID(lookups[0].RepositoryID)
+	require.NoError(t, err)
+	for _, mutation := range []struct {
+		name    string
+		query   string
+		args    []any
+		restore string
+	}{
+		{"uncommitted Namespace", "UPDATE %s.namespaces_by_uid SET watch_committed=false WHERE uid=?", []any{namespaceID},
+			"UPDATE %s.namespaces_by_uid SET watch_committed=true WHERE uid=?"},
+		{"missing reverse mapping", "DELETE FROM %s.namespace_mappings_by_repository WHERE repository_id=?", []any{repositoryID},
+			"INSERT INTO %s.namespace_mappings_by_repository (repository_id,namespace,name) VALUES (?, '" + lookups[0].Namespace + "', 'gitstore-system')"},
+		{"stale reverse mapping", "UPDATE %s.namespace_mappings_by_repository SET namespace='other' WHERE repository_id=?", []any{repositoryID},
+			"UPDATE %s.namespace_mappings_by_repository SET namespace='" + lookups[0].Namespace + "' WHERE repository_id=?"},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			require.NoError(t, raw.Query(fmt.Sprintf(mutation.query, scyllaKeyspace), mutation.args...).Exec())
+			facts, err := read(ctx, lookups)
+			require.NoError(t, err)
+			require.Empty(t, facts[0], "saga-incomplete facts must not authorize a Git proof")
+			for _, fact := range facts[1:] {
+				require.NotNil(t, fact.Namespace, "one invalid identity must not erase unrelated live facts")
+			}
+			require.NoError(t, raw.Query(fmt.Sprintf(mutation.restore, scyllaKeyspace), mutation.args...).Exec())
+			assertFacts()
+		})
+	}
+	for _, invalid := range [][]datastore.RBACOriginLookup{
+		nil, append(append([]datastore.RBACOriginLookup{}, lookups...), lookups[0]),
+		{{NamespaceUID: "invalid", Namespace: "shop", RepositoryID: lookups[0].RepositoryID}},
+	} {
+		_, err := read(ctx, invalid)
+		require.ErrorIs(t, err, datastore.ErrRBACInvalid)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = read(canceled, lookups)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestRBACStatusUpdatesDoNotRepairUnchangedIdentityIndexes(t *testing.T) {
+	for _, kind := range []rbac.Kind{rbac.Role, rbac.RoleBinding} {
+		t.Run(string(kind), func(t *testing.T) {
+			keyspace := "gitstore_rbac_status_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+			provisionKeyspace(scyllaAddr, keyspace)
+			t.Cleanup(func() { dropKeyspace(scyllaAddr, keyspace) })
+			cfg := testScyllaConfig(t)
+			cfg.Keyspace = keyspace
+			ds, err := scylla.New(cfg, zap.NewNop())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, ds.Close()) })
+			store := ds.(datastore.RBACCapable).RBACStore()
+			tier, roleUID := uuid.NewString(), uuid.NewString()
+			role := &rbac.Resource{APIVersion: rbac.APIVersion, Kind: rbac.Role, NamespaceUID: tier,
+				Metadata: rbac.Metadata{Name: "reader", Namespace: "shop", UID: roleUID},
+				Spec:     json.RawMessage(`{"rules":[]}`)}
+			var state rbac.TierState
+			state.Projection.RepositoryID = uuid.NewString()
+			state.Projection.GitRef = "refs/heads/main"
+			state.Projection.GitRevision = "main@sha1:" + strings.Repeat("a", 40)
+			state.Projection.TreeDigest = strings.Repeat("b", 64)
+			state.Projection.Actor = "test"
+			changes := []rbac.Change{{Resource: role}}
+			key := rbac.ResourceKey{TierID: tier, Kind: kind, Name: "reader"}
+			if kind == rbac.RoleBinding {
+				binding := &rbac.Resource{APIVersion: rbac.APIVersion, Kind: kind, NamespaceUID: tier,
+					Metadata: rbac.Metadata{Name: "reader", Namespace: "shop", UID: uuid.NewString()},
+					Spec:     json.RawMessage(`{"roleRef":{"kind":"Role","name":"reader"},"subjects":[{"kind":"User","name":"alice"}]}`)}
+				changes = append(changes, rbac.Change{Resource: binding})
+			}
+			_, err = store.ApplyRBAC(t.Context(), rbac.TierWrite{
+				TierID: tier, Projection: &state.Projection, Changes: changes,
+			})
+			require.NoError(t, err)
+			current, err := store.GetRBAC(t.Context(), key)
+			require.NoError(t, err)
+			if kind == rbac.RoleBinding {
+				current, err = (rbac.References{Store: store}).Resolve(t.Context(), key,
+					current.Metadata.UID, current.Metadata.ResourceVersion)
+				require.NoError(t, err)
+				resolved, err := rbac.ResolvedRoleUID(current)
+				require.NoError(t, err)
+				require.Equal(t, roleUID, resolved)
+			}
+			raw, err := openRootSession(scyllaAddr)
+			require.NoError(t, err)
+			t.Cleanup(raw.Close)
+			require.NoError(t, raw.Query("DROP TABLE "+keyspace+".rbac_resources_by_id").Exec())
+			uid, version := current.Metadata.UID, current.Metadata.ResourceVersion
+			status := map[string]json.RawMessage{}
+			if len(current.Status) > 0 {
+				require.NoError(t, json.Unmarshal(current.Status, &status))
+			}
+			status["observedGeneration"] = json.RawMessage(`1`)
+			current.Status, err = json.Marshal(status)
+			require.NoError(t, err)
+			state, err = store.ReadRBACTier(t.Context(), tier)
+			require.NoError(t, err)
+			after, err := store.ApplyRBAC(t.Context(), rbac.TierWrite{
+				TierID: tier, ExpectedRevision: state.Revision,
+				Changes: []rbac.Change{{Resource: current, ExpectedUID: uid, ExpectedResourceVersion: version}},
+			})
+			require.NoError(t, err, "status must not depend on an unchanged identity index")
+			require.False(t, after.ProjectionPending)
+			current, err = store.GetRBAC(t.Context(), key)
+			require.NoError(t, err)
+			require.Equal(t, uid, current.Metadata.UID)
+			require.Contains(t, string(current.Status), `"observedGeneration":1`)
+			projection := after.Projection
+			projection.GitRevision = "main@sha1:" + strings.Repeat("c", 40)
+			created := &rbac.Resource{APIVersion: rbac.APIVersion, Kind: rbac.Role, NamespaceUID: tier,
+				Metadata: rbac.Metadata{Name: "new-reader", Namespace: "shop", UID: uuid.NewString()},
+				Spec:     json.RawMessage(`{"rules":[]}`)}
+			pending, err := store.ApplyRBAC(t.Context(), rbac.TierWrite{
+				TierID: tier, ExpectedRevision: after.Revision, ExpectedGitRevision: after.Projection.GitRevision,
+				Projection: &projection, Changes: []rbac.Change{{Resource: created}},
+			})
+			require.Error(t, err, "a new identity still requires its index repair")
+			require.True(t, pending.ProjectionPending)
+		})
+	}
+}
+
+func TestRBACConcurrentStatusConflictsDoNotCommit(t *testing.T) {
+	first, second := newTestStores(t)
+	stores := []rbac.Store{
+		first.(datastore.RBACCapable).RBACStore(),
+		second.(datastore.RBACCapable).RBACStore(),
+	}
+	tier := uuid.NewString()
+	changes := make([]rbac.Change, 4)
+	for index := range changes {
+		changes[index].Resource = &rbac.Resource{APIVersion: rbac.APIVersion, Kind: rbac.Role, NamespaceUID: tier,
+			Metadata: rbac.Metadata{Name: fmt.Sprintf("status-%d", index), Namespace: "shop", UID: uuid.NewString()},
+			Spec:     json.RawMessage(`{"rules":[]}`)}
+	}
+	projection := rbac.ProjectionIdentity{RepositoryID: uuid.NewString(), GitRef: "refs/heads/main",
+		GitRevision: "main@sha1:" + strings.Repeat("a", 40), TreeDigest: strings.Repeat("b", 64), Actor: "test"}
+	_, err := stores[0].ApplyRBAC(t.Context(), rbac.TierWrite{TierID: tier, Projection: &projection, Changes: changes})
+	require.NoError(t, err)
+	var workers sync.WaitGroup
+	for index, change := range changes {
+		workers.Go(func() {
+			store := stores[index%len(stores)]
+			key := rbac.ResourceKey{TierID: tier, Kind: rbac.Role, Name: change.Resource.Metadata.Name}
+			for range 16 {
+				current, err := store.GetRBAC(t.Context(), key)
+				require.NoError(t, err)
+				state, err := store.ReadRBACTier(t.Context(), tier)
+				require.NoError(t, err)
+				version := current.Metadata.ResourceVersion
+				current.Status = json.RawMessage(`{"observedGeneration":1}`)
+				_, err = store.ApplyRBAC(t.Context(), rbac.TierWrite{
+					TierID: tier, ExpectedRevision: state.Revision,
+					Changes: []rbac.Change{{Resource: current, ExpectedUID: current.Metadata.UID, ExpectedResourceVersion: version}},
+				})
+				if err != nil {
+					require.ErrorIs(t, err, rbac.ErrConflict)
+					after, err := store.GetRBAC(t.Context(), key)
+					require.NoError(t, err)
+					require.Equal(t, version, after.Metadata.ResourceVersion,
+						"a post-commit repair read must not misreport an unrelated tier advance as a failed status CAS")
+				}
+			}
+		})
+	}
+	workers.Wait()
 }
 
 func TestServiceAccountClusterConcurrentIdentityAndRepair(t *testing.T) {

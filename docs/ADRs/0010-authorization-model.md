@@ -358,15 +358,52 @@ revisions and catalog/built-in digests, not whichever publication happens to
 be current at logging time. Namespace name reuse cannot select an old UID's
 grants. Static providers remain independent; their grants are never merged.
 
+Publication attempts can capture at most three complete sources to catch up
+with newer durable revisions. Only an identical normalized authorization
+digest at the same canonical/lifecycle origin can reuse prepared policy;
+metadata catch-up never renews its original live-origin proof. Changed policy
+requires fresh preparation and a new post-preparation proof. Both paths retain
+the final revision, lifecycle, journal-epoch, progress and freshness fences.
+Role-only diagnostics, audit metadata, owner-link and finalizer updates retain
+their durable resource events and CAS revisions without scheduling an
+authorization replacement. Binding, policy, identity, generation, termination
+and canonical-origin changes, or incomplete source frames, retain tier progress.
 Controller observations expose `observedGeneration` and `lastAppliedRevision`
 for all four persisted RBAC kinds. The latter acknowledges the reconciled
 resource's own `metadata.revision`, not a later repository head, and is absent
 until observed. A same-generation authored revision still needs acknowledgement;
 unchanged observations remain no-ops. Status writes retain UID/resourceVersion
 checks and reject acknowledgements for another revision.
+Scylla captures the tier header and bounded raw rows together in one unpaged
+[`SERIAL` partition read](https://docs.scylladb.com/manual/stable/features/lwt.html#reading-with-paxos),
+isolated from the same-partition conditional batches that update them. The
+stored tier's byte and count limits bound the complete result. Smaller caller
+byte budgets retain paging. If the server paginates a result, the partial
+capture is discarded and a bounded raw scan between identical complete
+tier-state reads remains required; separate
+pages are never assumed atomic. Local JSON decoding and validation happen after
+the immutable capture, outside its source-read window. The captured revision is
+retained; publication still requires the journal barrier and post-preparation
+live proof.
+
+Scylla candidate writes read only their requested clustering keys, in
+same-tier batches of at most 32 with at most four batches in flight. Missing
+rows remain explicit absences; malformed or unrelated rows and any failed
+batch discard the complete candidate. The tier revision CAS still fences
+concurrent writes, and index repair retains its existing ordering and bounds.
+
+Canonical ref proofs retain the receiver-bound signature and per-repository
+authorization for every entry. Each batch of at most 32 refs runs in one
+blocking task, preserving response order and independent missing/busy results.
+Repository read locks remain non-blocking; a busy repository cannot hold up
+unrelated proofs in the same batch.
 
 Writes and reviews capture authoritative snapshots current at validation
-start, within bounded retries/deadlines. The tier vector is not globally
+start, within bounded retries/deadlines. Captures with pending projection
+repairs consume the same three-attempt budget and cannot become pinnable
+snapshots. Authoritative pins share the provider's bounded author-content
+validation cache; current source identity, lifecycle, status and projection
+readiness are still checked independently. The tier vector is not globally
 atomic. An authorized write may finish after a concurrent cross-repository
 revocation; a new candidate or conflict retry must capture authority again.
 There is no global commit fence or distributed Git intent protocol. A

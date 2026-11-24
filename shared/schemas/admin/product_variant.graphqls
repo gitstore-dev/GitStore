@@ -20,6 +20,26 @@ extend type Query {
   ): ProductVariantConnection!
 }
 
+extend type Subscription {
+  """
+  Durable ProductVariant changes, resumable across API replicas within journal
+  retention. Capture the shared bootstrap bookmark before listing current state.
+  """
+  watchProductVariants(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): ProductVariantWatchEvent!
+}
+
+type ProductVariantWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+  productVariant: ProductVariant
+}
+
 """
 Kubernetes-style ProductVariant resource. The atomic sellable SKU unit.
 Product is the non-sellable parent descriptor; ProductVariant carries pricing,

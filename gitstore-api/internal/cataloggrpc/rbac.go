@@ -21,6 +21,7 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 	apiruntime "github.com/gitstore-dev/gitstore/api/internal/runtime"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -52,7 +53,7 @@ func (s *Server) projectRBACReceive(ctx context.Context, req *catalogv1.AdmitRes
 	if namespace.Name == "gitstore-system" {
 		tier = rbac.ClusterTierID
 	}
-	source := rbac.OriginReader{Store: s.store, Git: s.rbacGit, MaxBytes: s.rbacValidator.Capture.Reader.MaxBytes}
+	source := rbac.OriginReader{Store: s.store, Git: s.rbacGit, MaxBytes: s.rbacValidator.Capture.Reader.MaxBytes, Digests: s.rbacOriginDigests}
 	origin, resources, err := source.ReadTree(ctx, tier)
 	if err != nil {
 		return err
@@ -61,6 +62,11 @@ func (s *Server) projectRBACReceive(ctx context.Context, req *catalogv1.AdmitRes
 		// A delayed callback must not roll a newer projection back or attribute
 		// an intervening commit to this receive's actor.
 		return nil
+	}
+	for _, ref := range []string{req.GetOldCommitSha(), req.GetNewCommitSha()} {
+		if _, err := s.loadParsedEntriesFrom(ctx, s.rbacGit, repository.UID, ref, repository.Namespace, req.GetChangedPaths()); err != nil {
+			return err
+		}
 	}
 	return s.projectRBACOrigin(ctx, tier, origin, resources, auth.PrincipalFromContext(ctx).Subject)
 }
@@ -73,7 +79,8 @@ func (s *Server) ReconcileRBACTier(ctx context.Context, tier string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	origin, resources, err := (rbac.OriginReader{Store: s.store, Git: s.rbacGit, MaxBytes: s.rbacValidator.Capture.Reader.MaxBytes}).ReadTree(ctx, tier)
+	origin, resources, err := (rbac.OriginReader{Store: s.store, Git: s.rbacGit,
+		MaxBytes: s.rbacValidator.Capture.Reader.MaxBytes, Digests: s.rbacOriginDigests}).ReadTree(ctx, tier)
 	if err != nil {
 		return err
 	}
@@ -387,6 +394,9 @@ func (s *Server) validateRBACChanges(ctx context.Context, req *catalogv1.Validat
 	if err != nil {
 		if diagnostics := rbacValidationErrors(err); len(diagnostics) != 0 {
 			return req, diagnostics, nil
+		}
+		if s.log != nil {
+			s.log.Warn("RBAC validation unavailable", zap.String("stage", rbac.ValidationFailureStage(err)))
 		}
 		return nil, nil, status.Error(codes.Unavailable, "authoritative RBAC validation unavailable")
 	}

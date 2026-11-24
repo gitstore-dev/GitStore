@@ -59,6 +59,16 @@ jobs:
       if: ${{ !cancelled() && steps.go_scylla_cdc.outcome == 'success' }}
       working-directory: ./shared/scylla-cdc-go
       run: test -z "$(gofmt -l .)" && go build ./... && go vet ./... && go test -race -count=1 ./...
+    - uses: actions/setup-go@v6
+      id: go_translation
+      if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+      with:
+        go-version-file: shared/translation/go.mod
+        cache-dependency-path: shared/translation/go.sum
+    - name: Check translation validation independently
+      if: ${{ !cancelled() && steps.go_translation.outcome == 'success' }}
+      working-directory: ./shared/translation
+      run: test -z "$(gofmt -l .)" && go build ./... && go vet ./... && go test -race -count=1 ./...
 
   git-service-test:
     name: Git Service Tests

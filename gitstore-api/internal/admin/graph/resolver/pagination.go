@@ -120,6 +120,20 @@ func BuildProductConnection(result *datastore.PageResult[datastore.Product]) *mo
 	}
 }
 
+func BuildFileConnection(result *datastore.PageResult[datastore.File]) *model.FileConnection {
+	edges := make([]*model.FileEdge, len(result.Items))
+	for i, file := range result.Items {
+		edges[i] = &model.FileEdge{
+			Cursor: EncodeKeysetCursor(file.CreationTimestamp, file.UID),
+			Node:   DatastoreFileToGraphQL(file),
+		}
+	}
+	return &model.FileConnection{
+		Edges:    edges,
+		PageInfo: buildPageInfo(result, func(file *datastore.File) string { return EncodeKeysetCursor(file.CreationTimestamp, file.UID) }),
+	}
+}
+
 // BuildCategoryConnection converts a PageResult[CategoryTaxonomy] into a GraphQL CategoryConnection.
 func BuildCategoryConnection(result *datastore.PageResult[datastore.CategoryTaxonomy]) *model.CategoryConnection {
 	edges := make([]*model.CategoryEdge, len(result.Items))

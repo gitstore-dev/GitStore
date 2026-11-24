@@ -5,13 +5,17 @@ package security
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/99designs/gqlgen/graphql"
 	"github.com/gitstore-dev/gitstore/api/internal/admin/graph/model"
 	"github.com/gitstore-dev/gitstore/api/internal/auth"
+	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/opa"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 	"github.com/gitstore-dev/gitstore/api/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,6 +24,77 @@ import (
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
+
+type changingReadPolicy struct {
+	*opa.Provider
+	after     func()
+	revisions []uint64
+}
+
+func (p *changingReadPolicy) Authorize(ctx context.Context, principal *auth.Principal, action string, resource auth.ResourceContext) (auth.Decision, error) {
+	decision, err := p.Provider.Authorize(ctx, principal, action, resource)
+	if decision.AuthorizationSnapshot != nil {
+		p.revisions = append(p.revisions, decision.AuthorizationSnapshot.Tiers[1].Revision)
+	}
+	if p.after != nil {
+		after := p.after
+		p.after = nil
+		after()
+	}
+	return decision, err
+}
+
+func TestProductReadAlternativesUseOneServingPublication(t *testing.T) {
+	for _, kind := range []string{"product", "productVariant"} {
+		for _, verb := range []string{"read", "list"} {
+			t.Run(kind+"/"+verb, func(t *testing.T) {
+				provider, err := opa.NewProvider(t.Context())
+				require.NoError(t, err)
+				t.Cleanup(provider.Close)
+				builtins, err := rbac.ReleaseBuiltins()
+				require.NoError(t, err)
+				cluster := auth.AuthorizationTier{Active: true, NamespaceVersion: "1",
+					CatalogDigest: auth.AuthorizationCatalogDigest(), BuiltinDigest: builtins.Digest(),
+					ContentDigest: strings.Repeat("a", 64),
+					State: rbac.TierState{TierID: rbac.ClusterTierID, Revision: 1, Projection: rbac.ProjectionIdentity{
+						GitRevision: "main@sha1:" + strings.Repeat("a", 40), TreeDigest: strings.Repeat("a", 64)}}}
+				namespace := cluster
+				namespace.Namespace = "shop"
+				namespace.State.TierID = "48d66ea2-b247-4d91-af7c-248daf9d5a80"
+				require.NoError(t, provider.PublishTier(t.Context(), cluster))
+				require.NoError(t, provider.PublishTier(t.Context(), namespace))
+				granted := namespace
+				granted.State.Revision = 2
+				granted.ContentDigest = strings.Repeat("b", 64)
+				granted.State.RoleCount, granted.State.BindingCount = 1, 1
+				granted.Resources = []*rbac.Resource{
+					{APIVersion: rbac.APIVersion, Kind: rbac.Role, NamespaceUID: namespace.State.TierID,
+						Metadata: rbac.Metadata{Name: "reader", Namespace: "shop", UID: "0ca27a1b-7ca9-4ddd-b7a8-6359888899ba"},
+						Spec:     json.RawMessage(`{"rules":[{"resources":["product","product/management","productVariant","productVariant/management"],"verbs":["read","list"]}]}`)},
+					{APIVersion: rbac.APIVersion, Kind: rbac.RoleBinding, NamespaceUID: namespace.State.TierID,
+						Metadata: rbac.Metadata{Name: "access", Namespace: "shop", UID: "71cafdad-6068-4451-b1e7-aad9658c2893"},
+						Spec:     json.RawMessage(`{"roleRef":{"kind":"Role","name":"reader"},"subjects":[{"kind":"User","name":"alice"}]}`),
+						Status:   json.RawMessage(`{"resolved":{"roleRef":{"uid":"0ca27a1b-7ca9-4ddd-b7a8-6359888899ba"}}}`)},
+				}
+				policy := &changingReadPolicy{Provider: provider, after: func() {
+					require.NoError(t, provider.PublishTier(t.Context(), granted))
+				}}
+				principal := &auth.Principal{Subject: "alice", AuthMethod: "static-users"}
+				resource := auth.ResourceContext{Kind: kind, Name: "widget", Attrs: map[string]any{"namespace": "shop"}}
+				err = authorizeCategoryAction(t.Context(), policy, principal, kind+"."+verb, resource)
+				require.Error(t, err, "a fallback must not switch to a grant installed after the ordinary denial")
+				require.Equal(t, []uint64{1, 1}, policy.revisions)
+				require.NoError(t, authorizeCategoryAction(t.Context(), policy, principal, kind+"."+verb, resource),
+					"a new request must observe the newly installed grant")
+				ctx, closeCapture := auth.ContextWithServingAuthorizationCapture(t.Context())
+				defer closeCapture()
+				require.NoError(t, authorizeCategoryAction(ctx, policy, principal, kind+"."+verb, resource))
+				require.NoError(t, authorizeCategoryAction(ctx, policy, principal, kind+"."+verb, resource),
+					"the helper must not close an existing operation's capture")
+			})
+		}
+	}
+}
 
 func TestProductWatchAuthorizationRunsBeforeCursorHandling(t *testing.T) {
 	for _, tc := range []struct {

@@ -12,6 +12,37 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 )
 
+func (m *memdbDatastore) recordCommittedVariant(eventType datastore.ResourceWatchEventType, resource *datastore.ProductVariant, previousLabels map[string]string) {
+	m.recordCommittedTarget(resource, resource.UID, datastore.ResourceWatchEvent{
+		Type: eventType, Kind: "ProductVariant", Namespace: resource.Namespace, Name: resource.Name,
+		SelectorLabels: resource.Labels, PreviousSelectorLabels: previousLabels,
+	})
+}
+
+func (m *memdbDatastore) recordCommittedCollection(eventType datastore.ResourceWatchEventType, resource *datastore.Collection, previousLabels map[string]string) {
+	m.recordCommittedTarget(resource, resource.UID, datastore.ResourceWatchEvent{
+		Type: eventType, Kind: "Collection", Namespace: resource.Namespace, Name: resource.Name,
+		SelectorLabels: resource.Labels, PreviousSelectorLabels: previousLabels,
+	})
+}
+
+// Callers hold targetWatchMutationMu through source commit and publication.
+func (m *memdbDatastore) recordCommittedTarget(resource any, uid string, event datastore.ResourceWatchEvent) {
+	if event.Type == datastore.ResourceWatchAdded || event.Type == datastore.ResourceWatchModified {
+		event.Payload, _ = json.Marshal(resource)
+	}
+	now := time.Now().UTC()
+	m.namespaceWatchMu.Lock()
+	defer m.namespaceWatchMu.Unlock()
+	m.pruneLocked(now.Add(-m.namespaceWatchRetention))
+	m.namespaceWatchSequence++
+	event.Epoch, event.Sequence, event.At = m.namespaceWatchEpoch, m.namespaceWatchSequence, now
+	event.SelectorLabels = cloneStringMap(event.SelectorLabels)
+	event.PreviousSelectorLabels = cloneStringMap(event.PreviousSelectorLabels)
+	event.DeduplicationKey = fmt.Sprintf("memdb:%s:%s:%d", event.Type, uid, event.Sequence)
+	m.namespaceWatchEvents = append(m.namespaceWatchEvents, event)
+}
+
 func (m *memdbDatastore) recordCommittedServiceAccount(eventType datastore.ResourceWatchEventType, account *datastore.ServiceAccount) {
 	var payload []byte
 	if eventType == datastore.ResourceWatchDeleted {

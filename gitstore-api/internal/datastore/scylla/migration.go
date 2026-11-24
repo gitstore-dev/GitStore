@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -160,11 +161,108 @@ func RunMigrationsWithFS(
 	session := gocqlx.NewSession(rawSession)
 
 	log.Info("running CQL migrations")
+	if err := recoverUnrecordedAddColumns(ctx, rawSession, keyspace, migrationFiles); err != nil {
+		return fmt.Errorf("recover migration progress: %w", err)
+	}
 	if err := applyGocqlxMigrations(ctx, session, migrationFiles); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
 
 	log.Info("migrations complete")
+	return nil
+}
+
+var migrationAddColumn = regexp.MustCompile(`(?i)^ALTER\s+TABLE\s+([a-z][a-z0-9_]*)\s+ADD\s+([a-z][a-z0-9_]*)\s+([a-z][a-z0-9_]*)$`)
+
+// ADD is not idempotent when DDL commits before its ledger update. Only an
+// unfinished, unchanged migration and an exact existing column prove recovery.
+func recoverUnrecordedAddColumns(ctx context.Context, session *gocql.Session, keyspace string, bundle fs.FS) error {
+	if err := session.AwaitSchemaAgreement(ctx); err != nil {
+		return err
+	}
+	var table string
+	err := session.Query("SELECT table_name FROM system_schema.tables WHERE keyspace_name=? AND table_name=?",
+		keyspace, "gocqlx_migrate").WithContext(ctx).Scan(&table)
+	if errors.Is(err, gocql.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	files, err := fs.Glob(bundle, "*.cql")
+	if err != nil {
+		return err
+	}
+	var history []migrate.Info
+	query := fmt.Sprintf("SELECT name, checksum, done, end_time FROM gocqlx_migrate LIMIT %d", len(files)+1)
+	if err := gocqlx.NewSession(session).ContextQuery(ctx, query, nil).SelectRelease(&history); err != nil {
+		return err
+	}
+	if len(history) > len(files) {
+		return errors.New("database is ahead")
+	}
+	sort.Slice(history, func(i, j int) bool { return history[i].Name < history[j].Name })
+	remaining := make(map[string][]string)
+	for index, entry := range history {
+		if entry.Name != files[index] {
+			return fmt.Errorf("inconsistent migrations: expected %s, found %s", files[index], entry.Name)
+		}
+		content, err := fs.ReadFile(bundle, entry.Name)
+		if err != nil {
+			return fmt.Errorf("database is ahead or migration %s is unavailable: %w", entry.Name, err)
+		}
+		if entry.Checksum != fmt.Sprintf("%x", md5.Sum(content)) {
+			return fmt.Errorf("migration %s checksum changed", entry.Name)
+		}
+		statements := strings.Split(string(content), ";")
+		if strings.TrimSpace(statements[len(statements)-1]) == "" {
+			statements = statements[:len(statements)-1]
+		}
+		if entry.Done < 0 || entry.Done > len(statements) {
+			return fmt.Errorf("migration %s has invalid progress", entry.Name)
+		}
+		if !entry.EndTime.IsZero() && entry.Done != len(statements) {
+			return fmt.Errorf("migration %s has inconsistent completed history", entry.Name)
+		}
+		if index < len(history)-1 && (entry.EndTime.IsZero() || entry.Done != len(statements)) {
+			return fmt.Errorf("migration %s is incomplete before a later migration", entry.Name)
+		}
+		if entry.EndTime.IsZero() {
+			remaining[entry.Name] = statements
+		}
+	}
+	for _, entry := range history {
+		statements := remaining[entry.Name]
+		for entry.Done < len(statements) {
+			match := migrationAddColumn.FindStringSubmatch(strings.TrimSpace(statements[entry.Done]))
+			if match == nil {
+				break
+			}
+			var columnType, kind string
+			err := session.Query(`SELECT type, kind FROM system_schema.columns
+				WHERE keyspace_name=? AND table_name=? AND column_name=?`,
+				keyspace, strings.ToLower(match[1]), strings.ToLower(match[2])).WithContext(ctx).Scan(&columnType, &kind)
+			if errors.Is(err, gocql.ErrNotFound) {
+				break
+			}
+			if err != nil {
+				return err
+			}
+			if columnType != strings.ToLower(match[3]) || kind != "regular" {
+				return fmt.Errorf("migration %s has incompatible existing column %s.%s", entry.Name, match[1], match[2])
+			}
+			applied, err := session.Query(`UPDATE gocqlx_migrate SET done=? WHERE name=?
+				IF checksum=? AND done=? AND end_time=null`,
+				entry.Done+1, entry.Name, entry.Checksum, entry.Done).WithContext(ctx).MapScanCAS(make(map[string]interface{}))
+			if err != nil {
+				return err
+			}
+			if !applied {
+				return fmt.Errorf("migration %s progress changed during recovery", entry.Name)
+			}
+			entry.Done++
+		}
+	}
 	return nil
 }
 

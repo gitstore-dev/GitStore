@@ -20,6 +20,57 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
+func TestInstrumentedTranslationRepairUsesSharedSDK(t *testing.T) {
+	store, err := memdb.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	namespace := &datastore.Namespace{UID: "00000000-0000-0000-0000-000000000296", Name: "private-repair-scope",
+		ResourceVersion: "1", Generation: 1, CreationTimestamp: time.Now().UTC()}
+	require.NoError(t, store.CreateNamespace(t.Context(), namespace))
+	registry := prometheus.NewRegistry()
+	wrapped := datastore.NewInstrumentedDatastoreWithMeter(store, "memdb", zap.NewNop(),
+		observabilitytest.Meter(t, registry, "gitstore/datastore"))
+	indexes := wrapped.(datastore.TranslationSourceAuditStore)
+	page, err := indexes.ListTranslationSourceAudit(t.Context(), namespace.UID, "", 1)
+	require.NoError(t, err)
+	require.Empty(t, page.Items)
+	targets := wrapped.(datastore.TranslationTargetAuditStore)
+	progress, err := targets.RepairTranslationTargetAuditTurn(t.Context(), namespace.UID, 1)
+	require.NoError(t, err)
+	require.NotEmpty(t, progress.ResourceVersion)
+	_, err = targets.GetTranslationTargetAuditProgress(t.Context(), namespace.UID)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = indexes.ListTranslationSourceAudit(ctx, namespace.UID, "", 1)
+	require.ErrorIs(t, err, context.Canceled)
+
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	counts := map[string]uint64{}
+	for _, family := range families {
+		for _, sample := range family.Metric {
+			labels := map[string]string{}
+			for _, label := range sample.Label {
+				labels[label.GetName()] = label.GetValue()
+				require.NotContains(t, label.GetValue(), namespace.Name)
+				require.NotContains(t, label.GetValue(), namespace.UID)
+			}
+			require.Len(t, labels, 2)
+			require.Equal(t, "memdb", labels["backend"])
+			if family.GetName() == "gitstore_datastore_operation_duration_seconds" {
+				counts[labels["operation"]] += sample.GetHistogram().GetSampleCount()
+			}
+		}
+	}
+	require.Equal(t, map[string]uint64{
+		"ListTranslationSourceAudit":       2,
+		"RepairTranslationTargetAuditTurn": 1, "GetTranslationTargetAuditProgress": 1,
+	}, counts)
+	require.Equal(t, 1.0, observabilitytest.Value(t, registry, "gitstore_datastore_operation_errors_total",
+		map[string]string{"backend": "memdb", "operation": "ListTranslationSourceAudit"}))
+}
+
 func TestInstrumentedDatastoreForwardsRepositoryCompletion(t *testing.T) {
 	store, err := memdb.New()
 	require.NoError(t, err)
@@ -28,6 +79,41 @@ func TestInstrumentedDatastoreForwardsRepositoryCompletion(t *testing.T) {
 	completion, ok := any(wrapped).(datastore.RepositoryDeletionStore)
 	require.True(t, ok)
 	require.ErrorIs(t, completion.CompleteRepositoryDeletion(context.Background(), "00000000-0000-0000-0000-000000000299", "1"), datastore.ErrNotFound)
+}
+
+type originFactsDatastore struct {
+	datastore.Datastore
+	read datastore.RBACOriginFactsReader
+}
+
+func (s *originFactsDatastore) RBACOriginFactsReader() datastore.RBACOriginFactsReader {
+	return s.read
+}
+
+func TestInstrumentedDatastoreForwardsOptionalLiveOriginReads(t *testing.T) {
+	ctx := t.Context()
+	lookups := []datastore.RBACOriginLookup{{NamespaceUID: "namespace", Namespace: "shop", RepositoryID: "repository"}}
+	expected := []datastore.RBACOriginFacts{{Namespace: &datastore.Namespace{UID: "namespace"}}}
+	store := &originFactsDatastore{}
+	wrap := func(next datastore.Datastore) datastore.RBACOriginFactsCapable {
+		return datastore.NewInstrumentedDatastoreWithMeter(next, "test", zap.NewNop(),
+			observabilitytest.Meter(t, prometheus.NewRegistry(), "gitstore/datastore")).(datastore.RBACOriginFactsCapable)
+	}
+	require.Nil(t, wrap(&stubDatastore{}).RBACOriginFactsReader())
+	require.Nil(t, wrap(store).RBACOriginFactsReader())
+	calls := 0
+	store.read = func(actual context.Context, keys []datastore.RBACOriginLookup) ([]datastore.RBACOriginFacts, error) {
+		calls++
+		require.Equal(t, ctx, actual)
+		require.Equal(t, lookups, keys)
+		return expected, datastore.ErrRBACUnavailable
+	}
+	read := wrap(store).RBACOriginFactsReader()
+	require.NotNil(t, read)
+	result, err := read(ctx, lookups)
+	require.ErrorIs(t, err, datastore.ErrRBACUnavailable)
+	require.Equal(t, expected, result)
+	require.Equal(t, 1, calls, "the decorator must not retry or replace the live reader")
 }
 
 func TestInstrumentedDatastoreForwardsCategoryCompletionIdentity(t *testing.T) {

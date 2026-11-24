@@ -112,6 +112,10 @@ func TestReadNotFoundUsesSharedEnvelopeOverTransport(t *testing.T) {
 				require.Len(t, result.Errors, 1, response.Body.String())
 				require.Equal(t, ast.Path{ast.PathName("detail")}, result.Errors[0].Path)
 				require.Nil(t, result.Data["detail"])
+				if lookup.kind == nodeKindTranslation {
+					require.Equal(t, string(admission.CodeFailedPrecondition), result.Errors[0].Extensions["code"])
+					return
+				}
 				requireReadNotFoundEnvelope(t, result.Errors[0], lookup.kind)
 			}
 		})
@@ -848,6 +852,17 @@ func TestNodeReadsDistinguishAbsenceFromInfrastructureFailure(t *testing.T) {
 				id := mustEncodeNodeID(kind, globalIDTestProductUID)
 				node, err := query.Node(t.Context(), id)
 				require.Nil(t, node)
+				if kind == nodeKindTranslation {
+					var gated *gqlerror.Error
+					require.ErrorAs(t, err, &gated)
+					require.Equal(t, string(admission.CodeFailedPrecondition), gated.Extensions["code"])
+					ctx := graphql.WithResponseContext(t.Context(), graphql.DefaultErrorPresenter, graphql.DefaultRecover)
+					nodes, err := query.Nodes(ctx, []string{id, id})
+					require.Nil(t, nodes)
+					require.ErrorAs(t, err, &gated)
+					require.Equal(t, string(admission.CodeFailedPrecondition), gated.Extensions["code"])
+					return
+				}
 				if errors.Is(failure, datastore.ErrNotFound) {
 					requireReadNotFoundEnvelope(t, err, kind)
 				} else {

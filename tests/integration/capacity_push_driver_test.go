@@ -40,6 +40,7 @@ type capacityPushConfig struct {
 	duration, interval                                              time.Duration
 	workers                                                         int
 	verifyAPIA, verifyAPIB                                          string
+	startAt                                                         time.Time
 }
 
 // capacityPushEvidence is the evidence document. repository/pushes/failures/
@@ -158,6 +159,11 @@ func capacityPushManifest(kind, runID, namespace string, sequence int) (path str
 // most workers concurrent pushes and summarizes the outcome.
 func runCapacityPushSchedule(ctx context.Context, duration, interval time.Duration, workers int,
 	push func(ctx context.Context, sequence int) capacityPushResult) (offered, dropped int, results []capacityPushResult) {
+	return runCapacityPushScheduleAt(ctx, time.Now(), duration, interval, workers, push)
+}
+
+func runCapacityPushScheduleAt(ctx context.Context, started time.Time, duration, interval time.Duration, workers int,
+	push func(ctx context.Context, sequence int) capacityPushResult) (offered, dropped int, results []capacityPushResult) {
 	type scheduledPush struct {
 		sequence int
 		at       time.Time
@@ -185,7 +191,6 @@ func runCapacityPushSchedule(ctx context.Context, duration, interval time.Durati
 			}
 		}()
 	}
-	started := time.Now()
 	waitUntil := func(at time.Time) bool {
 		if delay := time.Until(at); delay > 0 {
 			timer := time.NewTimer(delay)
@@ -321,6 +326,11 @@ func (w *capacityPushWorker) push(ctx context.Context, sequence int) capacityPus
 			return result
 		}
 	}
+	return w.pushCommit(ctx, sequence, started)
+}
+
+func (w *capacityPushWorker) pushCommit(ctx context.Context, sequence int, started time.Time) capacityPushResult {
+	result := capacityPushResult{sequence: sequence}
 	_, err := secretCapacityGit(ctx, w.directory, w.token, "push", "--quiet", "origin", "HEAD:refs/heads/main")
 	if err != nil && ctx.Err() == nil {
 		result.retried = true

@@ -43,6 +43,45 @@ func (i *testFailureInjector) Inject(step string, point failurePoint) error {
 	return err
 }
 
+func FailMutationBeforeForTest(store datastore.Datastore, action string) func() {
+	native := store.(*scyllaDatastore)
+	previous := native.mutations.injector
+	injector := newTestFailureInjector()
+	injector.fail(action, failureBefore)
+	native.mutations.injector = injector
+	return func() { native.mutations.injector = previous }
+}
+
+func FailMutationAfterForTest(store datastore.Datastore, action string) func() {
+	native := store.(*scyllaDatastore)
+	previous := native.mutations.injector
+	injector := newTestFailureInjector()
+	injector.fail(action, failureAfter)
+	native.mutations.injector = injector
+	return func() { native.mutations.injector = previous }
+}
+
+type beforeMutationTestInjector struct {
+	previous failureInjector
+	action   string
+	run      func()
+	once     sync.Once
+}
+
+func (i *beforeMutationTestInjector) Inject(action string, point failurePoint) error {
+	if action == i.action && point == failureBefore {
+		i.once.Do(i.run)
+	}
+	return i.previous.Inject(action, point)
+}
+
+func RunMutationBeforeForTest(store datastore.Datastore, action string, run func()) func() {
+	native := store.(*scyllaDatastore)
+	previous := native.mutations.injector
+	native.mutations.injector = &beforeMutationTestInjector{previous: previous, action: action, run: run}
+	return func() { native.mutations.injector = previous }
+}
+
 func TestMutationExecutorCompensatesInReverseOrder(t *testing.T) {
 	injector := newTestFailureInjector()
 	injector.fail("second", failureAfter)

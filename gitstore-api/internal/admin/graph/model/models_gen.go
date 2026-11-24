@@ -100,6 +100,20 @@ type AssignUserGroupPayload struct {
 	Actor Actor `json:"actor,omitempty"`
 }
 
+type BindTranslationTargetInput struct {
+	Namespace      string `json:"namespace"`
+	Name           string `json:"name"`
+	TranslationID  string `json:"translationID"`
+	SourceVersion  string `json:"sourceVersion"`
+	BindingVersion string `json:"bindingVersion"`
+	ReferenceEpoch string `json:"referenceEpoch"`
+	TargetUID      string `json:"targetUID"`
+}
+
+type BindTranslationTargetPayload struct {
+	Binding *TranslationBinding `json:"binding"`
+}
+
 // A pointer to another catalogue resource.
 type CatalogObjectReference struct {
 	APIVersion      *string `json:"apiVersion,omitempty"`
@@ -399,6 +413,14 @@ type CollectionStatus struct {
 	Conditions []*Condition `json:"conditions"`
 	// Resolved membership snapshot (cached hint; collection.products is authoritative).
 	Resolved *ResolvedCollectionDefinition `json:"resolved,omitempty"`
+}
+
+type CollectionWatchEvent struct {
+	Type            WatchEventType `json:"type"`
+	Namespace       *string        `json:"namespace,omitempty"`
+	Name            string         `json:"name"`
+	ResourceVersion string         `json:"resourceVersion"`
+	Collection      *Collection    `json:"collection,omitempty"`
 }
 
 type CompleteCategoryDeletionInput struct {
@@ -864,6 +886,16 @@ type FileBy struct {
 type FileChecksum struct {
 	Algorithm string `json:"algorithm"`
 	Value     string `json:"value"`
+}
+
+type FileConnection struct {
+	Edges    []*FileEdge `json:"edges"`
+	PageInfo *PageInfo   `json:"pageInfo"`
+}
+
+type FileEdge struct {
+	Cursor string `json:"cursor"`
+	Node   *File  `json:"node"`
 }
 
 type FileImageProcessing struct {
@@ -1406,6 +1438,14 @@ type ProductVariantStatus struct {
 	Resolved *ResolvedProductVariantDefinition `json:"resolved,omitempty"`
 }
 
+type ProductVariantWatchEvent struct {
+	Type            WatchEventType  `json:"type"`
+	Namespace       *string         `json:"namespace,omitempty"`
+	Name            string          `json:"name"`
+	ResourceVersion string          `json:"resourceVersion"`
+	ProductVariant  *ProductVariant `json:"productVariant,omitempty"`
+}
+
 // Product-specific watch event. Carries the same envelope as
 // CategoryWatchEvent but with a strongly-typed `product` field instead
 // of a JSON-boxed `object`, so core-kind consumers get full type safety.
@@ -1819,6 +1859,20 @@ type ResolvedRepositoryDefinition struct {
 	StorageClass string `json:"storageClass"`
 }
 
+type ResolvedTranslation struct {
+	CanonicalLocale     *string                    `json:"canonicalLocale,omitempty"`
+	Target              *TranslationTargetEvidence `json:"target,omitempty"`
+	ValidatedFieldPaths []string                   `json:"validatedFieldPaths"`
+}
+
+type ResolvedTranslationInput struct {
+	CanonicalLocale     *string                         `json:"canonicalLocale,omitempty"`
+	DescriptorDigest    string                          `json:"descriptorDigest"`
+	SourceDigest        string                          `json:"sourceDigest"`
+	Target              *TranslationTargetEvidenceInput `json:"target,omitempty"`
+	ValidatedFieldPaths []string                        `json:"validatedFieldPaths"`
+}
+
 // The resource's current authorization owner subject. This is distinct from
 // ownerReferences, which describe system-managed relationships between
 // resources.
@@ -2211,6 +2265,161 @@ type TransferNamespaceOwnerPayload struct {
 	Namespace *Namespace `json:"namespace"`
 }
 
+// A Git-authored translation document. Validation never applies its text to the
+// target. Runtime operations remain unavailable until admission is activated.
+type Translation struct {
+	ID         string             `json:"id"`
+	APIVersion string             `json:"apiVersion"`
+	Kind       string             `json:"kind"`
+	Metadata   *ObjectMeta        `json:"metadata"`
+	Spec       *TranslationSpec   `json:"spec"`
+	Body       *string            `json:"body,omitempty"`
+	Status     *TranslationStatus `json:"status,omitempty"`
+}
+
+func (Translation) IsNode() {}
+
+// Opaque identifier encoding a resource kind and stable resource UID.
+func (this Translation) GetID() string { return this.ID }
+
+// Controller-only sticky reference state, separate from public status.
+type TranslationBinding struct {
+	TranslationID  string  `json:"translationID"`
+	SourceVersion  string  `json:"sourceVersion"`
+	BindingVersion string  `json:"bindingVersion"`
+	ReferenceEpoch string  `json:"referenceEpoch"`
+	NamespaceUID   string  `json:"namespaceUID"`
+	BoundUID       *string `json:"boundUID,omitempty"`
+}
+
+type TranslationBy struct {
+	ID            *string                   `json:"id,omitempty"`
+	NamespacePath *TranslationNamespacePath `json:"namespacePath,omitempty"`
+}
+
+type TranslationConnection struct {
+	Edges    []*TranslationEdge `json:"edges"`
+	PageInfo *PageInfo          `json:"pageInfo"`
+}
+
+type TranslationDependencyInput struct {
+	Namespace    string  `json:"namespace"`
+	NamespaceUID string  `json:"namespaceUID"`
+	APIVersion   string  `json:"apiVersion"`
+	Kind         string  `json:"kind"`
+	Name         string  `json:"name"`
+	UID          *string `json:"uid,omitempty"`
+}
+
+type TranslationDependent struct {
+	TranslationID  string `json:"translationID"`
+	SourceVersion  string `json:"sourceVersion"`
+	ReferenceEpoch string `json:"referenceEpoch"`
+}
+
+// One bounded controller scan turn, not a Relay resource connection.
+type TranslationDependentScan struct {
+	Items []*TranslationDependent `json:"items"`
+	// Opaque scan progress. Continue even when items is empty; null means exhausted.
+	Continuation *string `json:"continuation,omitempty"`
+}
+
+type TranslationEdge struct {
+	Cursor string       `json:"cursor"`
+	Node   *Translation `json:"node"`
+}
+
+type TranslationNamespacePath struct {
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+type TranslationPatch struct {
+	FieldPath   string `json:"fieldPath"`
+	Translation string `json:"translation"`
+}
+
+type TranslationSpec struct {
+	Locale    string                  `json:"locale"`
+	TargetRef *CatalogObjectReference `json:"targetRef"`
+	Patches   []*TranslationPatch     `json:"patches"`
+}
+
+// Guarded current status. lastAppliedRevision identifies the Translation source
+// successfully reconciled, including unresolved observations, not target changes.
+type TranslationStatus struct {
+	ObservedGeneration  int32                `json:"observedGeneration"`
+	LastAppliedRevision string               `json:"lastAppliedRevision"`
+	Conditions          []*Condition         `json:"conditions"`
+	Resolved            *ResolvedTranslation `json:"resolved,omitempty"`
+}
+
+type TranslationTargetEvidence struct {
+	APIVersion      string `json:"apiVersion"`
+	Kind            string `json:"kind"`
+	Namespace       string `json:"namespace"`
+	Name            string `json:"name"`
+	UID             string `json:"uid"`
+	Generation      int32  `json:"generation"`
+	Revision        string `json:"revision"`
+	ResourceVersion string `json:"resourceVersion"`
+	ContentDigest   string `json:"contentDigest"`
+}
+
+type TranslationTargetEvidenceInput struct {
+	APIVersion      string `json:"apiVersion"`
+	Kind            string `json:"kind"`
+	Namespace       string `json:"namespace"`
+	Name            string `json:"name"`
+	UID             string `json:"uid"`
+	Generation      int32  `json:"generation"`
+	Revision        string `json:"revision"`
+	ResourceVersion string `json:"resourceVersion"`
+	ContentDigest   string `json:"contentDigest"`
+}
+
+// Controller-only thin material proof for classifying invalidation hints.
+type TranslationTargetObservation struct {
+	NamespaceUID string                     `json:"namespaceUID"`
+	Evidence     *TranslationTargetEvidence `json:"evidence"`
+}
+
+// Controller-only stored common status, including private validation fingerprints.
+type TranslationValidationObservation struct {
+	ObservedGeneration  int32          `json:"observedGeneration"`
+	LastAppliedRevision string         `json:"lastAppliedRevision"`
+	Conditions          []*Condition   `json:"conditions"`
+	Resolved            map[string]any `json:"resolved,omitempty"`
+}
+
+// Controller-only source and target evidence from one bounded validation turn.
+type TranslationValidationSnapshot struct {
+	SourceID      string                       `json:"sourceID"`
+	SourceVersion string                       `json:"sourceVersion"`
+	SourceDigest  string                       `json:"sourceDigest"`
+	NamespaceUID  string                       `json:"namespaceUID"`
+	Binding       *TranslationBinding          `json:"binding"`
+	Target        *TranslationValidationTarget `json:"target,omitempty"`
+	// Stored observation for controller convergence, not a claim of current target validity.
+	Observation *TranslationValidationObservation `json:"observation,omitempty"`
+}
+
+type TranslationValidationTarget struct {
+	Namespace string                     `json:"namespace"`
+	Evidence  *TranslationTargetEvidence `json:"evidence"`
+	// Authorized raw spec fields with authored names; absent and null leaves are preserved.
+	Fields map[string]any `json:"fields"`
+}
+
+type TranslationWatchEvent struct {
+	Type            WatchEventType `json:"type"`
+	Namespace       *string        `json:"namespace,omitempty"`
+	Name            string         `json:"name"`
+	ResourceVersion string         `json:"resourceVersion"`
+	Translation     *Translation   `json:"translation,omitempty"`
+	Historical      bool           `json:"historical"`
+}
+
 type UpdateCategoryInput struct {
 	APIVersion string `json:"apiVersion"`
 	Kind       string `json:"kind"`
@@ -2355,9 +2564,12 @@ type UpdateRepositoryStatusPayload struct {
 }
 
 type UpdateResourceStatusInput struct {
-	Kind                string            `json:"kind"`
-	Name                string            `json:"name"`
-	Namespace           string            `json:"namespace"`
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	// Source lifetime UID, required and enforced for Translation. Other kinds
+	// retain their existing status preconditions.
+	UID                 *string           `json:"uid,omitempty"`
 	ResourceVersion     string            `json:"resourceVersion"`
 	ObservedGeneration  *int32            `json:"observedGeneration,omitempty"`
 	LastAppliedRevision *string           `json:"lastAppliedRevision,omitempty"`
@@ -2395,6 +2607,22 @@ type UpdateRoleInput struct {
 
 type UpdateRolePayload struct {
 	Role *Role `json:"role,omitempty"`
+}
+
+type UpdateTranslationStatusInput struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	// The source lifetime UID returned by Translation metadata.
+	UID                 string                    `json:"uid"`
+	ResourceVersion     string                    `json:"resourceVersion"`
+	ObservedGeneration  int32                     `json:"observedGeneration"`
+	LastAppliedRevision string                    `json:"lastAppliedRevision"`
+	Conditions          []*ConditionInput         `json:"conditions"`
+	Resolved            *ResolvedTranslationInput `json:"resolved,omitempty"`
+}
+
+type UpdateTranslationStatusPayload struct {
+	Translation *Translation `json:"translation,omitempty"`
 }
 
 // Patch the human identified by its opaque ID, preserving omitted fields.

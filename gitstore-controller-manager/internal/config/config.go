@@ -17,6 +17,7 @@ import (
 	"github.com/gitstore-dev/gitstore/controller-manager/internal/secret"
 	"github.com/gitstore-dev/gitstore/observability"
 	"github.com/gitstore-dev/gitstore/secretmaterial"
+	"github.com/gitstore-dev/gitstore/translation"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 	"go.uber.org/zap/zapcore"
@@ -37,11 +38,27 @@ type ControllerConfig struct {
 	Checkpoint      CheckpointConfig              `mapstructure:"checkpoint"`
 	Reconcile       ReconcileConfig               `mapstructure:"reconcile"`
 	Watch           WatchConfig                   `mapstructure:"watch"`
+	Translation     TranslationConfig             `mapstructure:"translation"`
 	Profiling       observability.ProfilingConfig `mapstructure:"profiling"`
 }
 
 type APIClientConfig struct {
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
+}
+
+type TranslationConfig struct {
+	Enabled          bool   `mapstructure:"enabled"`
+	DescriptorDigest string `mapstructure:"descriptor_digest"`
+}
+
+func (c TranslationConfig) Validate() error {
+	if c.DescriptorDigest != "" && c.DescriptorDigest != translation.CapabilityDigest() {
+		return errors.New("controller.translation.descriptor_digest capability mismatch")
+	}
+	if c.Enabled && c.DescriptorDigest == "" {
+		return errors.New("controller.translation.descriptor_digest is required when enabled")
+	}
+	return nil
 }
 
 // RateLimitConfig mirrors gitstore-api's api.rate_limit shape for
@@ -107,8 +124,10 @@ var defaults = map[string]any{
 	"controller.checkpoint.flush_interval_events":        100,
 	"controller.watch.max_backoff":                       "30s",
 	"controller.watch.resync_interval":                   "10m",
-	"log.level":                                          "info",
-	"log.format":                                         "json",
+	"controller.translation.enabled":                     false,
+	"controller.translation.descriptor_digest":           "",
+	"log.level":  "info",
+	"log.format": "json",
 }
 
 func Load() (*Config, error) { return load(nil) }
@@ -290,6 +309,9 @@ func decodeValue(from, to reflect.Type, value any) (any, error) {
 }
 
 func validate(cfg *Config) error {
+	if err := cfg.Controller.Translation.Validate(); err != nil {
+		return err
+	}
 	if err := cfg.Controller.Profiling.Validate(); err != nil {
 		return fmt.Errorf("controller.%w", err)
 	}

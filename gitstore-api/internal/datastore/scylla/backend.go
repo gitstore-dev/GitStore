@@ -70,30 +70,32 @@ type scyllaDatastore struct {
 
 // productRow mirrors the columns of products_by_key.
 type productRow struct {
-	Namespace         string            `db:"namespace"`
-	CreationTimestamp time.Time         `db:"creation_timestamp"`
-	UID               gocql.UUID        `db:"uid"`
-	Name              string            `db:"name"`
-	APIVersion        string            `db:"api_version"`
-	Kind              string            `db:"kind"`
-	Generation        int64             `db:"generation"`
-	ResourceVersion   string            `db:"resource_version"`
-	Revision          string            `db:"revision"`
-	CreationActor     string            `db:"creation_actor"`
-	UpdateTimestamp   time.Time         `db:"update_timestamp"`
-	UpdateActor       string            `db:"update_actor"`
-	Labels            map[string]string `db:"labels"`
-	Annotations       map[string]string `db:"annotations"`
-	OwnerReferences   string            `db:"owner_references"`
-	Finalizers        []string          `db:"finalizers"`
-	DeletionTimestamp *time.Time        `db:"deletion_timestamp"`
-	RepositoryID      *gocql.UUID       `db:"repository_id"`
-	SourcePath        string            `db:"source_path"`
-	GitCommitSHA      string            `db:"git_commit_sha"`
-	GitRef            string            `db:"git_ref"`
-	Spec              string            `db:"spec"`
-	Body              string            `db:"body"`
-	Status            string            `db:"status"`
+	TranslationSourceIdentity string            `db:"translation_source_identity"`
+	TranslationRetired        *bool             `db:"translation_retired"`
+	Namespace                 string            `db:"namespace"`
+	CreationTimestamp         time.Time         `db:"creation_timestamp"`
+	UID                       gocql.UUID        `db:"uid"`
+	Name                      string            `db:"name"`
+	APIVersion                string            `db:"api_version"`
+	Kind                      string            `db:"kind"`
+	Generation                int64             `db:"generation"`
+	ResourceVersion           string            `db:"resource_version"`
+	Revision                  string            `db:"revision"`
+	CreationActor             string            `db:"creation_actor"`
+	UpdateTimestamp           time.Time         `db:"update_timestamp"`
+	UpdateActor               string            `db:"update_actor"`
+	Labels                    map[string]string `db:"labels"`
+	Annotations               map[string]string `db:"annotations"`
+	OwnerReferences           string            `db:"owner_references"`
+	Finalizers                []string          `db:"finalizers"`
+	DeletionTimestamp         *time.Time        `db:"deletion_timestamp"`
+	RepositoryID              *gocql.UUID       `db:"repository_id"`
+	SourcePath                string            `db:"source_path"`
+	GitCommitSHA              string            `db:"git_commit_sha"`
+	GitRef                    string            `db:"git_ref"`
+	Spec                      string            `db:"spec"`
+	Body                      string            `db:"body"`
+	Status                    string            `db:"status"`
 }
 
 // productNameRow mirrors products_by_identity (index only).
@@ -112,32 +114,34 @@ type productUIDRow struct {
 }
 
 type categoryTaxonomyRow struct {
-	Namespace         string            `db:"namespace"`
-	CreationTimestamp time.Time         `db:"creation_timestamp"`
-	UID               gocql.UUID        `db:"uid"`
-	Name              string            `db:"name"`
-	APIVersion        string            `db:"api_version"`
-	Kind              string            `db:"kind"`
-	Generation        int64             `db:"generation"`
-	ResourceVersion   string            `db:"resource_version"`
-	Revision          string            `db:"revision"`
-	CreationActor     string            `db:"creation_actor"`
-	UpdateTimestamp   time.Time         `db:"update_timestamp"`
-	UpdateActor       string            `db:"update_actor"`
-	Labels            map[string]string `db:"labels"`
-	Annotations       map[string]string `db:"annotations"`
-	OwnerReferences   string            `db:"owner_references"`
-	Finalizers        []string          `db:"finalizers"`
-	DeletionTimestamp *time.Time        `db:"deletion_timestamp"`
-	ParentName        string            `db:"parent_name"`
-	AncestorPath      string            `db:"ancestor_path"`
-	RepositoryID      *gocql.UUID       `db:"repository_id"`
-	SourcePath        string            `db:"source_path"`
-	GitCommitSHA      string            `db:"git_commit_sha"`
-	GitRef            string            `db:"git_ref"`
-	Spec              string            `db:"spec"`
-	Body              string            `db:"body"`
-	Status            string            `db:"status"`
+	TranslationSourceIdentity string            `db:"translation_source_identity"`
+	TranslationRetired        *bool             `db:"translation_retired"`
+	Namespace                 string            `db:"namespace"`
+	CreationTimestamp         time.Time         `db:"creation_timestamp"`
+	UID                       gocql.UUID        `db:"uid"`
+	Name                      string            `db:"name"`
+	APIVersion                string            `db:"api_version"`
+	Kind                      string            `db:"kind"`
+	Generation                int64             `db:"generation"`
+	ResourceVersion           string            `db:"resource_version"`
+	Revision                  string            `db:"revision"`
+	CreationActor             string            `db:"creation_actor"`
+	UpdateTimestamp           time.Time         `db:"update_timestamp"`
+	UpdateActor               string            `db:"update_actor"`
+	Labels                    map[string]string `db:"labels"`
+	Annotations               map[string]string `db:"annotations"`
+	OwnerReferences           string            `db:"owner_references"`
+	Finalizers                []string          `db:"finalizers"`
+	DeletionTimestamp         *time.Time        `db:"deletion_timestamp"`
+	ParentName                string            `db:"parent_name"`
+	AncestorPath              string            `db:"ancestor_path"`
+	RepositoryID              *gocql.UUID       `db:"repository_id"`
+	SourcePath                string            `db:"source_path"`
+	GitCommitSHA              string            `db:"git_commit_sha"`
+	GitRef                    string            `db:"git_ref"`
+	Spec                      string            `db:"spec"`
+	Body                      string            `db:"body"`
+	Status                    string            `db:"status"`
 }
 
 // categoryTaxonomyNameRow mirrors category_taxonomies_by_name (index only).
@@ -156,30 +160,32 @@ type categoryTaxonomyUIDRow struct {
 }
 
 type collectionRow struct {
-	Namespace         string            `db:"namespace"`
-	CreationTimestamp time.Time         `db:"creation_timestamp"`
-	UID               gocql.UUID        `db:"uid"`
-	Name              string            `db:"name"`
-	APIVersion        string            `db:"api_version"`
-	Kind              string            `db:"kind"`
-	Generation        int64             `db:"generation"`
-	ResourceVersion   string            `db:"resource_version"`
-	Revision          string            `db:"revision"`
-	CreationActor     string            `db:"creation_actor"`
-	UpdateTimestamp   time.Time         `db:"update_timestamp"`
-	UpdateActor       string            `db:"update_actor"`
-	Labels            map[string]string `db:"labels"`
-	Annotations       map[string]string `db:"annotations"`
-	OwnerReferences   string            `db:"owner_references"`
-	Finalizers        []string          `db:"finalizers"`
-	DeletionTimestamp *time.Time        `db:"deletion_timestamp"`
-	RepositoryID      *gocql.UUID       `db:"repository_id"`
-	SourcePath        string            `db:"source_path"`
-	GitCommitSHA      string            `db:"git_commit_sha"`
-	GitRef            string            `db:"git_ref"`
-	Spec              string            `db:"spec"`
-	Body              string            `db:"body"`
-	Status            string            `db:"status"`
+	TranslationSourceIdentity string            `db:"translation_source_identity"`
+	TranslationRetired        *bool             `db:"translation_retired"`
+	Namespace                 string            `db:"namespace"`
+	CreationTimestamp         time.Time         `db:"creation_timestamp"`
+	UID                       gocql.UUID        `db:"uid"`
+	Name                      string            `db:"name"`
+	APIVersion                string            `db:"api_version"`
+	Kind                      string            `db:"kind"`
+	Generation                int64             `db:"generation"`
+	ResourceVersion           string            `db:"resource_version"`
+	Revision                  string            `db:"revision"`
+	CreationActor             string            `db:"creation_actor"`
+	UpdateTimestamp           time.Time         `db:"update_timestamp"`
+	UpdateActor               string            `db:"update_actor"`
+	Labels                    map[string]string `db:"labels"`
+	Annotations               map[string]string `db:"annotations"`
+	OwnerReferences           string            `db:"owner_references"`
+	Finalizers                []string          `db:"finalizers"`
+	DeletionTimestamp         *time.Time        `db:"deletion_timestamp"`
+	RepositoryID              *gocql.UUID       `db:"repository_id"`
+	SourcePath                string            `db:"source_path"`
+	GitCommitSHA              string            `db:"git_commit_sha"`
+	GitRef                    string            `db:"git_ref"`
+	Spec                      string            `db:"spec"`
+	Body                      string            `db:"body"`
+	Status                    string            `db:"status"`
 }
 
 type collectionNameRow struct {
@@ -196,32 +202,34 @@ type collectionUIDRow struct {
 }
 
 type productVariantRow struct {
-	Namespace         string            `db:"namespace"`
-	CreationTimestamp time.Time         `db:"creation_timestamp"`
-	UID               gocql.UUID        `db:"uid"`
-	Name              string            `db:"name"`
-	APIVersion        string            `db:"api_version"`
-	Kind              string            `db:"kind"`
-	Generation        int64             `db:"generation"`
-	ResourceVersion   string            `db:"resource_version"`
-	Revision          string            `db:"revision"`
-	CreationActor     string            `db:"creation_actor"`
-	UpdateTimestamp   time.Time         `db:"update_timestamp"`
-	UpdateActor       string            `db:"update_actor"`
-	Labels            map[string]string `db:"labels"`
-	Annotations       map[string]string `db:"annotations"`
-	OwnerReferences   string            `db:"owner_references"`
-	Finalizers        []string          `db:"finalizers"`
-	DeletionTimestamp *time.Time        `db:"deletion_timestamp"`
-	SKU               string            `db:"sku"`
-	ProductRefName    string            `db:"product_ref_name"`
-	RepositoryID      *gocql.UUID       `db:"repository_id"`
-	SourcePath        string            `db:"source_path"`
-	GitCommitSHA      string            `db:"git_commit_sha"`
-	GitRef            string            `db:"git_ref"`
-	Spec              string            `db:"spec"`
-	Body              string            `db:"body"`
-	Status            string            `db:"status"`
+	TranslationSourceIdentity string            `db:"translation_source_identity"`
+	TranslationRetired        *bool             `db:"translation_retired"`
+	Namespace                 string            `db:"namespace"`
+	CreationTimestamp         time.Time         `db:"creation_timestamp"`
+	UID                       gocql.UUID        `db:"uid"`
+	Name                      string            `db:"name"`
+	APIVersion                string            `db:"api_version"`
+	Kind                      string            `db:"kind"`
+	Generation                int64             `db:"generation"`
+	ResourceVersion           string            `db:"resource_version"`
+	Revision                  string            `db:"revision"`
+	CreationActor             string            `db:"creation_actor"`
+	UpdateTimestamp           time.Time         `db:"update_timestamp"`
+	UpdateActor               string            `db:"update_actor"`
+	Labels                    map[string]string `db:"labels"`
+	Annotations               map[string]string `db:"annotations"`
+	OwnerReferences           string            `db:"owner_references"`
+	Finalizers                []string          `db:"finalizers"`
+	DeletionTimestamp         *time.Time        `db:"deletion_timestamp"`
+	SKU                       string            `db:"sku"`
+	ProductRefName            string            `db:"product_ref_name"`
+	RepositoryID              *gocql.UUID       `db:"repository_id"`
+	SourcePath                string            `db:"source_path"`
+	GitCommitSHA              string            `db:"git_commit_sha"`
+	GitRef                    string            `db:"git_ref"`
+	Spec                      string            `db:"spec"`
+	Body                      string            `db:"body"`
+	Status                    string            `db:"status"`
 }
 
 type productVariantNameRow struct {
@@ -451,6 +459,9 @@ func (s *scyllaDatastore) createProduct(ctx context.Context, p *datastore.Produc
 		p.CreationTimestamp = time.Now().UTC().Truncate(time.Millisecond)
 	}
 	row := toProductRow(p)
+	if err := s.freezeTranslationTargetBirth(ctx, row); err != nil {
+		return err
+	}
 	var (
 		existed      bool
 		nameReserved bool
@@ -606,11 +617,14 @@ func (s *scyllaDatastore) getProductByKey(ctx context.Context, namespace string,
 		cols,
 	)
 	var row productRow
-	if err := s.session.Query(stmt, nil).WithContext(ctx).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
+	if err := s.session.Query(stmt, nil).WithContext(ctx).Consistency(gocql.Serial).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: product namespace=%s uid=%s", datastore.ErrNotFound, namespace, uid)
 		}
 		return nil, fmt.Errorf("scylla: get product by key: %w", err)
+	}
+	if err := s.checkLiveTranslationTargetUID(ctx, "Product", uid, row.TranslationRetired); err != nil {
+		return nil, err
 	}
 	return fromProductRow(&row), nil
 }
@@ -634,13 +648,21 @@ func (s *scyllaDatastore) ListProducts(ctx context.Context, namespace string, pa
 		}
 		position = &categoryProductRow{CreationTimestamp: parsed.CreatedAt, ProductUID: mustParseUUID(parsed.ID)}
 	}
+	initial, err := s.readInitialProductShards(ctx, namespace, order, relation, position, shardPageSize)
+	if err != nil {
+		return nil, err
+	}
 	items, err := collectProductProjectionPage(ctx, namespace, page.Last > 0, limit, position, productNamespaceShardCount, shardPageSize,
-		func(ctx context.Context, shard int8, position *categoryProductRow) ([]categoryProductRow, error) {
+		func(ctx context.Context, shard int8, after *categoryProductRow) ([]categoryProductRow, error) {
+			// Initial reads share the page cursor; refills have a shard-local cursor.
+			if after == position {
+				return initial[shard], nil
+			}
 			statement := "SELECT creation_timestamp,uid AS product_uid FROM " + productsByNamespaceShard + " WHERE namespace=? AND shard=?"
 			args := []any{namespace, shard}
-			if position != nil {
+			if after != nil {
 				statement += " AND (creation_timestamp,uid) " + relation + " (?,?)"
-				args = append(args, position.CreationTimestamp, position.ProductUID)
+				args = append(args, after.CreationTimestamp, after.ProductUID)
 			}
 			statement += " ORDER BY creation_timestamp " + order + ",uid " + order + " LIMIT ?"
 			args = append(args, shardPageSize)
@@ -656,6 +678,37 @@ func (s *scyllaDatastore) ListProducts(ctx context.Context, namespace string, pa
 		return nil, err
 	}
 	return buildPageResult(items, limit, page), nil
+}
+
+func (s *scyllaDatastore) readInitialProductShards(ctx context.Context, namespace, order, relation string, position *categoryProductRow, shardPageSize int) (pages [productNamespaceShardCount][]categoryProductRow, err error) {
+	if err := ctx.Err(); err != nil {
+		return pages, err
+	}
+	shards := make([]int8, productNamespaceShardCount)
+	for shard := range shards {
+		shards[shard] = int8(shard)
+	}
+	statement := "SELECT shard,creation_timestamp,uid AS product_uid FROM " + productsByNamespaceShard + " WHERE namespace=? AND shard IN ?"
+	args := []any{namespace, shards}
+	if position != nil {
+		statement += " AND (creation_timestamp,uid) " + relation + " (?,?)"
+		args = append(args, position.CreationTimestamp, position.ProductUID)
+	}
+	statement += " ORDER BY creation_timestamp " + order + ",uid " + order + " PER PARTITION LIMIT ?"
+	args = append(args, shardPageSize)
+	var rows []struct {
+		Shard             int8       `db:"shard"`
+		CreationTimestamp time.Time  `db:"creation_timestamp"`
+		ProductUID        gocql.UUID `db:"product_uid"`
+	}
+	// Cross-partition ordering requires paging off; each of the 64 partitions is bounded.
+	if err := s.session.Query(statement, nil).WithContext(ctx).Bind(args...).PageSize(0).SelectRelease(&rows); err != nil {
+		return pages, fmt.Errorf("scylla: list initial product shards: %w", err)
+	}
+	for _, row := range rows {
+		pages[row.Shard] = append(pages[row.Shard], categoryProductRow{CreationTimestamp: row.CreationTimestamp, ProductUID: row.ProductUID})
+	}
+	return pages, nil
 }
 
 const productsByNamespaceShard = "products_by_namespace_shard"
@@ -769,7 +822,7 @@ func (s *scyllaDatastore) UpdateProductStatus(ctx context.Context, namespace, na
 		return nil, err
 	}
 	uid := mustParseUUID(existing.UID)
-	const statement = "UPDATE products_by_key SET resource_version=?, status=?, owner_references=? WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
+	const statement = "UPDATE products_by_key SET resource_version=?, status=?, owner_references=? WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=? AND translation_retired=null"
 	authoritative := mutationAction{
 		Step: catalogueStep("update-status", "Product", existing.UID, "products_by_key", existing.UID, "update-authoritative"),
 		Apply: func(ctx context.Context) error {
@@ -823,7 +876,7 @@ func (s *scyllaDatastore) deleteProductFenced(ctx context.Context, p *datastore.
 	authoritative := mutationAction{
 		Step: catalogueStep("delete", "Product", uid, "products_by_key", uid, "delete-authoritative"),
 		Apply: func(ctx context.Context) error {
-			return s.deleteProductAuthoritative(ctx, toProductRow(p), expectedResourceVersion)
+			return s.retireTranslationTargetAuthoritative(ctx, "Product", p.Namespace, p.CreationTimestamp, uid, expectedResourceVersion, nil)
 		},
 	}
 	projections := []mutationAction{
@@ -898,6 +951,9 @@ func (s *scyllaDatastore) createCategoryTaxonomy(ctx context.Context, c *datasto
 		c.CreationTimestamp = time.Now().UTC().Truncate(time.Millisecond)
 	}
 	row := toCategoryTaxonomyRow(c)
+	if err := s.freezeTranslationTargetBirth(ctx, row); err != nil {
+		return err
+	}
 	var (
 		existed      bool
 		nameReserved bool
@@ -940,7 +996,7 @@ func (s *scyllaDatastore) createCategoryTaxonomy(ctx context.Context, c *datasto
 					return applyErr
 				}
 				if !applied {
-					current, getErr := s.getCategoryTaxonomyByKey(row.Namespace, row.CreationTimestamp, uid)
+					current, getErr := s.getCategoryTaxonomyByKey(ctx, row.Namespace, row.CreationTimestamp, uid)
 					if getErr != nil {
 						return getErr
 					}
@@ -977,16 +1033,19 @@ func (s *scyllaDatastore) createCategoryTaxonomy(ctx context.Context, c *datasto
 	return nil
 }
 
-func (s *scyllaDatastore) getCategoryTaxonomyByKey(namespace string, creationTimestamp time.Time, uid gocql.UUID) (*datastore.CategoryTaxonomy, error) {
+func (s *scyllaDatastore) getCategoryTaxonomyByKey(ctx context.Context, namespace string, creationTimestamp time.Time, uid gocql.UUID) (*datastore.CategoryTaxonomy, error) {
 	const stmt = "SELECT %s FROM category_taxonomies_by_namespace WHERE namespace = ? AND creation_timestamp = ? AND uid = ?"
 	cols := strings.Join(s.categoryTaxonomyTable.Metadata().Columns, ", ")
 	var row categoryTaxonomyRow
 	if err := s.session.Query(fmt.Sprintf(stmt, cols), nil).
-		Bind(namespace, creationTimestamp, uid).GetRelease(&row); err != nil {
+		WithContext(ctx).Consistency(gocql.Serial).Bind(namespace, creationTimestamp, uid).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: category_taxonomy %s/%s", datastore.ErrNotFound, namespace, uid)
 		}
 		return nil, fmt.Errorf("scylla: get category_taxonomy by key: %w", err)
+	}
+	if err := s.checkLiveTranslationTargetUID(ctx, "CategoryTaxonomy", uid, row.TranslationRetired); err != nil {
+		return nil, err
 	}
 	return fromCategoryTaxonomyRow(&row), nil
 }
@@ -1007,7 +1066,7 @@ func (s *scyllaDatastore) GetCategoryTaxonomy(ctx context.Context, uid string) (
 		}
 		return nil, fmt.Errorf("scylla: get category_taxonomy by uid: %w", err)
 	}
-	category, err := s.getCategoryTaxonomyByKey(uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
+	category, err := s.getCategoryTaxonomyByKey(ctx, uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "CategoryTaxonomy", ResourceUID: uid, Projection: "category_taxonomies_by_uid",
@@ -1030,7 +1089,7 @@ func (s *scyllaDatastore) GetCategoryTaxonomyByName(ctx context.Context, namespa
 		}
 		return nil, fmt.Errorf("scylla: get category_taxonomy by name: %w", err)
 	}
-	category, err := s.getCategoryTaxonomyByKey(namespace, nameRow.CreationTimestamp, nameRow.UID)
+	category, err := s.getCategoryTaxonomyByKey(ctx, namespace, nameRow.CreationTimestamp, nameRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "CategoryTaxonomy", ResourceUID: nameRow.UID.String(), Projection: "category_taxonomies_by_name",
@@ -1048,7 +1107,11 @@ func (s *scyllaDatastore) GetCategoryTaxonomyByName(ctx context.Context, namespa
 	return category, err
 }
 
-func (s *scyllaDatastore) ListCategoryTaxonomies(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
+func (s *scyllaDatastore) ListCategoryTaxonomies(ctx context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.CategoryTaxonomy], error) {
+	page, err := page.BoundedProductPage()
+	if err != nil {
+		return nil, err
+	}
 	if err := datastore.RejectClosureCursors(page); err != nil {
 		return nil, err
 	}
@@ -1056,7 +1119,7 @@ func (s *scyllaDatastore) ListCategoryTaxonomies(_ context.Context, namespace st
 	pq := buildPaginatedSelect(s.categoryTaxonomyTable, page, "namespace", namespace, clusterKeys{TimestampCol: "creation_timestamp", IDCol: "uid"}, nil, nil)
 
 	var rows []categoryTaxonomyRow
-	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
+	if err := s.session.Query(pq.Stmt, nil).WithContext(ctx).Bind(pq.Args...).SelectRelease(&rows); err != nil {
 		return nil, fmt.Errorf("scylla: list category_taxonomies: %w", err)
 	}
 
@@ -1066,6 +1129,9 @@ func (s *scyllaDatastore) ListCategoryTaxonomies(_ context.Context, namespace st
 
 	cats := make([]*datastore.CategoryTaxonomy, len(rows))
 	for i := range rows {
+		if err := s.checkTranslationTargetPageUID(ctx, "CategoryTaxonomy", rows[i].UID, rows[i].TranslationRetired); err != nil {
+			return nil, err
+		}
 		cats[i] = fromCategoryTaxonomyRow(&rows[i])
 	}
 
@@ -1096,7 +1162,7 @@ func (s *scyllaDatastore) updateCategoryTaxonomy(ctx context.Context, c *datasto
 	if c.CreationTimestamp.IsZero() {
 		existing, err = s.GetCategoryTaxonomy(ctx, c.UID)
 	} else {
-		existing, err = s.getCategoryTaxonomyByKey(c.Namespace, c.CreationTimestamp, uid)
+		existing, err = s.getCategoryTaxonomyByKey(ctx, c.Namespace, c.CreationTimestamp, uid)
 	}
 	if err != nil {
 		return err
@@ -1177,7 +1243,7 @@ func (s *scyllaDatastore) UpdateCategoryTaxonomyStatus(ctx context.Context, name
 	// which we surface as ErrConflict rather than silently overwriting a
 	// newer version (spec 040 FR-009).
 	const updStatus = "UPDATE category_taxonomies_by_namespace SET resource_version=?, status=? " +
-		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
+		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=? AND translation_retired=null"
 	authoritative := mutationAction{
 		Step: catalogueStep("update-status", "CategoryTaxonomy", existing.UID, "category_taxonomies_by_namespace", existing.UID, "update-authoritative"),
 		Apply: func(ctx context.Context) error {
@@ -1240,11 +1306,11 @@ func (s *scyllaDatastore) deleteCategoryTaxonomyWithResourceVersion(ctx context.
 func (s *scyllaDatastore) deleteCategoryTaxonomyFenced(ctx context.Context, c *datastore.CategoryTaxonomy, expectedResourceVersion string) error {
 	parsedUID := mustParseUUID(c.UID)
 
-	err := s.mutations.executeDelete(ctx,
+	err := s.mutations.executeConditionalDelete(ctx, expectedResourceVersion,
 		mutationAction{
 			Step: catalogueStep("delete", "CategoryTaxonomy", c.UID, "category_taxonomies_by_namespace", c.UID, "delete-authoritative"),
 			Apply: func(ctx context.Context) error {
-				return s.deleteCategoryTaxonomyAuthoritative(ctx, toCategoryTaxonomyRow(c), expectedResourceVersion)
+				return s.retireTranslationTargetAuthoritative(ctx, "CategoryTaxonomy", c.Namespace, c.CreationTimestamp, c.UID, expectedResourceVersion, nil)
 			},
 		},
 		mutationAction{
@@ -1316,6 +1382,9 @@ func (s *scyllaDatastore) createCollection(ctx context.Context, c *datastore.Col
 		c.CreationTimestamp = time.Now().UTC().Truncate(time.Millisecond)
 	}
 	row := toCollectionRow(c)
+	if err := s.freezeTranslationTargetBirth(ctx, row); err != nil {
+		return err
+	}
 	var (
 		existed      bool
 		nameReserved bool
@@ -1358,7 +1427,7 @@ func (s *scyllaDatastore) createCollection(ctx context.Context, c *datastore.Col
 					return applyErr
 				}
 				if !applied {
-					current, getErr := s.getCollectionByKey(row.Namespace, row.CreationTimestamp, uid)
+					current, getErr := s.getCollectionByKey(ctx, row.Namespace, row.CreationTimestamp, uid)
 					if getErr != nil {
 						return getErr
 					}
@@ -1408,7 +1477,7 @@ func (s *scyllaDatastore) GetCollection(ctx context.Context, uid string) (*datas
 		}
 		return nil, fmt.Errorf("scylla: get collection (uid lookup): %w", err)
 	}
-	collection, err := s.getCollectionByKey(uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
+	collection, err := s.getCollectionByKey(ctx, uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "Collection", ResourceUID: uid, Projection: "collections_by_uid",
@@ -1427,7 +1496,7 @@ func (s *scyllaDatastore) GetCollectionByName(ctx context.Context, namespace, na
 		}
 		return nil, fmt.Errorf("scylla: get collection by name: %w", err)
 	}
-	collection, err := s.getCollectionByKey(nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
+	collection, err := s.getCollectionByKey(ctx, nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "Collection", ResourceUID: nameRow.UID.String(), Projection: "collections_by_name",
@@ -1445,28 +1514,35 @@ func (s *scyllaDatastore) GetCollectionByName(ctx context.Context, namespace, na
 	return collection, err
 }
 
-func (s *scyllaDatastore) getCollectionByKey(namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.Collection, error) {
+func (s *scyllaDatastore) getCollectionByKey(ctx context.Context, namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.Collection, error) {
 	cols := strings.Join(s.collectionTable.Metadata().Columns, ", ")
 	stmt := fmt.Sprintf(
 		"SELECT %s FROM collections_by_namespace WHERE namespace = ? AND creation_timestamp = ? AND uid = ?",
 		cols,
 	)
 	var row collectionRow
-	if err := s.session.Query(stmt, nil).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
+	if err := s.session.Query(stmt, nil).WithContext(ctx).Consistency(gocql.Serial).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: collection namespace=%s uid=%s", datastore.ErrNotFound, namespace, uid)
 		}
 		return nil, fmt.Errorf("scylla: get collection by key: %w", err)
 	}
+	if err := s.checkLiveTranslationTargetUID(ctx, "Collection", uid, row.TranslationRetired); err != nil {
+		return nil, err
+	}
 	return fromCollectionRow(&row), nil
 }
 
-func (s *scyllaDatastore) ListCollections(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
+func (s *scyllaDatastore) ListCollections(ctx context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.Collection], error) {
+	page, err := page.BoundedProductPage()
+	if err != nil {
+		return nil, err
+	}
 	limit := page.Limit()
 	pq := buildPaginatedSelect(s.collectionTable, page, "namespace", namespace, collectionClusterKeys, nil, nil)
 
 	var rows []collectionRow
-	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
+	if err := s.session.Query(pq.Stmt, nil).WithContext(ctx).Bind(pq.Args...).SelectRelease(&rows); err != nil {
 		return nil, fmt.Errorf("scylla: list collections: %w", err)
 	}
 
@@ -1476,6 +1552,9 @@ func (s *scyllaDatastore) ListCollections(_ context.Context, namespace string, p
 
 	items := make([]*datastore.Collection, len(rows))
 	for i := range rows {
+		if err := s.checkTranslationTargetPageUID(ctx, "Collection", rows[i].UID, rows[i].TranslationRetired); err != nil {
+			return nil, err
+		}
 		items[i] = fromCollectionRow(&rows[i])
 	}
 
@@ -1506,7 +1585,7 @@ func (s *scyllaDatastore) updateCollection(ctx context.Context, c *datastore.Col
 	if c.CreationTimestamp.IsZero() {
 		existing, err = s.GetCollection(ctx, c.UID)
 	} else {
-		existing, err = s.getCollectionByKey(c.Namespace, c.CreationTimestamp, uid)
+		existing, err = s.getCollectionByKey(ctx, c.Namespace, c.CreationTimestamp, uid)
 	}
 	if err != nil {
 		return err
@@ -1564,7 +1643,7 @@ func (s *scyllaDatastore) DeleteCollection(ctx context.Context, uid string) erro
 	if err != nil {
 		return err
 	}
-	return s.deleteCollectionWithResourceVersion(ctx, c, c.ResourceVersion, false)
+	return s.deleteCollectionWithResourceVersion(ctx, c, c.ResourceVersion)
 }
 
 func (s *scyllaDatastore) DeleteCollectionWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error {
@@ -1572,23 +1651,23 @@ func (s *scyllaDatastore) DeleteCollectionWithResourceVersion(ctx context.Contex
 	if err != nil {
 		return err
 	}
-	return s.deleteCollectionWithResourceVersion(ctx, c, expectedResourceVersion, true)
+	return s.deleteCollectionWithResourceVersion(ctx, c, expectedResourceVersion)
 }
 
-func (s *scyllaDatastore) deleteCollectionWithResourceVersion(ctx context.Context, c *datastore.Collection, expectedResourceVersion string, authoritativeFirst bool) error {
+func (s *scyllaDatastore) deleteCollectionWithResourceVersion(ctx context.Context, c *datastore.Collection, expectedResourceVersion string) error {
 	return s.catalogMutation(ctx, "Collection", c.Namespace, c.RepositoryID, c.UID, true, func() error {
-		return s.deleteCollectionFenced(ctx, c, expectedResourceVersion, authoritativeFirst)
+		return s.deleteCollectionFenced(ctx, c, expectedResourceVersion)
 	})
 }
 
-func (s *scyllaDatastore) deleteCollectionFenced(ctx context.Context, c *datastore.Collection, expectedResourceVersion string, authoritativeFirst bool) error {
+func (s *scyllaDatastore) deleteCollectionFenced(ctx context.Context, c *datastore.Collection, expectedResourceVersion string) error {
 	uid := c.UID
 	parsedUID := mustParseUUID(uid)
 
 	authoritative := mutationAction{
 		Step: catalogueStep("delete", "Collection", uid, "collections_by_namespace", uid, "delete-authoritative"),
 		Apply: func(ctx context.Context) error {
-			return s.deleteCollectionAuthoritative(ctx, toCollectionRow(c), expectedResourceVersion)
+			return s.retireTranslationTargetAuthoritative(ctx, "Collection", c.Namespace, c.CreationTimestamp, uid, expectedResourceVersion, nil)
 		},
 	}
 	projections := []mutationAction{
@@ -1620,12 +1699,7 @@ func (s *scyllaDatastore) deleteCollectionFenced(ctx context.Context, c *datasto
 			},
 		},
 	}
-	var err error
-	if authoritativeFirst {
-		err = s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
-	} else {
-		err = s.mutations.executeDelete(ctx, authoritative, projections...)
-	}
+	err := s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
 	if err != nil {
 		return fmt.Errorf("scylla: delete collection: %w", err)
 	}
@@ -1683,6 +1757,9 @@ func (s *scyllaDatastore) createProductVariant(ctx context.Context, v *datastore
 		v.CreationTimestamp = time.Now().UTC().Truncate(time.Millisecond)
 	}
 	row := toProductVariantRow(v)
+	if err := s.freezeTranslationTargetBirth(ctx, row); err != nil {
+		return err
+	}
 	var (
 		existed      bool
 		nameReserved bool
@@ -1743,7 +1820,7 @@ func (s *scyllaDatastore) createProductVariant(ctx context.Context, v *datastore
 				return applyErr
 			}
 			if !applied {
-				current, getErr := s.getProductVariantByKey(row.Namespace, row.CreationTimestamp, uid)
+				current, getErr := s.getProductVariantByKey(ctx, row.Namespace, row.CreationTimestamp, uid)
 				if getErr != nil {
 					return getErr
 				}
@@ -1810,7 +1887,7 @@ func (s *scyllaDatastore) GetProductVariant(ctx context.Context, uid string) (*d
 		}
 		return nil, fmt.Errorf("scylla: get product_variant (uid lookup): %w", err)
 	}
-	variant, err := s.getProductVariantByKey(uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
+	variant, err := s.getProductVariantByKey(ctx, uidRow.Namespace, uidRow.CreationTimestamp, uidRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "ProductVariant", ResourceUID: uid, Projection: "product_variants_by_uid",
@@ -1829,7 +1906,7 @@ func (s *scyllaDatastore) GetProductVariantByName(ctx context.Context, namespace
 		}
 		return nil, fmt.Errorf("scylla: get product_variant by name: %w", err)
 	}
-	variant, err := s.getProductVariantByKey(nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
+	variant, err := s.getProductVariantByKey(ctx, nameRow.Namespace, nameRow.CreationTimestamp, nameRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "ProductVariant", ResourceUID: nameRow.UID.String(), Projection: "product_variants_by_name",
@@ -1856,7 +1933,7 @@ func (s *scyllaDatastore) GetProductVariantBySKU(ctx context.Context, namespace,
 		}
 		return nil, fmt.Errorf("scylla: get product_variant by sku: %w", err)
 	}
-	variant, err := s.getProductVariantByKey(skuRow.Namespace, skuRow.CreationTimestamp, skuRow.UID)
+	variant, err := s.getProductVariantByKey(ctx, skuRow.Namespace, skuRow.CreationTimestamp, skuRow.UID)
 	if errors.Is(err, datastore.ErrNotFound) {
 		s.reportFinding(ctx, datastore.ProjectionFinding{
 			ResourceKind: "ProductVariant", ResourceUID: skuRow.UID.String(), Projection: "product_variants_by_sku",
@@ -1874,28 +1951,35 @@ func (s *scyllaDatastore) GetProductVariantBySKU(ctx context.Context, namespace,
 	return variant, err
 }
 
-func (s *scyllaDatastore) getProductVariantByKey(namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.ProductVariant, error) {
+func (s *scyllaDatastore) getProductVariantByKey(ctx context.Context, namespace string, createdAt time.Time, uid gocql.UUID) (*datastore.ProductVariant, error) {
 	cols := strings.Join(s.productVariantByNamespaceTable.Metadata().Columns, ", ")
 	stmt := fmt.Sprintf(
 		"SELECT %s FROM product_variants_by_namespace WHERE namespace = ? AND creation_timestamp = ? AND uid = ?",
 		cols,
 	)
 	var row productVariantRow
-	if err := s.session.Query(stmt, nil).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
+	if err := s.session.Query(stmt, nil).WithContext(ctx).Consistency(gocql.Serial).Bind(namespace, createdAt, uid).GetRelease(&row); err != nil {
 		if errors.Is(err, gocql.ErrNotFound) {
 			return nil, fmt.Errorf("%w: product_variant namespace=%s uid=%s", datastore.ErrNotFound, namespace, uid)
 		}
 		return nil, fmt.Errorf("scylla: get product_variant by key: %w", err)
 	}
+	if err := s.checkLiveTranslationTargetUID(ctx, "ProductVariant", uid, row.TranslationRetired); err != nil {
+		return nil, err
+	}
 	return fromProductVariantRow(&row), nil
 }
 
-func (s *scyllaDatastore) ListProductVariants(_ context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.ProductVariant], error) {
+func (s *scyllaDatastore) ListProductVariants(ctx context.Context, namespace string, page datastore.PageParams) (*datastore.PageResult[datastore.ProductVariant], error) {
+	page, err := page.BoundedProductPage()
+	if err != nil {
+		return nil, err
+	}
 	limit := page.Limit()
 	pq := buildPaginatedSelect(s.productVariantByNamespaceTable, page, "namespace", namespace, productClusterKeys, nil, nil)
 
 	var rows []productVariantRow
-	if err := s.session.Query(pq.Stmt, nil).Bind(pq.Args...).SelectRelease(&rows); err != nil {
+	if err := s.session.Query(pq.Stmt, nil).WithContext(ctx).Bind(pq.Args...).SelectRelease(&rows); err != nil {
 		return nil, fmt.Errorf("scylla: list product_variants: %w", err)
 	}
 
@@ -1905,6 +1989,9 @@ func (s *scyllaDatastore) ListProductVariants(_ context.Context, namespace strin
 
 	items := make([]*datastore.ProductVariant, len(rows))
 	for i := range rows {
+		if err := s.checkTranslationTargetPageUID(ctx, "ProductVariant", rows[i].UID, rows[i].TranslationRetired); err != nil {
+			return nil, err
+		}
 		items[i] = fromProductVariantRow(&rows[i])
 	}
 	return buildPageResult(items, limit, page), nil
@@ -1922,15 +2009,16 @@ func (s *scyllaDatastore) ListProductVariantsByProductRef(ctx context.Context, n
 	}
 	result := make([]*datastore.ProductVariant, 0, len(refRows))
 	for _, r := range refRows {
-		v, err := s.getProductVariantByKey(r.Namespace, r.CreationTimestamp, r.UID)
+		v, err := s.getProductVariantByKey(ctx, r.Namespace, r.CreationTimestamp, r.UID)
 		if err != nil {
 			if errors.Is(err, datastore.ErrNotFound) {
 				s.reportFinding(ctx, datastore.ProjectionFinding{
 					ResourceKind: "ProductVariant", ResourceUID: r.UID.String(), Projection: "product_variants_by_product_ref",
 					LookupKey: namespace + "/" + productRefName, Operation: "list_by_product_ref", Type: datastore.FindingDangling,
 				})
+				continue
 			}
-			continue
+			return nil, err
 		}
 		if v.ProductRefName != productRefName {
 			s.reportFinding(ctx, datastore.ProjectionFinding{
@@ -1968,7 +2056,7 @@ func (s *scyllaDatastore) updateProductVariant(ctx context.Context, v *datastore
 	if v.CreationTimestamp.IsZero() {
 		existing, err = s.GetProductVariant(ctx, v.UID)
 	} else {
-		existing, err = s.getProductVariantByKey(v.Namespace, v.CreationTimestamp, uid)
+		existing, err = s.getProductVariantByKey(ctx, v.Namespace, v.CreationTimestamp, uid)
 	}
 	if err != nil {
 		return err
@@ -2085,7 +2173,7 @@ func (s *scyllaDatastore) DeleteProductVariant(ctx context.Context, uid string) 
 	if err != nil {
 		return err
 	}
-	return s.deleteProductVariantWithResourceVersion(ctx, v, v.ResourceVersion, false)
+	return s.deleteProductVariantWithResourceVersion(ctx, v, v.ResourceVersion)
 }
 
 func (s *scyllaDatastore) DeleteProductVariantWithResourceVersion(ctx context.Context, uid, expectedResourceVersion string) error {
@@ -2093,16 +2181,16 @@ func (s *scyllaDatastore) DeleteProductVariantWithResourceVersion(ctx context.Co
 	if err != nil {
 		return err
 	}
-	return s.deleteProductVariantWithResourceVersion(ctx, v, expectedResourceVersion, true)
+	return s.deleteProductVariantWithResourceVersion(ctx, v, expectedResourceVersion)
 }
 
-func (s *scyllaDatastore) deleteProductVariantWithResourceVersion(ctx context.Context, v *datastore.ProductVariant, expectedResourceVersion string, authoritativeFirst bool) error {
+func (s *scyllaDatastore) deleteProductVariantWithResourceVersion(ctx context.Context, v *datastore.ProductVariant, expectedResourceVersion string) error {
 	return s.catalogMutation(ctx, "ProductVariant", v.Namespace, v.RepositoryID, v.UID, true, func() error {
-		return s.deleteProductVariantFenced(ctx, v, expectedResourceVersion, authoritativeFirst)
+		return s.deleteProductVariantFenced(ctx, v, expectedResourceVersion)
 	})
 }
 
-func (s *scyllaDatastore) deleteProductVariantFenced(ctx context.Context, v *datastore.ProductVariant, expectedResourceVersion string, authoritativeFirst bool) error {
+func (s *scyllaDatastore) deleteProductVariantFenced(ctx context.Context, v *datastore.ProductVariant, expectedResourceVersion string) error {
 	uid := v.UID
 	parsedUID := mustParseUUID(uid)
 	projections := []mutationAction{
@@ -2163,15 +2251,10 @@ func (s *scyllaDatastore) deleteProductVariantFenced(ctx context.Context, v *dat
 	authoritative := mutationAction{
 		Step: catalogueStep("delete", "ProductVariant", uid, "product_variants_by_namespace", uid, "delete-authoritative"),
 		Apply: func(ctx context.Context) error {
-			return s.deleteProductVariantAuthoritative(ctx, toProductVariantRow(v), expectedResourceVersion)
+			return s.retireTranslationTargetAuthoritative(ctx, "ProductVariant", v.Namespace, v.CreationTimestamp, uid, expectedResourceVersion, nil)
 		},
 	}
-	var err error
-	if authoritativeFirst {
-		err = s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
-	} else {
-		err = s.mutations.executeDelete(ctx, authoritative, projections...)
-	}
+	err := s.mutations.executeConditionalDelete(ctx, expectedResourceVersion, authoritative, projections...)
 	if err != nil {
 		return fmt.Errorf("scylla: delete product_variant: %w", err)
 	}
@@ -2207,13 +2290,43 @@ func validateResourceVersionTransition(current, desired string) error {
 }
 
 func (s *scyllaDatastore) insertAuthoritative(ctx context.Context, target *table.Table, row any) (bool, error) {
-	statement, names := target.Insert()
-	applied, err := s.session.Query(statement+" IF NOT EXISTS", names).WithContext(ctx).
-		BindStruct(row).ExecCASRelease()
+	if err := s.checkTranslationTargetInsert(ctx, row); err != nil {
+		return false, err
+	}
+	if _, resource, _ := translationTargetSourceRow(row); resource != nil {
+		if err := s.mutations.injector.Inject("prepare-target-source", failureBefore); err != nil {
+			return false, err
+		}
+	}
+	if _, err := s.prepareTranslationTargetSourceIdentity(ctx, row, true); err != nil {
+		return false, err
+	}
+	pending, err := s.beginTranslationTargetCreation(ctx, row)
 	if err != nil {
 		return false, err
 	}
-	return applied, nil
+	if pending != nil {
+		if err := s.checkTranslationTargetInsert(ctx, row); err != nil {
+			return false, err
+		}
+	}
+	if _, resource, _ := translationTargetSourceRow(row); resource != nil {
+		if err := s.mutations.injector.Inject("publish-target-source", failureBefore); err != nil {
+			return false, err
+		}
+	}
+	statement, names := target.Insert()
+	applied, err := s.executeTranslationTargetCAS(ctx, translationTargetRowMutation(row, nil, true, pending), func() (bool, error) {
+		return s.session.Query(statement+" IF NOT EXISTS", names).WithContext(ctx).Consistency(gocql.Quorum).SerialConsistency(gocql.Serial).
+			BindStruct(row).ExecCASRelease()
+	})
+	if err != nil {
+		return false, err
+	}
+	if !applied && pending == nil {
+		return false, nil
+	}
+	return applied, s.finishTranslationTargetSourceUpdate(ctx, row, pending, applied, nil)
 }
 
 func (s *scyllaDatastore) insertProjection(ctx context.Context, target *table.Table, row any) error {
@@ -2222,115 +2335,119 @@ func (s *scyllaDatastore) insertProjection(ctx context.Context, target *table.Ta
 }
 
 func (s *scyllaDatastore) updateProductAuthoritative(ctx context.Context, row *productRow, expectedResourceVersion string) error {
-	const statement = "UPDATE products_by_key SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
-		"creation_actor=?,update_timestamp=?,update_actor=?,labels=?,annotations=?,owner_references=?,finalizers=?,deletion_timestamp=?," +
-		"repository_id=?,source_path=?,git_commit_sha=?,git_ref=?,spec=?,body=?,status=? " +
-		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
-	applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(
-		row.Name, row.APIVersion, row.Kind, row.Generation, row.ResourceVersion, row.Revision,
-		row.CreationActor, row.UpdateTimestamp, row.UpdateActor, row.Labels, row.Annotations,
-		row.OwnerReferences, row.Finalizers, row.DeletionTimestamp, row.RepositoryID,
-		row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
-		row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion,
-	).ExecCASRelease()
+	previousIdentity, err := s.prepareTranslationTargetSourceIdentity(ctx, row, false)
 	if err != nil {
 		return err
 	}
-	if !applied {
-		return datastore.ErrConflict
+	pending, err := s.beginProvenTranslationTargetUpdate(ctx, row, previousIdentity, expectedResourceVersion)
+	if err != nil {
+		return err
 	}
-	return nil
+	const statement = "UPDATE products_by_key SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
+		"creation_actor=?,update_timestamp=?,update_actor=?,labels=?,annotations=?,owner_references=?,finalizers=?,deletion_timestamp=?," +
+		"repository_id=?,source_path=?,git_commit_sha=?,git_ref=?,spec=?,body=?,status=?,translation_source_identity=? " +
+		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=? AND translation_retired=null AND translation_source_identity=?"
+	applied, err := s.executeTranslationTargetCAS(ctx, translationTargetRowMutation(row, previousIdentity, false, pending), func() (bool, error) {
+		return s.session.Query(statement, nil).WithContext(ctx).Consistency(gocql.Quorum).SerialConsistency(gocql.Serial).Bind(
+			row.Name, row.APIVersion, row.Kind, row.Generation, row.ResourceVersion, row.Revision,
+			row.CreationActor, row.UpdateTimestamp, row.UpdateActor, row.Labels, row.Annotations,
+			row.OwnerReferences, row.Finalizers, row.DeletionTimestamp, row.RepositoryID,
+			row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status, row.TranslationSourceIdentity,
+			row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion, previousIdentity,
+		).ExecCASRelease()
+	})
+	return s.finishTranslationTargetSourceUpdate(ctx, row, pending, applied, err)
 }
 
 func (s *scyllaDatastore) updateCategoryTaxonomyAuthoritative(ctx context.Context, row *categoryTaxonomyRow, expectedResourceVersion string) error {
-	const statement = "UPDATE category_taxonomies_by_namespace SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
-		"creation_actor=?,update_timestamp=?,update_actor=?,labels=?,annotations=?,owner_references=?,finalizers=?,deletion_timestamp=?," +
-		"repository_id=?,source_path=?,git_commit_sha=?,git_ref=?,spec=?,body=?,status=?,parent_name=?,ancestor_path=? " +
-		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
-	applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(
-		row.Name, row.APIVersion, row.Kind, row.Generation, row.ResourceVersion, row.Revision,
-		row.CreationActor, row.UpdateTimestamp, row.UpdateActor, row.Labels, row.Annotations,
-		row.OwnerReferences, row.Finalizers, row.DeletionTimestamp, row.RepositoryID,
-		row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
-		row.ParentName, row.AncestorPath, row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion,
-	).ExecCASRelease()
+	previousIdentity, err := s.prepareTranslationTargetSourceIdentity(ctx, row, false)
 	if err != nil {
 		return err
 	}
-	if !applied {
-		return datastore.ErrConflict
+	pending, err := s.beginProvenTranslationTargetUpdate(ctx, row, previousIdentity, expectedResourceVersion)
+	if err != nil {
+		return err
 	}
-	return nil
+	const statement = "UPDATE category_taxonomies_by_namespace SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
+		"creation_actor=?,update_timestamp=?,update_actor=?,labels=?,annotations=?,owner_references=?,finalizers=?,deletion_timestamp=?," +
+		"repository_id=?,source_path=?,git_commit_sha=?,git_ref=?,spec=?,body=?,status=?,parent_name=?,ancestor_path=?,translation_source_identity=? " +
+		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=? AND translation_retired=null AND translation_source_identity=?"
+	applied, err := s.executeTranslationTargetCAS(ctx, translationTargetRowMutation(row, previousIdentity, false, pending), func() (bool, error) {
+		return s.session.Query(statement, nil).WithContext(ctx).Consistency(gocql.Quorum).SerialConsistency(gocql.Serial).Bind(
+			row.Name, row.APIVersion, row.Kind, row.Generation, row.ResourceVersion, row.Revision,
+			row.CreationActor, row.UpdateTimestamp, row.UpdateActor, row.Labels, row.Annotations,
+			row.OwnerReferences, row.Finalizers, row.DeletionTimestamp, row.RepositoryID,
+			row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
+			row.ParentName, row.AncestorPath, row.TranslationSourceIdentity, row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion, previousIdentity,
+		).ExecCASRelease()
+	})
+	return s.finishTranslationTargetSourceUpdate(ctx, row, pending, applied, err)
 }
 
 func (s *scyllaDatastore) updateCollectionAuthoritative(ctx context.Context, row *collectionRow, expectedResourceVersion string) error {
-	const statement = "UPDATE collections_by_namespace SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
-		"creation_actor=?,update_timestamp=?,update_actor=?,labels=?,annotations=?,owner_references=?,finalizers=?,deletion_timestamp=?," +
-		"repository_id=?,source_path=?,git_commit_sha=?,git_ref=?,spec=?,body=?,status=? " +
-		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
-	applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(
-		row.Name, row.APIVersion, row.Kind, row.Generation, row.ResourceVersion, row.Revision,
-		row.CreationActor, row.UpdateTimestamp, row.UpdateActor, row.Labels, row.Annotations,
-		row.OwnerReferences, row.Finalizers, row.DeletionTimestamp, row.RepositoryID,
-		row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
-		row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion,
-	).ExecCASRelease()
+	previousIdentity, err := s.prepareTranslationTargetSourceIdentity(ctx, row, false)
 	if err != nil {
 		return err
 	}
-	if !applied {
-		return datastore.ErrConflict
+	pending, err := s.beginProvenTranslationTargetUpdate(ctx, row, previousIdentity, expectedResourceVersion)
+	if err != nil {
+		return err
 	}
-	return nil
+	const statement = "UPDATE collections_by_namespace SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
+		"creation_actor=?,update_timestamp=?,update_actor=?,labels=?,annotations=?,owner_references=?,finalizers=?,deletion_timestamp=?," +
+		"repository_id=?,source_path=?,git_commit_sha=?,git_ref=?,spec=?,body=?,status=?,translation_source_identity=? " +
+		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=? AND translation_retired=null AND translation_source_identity=?"
+	applied, err := s.executeTranslationTargetCAS(ctx, translationTargetRowMutation(row, previousIdentity, false, pending), func() (bool, error) {
+		return s.session.Query(statement, nil).WithContext(ctx).Consistency(gocql.Quorum).SerialConsistency(gocql.Serial).Bind(
+			row.Name, row.APIVersion, row.Kind, row.Generation, row.ResourceVersion, row.Revision,
+			row.CreationActor, row.UpdateTimestamp, row.UpdateActor, row.Labels, row.Annotations,
+			row.OwnerReferences, row.Finalizers, row.DeletionTimestamp, row.RepositoryID,
+			row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status, row.TranslationSourceIdentity,
+			row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion, previousIdentity,
+		).ExecCASRelease()
+	})
+	return s.finishTranslationTargetSourceUpdate(ctx, row, pending, applied, err)
 }
 
 func (s *scyllaDatastore) updateProductVariantAuthoritative(ctx context.Context, row *productVariantRow, expectedResourceVersion string) error {
-	const statement = "UPDATE product_variants_by_namespace SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
-		"creation_actor=?,update_timestamp=?,update_actor=?,labels=?,annotations=?,owner_references=?,finalizers=?,deletion_timestamp=?," +
-		"repository_id=?,source_path=?,git_commit_sha=?,git_ref=?,spec=?,body=?,status=?,sku=?,product_ref_name=? " +
-		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?"
-	applied, err := s.session.Query(statement, nil).WithContext(ctx).Bind(
-		row.Name, row.APIVersion, row.Kind, row.Generation, row.ResourceVersion, row.Revision,
-		row.CreationActor, row.UpdateTimestamp, row.UpdateActor, row.Labels, row.Annotations,
-		row.OwnerReferences, row.Finalizers, row.DeletionTimestamp, row.RepositoryID,
-		row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
-		row.SKU, row.ProductRefName, row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion,
-	).ExecCASRelease()
+	previousIdentity, err := s.prepareTranslationTargetSourceIdentity(ctx, row, false)
 	if err != nil {
 		return err
 	}
-	if !applied {
-		return datastore.ErrConflict
+	pending, err := s.beginProvenTranslationTargetUpdate(ctx, row, previousIdentity, expectedResourceVersion)
+	if err != nil {
+		return err
 	}
-	return nil
+	const statement = "UPDATE product_variants_by_namespace SET name=?,api_version=?,kind=?,generation=?,resource_version=?,revision=?," +
+		"creation_actor=?,update_timestamp=?,update_actor=?,labels=?,annotations=?,owner_references=?,finalizers=?,deletion_timestamp=?," +
+		"repository_id=?,source_path=?,git_commit_sha=?,git_ref=?,spec=?,body=?,status=?,sku=?,product_ref_name=?,translation_source_identity=? " +
+		"WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=? AND translation_retired=null AND translation_source_identity=?"
+	applied, err := s.executeTranslationTargetCAS(ctx, translationTargetRowMutation(row, previousIdentity, false, pending), func() (bool, error) {
+		return s.session.Query(statement, nil).WithContext(ctx).Consistency(gocql.Quorum).SerialConsistency(gocql.Serial).Bind(
+			row.Name, row.APIVersion, row.Kind, row.Generation, row.ResourceVersion, row.Revision,
+			row.CreationActor, row.UpdateTimestamp, row.UpdateActor, row.Labels, row.Annotations,
+			row.OwnerReferences, row.Finalizers, row.DeletionTimestamp, row.RepositoryID,
+			row.SourcePath, row.GitCommitSHA, row.GitRef, row.Spec, row.Body, row.Status,
+			row.SKU, row.ProductRefName, row.TranslationSourceIdentity, row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion, previousIdentity,
+		).ExecCASRelease()
+	})
+	return s.finishTranslationTargetSourceUpdate(ctx, row, pending, applied, err)
 }
 
 func (s *scyllaDatastore) deleteProductAuthoritative(ctx context.Context, row *productRow, expectedResourceVersion string) error {
-	return s.deleteAuthoritative(ctx,
-		"DELETE FROM products_by_key WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?",
-		row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion,
-	)
+	return s.rollbackTranslationTargetCreation(ctx, row, expectedResourceVersion)
 }
 
 func (s *scyllaDatastore) deleteCategoryTaxonomyAuthoritative(ctx context.Context, row *categoryTaxonomyRow, expectedResourceVersion string) error {
-	return s.deleteAuthoritative(ctx,
-		"DELETE FROM category_taxonomies_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?",
-		row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion,
-	)
+	return s.rollbackTranslationTargetCreation(ctx, row, expectedResourceVersion)
 }
 
 func (s *scyllaDatastore) deleteCollectionAuthoritative(ctx context.Context, row *collectionRow, expectedResourceVersion string) error {
-	return s.deleteAuthoritative(ctx,
-		"DELETE FROM collections_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?",
-		row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion,
-	)
+	return s.rollbackTranslationTargetCreation(ctx, row, expectedResourceVersion)
 }
 
 func (s *scyllaDatastore) deleteProductVariantAuthoritative(ctx context.Context, row *productVariantRow, expectedResourceVersion string) error {
-	return s.deleteAuthoritative(ctx,
-		"DELETE FROM product_variants_by_namespace WHERE namespace=? AND creation_timestamp=? AND uid=? IF resource_version=?",
-		row.Namespace, row.CreationTimestamp, row.UID, expectedResourceVersion,
-	)
+	return s.rollbackTranslationTargetCreation(ctx, row, expectedResourceVersion)
 }
 
 func (s *scyllaDatastore) deleteAuthoritative(ctx context.Context, statement string, args ...any) error {
@@ -3087,7 +3204,7 @@ func (s *scyllaDatastore) HasCatalogResources(ctx context.Context, repoID string
 		var row struct {
 			UID gocql.UUID `db:"uid"`
 		}
-		err := s.session.Query("SELECT uid FROM "+repositoryResourcesTable+" WHERE repository_id=? AND shard=? LIMIT 1", nil).
+		err := s.session.Query("SELECT uid FROM "+repositoryResourcesTable+" WHERE repository_id=? AND shard=? AND kind > '' LIMIT 1", nil).
 			WithContext(ctx).Bind(mustParseUUID(repoID), shard).GetRelease(&row)
 		if err == nil {
 			return true, nil

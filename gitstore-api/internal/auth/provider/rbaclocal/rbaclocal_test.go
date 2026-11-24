@@ -64,6 +64,7 @@ func TestShippedPolicyEffectiveGrants(t *testing.T) {
 			internal := &authpkg.Principal{Subject: "system:api", AuthMethod: "internal", Groups: []string{"system:authenticated"}}
 			admin := &authpkg.Principal{Subject: "admin", AuthMethod: "static-users", Groups: []string{"system:authenticated"}}
 			controllerActions := strings.Fields("namespace.read namespace.list namespace.watch namespace.status.write namespace.purge namespace.system-repository.provision repository.create repository.read repository.list repository.watch repository.status.write repository.purge categoryTaxonomy.read categoryTaxonomy.list categoryTaxonomy.watch categoryTaxonomy.status.write categoryTaxonomy.purge product.read product.list product.watch product.management.read product.management.list product.status.write product.purge file.read file.list file.watch file.status.write serviceAccount.token.issue")
+			controllerActions = append(controllerActions, strings.Fields("translation.read translation.list translation.watch translation.status.write productVariant.read productVariant.list productVariant.watch collection.read collection.list collection.watch")...)
 			internalActions := strings.Fields("repository.create repository.delete repository.contents.read repository.contents.write")
 			contains := func(actions []string, action string) bool {
 				for _, candidate := range actions {
@@ -117,7 +118,7 @@ func TestShippedPolicyEffectiveGrants(t *testing.T) {
 				isolated.RoleBindings = []Binding{{Namespace: &namespace, RoleRef: RoleRef{Kind: "ClusterRole", Name: name}, Subjects: []SubjectRef{{Kind: "User", Name: "alice"}}}}
 				provider.snapshot.Store(compilePolicy(&isolated))
 				for _, action := range authpkg.AuthorizationActions() {
-					core := contains([]string{"repository", "categoryTaxonomy", "product", "productVariant", "collection", "file"}, action.Resource)
+					core := contains([]string{"repository", "categoryTaxonomy", "product", "productVariant", "collection", "file", "translation"}, action.Resource)
 					want := core && contains([]string{"read", "list", "watch"}, action.Verb)
 					want = want || (action.Resource == "product/management" || action.Resource == "productVariant/management")
 					if name != "view" {

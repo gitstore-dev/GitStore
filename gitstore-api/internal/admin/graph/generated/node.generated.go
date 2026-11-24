@@ -63,6 +63,13 @@ func (ec *executionContext) _Node(ctx context.Context, sel ast.SelectionSet, obj
 			return graphql.Null
 		}
 		return ec._ServiceAccount(ctx, sel, obj)
+	case model.Translation:
+		return ec._Translation(ctx, sel, &obj)
+	case *model.Translation:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._Translation(ctx, sel, obj)
 	case model.RoleBinding:
 		return ec._RoleBinding(ctx, sel, &obj)
 	case *model.RoleBinding:

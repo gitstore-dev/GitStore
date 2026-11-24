@@ -397,7 +397,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			}
 		}
 	}
-	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isActorReadField(fc) && !isAdditionalCatalogField(fc) && !isNamespaceQueryField(fc) && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isCategoryProductsField(fc) && !isFileQueryField(fc) && !isCategoryQueryField(fc) {
+	if fc.Object != "Mutation" && fc.Object != "Subscription" && !isTranslationQueryField(fc) && !isActorReadField(fc) && !isAdditionalCatalogField(fc) && !isNamespaceQueryField(fc) && !isRepositoryQueryField(fc) && !isProductQueryField(fc) && !isCategoryProductsField(fc) && !isFileQueryField(fc) && !isCategoryQueryField(fc) {
 		return next(ctx)
 	}
 	if fc.Object == "Mutation" {
@@ -435,7 +435,13 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 			}
 		})
 	}
-	if isFileQueryField(fc) {
+	if isTranslationQueryField(fc) {
+		var err error
+		ctx, err = a.authorizeTranslationQuery(ctx, fc, principal, authz)
+		if err != nil {
+			return nil, err
+		}
+	} else if isFileQueryField(fc) {
 		var err error
 		ctx, err = a.authorizeFileRead(ctx, fc, principal, authz)
 		if err != nil {
@@ -472,6 +478,11 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		return nil, err
 	}
 	ctx = fileCtx
+	translationCtx, err := a.authorizeTranslationNodes(ctx, fc, principal, authz)
+	if err != nil {
+		return nil, err
+	}
+	ctx = translationCtx
 	if err := a.authorizeCategoryNodeField(ctx, fc, principal, authz); err != nil {
 		return nil, err
 	}
@@ -694,14 +705,18 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 				Extensions: map[string]any{"code": "FORBIDDEN"},
 			}
 		}
-	case "updateProductStatus":
+	case "updateProductStatus", "updateTranslationStatus":
 		if authz == nil {
 			return nil, gqlerror.Errorf("authorization service unavailable")
 		}
 		name, _ := nestedStringArg(fc.Args, "input", "name")
 		namespace, _ := nestedStringArg(fc.Args, "input", "namespace")
-		decision, err := authz.Authorize(ctx, principal, "product.status.write", auth.ResourceContext{
-			Kind: "product", Name: name, Attrs: map[string]any{"namespace": namespace},
+		kind, action := "product", auth.ActionProductStatusWrite
+		if fc.Field.Name == "updateTranslationStatus" {
+			kind, action = "translation", auth.ActionTranslationStatusWrite
+		}
+		decision, err := authz.Authorize(ctx, principal, action, auth.ResourceContext{
+			Kind: kind, Name: name, Attrs: map[string]any{"namespace": namespace},
 		})
 		if err != nil {
 			return nil, authorizationGraphQLError(err)
@@ -784,7 +799,7 @@ func (a *Authorize) GraphQLFieldAuthorizer(ctx context.Context, next graphql.Res
 		kind, _ := nestedStringArg(fc.Args, "input", "kind")
 		// Match the concrete generic status backends. Catalog membership alone
 		// does not expose an operation (Product has only a typed status mutation).
-		if kind != "Namespace" && kind != "Repository" && kind != "CategoryTaxonomy" && kind != "File" &&
+		if kind != "Namespace" && kind != "Repository" && kind != "CategoryTaxonomy" && kind != "File" && kind != "Translation" &&
 			kind != "Role" && kind != "ClusterRole" && kind != "RoleBinding" && kind != "ClusterRoleBinding" {
 			return nil, &gqlerror.Error{Message: "unsupported status kind", Extensions: map[string]any{"code": "UNSUPPORTED_KIND"}}
 		}
@@ -1140,7 +1155,7 @@ func isAdditionalCatalogField(fc *graphql.FieldContext) bool {
 		return false
 	}
 	switch fc.Object + "." + fc.Field.Name {
-	case "Query.collection", "Query.collections", "Query.productVariant", "Query.productVariants", "Collection.products", "Product.productVariants":
+	case "Query.collection", "Query.collections", "Query.productVariant", "Query.productVariants", "Query.files", "Collection.products", "Product.productVariants":
 		return true
 	}
 	return false
@@ -1185,7 +1200,7 @@ func (a *Authorize) authorizeAdditionalCatalogField(ctx context.Context, fc *gra
 	if fc.Object != "Query" {
 		return nil
 	}
-	if fc.Field.Name == "collections" || fc.Field.Name == "productVariants" {
+	if fc.Field.Name == "collections" || fc.Field.Name == "productVariants" || fc.Field.Name == "files" {
 		namespace, _ := directStringArg(fc.Args, "namespace")
 		return list(strings.TrimSuffix(fc.Field.Name, "s"), namespace)
 	}
@@ -1680,13 +1695,20 @@ func authorizeCategoryAction(ctx context.Context, authz auth.AuthZProvider, prin
 	if authz == nil {
 		return gqlerror.Errorf("authorization service unavailable")
 	}
+	managementAlternative := (resource.Kind == "product" || resource.Kind == "productVariant") &&
+		(action == resource.Kind+".read" || action == resource.Kind+".list")
+	if managementAlternative && auth.ServingAuthorizationCaptureFromContext(ctx) == nil {
+		var closeCapture func()
+		ctx, closeCapture = auth.ContextWithServingAuthorizationCapture(ctx)
+		defer closeCapture()
+	}
 	decision, err := authz.Authorize(ctx, principal, action, resource)
 	if err != nil {
 		return authorizationGraphQLError(err)
 	}
 	// The same endpoint can be read using either ordinary or management
 	// capability. There is no role-name shortcut and no requirement to hold both.
-	if decision.Outcome != auth.OutcomeAllow && (resource.Kind == "product" || resource.Kind == "productVariant") && (action == resource.Kind+".read" || action == resource.Kind+".list") {
+	if decision.Outcome != auth.OutcomeAllow && managementAlternative {
 		verb := strings.TrimPrefix(action, resource.Kind+".")
 		decision, err = authz.Authorize(ctx, principal, resource.Kind+".management."+verb, resource)
 		if err != nil {
@@ -1708,16 +1730,16 @@ func graphqlFieldRequiresAuthorization(fc *graphql.FieldContext) bool {
 	}
 	switch fc.Object {
 	case "Query":
-		return isActorReadField(fc) || isNamespaceQueryField(fc) || isProductQueryField(fc) || isFileQueryField(fc) || isCategoryQueryField(fc) || isRepositoryQueryField(fc)
+		return isTranslationQueryField(fc) || isActorReadField(fc) || isNamespaceQueryField(fc) || isProductQueryField(fc) || isFileQueryField(fc) || isCategoryQueryField(fc) || isRepositoryQueryField(fc)
 	case "Mutation":
 		switch fc.Field.Name {
 		case "createProduct", "updateProduct", "deleteProduct", "completeProductDeletion", "createRepository", "deleteRepository", "deleteNamespace", "completeNamespaceDeletion", "provisionNamespaceSystemRepository", "completeRepositoryDeletion", "provisionRepositoryStorage", "updateCategoryStatus", "updateProductStatus", "updateNamespaceStatus", "createCategory", "updateCategory", "deleteCategory", "completeCategoryDeletion", "updateResourceStatus", "issueServiceAccountToken", "createServiceAccount", "rotateServiceAccountKey", "deleteServiceAccount":
 			return true
-		case "createNamespace", "updateNamespace", "transferNamespaceOwner", "updateRepository", "updateRepositoryStatus":
+		case "createNamespace", "updateNamespace", "transferNamespaceOwner", "updateRepository", "updateRepositoryStatus", "updateTranslationStatus":
 			return true
 		}
 	case "Subscription":
-		return fc.Field.Name == "watchFiles" || fc.Field.Name == "watchNamespaces" || fc.Field.Name == "watchRepositories" || fc.Field.Name == "watchProducts" || fc.Field.Name == "watchCategories" || fc.Field.Name == "watchResources" ||
+		return fc.Field.Name == "watchTranslations" || fc.Field.Name == "watchFiles" || fc.Field.Name == "watchProductVariants" || fc.Field.Name == "watchCollections" || fc.Field.Name == "watchNamespaces" || fc.Field.Name == "watchRepositories" || fc.Field.Name == "watchProducts" || fc.Field.Name == "watchCategories" || fc.Field.Name == "watchResources" ||
 			fc.Field.Name == "watchRoles" || fc.Field.Name == "watchClusterRoles" || fc.Field.Name == "watchRoleBindings" || fc.Field.Name == "watchClusterRoleBindings"
 	}
 	return false
@@ -2102,6 +2124,12 @@ func (a *Authorize) authorizeSubscription(
 		kind = "Repository"
 	case "watchProducts":
 		kind = "Product"
+	case "watchProductVariants":
+		kind = "ProductVariant"
+	case "watchCollections":
+		kind = "Collection"
+	case "watchTranslations":
+		kind = "Translation"
 	case "watchCategories":
 		kind = "CategoryTaxonomy"
 	case "watchRoles":
@@ -2114,7 +2142,7 @@ func (a *Authorize) authorizeSubscription(
 		kind = "ClusterRoleBinding"
 	case "watchResources":
 		kind, _ = directStringArg(fc.Args, "kind")
-		if kind != "File" && kind != "Namespace" && kind != "Repository" && kind != "Product" && kind != "CategoryTaxonomy" &&
+		if kind != "File" && kind != "Namespace" && kind != "Repository" && kind != "Product" && kind != "ProductVariant" && kind != "Collection" && kind != "CategoryTaxonomy" && kind != "Translation" &&
 			kind != "Role" && kind != "ClusterRole" && kind != "RoleBinding" && kind != "ClusterRoleBinding" {
 			// No other kind has a durable watch source; the resolver
 			// rejects it with UNSUPPORTED_KIND without opening a stream.
@@ -2134,7 +2162,7 @@ func (a *Authorize) authorizeSubscription(
 		return nil, &gqlerror.Error{Message: "unsupported watch kind", Extensions: map[string]any{"code": "UNSUPPORTED_KIND"}}
 	}
 	resource := auth.ResourceContext{Kind: definition.Kind, Attrs: map[string]any{}}
-	if kind == "File" || kind == "Repository" || kind == "Product" || kind == "CategoryTaxonomy" || kind == "Role" || kind == "RoleBinding" {
+	if kind == "Translation" || kind == "File" || kind == "Repository" || kind == "Product" || kind == "ProductVariant" || kind == "Collection" || kind == "CategoryTaxonomy" || kind == "Role" || kind == "RoleBinding" {
 		namespace, _ := directStringArg(fc.Args, "namespace")
 		resource.Attrs["namespace"] = namespace
 	}

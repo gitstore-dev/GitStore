@@ -34,6 +34,7 @@ non-overlapping replacement, not concurrent Git replicas.
 | Watch disconnects, status conflicts, or journal readiness | [Watch and status diagnostics](controller-watch-status.md) |
 | Controller token exchange or credential failures | [Controller authentication](controller-auth.md) |
 | Missing or inconsistent Scylla projections | [Projection audit and repair](scylla-projection-repair.md) |
+| Translation activation refusal or retained proof requiring maintenance | [Translation safety and recovery](translations.md) |
 | Namespace admission rejection or termination blocked | [Namespace admission](namespace-admission.md) |
 | Product or Category deletion not completing | [Catalog lifecycle](catalog-lifecycle.md) |
 | Containers, ports, Compose, or local startup failing | [Docker troubleshooting](docker-troubleshooting.md) |

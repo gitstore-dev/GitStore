@@ -282,6 +282,23 @@ The embedded engine accepts only the release's fixed policy; operators
 cannot supply Rego source or remote bundles. Its in-memory translations are
 disposable and do not replace durable RBAC resources.
 
+For an explicitly owned acceptance runtime, optional
+`api.auth.opa.evidence_directory`
+(`GITSTORE_API__AUTH__OPA__EVIDENCE_DIRECTORY`) selects an existing clean
+absolute private directory with no group/other permissions. The runtime
+exclusively creates private `source-models.jsonl` and `decisions.jsonl` files,
+bounded to 1 GiB and 8 GiB respectively. The source stream records complete
+canonical snapshots and capture clocks; the decision stream records unsampled
+authorization receipts without changing normal operational-log sampling.
+Concurrent capture writes are coalesced into bounded batches without deferring
+publication past a successful write; shutdown syncs and closes both streams,
+and any capture failure prevents a successful evidence seal.
+Captured policies, subjects and request identifiers are private evidence,
+not public diagnostics. Use a fresh directory per process epoch, preserve failed
+streams, and restart to change capture selection. Empty selection is the default
+and creates no capture files. This setting does not bypass the production
+OPA startup gate or establish capacity acceptance.
+
 Durable journal delivery alone does not establish authorization readiness.
 Serving requires a complete consistent snapshot and verified continuous,
 fresh watch progress; resource update timestamps alone are not freshness
@@ -292,12 +309,37 @@ snapshot is missing, including for request-scoped authorization captures.
 Requests remain unavailable until the complete snapshot is installed; an
 absent snapshot is never treated as an empty policy.
 
+OPA authorization decision logs distinguish cluster and Namespace origin
+failures as `not installed`, `not verified`, `expired` or `clock ahead`.
+These bounded reasons contain no tier names, UIDs or policy content and retain
+the same fail-closed authorization-unavailable response. An expired proof is
+not evidence that a resource was deleted; diagnose source verification and
+worker progress without extending the freshness limit.
+
+Namespace origin batches reread live identities with at most four concurrent
+identity readers (twelve datastore reads per batch) before requesting signed
+ref proofs. Proof clocks remain stamped before I/O, so slow reads cannot extend
+freshness.
+
+A write-busy Git repository contributes no new ref proof; other repositories
+in the same batch can still be checked. Contention does not prove deletion or
+extend an existing proof's freshness. With matching live identity and healthy
+watch progress, an already complete publication remains usable only until its
+original proof expires while background verification retries. A busy response
+cannot establish readiness or renew that proof. Missing refs, changed identity,
+malformed responses and other verification failures still fail closed.
+
 Background workers alternate queued rebuilds with the oldest due origin checks.
-With at least two workers and installed publications, full Namespace scans leave
-one worker slot for origin checks or shared root replacement. Root rebuilds take
-priority over queued Namespace rebuilds within the same concurrency limit.
-A single worker still serializes checks and rebuilds; overload or slow checks
-still fail closed at the configured freshness bound.
+Once publications are installed, the default four-worker bound permits at most
+two concurrent Namespace rebuilds, leaving separate capacity for Namespace
+origin checks and shared root recovery. Root rebuilds take priority over queued
+Namespace rebuilds within the same concurrency limit. When every Namespace
+worker is occupied, a proof batch can use the remaining shared ref-check capacity
+instead of leaving other workers' unused batch shares idle. Running work still
+counts against that bound, with a separate share reserved for root and recovery.
+Smaller worker bounds
+reduce this separation; a single worker serializes checks and rebuilds.
+Overload or slow checks still fail closed at the configured freshness bound.
 
 Ordinary policy revisions replace complete translations atomically. While a
 replacement is prepared for the same active Namespace, repository and canonical

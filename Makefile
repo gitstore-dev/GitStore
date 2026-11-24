@@ -9,7 +9,7 @@ CONTROLLER_MANAGER_DIR := $(ROOT)/gitstore-controller-manager
 GIT_SERVICE_DIR := $(ROOT)/gitstore-git-service
 OIDC_BRIDGE_DIR := $(ROOT)/gitstore-oidc-bridge
 SECRET_MATERIAL_DIR := $(ROOT)/shared/secretmaterial
-GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR) $(SECRET_MATERIAL_DIR) $(ROOT)/shared/observability $(ROOT)/shared/scylla-cdc-go
+GO_MODULE_DIRS := $(API_DIR) $(CONTROLLER_MANAGER_DIR) $(OIDC_BRIDGE_DIR) $(SECRET_MATERIAL_DIR) $(ROOT)/shared/observability $(ROOT)/shared/scylla-cdc-go $(ROOT)/shared/translation
 
 API_ENV_FILE ?= $(API_DIR)/.env
 CONFIG_FILE ?= ./config/config.toml
@@ -452,10 +452,14 @@ down: ## Stop and remove compose services and networks.
 	@$(LIFECYCLE_COMPOSE) down --remove-orphans
 
 build: ## Build Rust/Go services and the shared secret-material module.
+ifneq ($(strip $(CAPACITY_BUILD_RECEIPT)$(CAPACITY_BUILD_OUTPUT)$(CAPACITY_BUILD_KIND)),)
+	@python3 "$(ROOT)/scripts/capacity-build-receipt.py" build "$(TARGET)" "$(CAPACITY_BUILD_OUTPUT)" "$(CAPACITY_BUILD_RECEIPT)" "$(or $(CAPACITY_BUILD_KIND),release)"
+else
 	@cd "$(GIT_SERVICE_DIR)" && cargo build --verbose
 	@for dir in $(GO_MODULE_DIRS); do \
 		( cd "$$dir" && go build -v ./... ) || exit 1; \
 	done
+endif
 
 generate: ## Generate committed sources; TARGET=authz or all.
 	@./scripts/run-make-workflow.sh generate "$(TARGET)"
@@ -499,7 +503,7 @@ else ifeq ($(TEST_TARGET),all)
 	@bash ./scripts/test-secret-config.sh
 	@bash ./scripts/test-license-headers.sh
 	@bash ./scripts/test-secret-capacity-evidence.sh
-	@cd "$(ROOT)/tests/integration" && GOWORK=off go test -count=1 -race -run '^TestSecretCapacity|^Test(CapacityPush|CapacityPreflight|PushHelper|EndpointSplit|EndpointLoad|RepositoryController|RBACCapacity)' .
+	@cd "$(ROOT)/tests/integration" && GOWORK=off go test -count=1 -race -run '^TestSecretCapacity|^Test(CapacityPush|CapacityPreflight|PushHelper|EndpointSplit|EndpointLoad|RepositoryController|RBACCapacity|TranslationCapacity|TranslationAuthoring|TranslationIntegration)' .
 	@./scripts/test-make-workflow-dispatch.sh
 	@./scripts/test-capacity-dispatch.sh
 	@./scripts/test-capacity-prometheus-export.sh
@@ -607,7 +611,13 @@ _capacity-namespace-admission:
 		go test -count=1 -timeout 0 -run '^TestNamespaceValidationCapacity$$' ./internal/cataloggrpc
 
 _capacity-namespace-watch:
-	@cd "$(ROOT)/tests/integration" && \
+	@if [ "$${CAPACITY_RBAC_WORKLOAD:-0}" = 1 ]; then \
+		cd "$(ROOT)/tests/integration" && \
+		MODE="$(MODE)" RBAC_TEST_RUN=1 RBAC_TEST_CAPACITY_SEED_RUN=1 \
+		RBAC_TEST_CAPACITY_SEED_FILE="$${CAPACITY_RBAC_SEED_FILE:?private RBAC seed declaration is required}" \
+		go test -v -count=1 -timeout=4h -run '^TestNamespaceWatchDeploymentCapacity$$' .; \
+	else \
+	cd "$(ROOT)/tests/integration" && \
 		NAMESPACE_WATCH_API_A="$(NAMESPACE_WATCH_API_A)" \
 		NAMESPACE_WATCH_API_B="$(NAMESPACE_WATCH_API_B)" \
 		NAMESPACE_WATCH_API_REPLACEMENT="$(NAMESPACE_WATCH_API_REPLACEMENT)" \
@@ -630,7 +640,8 @@ _capacity-namespace-watch:
 		NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT="$(NAMESPACE_WATCH_CAPACITY_SKIP_REPLACEMENT)" \
 		MODE="$(MODE)" \
 		NAMESPACE_WATCH_CAPACITY_RUN=1 \
-		go test -v -count=1 -timeout 0 -run '^TestNamespaceWatchDeploymentCapacity$$' .
+		go test -v -count=1 -timeout 0 -run '^TestNamespaceWatchDeploymentCapacity$$' .; \
+	fi
 
 _capacity-namespace-recovery:
 	@cd "$(ROOT)/tests/integration" && \

@@ -1,9 +1,10 @@
 # Implementation Validation Quickstart
 
 RBAC contracts, component implementations and local tests are available,
-but production OPA startup is deliberately refused while native replica,
-rollout and capacity acceptance remain pending. The local checks below are
-supported; the deployed scenarios are pending validation, not a currently
+but production OPA startup is deliberately refused while final acceptance
+remains pending. Local checks and explicitly selected owned native capacity
+diagnostics and the strict healthy-alpha runner are supported. A deployed
+healthy-alpha pass remains pending. The production sequence below is not a currently
 usable deployment recipe. Use only an explicitly owned environment.
 
 ## 1. Verify local contracts
@@ -104,20 +105,41 @@ Use the owned chaos runner for API restart and a declared journal
 interruption. Verify source heartbeat, stale/cursorless denial, full
 resync and recovery <=30 s. Reconnecting a transport is not sufficient.
 
-## 6. Run declared acceptance (pending)
+## 6. Run owned diagnostics, then declared acceptance (pending)
 
-The current drivers do not yet provide RBAC workload selection. Only after
-that extension and its verifier regressions pass can these existing families
-run the declared RBAC acceptance:
+The existing families support an explicitly selected diagnostic workload:
 
 ```sh
-make capacity TARGET=namespace PROFILE=watch
-make capacity TARGET=api PROFILE=readiness MODE=alpha
+CAPACITY_RBAC_WORKLOAD=1 make capacity TARGET=namespace PROFILE=watch MODE=diagnostic
+CAPACITY_RBAC_WORKLOAD=1 make capacity TARGET=api PROFILE=readiness MODE=diagnostic
 ```
 
-Supply the implemented driver's required private fixture/ownership
-configuration as documented in its README. A default health-only run
-does not satisfy this spec. Use the 1,000-namespace/10,000-role/50,000-binding
+Supply the private seed declaration, live owned topology, independently enrolled
+ordinary principals and per-API source/decision captures documented in
+[the capacity README](../../tests/capacity/README.md). The optional mixed
+Git/GraphQL mutation companion requires its separate holdout principal and
+original admission clocks. Replay checks complete per-API ordinary outcomes,
+exact revision-pinned propagation and producer-nanosecond provider timings.
+The RBAC driver's four-hour outer lifetime includes fixture preparation; it
+does not extend individual operations, seed readback or propagation deadlines.
+
+The same two families accept `MODE=alpha` only with the complete healthy-alpha
+shape: maximum root batch under ordinary load, fixed 48-second root preamble,
+1,800 seconds of mixed Namespace writes at 50/minute across four hot tiers and
+1,860 seconds of ordinary traffic at 1,000 HTTP/s total. Build each owned
+artifact with the existing `make build` capacity receipt selectors documented
+in the capacity README; the API uses `CAPACITY_BUILD_KIND=owned-rbac`, not a
+production activation bypass. Declare private build receipts in the topology,
+hardware/configuration manifests and the exact selected run receipt directory.
+Both APIs must supply actual SDK resource bounds, complete source joins and
+independently replayed provider/propagation percentile gates. Independent
+sealed postflight is mandatory for both families.
+
+Production RBAC selection remains refused. Implemented alpha wiring is not a
+deployed pass. Diagnostic passes, including short full-rate windows, do not
+satisfy the remaining acceptance gates; neither does an unselected default
+health-only run. Use the
+1,000-namespace/10,000-role/50,000-binding
 dataset, sustained 50 writes/min, decision/propagation oracle and
 30-minute load/fault gates from the capacity contract.
 

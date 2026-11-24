@@ -5,6 +5,7 @@ package observability
 
 import (
 	"context"
+	"math"
 	"runtime"
 	"runtime/debug"
 	runtimemetrics "runtime/metrics"
@@ -71,19 +72,29 @@ func registerRuntimeMetrics(provider metric.MeterProvider) error {
 	threads := MustInstrument(meter.Int64ObservableGauge("go_threads"))
 	gogc := MustInstrument(meter.Int64ObservableGauge("go_gc_gogc_percent"))
 	memoryLimit := MustInstrument(meter.Int64ObservableGauge("go_gc_gomemlimit_bytes"))
+	gcHeapLive := MustInstrument(meter.Int64ObservableGauge("go_gc_heap_live_bytes",
+		metric.WithUnit("By"), metric.WithDescription("Heap bytes marked live by the last completed GC; excludes allocations since that GC.")))
+	gcCycles := MustInstrument(meter.Int64ObservableCounter("go_gc_cycles_total",
+		metric.WithDescription("Completed GC cycles since process start, sampled coherently with go_gc_heap_live_bytes.")))
 	gcCount := MustInstrument(meter.Int64ObservableCounter("go_gc_duration_seconds_count"))
 	gcSum := MustInstrument(meter.Float64ObservableCounter("go_gc_duration_seconds_sum", metric.WithUnit("s")))
 	gcQuantile := MustInstrument(meter.Float64ObservableGauge("go_gc_duration_seconds", metric.WithUnit("s")))
 	lastGC := MustInstrument(meter.Float64ObservableGauge("go_memstats_last_gc_time_seconds", metric.WithUnit("s")))
 	info := MustInstrument(meter.Int64ObservableGauge("go_info"))
-	instruments = append(instruments, goroutines, procs, threads, gogc, memoryLimit, gcCount, gcSum, gcQuantile, lastGC, info)
+	instruments = append(instruments, goroutines, procs, threads, gogc, memoryLimit, gcHeapLive, gcCycles, gcCount, gcSum, gcQuantile, lastGC, info)
 	var lock sync.Mutex
 	var lastRead time.Time
 	var memory runtime.MemStats
 	gc := debug.GCStats{PauseQuantiles: make([]time.Duration, 5)}
 	// Gauges retain the canonical labels previously normalized for summaries.
 	quantileLabels := [...]string{"0.0", "0.25", "0.5", "0.75", "1.0"}
-	samples := []runtimemetrics.Sample{{Name: "/gc/gogc:percent"}, {Name: "/gc/gomemlimit:bytes"}}
+	samples := []runtimemetrics.Sample{
+		{Name: "/gc/gogc:percent"},
+		{Name: "/gc/gomemlimit:bytes"},
+		{Name: "/gc/cycles/total:gc-cycles"},
+		{Name: "/gc/heap/live:bytes"},
+	}
+	completedGCCheck := []runtimemetrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
 	_, err := meter.RegisterCallback(func(ctx context.Context, observer metric.Observer) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -110,6 +121,29 @@ func registerRuntimeMetrics(provider metric.MeterProvider) error {
 		runtimemetrics.Read(samples)
 		observer.ObserveInt64(gogc, int64(samples[0].Value.Uint64()))
 		observer.ObserveInt64(memoryLimit, int64(samples[1].Value.Uint64()))
+		// Read cycles before live heap, then confirm in a separate Read: runtime
+		// caches cycle stats within one Read, so repeating the name there cannot
+		// detect a GC completing between samples. Omit both signals if three
+		// attempts cannot establish provenance; never force GC during collection.
+		for attempt := range 3 {
+			if attempt > 0 {
+				runtimemetrics.Read(samples)
+			}
+			if samples[2].Value.Kind() != runtimemetrics.KindUint64 || samples[3].Value.Kind() != runtimemetrics.KindUint64 {
+				break
+			}
+			cycles, live := samples[2].Value.Uint64(), samples[3].Value.Uint64()
+			runtimemetrics.Read(completedGCCheck)
+			if completedGCCheck[0].Value.Kind() != runtimemetrics.KindUint64 || cycles > math.MaxInt64 || live > math.MaxInt64 {
+				break
+			}
+			if cycles != completedGCCheck[0].Value.Uint64() {
+				continue
+			}
+			observer.ObserveInt64(gcHeapLive, int64(live))
+			observer.ObserveInt64(gcCycles, int64(cycles))
+			break
+		}
 		observer.ObserveInt64(gcCount, gc.NumGC)
 		observer.ObserveFloat64(gcSum, gc.PauseTotal.Seconds())
 		for i, pause := range gc.PauseQuantiles {

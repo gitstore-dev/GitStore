@@ -16,8 +16,10 @@ import (
 	"testing"
 	"time"
 
+	catalogv1 "github.com/gitstore-dev/gitstore/api/gen/gitstore/catalog/v1"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/translation"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -34,6 +36,8 @@ func roleTestConfig(t *testing.T) *config.Config {
 	t.Setenv("GITSTORE_API__AUTH__USERDIR__PROVIDER", "none")
 	t.Setenv("GITSTORE_GRPC_AUTH__HMAC_SECRET", "test-runtime-role-signing-secret")
 	t.Setenv("GITSTORE_API__GIT_SERVICE__URI", "passthrough:///127.0.0.1:1")
+	t.Setenv("GITSTORE_API__TRANSLATION__ENABLED", "false")
+	t.Setenv("GITSTORE_API__TRANSLATION__DESCRIPTOR_DIGEST", "")
 	cfg, err := config.Load()
 	require.NoError(t, err)
 	ports := []*int{&cfg.Api.AdminPort, &cfg.Api.StorefrontPort, &cfg.Api.GitPort, &cfg.Api.GrpcPort}
@@ -48,6 +52,49 @@ func roleTestConfig(t *testing.T) *config.Config {
 		require.NoError(t, listener.Close())
 	}
 	return cfg
+}
+
+func TestTranslationRolloutRejectsUnsupportedConfigurationBeforeRuntime(t *testing.T) {
+	for _, role := range []string{config.RoleCatalog, config.RoleAdmin, config.RoleSmartHTTP, config.RoleStorefront} {
+		for _, invalid := range []struct {
+			name, digest, message string
+			enabled               bool
+		}{
+			{name: "enabled-unpinned", enabled: true, message: "descriptor"},
+			{name: "enabled-mismatched", enabled: true, digest: "unsupported-descriptor", message: "capability mismatch"},
+			{name: "mismatched", digest: "unsupported-descriptor", message: "capability mismatch"},
+		} {
+			t.Run(role+"/"+invalid.name, func(t *testing.T) {
+				cfg := roleTestConfig(t)
+				cfg.Api.Roles = []string{role}
+				cfg.Api.Translation.Enabled = invalid.enabled
+				cfg.Api.Translation.DescriptorDigest = invalid.digest
+				cfg.Api.Datastore.Backend = "must-not-construct"
+				server, err := NewServer(cfg, zap.NewNop())
+				if server != nil {
+					t.Cleanup(server.Close)
+				}
+				require.ErrorContains(t, err, invalid.message, "rollout validation must precede datastore/provider/listener effects")
+				require.Nil(t, server)
+			})
+		}
+	}
+}
+
+func TestTranslationPinnedCapabilityIsCompatibleWithEveryRole(t *testing.T) {
+	for _, role := range []string{config.RoleCatalog, config.RoleAdmin, config.RoleSmartHTTP, config.RoleStorefront} {
+		for _, enabled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/enabled=%t", role, enabled), func(t *testing.T) {
+				cfg := roleTestConfig(t)
+				cfg.Api.Roles = []string{role}
+				cfg.Api.Translation.Enabled = enabled
+				cfg.Api.Translation.DescriptorDigest = translation.CapabilityDigest()
+				server, err := NewServer(cfg, zap.NewNop())
+				require.NoError(t, err)
+				server.Close()
+			})
+		}
+	}
 }
 
 func TestEveryRuntimeRoleCombinationStartsDuringGitOutage(t *testing.T) {
@@ -160,15 +207,21 @@ func TestBootstrapRetriesOnlyOneBoundedAttemptAndCancels(t *testing.T) {
 func TestRuntimeBudgetsDoNotStarveCatalogCallbacksOrHealth(t *testing.T) {
 	budget := config.RoleBudget{InFlight: 1, Deadline: time.Second}
 	catalog := boundedCatalog(budget)
+	request := &catalogv1.ValidateResourcesRequest{Trees: []*catalogv1.ResourceValidationTree{{
+		ProposedBlobs: []*catalogv1.ResourceBlob{{Path: "translations/product-de.md", Content: []byte("---\nkind: Translation\n---\nExact authored body\r\n")}},
+	}}}
+	info := &grpc.UnaryServerInfo{FullMethod: catalogv1.CatalogService_ValidateResources_FullMethodName}
 	smart := boundedHTTP(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The originating operation owns its Smart HTTP slot while catalog
 		// executes a callback that must retain its independent capacity.
-		_, err := catalog(r.Context(), nil, &grpc.UnaryServerInfo{FullMethod: "/catalog/Admit"}, func(ctx context.Context, _ any) (any, error) {
-			_, err := catalog(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/catalog/Admit"}, func(context.Context, any) (any, error) {
+		_, err := catalog(r.Context(), request, info, func(ctx context.Context, got any) (any, error) {
+			require.Same(t, request, got)
+			response, err := catalog(ctx, request, info, func(context.Context, any) (any, error) {
 				t.Error("overloaded callback must not execute")
 				return nil, nil
 			})
 			require.Equal(t, codes.ResourceExhausted, status.Code(err))
+			require.Nil(t, response, "overload must not publish a partial validation result")
 			called := false
 			_, err = catalog(ctx, nil, &grpc.UnaryServerInfo{FullMethod: "/grpc.health.v1.Health/Check"}, func(context.Context, any) (any, error) {
 				called = true
@@ -184,13 +237,20 @@ func TestRuntimeBudgetsDoNotStarveCatalogCallbacksOrHealth(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	smart.ServeHTTP(recorder, httptest.NewRequest("POST", "/repo/git-receive-pack", nil))
 	require.Equal(t, 204, recorder.Code)
+	_, err := catalog(t.Context(), request, info, func(_ context.Context, got any) (any, error) {
+		require.Same(t, request, got)
+		return nil, nil
+	})
+	require.NoError(t, err, "completion must release the shared Catalog slot")
 	timeout := boundedCatalog(config.RoleBudget{InFlight: 1, Deadline: 10 * time.Millisecond})
 	start := time.Now()
-	_, err := timeout(t.Context(), nil, &grpc.UnaryServerInfo{FullMethod: "/catalog/Validate"}, func(ctx context.Context, _ any) (any, error) {
+	response, err := timeout(t.Context(), request, info, func(ctx context.Context, got any) (any, error) {
+		require.Same(t, request, got)
 		<-ctx.Done()
 		return nil, ctx.Err()
 	})
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, response)
 	require.Less(t, time.Since(start), time.Second)
 }
 

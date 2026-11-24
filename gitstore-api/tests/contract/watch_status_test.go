@@ -295,7 +295,7 @@ func TestWatchResources_GenericPathParitiesWithWatchCategories(t *testing.T) {
 // subscription that can never deliver an event.
 func TestWatchResources_UnsupportedKindIsRejected(t *testing.T) {
 	r, _ := newWatchTestResolver(t)
-	for _, kind := range []string{"Collection", "ProductVariant", "Bogus"} {
+	for _, kind := range []string{"Bogus"} {
 		_, err := r.Subscription().WatchResources(t.Context(), kind, nil, nil, nil)
 		require.Error(t, err)
 		var gqlErr *gqlerror.Error

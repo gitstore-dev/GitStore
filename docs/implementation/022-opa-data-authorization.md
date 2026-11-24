@@ -20,6 +20,46 @@ and unstable reads remain unavailable without launching a repair write.
 Immutable manifest reads overlap in batches of at most two files; aggregate
 payload limits and the final live Namespace/Git identity check still apply.
 
+Periodic origin checks batch at most 32 Namespace identities. Scylla reads live
+authoritative Namespace/Repository rows and both mapping directions with four
+bounded CQL queries, joining by identity rather than result order. Uncommitted
+Namespace saga rows, missing or inconsistent mappings and failed reads cannot
+authorize a Git proof. Other backends retain bounded individual reads. No live
+facts are cached, root checks remain independent, and canonical Git proofs,
+freshness clocks and publication fences are unchanged. This reduces read
+fan-out; it does not establish deployed latency or sustained acceptance.
+
+Complete tier scans can publish across concurrent revision notifications only
+when the captured revision covers every received update. Namespace lifecycle,
+repository mapping and watch-continuity changes still fence the scan. A covered
+notification does not schedule another scan; origin freshness and the durable
+journal publication barrier remain required.
+
+Durable journal appends group events within both 32 statements and 512 KiB of
+conservatively encoded data, without crossing a journal bucket. This lets padded
+RBAC resources share a conditional append instead of reducing a maximum root
+admission to one LWT pair per resource. A single oversized event retains its
+existing isolated path; source-progress checkpoint batches retain their separate
+32 KiB bound. Lease fencing, ambiguous-outcome recovery, ordering, retention and
+authorization freshness are unchanged. This batching bound is not a deployed
+propagation or sustained-load acceptance claim.
+
+Scylla repairs a tier's independent UID lookup/link projections with at most
+four workers per repair. Each resource's lookup precedes its binding link,
+conditional inserts retain UID tombstones, and the tier's pending-repair marker
+is cleared by the original revision CAS only after every worker succeeds.
+Failure cancels and joins the workers, leaving repair pending for retry.
+
+Role diagnostics and physical cleanup after termination retain durable resource
+events and CAS revisions without invalidating unchanged prepared authority.
+Termination itself remains authoritative. Scylla suppresses cleanup progress
+only for complete consecutive tier images with the same projection, the exact
+Role-count decrement and the exact removed Role UID/key repair steps; binding
+changes, unknown repair and incomplete evidence retain the publication fence.
+Finalizers, finalized role guards, claims, index repair and raw snapshot fences
+remain enforced. Prepared sources may retain already-denying terminating rows
+between policy rebuilds; live storage still removes those rows and lookup links.
+
 Authoring and SubjectAccessReview use authoritative validation-start captures,
 not an atomic global authorization fence. Already-authorized writes may
 finish after concurrent revocation. Failed containment proofs require explicit
@@ -38,6 +78,29 @@ Production construction is still gated. Local contract/race evidence does not
 establish deployed replica/rolling, load/fault, memory/RSS or large-catalog
 acceptance. ADR 0010 section 16 records the current boundary; ADR 0018 remains
 Proposed because platform-wide leases and side-effect fencing are not added.
+
+The private native capacity diagnostic can run an isolated eight-phase root
+propagation preamble during ordinary k6 traffic, followed by the full declared
+four-tier Namespace mutation schedule. It requires independently captured
+ordinary decisions from both APIs, a disjoint holdout, original admission
+clocks and sealed source/decision replay. Source frames coalesce writes through
+one bounded 64 KiB buffer per API capture; the complete frame must flush before
+snapshot preparation/publication continues. Cancellation, quota and write
+failures still prevent successful capture and sealing. An optional maximum root
+batch adds only owned, unbound filler Roles and verifies their complete removal.
+Single-attempt GraphQL refusal receipts retain only HTTP status and allowlisted
+error-code classifications, not response messages or arbitrary extensions.
+Cleanup compares the exact authored JSON bytes in `.yaml` manifest paths, not a YAML
+re-encoding; the maximum batch is sized from those committed bytes. Cleanup
+must stop and join ordinary traffic before restoring root policy. See the
+[capacity contributor guide](../../tests/capacity/README.md) for bounded
+declarations. Both existing public capacity families also support a strict
+healthy-alpha declaration with full dataset/durations, maximum root batch,
+repository-generated source/artifact receipts, actual SDK resource observations
+and independently replayed provider/propagation percentiles. Neither a requested
+limit nor a subprocess success substitutes for those gates. Local contracts
+establish runner behavior only, not a sustained deployed pass; production
+capacity and production OPA activation remain separately gated.
 
 Provider conformance reads the sole authored
 [`tests/fixtures/authorization/decision-table.json`](../../tests/fixtures/authorization/decision-table.json).

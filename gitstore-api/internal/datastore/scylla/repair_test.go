@@ -6,12 +6,279 @@ package scylla
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/gitstore-dev/gitstore/api/internal/datastore"
+	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 )
+
+func TestReadRBACWriteResourcesOverlapsReadsAndPreservesAbsence(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	write := rbac.TierWrite{TierID: rbac.ClusterTierID, Changes: make([]rbac.Change, 129)}
+	for index := range write.Changes {
+		write.Changes[index].Resource = &rbac.Resource{Kind: rbac.ClusterRole,
+			Metadata: rbac.Metadata{Name: "role-" + strconv.Itoa(index)}}
+	}
+	entered, release := make(chan struct{}, len(write.Changes)), make(chan struct{})
+	defer close(release)
+	done := make(chan error, 1)
+	var current map[rbac.ResourceKey]*rbac.Resource
+	go func() {
+		var err error
+		current, err = readRBACWriteResources(ctx, write, func(ctx context.Context, keys []rbac.ResourceKey) (map[rbac.ResourceKey]*rbac.Resource, error) {
+			if len(keys) == 0 || len(keys) > 32 {
+				t.Errorf("unbounded candidate batch: %d", len(keys))
+			}
+			entered <- struct{}{}
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			resources := make(map[rbac.ResourceKey]*rbac.Resource)
+			for _, key := range keys {
+				if key.Name != "role-0" {
+					resources[key] = &rbac.Resource{Kind: key.Kind, Metadata: rbac.Metadata{Name: key.Name}}
+				}
+			}
+			return resources, nil
+		})
+		done <- err
+	}()
+	for range 4 {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("independent candidate reads did not overlap")
+		}
+	}
+	select {
+	case <-entered:
+		t.Fatal("more than four candidate batches overlapped")
+	default:
+	}
+	for range 5 {
+		release <- struct{}{}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	for index, change := range write.Changes {
+		key := rbac.ResourceKey{TierID: write.TierID, Kind: change.Resource.Kind, Name: change.Resource.Metadata.Name}
+		resource, found := current[key]
+		if !found || (index == 0) != (resource == nil) {
+			t.Fatalf("candidate read lost presence/absence for %s", key.Name)
+		}
+		if resource != nil && resource.Metadata.Name != key.Name {
+			t.Fatalf("candidate read substituted another resource for %s", key.Name)
+		}
+	}
+}
+
+func TestReadRBACWriteResourcesFailureCannotReturnPartialCandidate(t *testing.T) {
+	want := errors.New("candidate lookup failed")
+	write := rbac.TierWrite{TierID: rbac.ClusterTierID, Changes: []rbac.Change{
+		{Resource: &rbac.Resource{Kind: rbac.ClusterRole, Metadata: rbac.Metadata{Name: "first"}}},
+		{Resource: &rbac.Resource{Kind: rbac.ClusterRole, Metadata: rbac.Metadata{Name: "second"}}},
+	}}
+	current, err := readRBACWriteResources(t.Context(), write, func(context.Context, []rbac.ResourceKey) (map[rbac.ResourceKey]*rbac.Resource, error) {
+		return nil, want
+	})
+	if !errors.Is(err, want) || current != nil {
+		t.Fatalf("candidate lookup failure returned a partial model: current=%v err=%v", current, err)
+	}
+	write.Changes[1].Resource = nil
+	current, err = readRBACWriteResources(t.Context(), write, func(context.Context, []rbac.ResourceKey) (map[rbac.ResourceKey]*rbac.Resource, error) {
+		t.Error("malformed candidate initiated source I/O")
+		return nil, nil
+	})
+	if !errors.Is(err, rbac.ErrInvalid) || current != nil {
+		t.Fatalf("malformed candidate was not rejected before I/O: current=%v err=%v", current, err)
+	}
+}
+
+func TestReadRBACWriteResourcesRejectsUnrelatedBatchRows(t *testing.T) {
+	for _, name := range []string{"other", "requested"} {
+		t.Run(name, func(t *testing.T) {
+			write := rbac.TierWrite{TierID: rbac.ClusterTierID, Changes: []rbac.Change{
+				{Resource: &rbac.Resource{Kind: rbac.ClusterRole, Metadata: rbac.Metadata{Name: "requested"}}},
+			}}
+			current, err := readRBACWriteResources(t.Context(), write, func(context.Context, []rbac.ResourceKey) (map[rbac.ResourceKey]*rbac.Resource, error) {
+				key := rbac.ResourceKey{TierID: write.TierID, Kind: rbac.ClusterRole, Name: name}
+				return map[rbac.ResourceKey]*rbac.Resource{key: {Kind: key.Kind, Metadata: rbac.Metadata{Name: "other"}}}, nil
+			})
+			if !errors.Is(err, rbac.ErrUnavailable) || current != nil {
+				t.Fatalf("batch substituted an unrelated resource: current=%v err=%v", current, err)
+			}
+		})
+	}
+}
+
+func TestRepairRBACStepsBoundsConcurrentWork(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	steps := make([]rbacRepairStep, 17)
+	for index := range steps {
+		steps[index].UID = strconv.Itoa(index)
+	}
+	entered, release := make(chan struct{}, len(steps)), make(chan struct{})
+	defer close(release)
+	var active, peak, completed atomic.Int64
+	seen := make([]atomic.Int64, len(steps))
+	done := make(chan error, 1)
+	go func() {
+		done <- runRBACSteps(ctx, steps, func(ctx context.Context, step rbacRepairStep) error {
+			current := active.Add(1)
+			for previous := peak.Load(); current > previous; previous = peak.Load() {
+				if peak.CompareAndSwap(previous, current) {
+					break
+				}
+			}
+			defer active.Add(-1)
+			index, err := strconv.Atoi(step.UID)
+			if err != nil {
+				return err
+			}
+			seen[index].Add(1)
+			entered <- struct{}{}
+			select {
+			case <-release:
+				completed.Add(1)
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+	}()
+	for range 4 {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("independent repairs did not overlap")
+		}
+	}
+	select {
+	case <-entered:
+		t.Fatal("more than four repairs started before any completed")
+	case err := <-done:
+		t.Fatalf("repair returned before its workers finished: %v", err)
+	default:
+	}
+	for range len(steps) {
+		release <- struct{}{}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if peak.Load() != 4 || active.Load() != 0 || completed.Load() != int64(len(steps)) {
+		t.Fatalf("unbounded or unfinished repairs: peak=%d active=%d completed=%d", peak.Load(), active.Load(), completed.Load())
+	}
+	for index := range seen {
+		if seen[index].Load() != 1 {
+			t.Fatalf("resource %d repaired %d times", index, seen[index].Load())
+		}
+	}
+}
+
+func TestRepairRBACStepsFailureCancelsAndJoinsWorkers(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	steps := make([]rbacRepairStep, 17)
+	for index := range steps {
+		steps[index].UID = strconv.Itoa(index)
+	}
+	entered, fail := make(chan struct{}, len(steps)), make(chan struct{})
+	var active, calls atomic.Int64
+	want := errors.New("conditional lookup failed")
+	done := make(chan error, 1)
+	go func() {
+		done <- runRBACSteps(ctx, steps, func(ctx context.Context, step rbacRepairStep) error {
+			active.Add(1)
+			calls.Add(1)
+			defer active.Add(-1)
+			entered <- struct{}{}
+			if step.UID == "0" {
+				select {
+				case <-fail:
+					return want
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+	for range 4 {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("repair workers did not start")
+		}
+	}
+	close(fail)
+	if err := <-done; !errors.Is(err, want) {
+		t.Fatalf("lost repair failure: %v", err)
+	}
+	if active.Load() != 0 || calls.Load() != 4 {
+		t.Fatalf("failed repair leaked or continued work: active=%d calls=%d", active.Load(), calls.Load())
+	}
+}
+
+func TestRBACRepairCompletionRecognizesConcurrentCompletedRepair(t *testing.T) {
+	before := rbac.TierState{TierID: rbac.ClusterTierID, Revision: 7, ProjectionPending: true,
+		Projection: rbac.ProjectionIdentity{RepositoryID: "repository", GitRef: "refs/heads/main",
+			GitRevision: "main@sha1:" + strings.Repeat("a", 40), TreeDigest: strings.Repeat("b", 64)}}
+	for _, test := range []struct {
+		name   string
+		change func(*rbac.TierState)
+		wantOK bool
+	}{
+		{"peer-completed-before-status-update", func(*rbac.TierState) {}, true},
+		{"unchanged-revision", func(state *rbac.TierState) { state.Revision = before.Revision }, false},
+		{"older-revision", func(state *rbac.TierState) { state.Revision = before.Revision - 1 }, false},
+		{"repair-still-pending", func(state *rbac.TierState) { state.ProjectionPending = true }, false},
+		{"new-canonical-origin", func(state *rbac.TierState) {
+			state.Projection.GitRevision = "main@sha1:" + strings.Repeat("c", 40)
+		}, false},
+		{"namespace-retired", func(state *rbac.TierState) { state.NamespaceRetired = true }, false},
+		{"different-tier", func(state *rbac.TierState) { state.TierID = "different" }, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			current := before
+			current.Revision++
+			current.ProjectionPending = false
+			test.change(&current)
+			reads := 0
+			err := confirmRBACRepair(t.Context(), before, func(context.Context) (rbac.TierState, error) {
+				reads++
+				return current, nil
+			})
+			if test.wantOK {
+				if err != nil {
+					t.Fatalf("completed identical-origin repair was reported as failed: %v", err)
+				}
+			} else if !errors.Is(err, rbac.ErrConflict) {
+				t.Fatalf("unconfirmed or superseded repair lost its conflict: %v", err)
+			}
+			if reads != 1 {
+				t.Fatalf("repair completion used %d live confirmation reads, want one", reads)
+			}
+		})
+	}
+	want := errors.New("repair confirmation unavailable")
+	err := confirmRBACRepair(t.Context(), before, func(context.Context) (rbac.TierState, error) {
+		return rbac.TierState{}, want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("repair confirmation suppressed its source failure: %v", err)
+	}
+}
 
 func TestProductListingReservationIsNotDeletedBeforeAuthorityAppears(t *testing.T) {
 	projection := ProjectionRecord{

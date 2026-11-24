@@ -32,6 +32,9 @@ container wiring and configuration.
   as implemented.
 - Existing `make build`, `make test`, `make lint` and `make pr-ready` include
   the pinned `shared/scylla-cdc-go` reader patch alongside the other Go modules.
+- Default `make test` and `make pr-ready` include local Translation authoring,
+  read/watch and evidence-oracle regressions. Native deployment, capacity and
+  fault acceptance remain opt-in; those unit checks do not certify them.
 - `make test TARGET=datastore DATASTORE=scylla` serializes tagged packages
   sharing one Scylla fixture, not the concurrent writers within each test.
   Preserve that scheduling in the command-dispatch regression.
@@ -84,15 +87,47 @@ container wiring and configuration.
   `CAPACITY_IDENTITY_CHAOS=1` additionally requires predeclared bounded fault
   windows, confirmed restart/recovery receipts and process-segmented counters;
   `USER_DIRECTORY_TEST_CHAOS=1` selects that opt-in owned driver.
-- Dynamic RBAC capacity remains unavailable: `CAPACITY_RBAC_WORKLOAD=1`
-  fails explicitly instead of falling back to a non-RBAC driver. The default
+- `CAPACITY_TRANSLATION_READINESS=1` selects authenticated exact-source reads
+  for `api/readiness`, currently diagnostic-only. It requires a protected
+  ten-namespace fixture and explicit ownership; never combine it with identity
+  mode. `CAPACITY_TRANSLATION_PUSHES=1` adds the automatically coordinated
+  bounded Git companion and shared preparation/load barrier. Thirty seconds
+  of read warmup include twenty verified pushes; fifteen seconds of read
+  cooldown and retained watches bracket the final original resource scrape.
+  Count preparation separately, retain source/target/history joins and measure
+  the complete unchanged offered window and its own latency distribution.
+  Preserve sub-second load timestamps when joining the precise preparation
+  barrier; whole-second truncation cannot prove the complete cooldown.
+  Neither read-only nor
+  connected diagnostic receipts certify sustained/fault/production acceptance.
+- `CAPACITY_RBAC_WORKLOAD=1` selects bounded owned native diagnostics or the
+  strict healthy-alpha runner in `api/readiness` and `namespace/watch`, with
+  `MODE=diagnostic|alpha`; production remains refused rather than falling back
+  to a non-RBAC driver. Alpha requires full 1,800-second Namespace writing,
+  1,860-second ordinary traffic, maximum root preamble, actual SDK bounds,
+  revision-joined percentile gates and independent sealed postflight. Require the
+  private seed/live-topology declarations documented in the capacity README.
+  The default
   test suite covers the local scheduler/oracle contracts; these are not native
   dataset, propagation or fault-recovery evidence.
-- `make chaos CHAOS_RBAC=1` requires an owned target and a predeclared fault
+  The selected RBAC Go driver has a four-hour outer lifetime for bounded
+  full-geometry setup plus load; individual operations, seed readback,
+  propagation and workload deadlines remain unchanged.
+- `make build TARGET=api|controller|git CAPACITY_BUILD_OUTPUT=<absolute-path>
+  CAPACITY_BUILD_RECEIPT=<absolute-path>` produces private source/artifact
+  receipts from a clean checkout. `CAPACITY_BUILD_KIND=owned-rbac` selects only
+  the existing owned API or controller test host; the default `release` recipe does not bypass
+  production activation. Matching source-identical receipts permit artifact
+  reuse; never adopt or overwrite an unreceipted/live binary. See the capacity
+  README for the complete private deployment/evidence contract.
+- `make chaos CHAOS_RBAC=1` or `CHAOS_TRANSLATION=1` requires an owned target
+  and a predeclared fault
   window of at most 30 seconds. Controller restart also requires an unchanged
   owned peer with non-overlapping writable checkpoint mounts. Journal-source
   pause affects all consumers, not one receiver; injector/restoration receipts
   never certify domain recovery. See [../tests/chaos/README.md](../tests/chaos/README.md).
+  The selectors cannot be combined. Translation API restart additionally
+  requires an unchanged owned API peer.
 
 ## Infrastructure command instructions
 

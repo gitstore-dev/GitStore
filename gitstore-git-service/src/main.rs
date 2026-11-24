@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use gitstore::auth::interceptor::RPCVerifier;
 use gitstore::git::hooks::{
-    admission_handler::AdmissionControlHandler,
+    admission_handler::AdmissionControlHandler, admission_receipts::AdmissionReceiptStore,
     category_taxonomy_deletion_handler::ResourceDeletionHandler,
     validation_handler::SchemaValidationHandler, ChainedValidationHandler, HookPipeline,
 };
@@ -95,26 +95,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Build admission handler.
-    let admission_handler: Arc<dyn gitstore::git::hooks::AdmissionHandler + Send + Sync> =
-        match AdmissionControlHandler::connect(
-            &catalog_url,
-            cfg.git_service.admission.branch_pattern.clone(),
-        )
-        .await
-        {
-            Ok(h) => {
-                info!(url = %catalog_url, "AdmissionControlHandler connected");
-                Arc::new(h.with_service_token(&cfg.grpc_auth.hmac_secret))
-            }
-            Err(error) => return Err(error.context("catalog admission is required").into()),
-        };
+    let admission_handler = match AdmissionControlHandler::connect(
+        &catalog_url,
+        cfg.git_service.admission.branch_pattern.clone(),
+    )
+    .await
+    {
+        Ok(h) => {
+            info!(url = %catalog_url, "AdmissionControlHandler connected");
+            Arc::new(h.with_service_token(&cfg.grpc_auth.hmac_secret))
+        }
+        Err(error) => return Err(error.context("catalog admission is required").into()),
+    };
 
     // Start gRPC server
     let grpc_addr: SocketAddr = format!("0.0.0.0:{}", cfg.git_service.grpc_port).parse()?;
     let hook_pipeline = Arc::new(HookPipeline::new(
         validation_timeout,
         validation_handler,
-        admission_handler,
+        admission_handler.clone(),
     ));
     let push_limits = gitstore::grpc::server::PushLimits {
         max_pack_size: cfg.push_limits.max_pack_size.0,
@@ -125,8 +124,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.grpc_auth.hmac_secret_previous.as_deref(),
         &data_path,
     )?;
-    let grpc_service =
-        GitServiceImpl::with_pipeline(data_path.clone(), hook_pipeline, push_limits, rpc_auth);
+    let receipt_root = data_path.clone();
+    let receipts = Arc::new(
+        gitstore::spawn_blocking(move || AdmissionReceiptStore::open(&receipt_root)).await??,
+    );
+    let grpc_service = Arc::new(
+        GitServiceImpl::with_pipeline(data_path.clone(), hook_pipeline, push_limits, rpc_auth)
+            .with_receipts(receipts),
+    );
+    grpc_service.recover_receipts_before_serving().await?;
+    let listener = tokio::net::TcpListener::bind(grpc_addr).await?;
     info!(
         rotation_window_open = cfg.grpc_auth.hmac_secret_previous.is_some(),
         "gRPC HMAC auth active"
@@ -136,24 +143,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "gRPC server starting on {}", grpc_addr
     );
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let replay_service = grpc_service.clone();
     let mut grpc_handle = tokio::spawn(async move {
         if let Err(e) = tonic::transport::Server::builder()
             .trace_fn(|request| gitstore::rpc_span(request.headers(), request.uri().path()))
             .add_service(gitstore::grpc::metrics::RpcMetricsService::new(
-                GitServiceServer::new(grpc_service),
+                GitServiceServer::from_arc(grpc_service),
             ))
-            .serve_with_shutdown(grpc_addr, async {
-                let _ = shutdown_rx.await;
-            })
+            .serve_with_incoming_shutdown(
+                tokio_stream::wrappers::TcpListenerStream::new(listener),
+                async {
+                    let _ = shutdown_rx.await;
+                },
+            )
             .await
         {
             error!(error = %e, "gRPC server error");
         }
     });
+    let replay_handle = tokio::spawn(async move {
+        replay_service.run_receipt_replay(&admission_handler).await;
+    });
 
     shutdown_signal().await?;
     info!("Shutting down...");
 
+    replay_handle.abort();
+    let _ = replay_handle.await;
     let _ = shutdown_tx.send(());
     if tokio::time::timeout(std::time::Duration::from_secs(10), &mut grpc_handle)
         .await

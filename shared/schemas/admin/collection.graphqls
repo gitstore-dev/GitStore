@@ -19,6 +19,26 @@ extend type Query {
   ): CollectionConnection!
 }
 
+extend type Subscription {
+  """
+  Durable Collection changes, resumable across API replicas within journal
+  retention. Capture the shared bootstrap bookmark before listing current state.
+  """
+  watchCollections(
+    namespace: String
+    selector: LabelSelectorInput
+    resourceVersion: String
+  ): CollectionWatchEvent!
+}
+
+type CollectionWatchEvent {
+  type: WatchEventType!
+  namespace: String
+  name: String!
+  resourceVersion: String!
+  collection: Collection
+}
+
 """
 A Collection is a namespace-scoped catalog resource that groups products via
 a declarative label selector. Defined by git push; mutations are not supported.

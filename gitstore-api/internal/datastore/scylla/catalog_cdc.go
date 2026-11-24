@@ -35,12 +35,19 @@ type catalogCDCSource struct {
 }
 
 var catalogCDCSources = map[string]catalogCDCSource{
-	"RBAC": {table: "rbac_resources_by_scope", changes: rbacCDCChanges, maxFrameChanges: rbacCDCMaxFrameChanges},
+	"RBAC":        {table: "rbac_resources_by_scope", changes: rbacCDCChanges, maxFrameChanges: rbacCDCMaxFrameChanges},
+	"Translation": {table: "translations_by_key", changes: translationCDCChanges},
 	"ServiceAccount": {table: "service_accounts_by_cluster_name", clusterScoped: true, payload: func(rows []*scyllacdc.ChangeRow) (json.RawMessage, error) {
 		return marshalServiceAccountCDC(serviceAccountCDCRow(rows))
 	}},
 	"Product": {table: "products_by_key", payload: func(rows []*scyllacdc.ChangeRow) (json.RawMessage, error) {
 		return marshalCDCImage(catalogCDCRow(rows), fromProductRow)
+	}},
+	"ProductVariant": {table: "product_variants_by_namespace", payload: func(rows []*scyllacdc.ChangeRow) (json.RawMessage, error) {
+		return marshalCDCImage(productVariantCDCRow(rows), fromProductVariantRow)
+	}},
+	"Collection": {table: "collections_by_namespace", payload: func(rows []*scyllacdc.ChangeRow) (json.RawMessage, error) {
+		return marshalCDCImage((*collectionRow)(catalogCDCRow(rows)), fromCollectionRow)
 	}},
 	"File": {table: "files_by_namespace", payload: func(rows []*scyllacdc.ChangeRow) (json.RawMessage, error) {
 		// Both authoritative tables share the same column layout. Convert
@@ -78,7 +85,7 @@ func (s *scyllaDatastore) runCatalogResourceCDC(ctx context.Context, materialize
 	sequencer.persistProgress = func(ctx context.Context, progress map[string]gocql.UUID) error {
 		return s.saveCDCProgressBatch(ctx, lease, kind, progress)
 	}
-	if kind == "RBAC" || kind == "ServiceAccount" {
+	if kind == "RBAC" || kind == "ServiceAccount" || kind == "Translation" {
 		var err error
 		sequencer.persistReadProgress, err = s.sourceReadProgress(runCtx, lease, kind)
 		if err != nil {
@@ -103,6 +110,7 @@ func (s *scyllaDatastore) runCatalogResourceCDC(ctx context.Context, materialize
 		Session: s.session.Session, TableNames: []string{s.keyspace + "." + source.table}, Consistency: gocql.Quorum,
 		ChangeConsumerFactory: factory, ProgressManager: progress, Logger: zapCDCLogger{s.log},
 		Advanced: scyllacdc.AdvancedReaderConfig{ChangeAgeLimit: changeAgeLimit, ConfidenceWindowSize: confidenceWindow,
+			MaxStreamsPerBatch:          namespaceCDCStreamsPerBatch,
 			MaxEmptyQueryTimeWindowSize: namespaceCDCEmptyProbeWindow,
 			PostEmptyQueryDelay:         100 * time.Millisecond, PostNonEmptyQueryDelay: 100 * time.Millisecond,
 			PostFailedQueryDelay: 100 * time.Millisecond, MaxPostFailedQueryDelay: 2 * time.Second, TableMissingRetryLimit: 30},
@@ -204,8 +212,9 @@ func (c *catalogCDCConsumer) changes(change scyllacdc.Change) ([]watchjournal.Ch
 		return nil, fmt.Errorf("%w: %s CDC frame exceeds %d row images", datastore.ErrNamespaceWatchDiscontinuity, c.kind, catalogCDCMaxRowsPerChange)
 	}
 	type image struct {
-		before, after *scyllacdc.ChangeRow
-		envelope      *productRow
+		before, after                 *scyllacdc.ChangeRow
+		beforeEnvelope, afterEnvelope *productRow
+		envelope                      *productRow
 	}
 	images := make(map[gocql.UUID]*image)
 	for side, rows := range [][]*scyllacdc.ChangeRow{change.PreImage, change.PostImage} {
@@ -231,12 +240,12 @@ func (c *catalogCDCConsumer) changes(change scyllacdc.Change) ([]watchjournal.Ch
 				if pair.before != nil {
 					return nil, fmt.Errorf("%w: %s CDC frame repeats a preimage", datastore.ErrNamespaceWatchDiscontinuity, c.kind)
 				}
-				pair.before = row
+				pair.before, pair.beforeEnvelope = row, envelope
 			} else {
 				if pair.after != nil {
 					return nil, fmt.Errorf("%w: %s CDC frame repeats a postimage", datastore.ErrNamespaceWatchDiscontinuity, c.kind)
 				}
-				pair.after, pair.envelope = row, envelope
+				pair.after, pair.afterEnvelope, pair.envelope = row, envelope, envelope
 			}
 		}
 	}
@@ -246,17 +255,23 @@ func (c *catalogCDCConsumer) changes(change scyllacdc.Change) ([]watchjournal.Ch
 	for _, uid := range ids {
 		pair := images[uid]
 		var before, after json.RawMessage
-		var err error
-		if pair.before != nil {
+		beforeLive, afterLive, err := catalogCDCLiveImages(pair.beforeEnvelope, pair.afterEnvelope)
+		if err != nil {
+			return nil, fmt.Errorf("%s CDC retirement: %w", c.kind, err)
+		}
+		if beforeLive {
 			before, err = c.payload([]*scyllacdc.ChangeRow{pair.before})
 			if err != nil {
 				return nil, err
 			}
 		}
-		if pair.after != nil {
+		if afterLive {
 			after, err = c.payload([]*scyllacdc.ChangeRow{pair.after})
 			if err != nil {
 				return nil, err
+			}
+			if len(before) == 0 && len(after) == 0 {
+				continue
 			}
 		}
 		key := c.streamID + ":" + change.Time.String()
@@ -277,6 +292,20 @@ func (c *catalogCDCConsumer) changes(change scyllacdc.Change) ([]watchjournal.Ch
 		})
 	}
 	return changes, nil
+}
+
+func catalogCDCLiveImages(before, after *productRow) (bool, bool, error) {
+	for _, row := range []*productRow{before, after} {
+		if row != nil && row.TranslationRetired != nil && !*row.TranslationRetired {
+			return false, false, fmt.Errorf("%w: invalid retirement marker", datastore.ErrNamespaceWatchDiscontinuity)
+		}
+	}
+	beforeLive := before != nil && before.TranslationRetired == nil
+	afterLive := after != nil && after.TranslationRetired == nil
+	if before != nil && !beforeLive && afterLive {
+		return false, false, fmt.Errorf("%w: retirement reversed", datastore.ErrNamespaceWatchDiscontinuity)
+	}
+	return beforeLive, afterLive, nil
 }
 
 func (c *catalogCDCConsumer) Empty(ctx context.Context, ackTime gocql.UUID) error {
@@ -302,6 +331,7 @@ func catalogCDCRow(rows []*scyllacdc.ChangeRow) *productRow {
 	}
 	row := rows[0]
 	scyllaRow := &productRow{}
+	scyllaRow.TranslationRetired = optionalCDCBool(row, "translation_retired")
 	assignCDC(row, "namespace", &scyllaRow.Namespace)
 	assignCDC(row, "creation_timestamp", &scyllaRow.CreationTimestamp)
 	assignCDC(row, "uid", &scyllaRow.UID)
@@ -327,6 +357,25 @@ func catalogCDCRow(rows []*scyllacdc.ChangeRow) *productRow {
 	assignCDC(row, "body", &scyllaRow.Body)
 	assignCDC(row, "status", &scyllaRow.Status)
 	return scyllaRow
+}
+
+func productVariantCDCRow(rows []*scyllacdc.ChangeRow) *productVariantRow {
+	base := catalogCDCRow(rows)
+	if base == nil {
+		return nil
+	}
+	row := &productVariantRow{
+		TranslationRetired: base.TranslationRetired,
+		Namespace:          base.Namespace, CreationTimestamp: base.CreationTimestamp, UID: base.UID, Name: base.Name,
+		APIVersion: base.APIVersion, Kind: base.Kind, Generation: base.Generation, ResourceVersion: base.ResourceVersion,
+		Revision: base.Revision, CreationActor: base.CreationActor, UpdateTimestamp: base.UpdateTimestamp, UpdateActor: base.UpdateActor,
+		Labels: base.Labels, Annotations: base.Annotations, OwnerReferences: base.OwnerReferences, Finalizers: base.Finalizers,
+		DeletionTimestamp: base.DeletionTimestamp, RepositoryID: base.RepositoryID, SourcePath: base.SourcePath,
+		GitCommitSHA: base.GitCommitSHA, GitRef: base.GitRef, Spec: base.Spec, Body: base.Body, Status: base.Status,
+	}
+	assignCDC(rows[0], "sku", &row.SKU)
+	assignCDC(rows[0], "product_ref_name", &row.ProductRefName)
+	return row
 }
 
 // categoryTaxonomyCDCRow decodes the CategoryTaxonomy image, which carries

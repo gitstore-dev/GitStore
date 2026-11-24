@@ -26,7 +26,9 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/rbaclocal"
 	"github.com/gitstore-dev/gitstore/api/internal/auth/provider/staticusers"
 	"github.com/gitstore-dev/gitstore/api/internal/config"
+	"github.com/gitstore-dev/gitstore/api/internal/datastore"
 	"github.com/gitstore-dev/gitstore/api/internal/datastore/scylla"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/crypto/bcrypt"
@@ -144,9 +146,9 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "  rbac binding add --file <policy.yaml> --subject <subject> --role <role>")
 	fmt.Fprintln(output, "  gen-jwt-secret")
 	fmt.Fprintln(output, "  gen-hmac-secret")
-	fmt.Fprintln(output, "  scylla-projection-audit [Scylla flags]")
+	fmt.Fprintln(output, "  scylla-projection-audit [Scylla flags] [--kind Translation --audit-scope indexes|targets --namespace-uid <uid> --page-size 256 --timeout 1m]")
 	fmt.Fprintln(output, "  migrate [Scylla flags] [--timeout 5m] (prepare an existing keyspace without starting the API)")
-	fmt.Fprintln(output, "  scylla-projection-repair (--dry-run | --confirm) [Scylla flags]")
+	fmt.Fprintln(output, "  scylla-projection-repair (--dry-run | --confirm) [Scylla flags] [--kind Translation --audit-scope indexes|targets --namespace-uid <uid> --page-size 256 --timeout 1m]")
 	fmt.Fprintln(output, "  enroll-serviceaccount --api-url <url> --admin-token <token> --namespace <namespace> --name <name> --key-id <id> --private-key-path <path> [--replace-existing-key]")
 	fmt.Fprintln(output, "  generate-signing-key --private-key-path <path> [--record-output-path <path> --key-id <id>]")
 	fmt.Fprintln(output, "  validate-local-config --config-file <config.toml> --policy-file <policy.yaml>")
@@ -470,7 +472,12 @@ func printSecret(stdout, stderr io.Writer, key string) int {
 
 func runProjectionAudit(args []string, stdout, stderr io.Writer) int {
 	flags, cfg := newScyllaFlagSet("scylla-projection-audit", stderr)
+	translation := newTranslationProjectionFlags(flags)
 	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if err := translation.validate(flags); err != nil {
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
 	client, err := openProjectionRepair(cfg())
@@ -480,6 +487,9 @@ func runProjectionAudit(args []string, stdout, stderr io.Writer) int {
 	}
 	defer client.Close()
 
+	if *translation.kind == "Translation" {
+		return runTranslationProjectionTurn(client, translation, false, stdout, stderr)
+	}
 	plan, err := client.Audit(context.Background())
 	if err != nil {
 		fmt.Fprintf(stderr, "Error auditing Scylla projections: %v\n", err)
@@ -496,11 +506,16 @@ func runProjectionRepair(args []string, stdout, stderr io.Writer) int {
 	flags, cfg := newScyllaFlagSet("scylla-projection-repair", stderr)
 	dryRun := flags.Bool("dry-run", false, "print the repair plan without mutating Scylla")
 	confirm := flags.Bool("confirm", false, "confirm conditional projection mutations")
+	translation := newTranslationProjectionFlags(flags)
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	if !*dryRun && !*confirm {
 		fmt.Fprintln(stderr, "scylla-projection-repair requires --dry-run or explicit --confirm")
+		return 2
+	}
+	if err := translation.validate(flags); err != nil {
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
 
@@ -511,6 +526,9 @@ func runProjectionRepair(args []string, stdout, stderr io.Writer) int {
 	}
 	defer client.Close()
 
+	if *translation.kind == "Translation" {
+		return runTranslationProjectionTurn(client, translation, !*dryRun, stdout, stderr)
+	}
 	plan, err := client.Audit(context.Background())
 	if err != nil {
 		fmt.Fprintf(stderr, "Error planning Scylla projection repair: %v\n", err)
@@ -534,6 +552,81 @@ func runProjectionRepair(args []string, stdout, stderr io.Writer) int {
 	}
 	if err := writeJSON(stdout, result); err != nil {
 		fmt.Fprintf(stderr, "Error writing repair result: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+type translationProjectionFlags struct {
+	kind, namespace, scope *string
+	limit                  *int
+	timeout                *time.Duration
+}
+
+func newTranslationProjectionFlags(flags *flag.FlagSet) translationProjectionFlags {
+	return translationProjectionFlags{
+		kind:      flags.String("kind", "", "select Translation for bounded source/index audit turns"),
+		scope:     flags.String("audit-scope", "indexes", "Translation audit scope: indexes or targets"),
+		namespace: flags.String("namespace-uid", "", "namespace lifetime UID required with --kind Translation"),
+		limit:     flags.Int("page-size", datastore.MaxTranslationPageSize, "maximum physical records scanned per Translation turn"),
+		timeout:   flags.Duration("timeout", time.Minute, "deadline for a Translation audit or repair turn"),
+	}
+}
+
+func (f translationProjectionFlags) validate(flags *flag.FlagSet) error {
+	if flags.NArg() != 0 {
+		return errors.New("projection commands accept no positional arguments")
+	}
+	if *f.kind == "" {
+		var scoped bool
+		flags.Visit(func(value *flag.Flag) {
+			if value.Name == "namespace-uid" || value.Name == "page-size" || value.Name == "timeout" || value.Name == "audit-scope" {
+				scoped = true
+			}
+		})
+		if scoped {
+			return errors.New("--namespace-uid, --page-size, --timeout and --audit-scope require --kind Translation")
+		}
+		return nil
+	}
+	id, err := uuid.Parse(*f.namespace)
+	if *f.kind != "Translation" || (*f.scope != "indexes" && *f.scope != "targets") || err != nil || id.String() != *f.namespace ||
+		*f.limit < 1 || *f.limit > datastore.MaxTranslationPageSize || *f.timeout <= 0 {
+		return fmt.Errorf("--kind Translation requires --audit-scope indexes|targets, a canonical --namespace-uid, --page-size 1..%d and positive --timeout", datastore.MaxTranslationPageSize)
+	}
+	return nil
+}
+
+func runTranslationProjectionTurn(client projectionRepairClient, flags translationProjectionFlags, repair bool, stdout, stderr io.Writer) int {
+	auditor, ok := client.(interface {
+		InspectTranslationAuditTurn(context.Context, string, int) (scylla.TranslationAuditInspection, error)
+		RepairTranslationAuditTurn(context.Context, string, int) (datastore.TranslationAuditProgress, error)
+		InspectTranslationTargetAuditTurn(context.Context, string, int) (scylla.TranslationAuditInspection, error)
+		RepairTranslationTargetAuditTurn(context.Context, string, int) (datastore.TranslationAuditProgress, error)
+	})
+	if !ok {
+		fmt.Fprintln(stderr, "projection repair client cannot audit Translations")
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *flags.timeout)
+	defer cancel()
+	var result any
+	var err error
+	if *flags.scope == "targets" && repair {
+		result, err = auditor.RepairTranslationTargetAuditTurn(ctx, *flags.namespace, *flags.limit)
+	} else if *flags.scope == "targets" {
+		result, err = auditor.InspectTranslationTargetAuditTurn(ctx, *flags.namespace, *flags.limit)
+	} else if repair {
+		result, err = auditor.RepairTranslationAuditTurn(ctx, *flags.namespace, *flags.limit)
+	} else {
+		result, err = auditor.InspectTranslationAuditTurn(ctx, *flags.namespace, *flags.limit)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "Translation audit turn failed; inspect persisted progress before retrying: %v\n", err)
+		return 1
+	}
+	if err := writeJSON(stdout, result); err != nil {
+		fmt.Fprintf(stderr, "Error writing Translation audit result: %v\n", err)
 		return 1
 	}
 	return 0

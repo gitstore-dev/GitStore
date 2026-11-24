@@ -53,6 +53,18 @@ The API then:
 
 Supported `kind` values: `Product`, `ProductVariant`, `CategoryTaxonomy`, `Collection`, `File`, and `Namespace`.
 
+`Translation` additionally uses the shared validation/admission path only when
+compatible Translation activation is explicitly enabled. Admission remains
+disabled by default. Its `i18n.gitstore.dev/v1beta1` envelope carries a locale,
+same-namespace target reference, ordered text patches and/or a byte-preserved
+Markdown body. Candidate target changes are considered independently of file
+order; invalid Translation documents reject the receive without applying a
+validated subset. Existing accepted Translations are not retroactively
+rejected when a target changes. Controller resolution and guarded current
+Ready follow admission; they never modify the target or apply localized
+content. See [Translation authoring](../storage-groups/translations.md) for
+eligible fields, limits and examples.
+
 Failures for individual resources are logged with operation, namespace, name, and conflict details where available. They do not block remaining resources and cannot reject a Git push that has already been accepted.
 
 If `old_commit_sha` is absent because an older git service called the API, admission falls back to the legacy full-tree snapshot path and logs a warning.

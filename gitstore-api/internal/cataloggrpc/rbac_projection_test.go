@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -22,6 +23,8 @@ import (
 	"github.com/gitstore-dev/gitstore/api/internal/rbac"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 )
@@ -35,7 +38,7 @@ type rbacProjectionFixture struct {
 	trees  map[string]map[string][]byte
 }
 
-func newRBACProjectionFixture(t *testing.T, wrap func(datastore.Datastore) datastore.Datastore) *rbacProjectionFixture {
+func newRBACProjectionFixture(t *testing.T, wrap func(datastore.Datastore) datastore.Datastore, options ...func(*cataloggrpc.ServerDeps)) *rbacProjectionFixture {
 	t.Helper()
 	ds := newNamespacePolicyDatastore(t)
 	repository, err := ds.GetRepository(t.Context(), testRepoID)
@@ -80,6 +83,9 @@ func newRBACProjectionFixture(t *testing.T, wrap func(datastore.Datastore) datas
 	validator := &admission.RBACValidator{Builtins: builtins, ManagedStore: ds, Capture: rbac.ValidationCapture{Registry: registry}}
 	f.server = newCatalogServer(t, ds, f.git, func(deps *cataloggrpc.ServerDeps) {
 		deps.Registry, deps.RBACValidator = registry, validator
+		for _, option := range options {
+			option(deps)
+		}
 	})
 	return f
 }
@@ -158,6 +164,52 @@ func TestRBACCanonicalResyncRepairsAnEntirelyLostCallback(t *testing.T) {
 	require.Equal(t, before.Resources[0].Metadata.UID, after.Resources[0].Metadata.UID)
 	require.NotNil(t, after.Resources[0].Metadata.DeletionTimestamp)
 	require.Equal(t, "main@sha1:"+f.tip, after.State.Projection.GitRevision)
+}
+
+func TestRBACProjectionSharesOnlyVerifiedTreeDigestWithSnapshotReader(t *testing.T) {
+	for _, receive := range []bool{false, true} {
+		t.Run(fmt.Sprintf("receive-%t", receive), func(t *testing.T) {
+			cache := new(rbac.OriginDigestCache)
+			f := newRBACProjectionFixture(t, nil, func(deps *cataloggrpc.ServerDeps) {
+				deps.RBACOriginDigests = cache
+			})
+			old := f.tip
+			f.tip = strings.Repeat("b", 40)
+			path := "rbac/clusterroles/reader.yaml"
+			f.trees[f.tip] = map[string][]byte{path: rbacProjectionRole("reader", "read")}
+			readFile, reads := f.git.readFileFunc, 0
+			f.git.readFileFunc = func(ctx context.Context, id, path, ref string) ([]byte, error) {
+				reads++
+				return readFile(ctx, id, path, ref)
+			}
+			if receive {
+				require.NoError(t, f.receive(t, old, path))
+			} else {
+				require.NoError(t, f.server.ReconcileRBACTier(t.Context(), rbac.ClusterTierID))
+			}
+			verifiedTreeReads := reads
+			require.Positive(t, verifiedTreeReads)
+			source := rbac.OriginReader{Store: f.ds, Git: f.git, Digests: cache}
+			builtins, err := rbac.ReleaseBuiltins()
+			require.NoError(t, err)
+			reader := rbac.SnapshotReader{Store: f.store, ReadOrigin: source.ReadProjectedOrigin,
+				CheckOrigin: source.CheckOrigin, CatalogDigest: auth.AuthorizationCatalogDigest(), BuiltinDigest: builtins.Digest()}
+			snapshot, err := reader.Read(t.Context(), rbac.ClusterTierID)
+			require.NoError(t, err)
+			require.Len(t, snapshot.Resources, 1)
+			require.Equal(t, verifiedTreeReads, reads, "projection's fully verified immutable tree must not be scanned again")
+
+			f.tip = strings.Repeat("c", 40)
+			f.trees[f.tip] = map[string][]byte{path: rbacProjectionRole("reader", "create")}
+			snapshot, err = reader.Read(t.Context(), rbac.ClusterTierID)
+			require.ErrorIs(t, err, rbac.ErrSnapshotProjectionMismatch, "cached bytes cannot hide a live canonical change")
+			require.Empty(t, snapshot.Resources)
+			require.Equal(t, verifiedTreeReads, reads, "unprojected canonical changes still route to recovery first")
+			f.git.resolveRefFunc = func(context.Context, string, string) (string, error) { return "", rbac.ErrUnavailable }
+			_, err = reader.Read(t.Context(), rbac.ClusterTierID)
+			require.ErrorIs(t, err, rbac.ErrUnavailable, "cached digests cannot replace a live origin proof")
+		})
+	}
 }
 
 func TestRBACCanonicalResyncPreservesThenRemovesOrdinaryOwnerCollision(t *testing.T) {
@@ -276,6 +328,87 @@ func TestRBACCanonicalOriginChecksDoNotReadManifests(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	require.ErrorIs(t, source.CheckOrigin(ctx, rbac.ClusterTierID, origin), rbac.ErrUnavailable)
+}
+
+func TestRBACProjectedOriginDefersUnprojectedTreeReadsToRecovery(t *testing.T) {
+	f := newRBACProjectionFixture(t, nil)
+	path := "rbac/clusterroles/reader.yaml"
+	f.trees[f.tip][path] = rbacProjectionRole("reader", "read")
+	reads := 0
+	readFile := f.git.readFileFunc
+	f.git.readFileFunc = func(ctx context.Context, id, path, ref string) ([]byte, error) {
+		reads++
+		return readFile(ctx, id, path, ref)
+	}
+	source := rbac.OriginReader{Store: f.ds, Git: f.git, Digests: new(rbac.OriginDigestCache)}
+	_, err := source.ReadProjectedOrigin(t.Context(), rbac.ClusterTierID)
+	require.ErrorIs(t, err, rbac.ErrSnapshotProjectionMismatch)
+	require.Zero(t, reads, "complete Git recovery must not be preceded by a redundant immutable-tree scan")
+
+	require.NoError(t, f.server.ReconcileRBACTier(t.Context(), rbac.ClusterTierID))
+	require.Equal(t, 1, reads)
+	origin, err := source.ReadProjectedOrigin(t.Context(), rbac.ClusterTierID)
+	require.NoError(t, err)
+	require.Equal(t, 2, reads, "matching projection metadata cannot replace independent canonical-tree verification")
+	current, err := source.ReadProjectedOrigin(t.Context(), rbac.ClusterTierID)
+	require.NoError(t, err)
+	require.Equal(t, origin, current)
+	require.Equal(t, 2, reads)
+
+	f.tip = strings.Repeat("b", 40)
+	f.trees[f.tip] = map[string][]byte{path: rbacProjectionRole("reader", "create")}
+	_, err = source.ReadProjectedOrigin(t.Context(), rbac.ClusterTierID)
+	require.ErrorIs(t, err, rbac.ErrSnapshotProjectionMismatch)
+	require.Equal(t, 2, reads, "a lost callback must route to recovery before reading the new tree")
+	changed, err := source.ReadOrigin(t.Context(), rbac.ClusterTierID)
+	require.NoError(t, err, "unconditional origin reads must still work without a matching projection")
+	require.NotEqual(t, origin.TreeDigest, changed.TreeDigest)
+	require.Equal(t, 3, reads)
+	f.git.resolveRefFunc = func(context.Context, string, string) (string, error) { return "", rbac.ErrUnavailable }
+	_, err = source.ReadProjectedOrigin(t.Context(), rbac.ClusterTierID)
+	require.ErrorIs(t, err, rbac.ErrUnavailable, "a verified digest cannot replace current canonical facts")
+}
+
+func TestRBACOriginCacheMissBracketsImmutableScanWithLiveProofs(t *testing.T) {
+	for _, projected := range []bool{false, true} {
+		for _, advanced := range []bool{false, true} {
+			t.Run(fmt.Sprintf("projected-%t-advanced-%t", projected, advanced), func(t *testing.T) {
+				f := newRBACProjectionFixture(t, nil)
+				old := f.tip
+				path := "rbac/clusterroles/reader.yaml"
+				f.tip = strings.Repeat("b", 40)
+				f.trees[f.tip] = map[string][]byte{path: rbacProjectionRole("reader", "read")}
+				require.NoError(t, f.receive(t, old, path))
+				proofs := 0
+				f.git.resolveRefFunc = func(context.Context, string, string) (string, error) {
+					proofs++
+					return f.tip, nil
+				}
+				readFile := f.git.readFileFunc
+				f.git.readFileFunc = func(ctx context.Context, id, path, ref string) ([]byte, error) {
+					content, err := readFile(ctx, id, path, ref)
+					if advanced {
+						f.tip = strings.Repeat("c", 40)
+					}
+					return content, err
+				}
+				source := rbac.OriginReader{Store: f.ds, Git: f.git, Digests: new(rbac.OriginDigestCache)}
+				read := source.ReadOrigin
+				if projected {
+					read = source.ReadProjectedOrigin
+				}
+				origin, err := read(t.Context(), rbac.ClusterTierID)
+				require.Equal(t, 2, proofs, "a cold read needs one live proof before and one after its immutable scan")
+				if advanced {
+					require.ErrorIs(t, err, rbac.ErrUnavailable, "reusing the initial proof must retain the final live fence")
+					require.Empty(t, origin)
+				} else {
+					require.NoError(t, err)
+					require.NotEmpty(t, origin.TreeDigest)
+				}
+			})
+		}
+	}
 }
 
 func TestRBACOriginDigestCacheRechecksLiveFactsWithoutRescanningImmutableFiles(t *testing.T) {
@@ -588,6 +721,35 @@ func rbacCallbackBlob(path string, content []byte) *catalogv1.ResourceBlob {
 	_, _ = fmt.Fprintf(digest, "blob %d\x00", len(content))
 	_, _ = digest.Write(content)
 	return &catalogv1.ResourceBlob{Path: path, Content: content, BlobOid: fmt.Sprintf("%x", digest.Sum(nil))}
+}
+
+func TestRBACCallbackUnavailableLogsOnlyCaptureStage(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	f := newRBACProjectionFixture(t, nil, func(deps *cataloggrpc.ServerDeps) {
+		deps.Logger = zap.New(core)
+		deps.RBACValidator.Capture.Reader = rbac.SnapshotReader{
+			Store: deps.Store.(datastore.RBACCapable).RBACStore(), CatalogDigest: auth.AuthorizationCatalogDigest(),
+			BuiltinDigest: deps.RBACValidator.Builtins.Digest(),
+			ReadOrigin: func(context.Context, string) (rbac.SnapshotOrigin, error) {
+				return rbac.SnapshotOrigin{}, errors.New("private backend details")
+			},
+		}
+	})
+	blob := rbacCallbackBlob("rbac/clusterroles/reader.yaml", rbacProjectionRole("reader", "read"))
+	tree := &catalogv1.ResourceValidationTree{
+		Ref:           &catalogv1.ReceiveRef{RefName: "refs/heads/main", OldCommitSha: f.tip, NewCommitSha: strings.Repeat("b", 40)},
+		ProposedBlobs: []*catalogv1.ResourceBlob{blob}, RbacTree: &catalogv1.RBACValidationTree{Blobs: []*catalogv1.ResourceBlob{blob}},
+	}
+	response, err := f.server.ValidateResources(t.Context(), &catalogv1.ValidateResourcesRequest{
+		RepositoryId: testRepoID, Trees: []*catalogv1.ResourceValidationTree{tree},
+	})
+	require.Nil(t, response)
+	require.Equal(t, codes.Unavailable, grpcstatus.Code(err))
+	require.Equal(t, "authoritative RBAC validation unavailable", grpcstatus.Convert(err).Message())
+	entries := logs.FilterMessage("RBAC validation unavailable").All()
+	require.Len(t, entries, 1)
+	require.Equal(t, map[string]any{"stage": "cluster-snapshot"}, entries[0].ContextMap())
+	require.NotContains(t, fmt.Sprint(logs.All()), "private backend details")
 }
 
 func TestRBACCallbackFailsClosedBeforeActivation(t *testing.T) {

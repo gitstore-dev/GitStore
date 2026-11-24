@@ -111,18 +111,24 @@ func newCapacityPushOracle(ctx context.Context, cfg capacityPushConfig, token st
 	if cfg.verifyAPIA == "" || cfg.verifyAPIB == "" || cfg.verifyAPIA == cfg.verifyAPIB || cfg.namespace == "" {
 		return nil, fmt.Errorf("two distinct Admin origins and an owned namespace are required")
 	}
-	oracle := &capacityPushOracle{jobs: make(chan capacityPushResult, 128)}
 	watch, err := newCapacityPushWatch(ctx, cfg, token)
 	if err != nil {
 		return nil, err
 	}
+	return startCapacityPushOracle(ctx, watch, func(ctx context.Context, result capacityPushResult) error {
+		return verifyCapacityPush(ctx, cfg, token, result, watch)
+	}), nil
+}
+
+func startCapacityPushOracle(ctx context.Context, watch *capacityPushWatch, verify func(context.Context, capacityPushResult) error) *capacityPushOracle {
+	oracle := &capacityPushOracle{jobs: make(chan capacityPushResult, 128)}
 	oracle.watch = watch
 	for range 4 {
 		oracle.wait.Add(1)
 		go func() {
 			defer oracle.wait.Done()
 			for result := range oracle.jobs {
-				if err := verifyCapacityPush(ctx, cfg, token, result, watch); err != nil {
+				if err := verify(ctx, result); err != nil {
 					oracle.failed.Add(1)
 				} else {
 					oracle.verified.Add(1)
@@ -130,7 +136,7 @@ func newCapacityPushOracle(ctx context.Context, cfg capacityPushConfig, token st
 			}
 		}()
 	}
-	return oracle, nil
+	return oracle
 }
 func (o *capacityPushOracle) offer(result capacityPushResult) {
 	select {
@@ -139,10 +145,12 @@ func (o *capacityPushOracle) offer(result capacityPushResult) {
 		o.dropped.Add(1)
 	}
 }
-func (o *capacityPushOracle) finish() (int, int, int) {
+func (o *capacityPushOracle) finish(keepWatch ...bool) (int, int, int) {
 	o.finishOnce.Do(func() { close(o.jobs) })
 	o.wait.Wait()
-	o.watch.close()
+	if len(keepWatch) != 1 || !keepWatch[0] {
+		o.watch.close()
+	}
 	return int(o.verified.Load()), int(o.failed.Load()), int(o.dropped.Load())
 }
 
