@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.gitstore.dev/gitstore/v1beta1/variant.schema.json",
+  "$id": "https://schemas.gitstore.dev/catalog.gitstore.dev/v1beta1/variant.schema.json",
   "title": "GitStore ProductVariant",
   "description": "YAML frontmatter for a GitStore ProductVariant resource. A ProductVariant resource is a Markdown file: this schema validates only the frontmatter object between the opening and closing '---' delimiters. The remaining Markdown content is the free-form variant description body and is not covered by this schema. Represents a purchasable configuration of a parent Product with its own SKU, pricing, inventory policy, and optional media. See docs/products/product-variant-spec.md for the full authoring contract.",
   "type": "object",

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.gitstore.dev/gitstore/v1beta1/namespace.schema.json",
+  "$id": "https://schemas.gitstore.dev/gitstore.dev/v1beta1/namespace.schema.json",
   "title": "GitStore Namespace",
   "description": "YAML frontmatter for a GitStore Namespace resource. A Namespace resource is a Markdown file: this schema validates only the frontmatter object between the opening and closing '---' delimiters. The remaining Markdown content is free-form documentation about the namespace and is not covered by this schema. Note: apiVersion for Namespace is the bare \"gitstore.dev\" API group, distinct from catalog resources (\"catalog.gitstore.dev\") and File (\"storage.gitstore.dev\"). A Namespace resource's metadata must omit namespace or set it to null — namespaces are top-level and cannot themselves belong to a namespace. See docs/namespace/namespace-spec.md for the full authoring contract.",
   "type": "object",

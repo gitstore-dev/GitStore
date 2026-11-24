@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://schemas.gitstore.dev/gitstore/v1beta1/collection.schema.json",
-  "title": "GitStore Collection",
-  "description": "YAML frontmatter for a GitStore Collection resource. A Collection resource is a Markdown file: this schema validates only the frontmatter object between the opening and closing '---' delimiters. The remaining Markdown content is the free-form collection description body and is not covered by this schema. A Collection groups Products either dynamically (spec.selector, matched by label) or manually (spec.targetRef, a single explicit Product). See docs/collections/collection-spec.md for the full authoring contract.",
+  "$id": "https://schemas.gitstore.dev/catalog.gitstore.dev/v1beta1/category.schema.json",
+  "title": "GitStore CategoryTaxonomy",
+  "description": "YAML frontmatter for a GitStore CategoryTaxonomy resource. A CategoryTaxonomy resource is a Markdown file: this schema validates only the frontmatter object between the opening and closing '---' delimiters. The remaining Markdown content is the free-form category description body and is not covered by this schema. Categories may nest via spec.parentRef to form a taxonomy tree. See docs/categories/category-taxonomy-spec.md for the full authoring contract.",
   "type": "object",
   "additionalProperties": false,
   "required": ["apiVersion", "kind", "metadata", "spec"],
@@ -12,14 +12,14 @@
       "description": "Must be exactly \"catalog.gitstore.dev/v1beta1\"."
     },
     "kind": {
-      "const": "Collection",
-      "description": "Must be exactly \"Collection\" (case-sensitive)."
+      "const": "CategoryTaxonomy",
+      "description": "Must be exactly \"CategoryTaxonomy\" (case-sensitive)."
     },
     "metadata": {
       "$ref": "#/$defs/ObjectMeta"
     },
     "spec": {
-      "$ref": "#/$defs/CollectionSpec"
+      "$ref": "#/$defs/CategoryTaxonomySpec"
     }
   },
   "$defs": {
@@ -33,7 +33,7 @@
           "type": "string",
           "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
           "maxLength": 63,
-          "description": "DNS label format: lowercase alphanumeric and hyphens, 1-63 characters, no leading/trailing hyphen. Identifies this Collection uniquely within its namespace."
+          "description": "DNS label format: lowercase alphanumeric and hyphens, 1-63 characters, no leading/trailing hyphen. Identifies this CategoryTaxonomy uniquely within its namespace."
         },
         "namespace": {
           "type": "string",
@@ -92,43 +92,9 @@
         "fileRef": { "$ref": "#/$defs/FileReference" }
       }
     },
-    "LabelSelectorRequirement": {
+    "CategoryTaxonomySpec": {
       "type": "object",
-      "description": "A single label-matching expression.",
-      "additionalProperties": false,
-      "required": ["key", "operator"],
-      "properties": {
-        "key": { "type": "string", "minLength": 1, "description": "Required. Label key to match against." },
-        "operator": {
-          "type": "string",
-          "enum": ["In", "NotIn", "Exists", "DoesNotExist"],
-          "description": "Required. Matching operator."
-        },
-        "values": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "Required and must be non-empty when operator is \"In\" or \"NotIn\"; must be omitted/empty for \"Exists\"/\"DoesNotExist\"."
-        }
-      }
-    },
-    "LabelSelector": {
-      "type": "object",
-      "description": "Selects Products dynamically by label. matchLabels entries are ANDed together with matchExpressions entries.",
-      "additionalProperties": false,
-      "properties": {
-        "matchLabels": {
-          "type": "object",
-          "additionalProperties": { "type": "string" }
-        },
-        "matchExpressions": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/LabelSelectorRequirement" }
-        }
-      }
-    },
-    "CollectionSpec": {
-      "type": "object",
-      "description": "Author-controlled declarative specification for a collection. Use exactly one of selector (dynamic) or targetRef (manual, single Product) — using both or neither may be rejected depending on the collection's intended semantics.",
+      "description": "Author-controlled declarative specification for a category taxonomy node.",
       "additionalProperties": false,
       "required": ["title"],
       "properties": {
@@ -138,13 +104,9 @@
           "maxLength": 200,
           "description": "Required. Human-readable display title. Max 200 characters."
         },
-        "selector": {
-          "$ref": "#/$defs/LabelSelector",
-          "description": "Dynamic membership: Products matching this label selector belong to the collection."
-        },
-        "targetRef": {
-          "allOf": [{ "$ref": "#/$defs/ObjectReference" }],
-          "description": "Manual membership: a single explicit reference. kind must be \"Product\" when present."
+        "parentRef": {
+          "$ref": "#/$defs/ObjectReference",
+          "description": "Reference to a parent CategoryTaxonomy, forming a tree. Omit for a root-level category. Cycles are rejected at admission."
         },
         "media": {
           "type": "array",
@@ -156,20 +118,17 @@
   "examples": [
     {
       "apiVersion": "catalog.gitstore.dev/v1beta1",
-      "kind": "Collection",
+      "kind": "CategoryTaxonomy",
       "metadata": {
-        "name": "summer-sale",
-        "namespace": "acme-store"
+        "name": "personal-computers",
+        "namespace": "acme-store",
+        "labels": { "gitstore.dev/department": "electronics" }
       },
       "spec": {
-        "title": "Summer Sale",
-        "selector": {
-          "matchLabels": {
-            "gitstore.dev/season": "summer"
-          },
-          "matchExpressions": [
-            { "key": "gitstore.dev/tier", "operator": "In", "values": ["premium", "standard"] }
-          ]
+        "title": "Personal Computers",
+        "parentRef": {
+          "kind": "CategoryTaxonomy",
+          "name": "electronics"
         }
       }
     }
