@@ -27,13 +27,11 @@ services:
   controller-manager:
     profiles: [local]
     command:
-      - /bin/sh
-      - -ec
-      - |
-        serviceaccount_uid="$$(sed -n 's/^GITSTORE_CONTROLLER__SERVICEACCOUNT__UID=//p' /run/controller-bootstrap/serviceaccount.env)"
-        test -n "$$serviceaccount_uid"
-        export GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="$$serviceaccount_uid"
-        exec /app/controller-manager --config-file /etc/gitstore/gitstore.toml
+      - /app/controller-manager
+      - --config-file
+      - /etc/gitstore/gitstore.toml
+      - --config-file
+      - /run/controller-bootstrap/serviceaccount.toml
     volumes:
       - ${CONFIG_FILE:-./config/config.toml}:/etc/gitstore/gitstore.toml:ro
       - controller-checkpoints:/var/lib/gitstore/checkpoints
@@ -45,27 +43,48 @@ services:
 
   credential-bootstrap:
     profiles: [local]
-    image: gitstore-api-debug:local
+    image: ghcr.io/gitstore-dev/api
     build:
       context: .
       dockerfile: docker/api.Dockerfile
-      target: debug
     # Only initialization needs root to prepare the named credential volumes.
     user: "0:0"
     command:
-      - /bin/sh
-      - -ec
-      - |
-        rm -f /run/controller-bootstrap/serviceaccount.env
-        /app/api gitctl generate-signing-key --private-key-path /run/api-issuer/serviceaccount-signing-key
-        chown 65532:65532 /run/api-issuer/serviceaccount-signing-key
-        /app/api gitctl generate-signing-key --private-key-path /run/controller-secrets/.controller-enrollment-key
-        private_key=$$(base64 < /run/controller-secrets/.controller-enrollment-key | tr -d '\n')
-        printf '{"format":"serviceaccount-signing-key/v1","values":{"privateKey":"%s","keyID":"Y29udHJvbGxlci1rZXk="}}\n' "$$private_key" > /run/controller-secrets/gitstore-controller-manager-signing-key.json
+      - /app/api
+      - gitctl
+      - bootstrap
+      - api
+      - --private-key-path
+      - /run/api-issuer/serviceaccount-signing-key
+      - --owner-uid
+      - "65532"
+      - --owner-gid
+      - "65532"
     volumes:
       - api-serviceaccount-issuer-key:/run/api-issuer
+    network_mode: none
+
+  controller-credential-bootstrap:
+    profiles: [local]
+    image: ghcr.io/gitstore-dev/api
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    user: "0:0"
+    command:
+      - /app/api
+      - gitctl
+      - bootstrap
+      - controller
+      - --private-key-path
+      - /run/controller-secrets/.controller-enrollment-key
+      - --record-output-path
+      - /run/controller-secrets/gitstore-controller-manager-signing-key.json
+      - --key-id
+      - controller-key
+    volumes:
       - controller-serviceaccount-secrets:/run/controller-secrets
-      - controller-serviceaccount-identity:/run/controller-bootstrap
+    network_mode: none
 
   serviceaccount-enrollment:
     profiles: [local]
@@ -91,14 +110,20 @@ services:
       - --private-key-path
       - /run/controller-secrets/.controller-enrollment-key
       - --identity-output-path
-      - /run/controller-bootstrap/serviceaccount.env
+      - /run/controller-bootstrap/serviceaccount.toml
+      - --identity-output-format
+      - toml
+      # memdb creates a new UID after restart; retain keys and explicitly rebind identity.
+      - --replace-identity
     depends_on:
       api:
         condition: service_healthy
+      controller-credential-bootstrap:
+        condition: service_completed_successfully
     networks:
       - gitstore-network
     volumes:
-      - controller-serviceaccount-secrets:/run/controller-secrets
+      - controller-serviceaccount-secrets:/run/controller-secrets:ro
       - controller-serviceaccount-identity:/run/controller-bootstrap
 
 volumes:

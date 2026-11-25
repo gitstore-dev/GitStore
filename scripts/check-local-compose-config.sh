@@ -56,10 +56,18 @@ check '
   .services.api.command == ["/app/api", "--config-file", "/etc/gitstore/gitstore.toml",
     "--serviceaccount-signing-key-file", "/run/secrets/serviceaccount-signing-key"] and
   .services.api.healthcheck.test == ["CMD", "/app/api", "gitctl", "healthcheck"] and
-  .services["credential-bootstrap"].build.target == "debug" and
+  (.services["credential-bootstrap"].build.target // "runtime") == "runtime" and
+  (.services["controller-credential-bootstrap"].build.target // "runtime") == "runtime" and
   .services["credential-bootstrap"].user == "0:0" and
+  .services["controller-credential-bootstrap"].user == "0:0" and
+  .services["credential-bootstrap"].image == .services.api.image and
+  .services["controller-credential-bootstrap"].image == .services.api.image and
+  .services["credential-bootstrap"].command[:4] == ["/app/api", "gitctl", "bootstrap", "api"] and
+  .services["controller-credential-bootstrap"].command[:4] == ["/app/api", "gitctl", "bootstrap", "controller"] and
+  .services["credential-bootstrap"].network_mode == "none" and
+  .services["controller-credential-bootstrap"].network_mode == "none" and
   (.services["serviceaccount-enrollment"].command[:2] == ["/app/api", "gitctl"])
-' "shell-less API startup, native probe and debug-only shell initialization must be wired"
+' "API startup, probing and independent preparation must use the shell-less API image"
 check '
   [.services[].volumes[]? | select(.target == "/etc/gitstore/policy.yaml")] |
   length == 1 and all(.[]; .read_only == true)
@@ -77,29 +85,32 @@ check '
   ($controller[0].source | type == "string" and length > 0) and
   ($api[0].source != $controller[0].source) and
   (mounts("credential-bootstrap"; "/run/api-issuer") | length == 1 and .[0].source == $api[0].source) and
-  (mounts("credential-bootstrap"; "/run/controller-secrets") | length == 1 and .[0].source == $controller[0].source) and
+  (mounts("controller-credential-bootstrap"; "/run/controller-secrets") | length == 1 and .[0].source == $controller[0].source) and
+  (.services["credential-bootstrap"].volumes | length == 1) and
+  (.services["controller-credential-bootstrap"].volumes | length == 1) and
   (mounts("serviceaccount-enrollment"; "/run/controller-secrets") |
-    length == 1 and .[0].source == $controller[0].source) and
+    length == 1 and .[0].source == $controller[0].source and .[0].read_only == true) and
   ([$root.services[].volumes[]? | select(.source == $api[0].source)] | length == 2) and
   ([$root.services[].volumes[]? | select(.source == $controller[0].source)] | length == 3)
 ' "API/controller key mounts must be distinct, read-only for consumers and restricted to their provisioning services"
 
 check '
-  [.services["credential-bootstrap"].volumes[]? | select(.target == "/run/controller-bootstrap")] as $bootstrap |
+  [.services["controller-manager"].volumes[]? | select(.target == "/run/controller-bootstrap")] as $bootstrap |
   [.services["serviceaccount-enrollment"].volumes[]? | select(.target == "/run/controller-bootstrap")] as $enrollment |
-  ($bootstrap | length == 1) and ($enrollment | length == 1) and
+  ($bootstrap | length == 1 and .[0].read_only == true) and ($enrollment | length == 1) and
   ($bootstrap[0].source | type == "string" and length > 0) and
   ($bootstrap[0].source == $enrollment[0].source)
-' "bootstrap and enrollment must share the identity-output mount"
+' "only enrollment writes the controller identity overlay"
 
 check '
   .services.api.depends_on["credential-bootstrap"] != null and
   .services["controller-manager"].depends_on["serviceaccount-enrollment"] != null and
   .services["serviceaccount-enrollment"].depends_on.api != null and
+  .services["serviceaccount-enrollment"].depends_on["controller-credential-bootstrap"] != null and
   (.services["serviceaccount-enrollment"].networks | has("gitstore-network")) and
-  (.services["credential-bootstrap"].command | tostring | contains("rm -f /run/controller-bootstrap/serviceaccount.env")) and
-  (.services["serviceaccount-enrollment"].command | tostring | contains("--replace-existing-key"))
-' "bootstrap/enrollment dependencies, network and identity replacement must be wired"
+  .services["controller-manager"].command == ["/app/controller-manager", "--config-file", "/etc/gitstore/gitstore.toml", "--config-file", "/run/controller-bootstrap/serviceaccount.toml"] and
+  (.services["serviceaccount-enrollment"].command | index("--identity-output-format") != null and index("toml") != null and index("--replace-identity") != null and index("--replace-existing-key") != null)
+' "bootstrap/enrollment dependencies, network and explicit TOML identity replacement must be wired"
 
 check '
   (.services["serviceaccount-enrollment"].command | index("--namespace") == null) and
