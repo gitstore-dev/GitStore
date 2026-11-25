@@ -802,7 +802,16 @@ pub fn check_blob_sizes_in_quarantine_paths(
                         pack_entry,
                         &mut out,
                         &mut inflate,
-                        &|_, _| Ok(None),
+                        &|id, _| {
+                            index_file
+                                .lookup(id)
+                                .map(|index| {
+                                    pack_file
+                                        .entry(index_file.pack_offset_at_index(index))
+                                        .map(gix_pack::data::decode::entry::ResolvedBase::InPack)
+                                })
+                                .transpose()
+                        },
                         &mut gix_pack::cache::Never,
                     )
                     .with_context(|| {
@@ -832,6 +841,84 @@ pub fn check_blob_sizes_in_quarantine_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quarantine_blob_limits_resolve_reference_and_offset_deltas() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        for (offset_deltas, thin) in [(false, false), (true, false), (false, true)] {
+            let (directory, source) = make_test_repo();
+            let common = "shared category description with unicode café\n".repeat(2048);
+            let first = format!("{common}first\n");
+            let second = format!("{common}other\n");
+            let parent = make_commit(&source, &first, None);
+            let tip = make_commit(&source, &second, Some(parent));
+            let mut command = Command::new("git");
+            command
+                .arg("--git-dir")
+                .arg(directory.path())
+                .args([
+                    "pack-objects",
+                    "--stdout",
+                    "--revs",
+                    "--window=10",
+                    "--depth=10",
+                ])
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            if offset_deltas {
+                command.arg("--delta-base-offset");
+            }
+            if thin {
+                command.arg("--thin");
+            }
+            let mut child = command.spawn().expect("git pack-objects fixture");
+            let mut stdin = child.stdin.take().unwrap();
+            writeln!(stdin, "{tip}").unwrap();
+            if thin {
+                writeln!(stdin, "^{parent}").unwrap();
+            }
+            drop(stdin);
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let (_target_directory, target) = make_test_repo();
+            let odb = if thin {
+                (*source.objects).clone()
+            } else {
+                (*target.objects).clone()
+            };
+            let quarantine =
+                stage_pack_from_reader(std::io::Cursor::new(output.stdout), Some(odb)).unwrap();
+            let pack =
+                gix_pack::data::File::at(&quarantine.pack_path, gix::hash::Kind::Sha1).unwrap();
+            let index =
+                gix_pack::index::File::at(&quarantine.index_path, gix::hash::Kind::Sha1).unwrap();
+            assert!(
+                index.iter().any(
+                    |entry| match pack.entry(entry.pack_offset).unwrap().header {
+                        gix_pack::data::entry::Header::OfsDelta { .. } => offset_deltas || thin,
+                        gix_pack::data::entry::Header::RefDelta { .. } => !offset_deltas && !thin,
+                        _ => false,
+                    }
+                ),
+                "fixture must contain the requested delta type"
+            );
+            if let Err(error) = check_blob_sizes_in_quarantine(&quarantine, second.len() as u64) {
+                panic!("validation: {error:#}");
+            }
+            let error =
+                check_blob_sizes_in_quarantine(&quarantine, second.len() as u64 - 1).unwrap_err();
+            assert!(format!("{error:#}").contains("exceeds"), "{error:#}");
+        }
+    }
 
     #[test]
     fn small_accepted_pack_is_visible_without_refreshing_cached_indexes() {
