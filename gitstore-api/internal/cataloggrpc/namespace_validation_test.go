@@ -171,7 +171,7 @@ func TestValidateResourcesNonNamespaceKindsNeverInvokeNamespacePolicy(t *testing
 
 	resp, err := srv.ValidateResources(context.Background(), namespaceValidationRequest(nil, []*catalogv1.ResourceBlob{{
 		Path:    "products/widget.md",
-		Content: []byte(validProduct),
+		Content: []byte(strings.ReplaceAll(validProduct, "namespace: gitstore", "namespace: gitstore-system")),
 	}}))
 
 	require.NoError(t, err)

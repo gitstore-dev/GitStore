@@ -25,9 +25,9 @@
   "$defs": {
     "ObjectMeta": {
       "type": "object",
-      "description": "Resource metadata. Unlike git-authored resources, namespace is REQUIRED here — there is no git push context from which to infer it, since Repository is created directly via the createRepository GraphQL mutation. Do not set uid, resourceVersion, generation, creationTimestamp, revision, ownerReferences, or finalizers — those fields are system-managed.",
+      "description": "Author metadata. Git manifests may omit namespace to use the owning repository namespace; GraphQL authoring inputs require an explicit namespace. Do not set uid, resourceVersion, generation, creationTimestamp, revision, ownerReferences, or finalizers — those fields are system-managed.",
       "additionalProperties": false,
-      "required": ["name", "namespace"],
+      "required": ["name"],
       "properties": {
         "name": {
           "type": "string",
@@ -39,7 +39,7 @@
           "type": "string",
           "pattern": "\\S",
           "minLength": 1,
-          "description": "Required. The namespace that owns this repository — must reference an existing Namespace."
+          "description": "Optional in Git manifests: omission uses the owning repository namespace. Explicit values must be nonblank strings matching that namespace."
         },
         "labels": {
           "type": "object",

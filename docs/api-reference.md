@@ -1411,7 +1411,7 @@ Their `namespace` field is nullable (`String`), with no input default. Namespace
 and ServiceAccount responses return `metadata.namespace: null`; namespaced
 resources return their owning namespace.
 
-Namespaced metadata requires a nonblank namespace. Omitted, null, empty, and
+GraphQL namespaced metadata requires a nonblank namespace. Omitted, null, empty, and
 whitespace-only values return the same error before namespace-dependent
 authorization lookups or writes:
 
@@ -1423,15 +1423,19 @@ Cluster-scoped metadata accepts omission or null. Every non-null value, includin
 an empty string, returns `BAD_USER_INPUT` with reason `NAMESPACE_FORBIDDEN` and
 field `metadata.namespace`. Error paths retain mutation aliases. Git admission
 uses the same reasons through its existing validation/admission reports. Git
-manifests for namespaced kinds must explicitly supply the owning namespace;
-repository context does not supply a missing value.
+manifests for namespaced kinds may omit the namespace: repository context supplies
+the effective namespace before authorization and validation without changing
+committed bytes. Explicit namespaces must be nonblank strings matching the
+owning repository. Explicit null, empty, whitespace-only and incorrectly typed
+values are rejected. Cluster-scoped restrictions remain unchanged.
 
 ### Client migration and rolling upgrades
 
 Replace fragments on the removed `NamespaceMetadata` type with selections on
 shared `ObjectMeta`. The dedicated `NamespaceMetadataInput` type is also removed.
-Before upgrading, add explicit namespaces to namespaced Git manifests that
-previously relied on repository inference. During a rolling upgrade, keep Namespace metadata selections inline and omit
+Before using namespace-free Git manifests, upgrade every API replica to a version
+supporting repository inference; older replicas reject these manifests. Explicit
+matching namespaces remain compatible. During a rolling upgrade, keep Namespace metadata selections inline and omit
 `metadata.namespace` from Namespace inputs so requests remain valid on both
 schemas. Defer queries of Namespace's new namespace field and fragments on its
 new metadata type until all API replicas are upgraded. Clients must handle a

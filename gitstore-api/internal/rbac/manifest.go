@@ -242,6 +242,11 @@ func ParseManifest(data []byte, path string, scope RepositoryScope) (*Resource, 
 		return nil, fmt.Errorf("RBAC manifest must reside at %s", canonicalPath)
 	}
 	if wire.Kind.Namespaced() {
+		// The strict YAML tree check above rejects null and non-string values.
+		// Only an absent key can produce nil here.
+		if wire.Metadata.Namespace == nil && scope.Namespace != "" && scope.NamespaceUID != "" {
+			wire.Metadata.Namespace = &scope.Namespace
+		}
 		if scope.Namespace == "" || scope.NamespaceUID == "" || wire.Metadata.Namespace == nil || *wire.Metadata.Namespace != scope.Namespace {
 			return nil, errors.New("RBAC namespace must match the repository namespace and live UID")
 		}

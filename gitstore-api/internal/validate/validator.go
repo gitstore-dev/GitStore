@@ -21,7 +21,15 @@ import (
 
 // Parser owns catalog frontmatter parsing and struct validation state.
 type Parser struct {
-	structValidator *validator.Validate
+	structValidator     *validator.Validate
+	repositoryNamespace func() (string, error)
+}
+
+// WithRepositoryNamespace returns a request-scoped parser. The resolver must
+// obtain the authoritative namespace from the owning repository, not input.
+// The original parser and committed bytes are never changed.
+func (p *Parser) WithRepositoryNamespace(resolve func() (string, error)) *Parser {
+	return &Parser{structValidator: p.validator(), repositoryNamespace: resolve}
 }
 
 // NewParser creates a parser with a fresh struct validator.
@@ -77,7 +85,11 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		return nil, nil, err
 	}
 
-	if err := preParseChecks(fmRaw); err != nil {
+	effectiveNamespace, err := p.namespaceForManifest(fmRaw)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := preParseChecks(fmRaw, effectiveNamespace); err != nil {
 		return nil, nil, err
 	}
 
@@ -100,6 +112,9 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
 		}
+		if effectiveNamespace != "" {
+			res.Metadata.Namespace = effectiveNamespace
+		}
 		var errs []error
 		if err := p.validator().Struct(res); err != nil {
 			errs = append(errs, toFriendlyError(err))
@@ -120,6 +135,9 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		body, err := frontmatter.Parse(bytes.NewReader(raw), &res, formats...)
 		if err != nil {
 			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
+		}
+		if effectiveNamespace != "" {
+			res.Metadata.Namespace = effectiveNamespace
 		}
 		var errs []error
 		if err := p.validator().Struct(res); err != nil {
@@ -142,6 +160,9 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
 		}
+		if effectiveNamespace != "" {
+			res.Metadata.Namespace = effectiveNamespace
+		}
 		var errs []error
 		if err := p.validator().Struct(res); err != nil {
 			errs = append(errs, toFriendlyError(err))
@@ -163,6 +184,9 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
 		}
+		if effectiveNamespace != "" {
+			res.Metadata.Namespace = effectiveNamespace
+		}
 		var errs []error
 		if err := p.validator().Struct(res); err != nil {
 			errs = append(errs, toFriendlyError(err))
@@ -183,6 +207,9 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		body, err := frontmatter.Parse(bytes.NewReader(raw), &res, formats...)
 		if err != nil {
 			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
+		}
+		if effectiveNamespace != "" {
+			res.Metadata.Namespace = effectiveNamespace
 		}
 		var errs []error
 		if err := p.validator().Struct(res); err != nil {
@@ -208,6 +235,9 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
 		}
+		if effectiveNamespace != "" {
+			res.Metadata.Namespace = effectiveNamespace
+		}
 		var errs []error
 		if err := p.validator().Struct(res); err != nil {
 			errs = append(errs, toFriendlyError(err))
@@ -228,6 +258,9 @@ func (p *Parser) ParseResource(r io.Reader) (*ParsedResource, []byte, error) {
 		body, err := frontmatter.Parse(bytes.NewReader(raw), &res, formats...)
 		if err != nil {
 			return nil, nil, fmt.Errorf("validate: parse frontmatter: %w", err)
+		}
+		if effectiveNamespace != "" {
+			res.Metadata.Namespace = effectiveNamespace
 		}
 		var errs []error
 		if err := p.validator().Struct(res); err != nil {
@@ -328,7 +361,7 @@ func extractFrontmatterBlock(src []byte) ([]byte, error) {
 
 // preParseChecks unmarshals the frontmatter block into a raw map and enforces
 // rules that must fire before struct binding.
-func preParseChecks(fmRaw []byte) error {
+func preParseChecks(fmRaw []byte, repositoryNamespace string) error {
 	var raw map[string]any
 	if err := yaml.Unmarshal(fmRaw, &raw); err != nil {
 		return fmt.Errorf("validate: malformed YAML: %w", err)
@@ -370,6 +403,11 @@ func preParseChecks(fmRaw []byte) error {
 			return fmt.Errorf("validate: metadata.namespace must be a string or null")
 		}
 		namespace = &text
+	}
+	if repositoryNamespace != "" && namespace == nil {
+		if _, present := meta["namespace"]; !present {
+			namespace = &repositoryNamespace
+		}
 	}
 	if err := admission.ValidateNamespaceScope(kind, namespace); err != nil {
 		return fmt.Errorf("validate: metadata.namespace %s: %s", err.Reason(), err.Error())

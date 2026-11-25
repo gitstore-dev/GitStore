@@ -24,7 +24,7 @@ A CategoryTaxonomy resource is a Markdown file with YAML frontmatter pushed to a
 | Field                  | Type              | Required | Constraint                                                             |
 |------------------------|-------------------|----------|------------------------------------------------------------------------|
 | `metadata.name`        | string            | yes      | DNS subdomain format; unique within namespace                          |
-| `metadata.namespace`   | string            | yes      | Must match the repository's owning namespace                           |
+| `metadata.namespace`   | string            | no       | Omission uses the repository's owning namespace; an explicit value must match |
 | `metadata.labels`      | map[string]string | no       | Key prefix ≤ 253 chars; key name ≤ 63 chars; value ≤ 63 chars          |
 | `metadata.annotations` | map[string]string | no       | No length restriction                                                  |
 
@@ -74,12 +74,14 @@ All spec fields are individually optional unless noted otherwise. Constraints ap
 
 ## Namespace Scope
 
-Git-backed namespaced resources (`Product`, `ProductVariant`, `CategoryTaxonomy`,
-`Collection`, `File`, and `Repository`) require a nonblank `metadata.namespace`
-in the committed file. Omission, null, empty, and whitespace-only values are
-rejected with `NAMESPACE_REQUIRED` before namespace-dependent authorization or
-writes. The value must match the owning repository's namespace; it cannot select
-a different namespace.
+Git-backed namespaced resources may omit `metadata.namespace`. Admission resolves
+the effective namespace from the owning repository before authorization,
+identity comparisons, reference checks, or writes, without rewriting the file.
+This applies to catalog resources, Translation, Role, and RoleBinding.
+An explicit value must be a nonblank string matching the repository namespace;
+null, empty, whitespace-only, and incorrectly typed values are rejected.
+An explicit namespace cannot select a different store. GraphQL authoring inputs
+continue to require an explicit namespace.
 
 The raw repository UUID is never stored as the namespace. If the repository or
 its namespace cannot be resolved, push admission aborts without storing resources.

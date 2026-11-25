@@ -866,7 +866,7 @@ apiVersion: catalog.gitstore.dev/v1beta1
 kind: Product
 metadata:
   name: %s
-  namespace: gitstore
+  namespace: gitstore-system
 spec:
   title: Capacity Product %d
 ---

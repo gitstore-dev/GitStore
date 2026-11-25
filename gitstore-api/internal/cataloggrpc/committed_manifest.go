@@ -33,6 +33,7 @@ var ErrCommittedManifestSuperseded = admission.ErrCommittedManifestSuperseded
 // the synchronous counterpart of the post-receive batch path; neither callers
 // nor GraphQL resolvers may write an author-controlled resource directly.
 func (s *Server) AdmitCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {
+	s = s.withRepositoryNamespace(ctx, req.RepositoryID)
 	principal := auth.PrincipalFromContext(ctx)
 	if !auth.ValidTrustedPrincipal(principal) || principal.Subject != req.ActorSubject {
 		return nil, status.Error(codes.Unauthenticated, "committed manifest actor does not match authenticated principal")
@@ -233,6 +234,9 @@ func (s *Server) admitCommittedManifest(ctx context.Context, req admission.Commi
 // from the current projection, preventing a stale caller from admitting a
 // later writer's content under its own identity.
 func (s *Server) repairCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) string {
+	// Repair survives the caller's cancellation. Resolve scope with this
+	// repair context rather than a cached failure from the original request.
+	s = s.withRepositoryNamespace(ctx, req.RepositoryID)
 	for attempt := 0; attempt < 3; attempt++ {
 		if ctx.Err() != nil {
 			return "budget_exhausted"

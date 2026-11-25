@@ -14,7 +14,7 @@ import (
 func TestManifestNamespaceScopeDiagnostics(t *testing.T) {
 	server := newCatalogServer(t, newTestDatastore(t), nil)
 	for _, kind := range []string{"Product", "CategoryTaxonomy", "Collection", "ProductVariant", "File", "Repository", "Namespace"} {
-		values := []string{"", "  namespace: null\n", "  namespace: \"\"\n", "  namespace: \" \\t\"\n"}
+		values := []string{"  namespace: null\n", "  namespace: \"\"\n", "  namespace: \" \\t\"\n"}
 		reason := admission.ReasonNamespaceRequired
 		if kind == "Namespace" {
 			values = []string{"  namespace: \"\"\n", "  namespace: \"  \"\n", "  namespace: acme\n"}

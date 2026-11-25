@@ -168,7 +168,8 @@ func (s *Service) saveDeletionIntent(ctx context.Context, resource any, intent *
 }
 
 func validateDeletionIdentity(content []byte, kind, namespace, name string) error {
-	parsed, _, err := validate.NewParser().ParseResource(bytes.NewReader(content))
+	parser := validate.NewParser().WithRepositoryNamespace(func() (string, error) { return namespace, nil })
+	parsed, _, err := parser.ParseResource(bytes.NewReader(content))
 	if err != nil {
 		return fmt.Errorf("parse deletion manifest: %w", err)
 	}

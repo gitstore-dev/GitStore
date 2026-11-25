@@ -69,6 +69,13 @@ uses `schemas/catalog.gitstore.dev/v1beta1/product.schema.json`.
 Each schema's `$id` uses the same group, version, and filename beneath
 `https://schemas.gitstore.dev/`.
 
+Namespaced Git manifests may omit `metadata.namespace`; admission uses the
+owning repository namespace without editing the file. Explicit namespaces must
+be nonblank strings matching that repository. The schemas describe this
+repository-scoped authoring form; GraphQL metadata inputs still require an
+explicit namespace. Offline context-free parsing must also supply repository
+scope before validating namespace-free manifests.
+
 | Schema | Kind | apiVersion | Git-pushable today? |
 |---|---|---|---|
 | [product.schema.json](catalog.gitstore.dev/v1beta1/product.schema.json) | `Product` | `catalog.gitstore.dev/v1beta1` | Yes |
