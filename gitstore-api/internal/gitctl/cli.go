@@ -58,6 +58,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "bootstrap":
+		return runBootstrap(args[1:], stdout, stderr)
 	case "process-executable":
 		if len(args) != 1 {
 			fmt.Fprintln(stderr, "process-executable accepts no arguments")
@@ -149,7 +151,9 @@ func printUsage(output io.Writer) {
 	fmt.Fprintln(output, "  scylla-projection-audit [Scylla flags] [--kind Translation --audit-scope indexes|targets --namespace-uid <uid> --page-size 256 --timeout 1m]")
 	fmt.Fprintln(output, "  migrate [Scylla flags] [--timeout 5m] (prepare an existing keyspace without starting the API)")
 	fmt.Fprintln(output, "  scylla-projection-repair (--dry-run | --confirm) [Scylla flags] [--kind Translation --audit-scope indexes|targets --namespace-uid <uid> --page-size 256 --timeout 1m]")
-	fmt.Fprintln(output, "  enroll-serviceaccount --api-url <url> --admin-token <token> --namespace <namespace> --name <name> --key-id <id> --private-key-path <path> [--replace-existing-key]")
+	fmt.Fprintln(output, "  bootstrap api --private-key-path <path> [--owner-uid <uid> --owner-gid <gid>]")
+	fmt.Fprintln(output, "  bootstrap controller --private-key-path <path> --record-output-path <path> --key-id <id> [--owner-uid <uid> --owner-gid <gid>]")
+	fmt.Fprintln(output, "  enroll-serviceaccount --api-url <url> --name <name> --key-id <id> --private-key-path <path> [--identity-output-path <path> --identity-output-format env|toml] [--replace-existing-key] [--replace-identity] (credentials from BOOTSTRAP_TOKEN or GITSTORE_BOOTSTRAP_ADMIN_* environment)")
 	fmt.Fprintln(output, "  generate-signing-key --private-key-path <path> [--record-output-path <path> --key-id <id>]")
 	fmt.Fprintln(output, "  validate-local-config --config-file <config.toml> --policy-file <policy.yaml>")
 }

@@ -67,9 +67,13 @@ container wiring and configuration.
   command does not transfer data. Read
   [../.claude/rules/scylla-migrations.md](../.claude/rules/scylla-migrations.md).
 - The default API image is shell-less and runs as UID/GID `65532:65532`.
-  Use its native `gitctl healthcheck`; shell-based credential initialization
-  explicitly selects `docker/api.Dockerfile`'s `debug` target as root. Keep
-  issuer key mounts API-only and readable only by the API identity.
+  Use its native `gitctl healthcheck` and separate offline `gitctl bootstrap
+  api|controller` commands. Compose preparation jobs use the same runtime image;
+  only API preparation mounts the issuer key. Enrollment writes a TOML identity
+  overlay loaded directly by the controller, with explicit `--replace-identity`
+  only for the development profile's recreated memdb identities. Native/remote
+  installations can prepare and enroll each component on its own host. Keep
+  existing keys and component-private mounts; add no bootstrap/debug image jobs.
 - `make clean TARGET=<git-data|controller-checkpoints> CONFIRM=1` removes
   selected local runtime state, never Docker volumes.
 - For capacity, profiling, chaos and owned-deployment helpers, read

@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -48,15 +49,17 @@ const (
 )
 
 type serviceAccountEnrollment struct {
-	apiURL         string
-	adminToken     string
-	name           string
-	keyID          string
-	privateKeyPath string
-	identityPath   string
-	replaceKey     bool
-	adminUsername  string
-	adminPassword  string
+	apiURL          string
+	adminToken      string
+	name            string
+	keyID           string
+	privateKeyPath  string
+	identityPath    string
+	identityFormat  string
+	replaceIdentity bool
+	replaceKey      bool
+	adminUsername   string
+	adminPassword   string
 }
 
 type enrollmentClient struct {
@@ -79,6 +82,8 @@ func runEnrollServiceAccount(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(&enrollment.keyID, "key-id", "controller-key", "enrolled public key ID")
 	flags.StringVar(&enrollment.privateKeyPath, "private-key-path", "", "explicit secure local private-key file path")
 	flags.StringVar(&enrollment.identityPath, "identity-output-path", "", "optional secure local ServiceAccount identity file path")
+	flags.StringVar(&enrollment.identityFormat, "identity-output-format", "env", "identity file format: env or toml (controller config overlay)")
+	flags.BoolVar(&enrollment.replaceIdentity, "replace-identity", false, "explicitly replace a valid saved UID after enrollment (for a recreated development API)")
 	flags.BoolVar(&enrollment.replaceKey, "replace-existing-key", false, "replace this key ID when the ServiceAccount already exists")
 	flags.StringVar(&enrollment.adminUsername, "admin-username", "", "administrator username for bootstrap authentication")
 	flags.StringVar(&enrollment.adminPassword, "admin-password", "", "administrator password for bootstrap authentication")
@@ -123,6 +128,7 @@ func runEnrollServiceAccount(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "enroll-serviceaccount could not prepare the key pair")
 		return 1
 	}
+	defer clear(privateKeyPEM)
 
 	uid, err := client.enroll(context.Background(), enrollment, publicKeyPEM, algorithm)
 	switch {
@@ -131,7 +137,7 @@ func runEnrollServiceAccount(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "enroll-serviceaccount could not securely persist the private key")
 			return 1
 		}
-		if err := writeServiceAccountIdentity(enrollment.identityPath, uid); err != nil {
+		if err := writeEnrollmentOutput(enrollment, uid); err != nil {
 			fmt.Fprintln(stderr, "enroll-serviceaccount could not securely persist the ServiceAccount identity")
 			return 1
 		}
@@ -139,7 +145,7 @@ func runEnrollServiceAccount(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, signingRecordRotationHint)
 		return 0
 	case errors.Is(err, errServiceAccountAlreadyExists) && !enrollment.replaceKey && !generated:
-		if err := requireServiceAccountIdentity(enrollment.identityPath); err != nil {
+		if err := requireEnrollmentIdentity(enrollment.identityPath, enrollment.identityFormat); err != nil {
 			fmt.Fprintln(stderr, "enroll-serviceaccount existing enrollment requires its persisted ServiceAccount identity")
 			return 1
 		}
@@ -155,7 +161,7 @@ func runEnrollServiceAccount(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "enroll-serviceaccount could not securely persist the private key")
 			return 1
 		}
-		if err := writeServiceAccountIdentity(enrollment.identityPath, uid); err != nil {
+		if err := writeEnrollmentOutput(enrollment, uid); err != nil {
 			fmt.Fprintln(stderr, "enroll-serviceaccount could not securely persist the ServiceAccount identity")
 			return 1
 		}
@@ -172,6 +178,9 @@ func runEnrollServiceAccount(args []string, stdout, stderr io.Writer) int {
 }
 
 func (e serviceAccountEnrollment) validate() error {
+	if e.identityFormat != "env" && e.identityFormat != "toml" {
+		return errors.New("identity format must be env or toml")
+	}
 	for _, value := range []string{e.apiURL, e.name, e.keyID, e.privateKeyPath} {
 		if strings.TrimSpace(value) == "" {
 			return errors.New("required enrollment value is empty")
@@ -203,19 +212,26 @@ func loadOrGeneratePrivateKey(path string) (crypto.Signer, bool, error) {
 	if err != nil {
 		return nil, false, errors.New("private key cannot be read")
 	}
+	defer clear(encoded)
+	signer, err := parseEnrollmentPrivateKey(encoded)
+	return signer, false, err
+}
+
+func parseEnrollmentPrivateKey(encoded []byte) (crypto.Signer, error) {
 	block, rest := pem.Decode(encoded)
 	if block == nil || len(bytes.TrimSpace(rest)) != 0 {
-		return nil, false, errors.New("private key is not a single PEM block")
+		return nil, errors.New("private key is not a single PEM block")
 	}
+	defer clear(block.Bytes)
 	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		return nil, false, errors.New("private key cannot be parsed")
+		return nil, errors.New("private key cannot be parsed")
 	}
 	signer, ok := key.(crypto.Signer)
 	if !ok || !supportedEnrollmentKey(signer) {
-		return nil, false, errors.New("private key has an unsupported algorithm")
+		return nil, errors.New("private key has an unsupported algorithm")
 	}
-	return signer, false, nil
+	return signer, nil
 }
 
 func supportedEnrollmentKey(signer crypto.Signer) bool {
@@ -268,44 +284,83 @@ func writePrivateKey(path string, value []byte) error {
 }
 
 func writeServiceAccountIdentity(path, uid string) error {
+	return writeEnrollmentIdentity(path, uid, "env")
+}
+
+func identityBytes(uid, format string) []byte {
+	if format == "toml" {
+		return []byte("[controller.serviceaccount]\nuid = " + strconv.Quote(uid) + "\n")
+	}
+	return []byte("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID=" + uid + "\n")
+}
+
+func writeEnrollmentIdentity(path, uid, format string) error {
+	return writeEnrollmentOutput(serviceAccountEnrollment{identityPath: path, identityFormat: format}, uid)
+}
+
+func writeEnrollmentOutput(enrollment serviceAccountEnrollment, uid string) error {
+	path, format := enrollment.identityPath, enrollment.identityFormat
 	if path == "" {
 		return nil
 	}
 	if !validServiceAccountUID(uid) {
 		return errors.New("ServiceAccount UID is empty")
 	}
-	value := []byte("GITSTORE_CONTROLLER__SERVICEACCOUNT__UID=" + uid + "\n")
-	if info, err := os.Lstat(path); err == nil {
-		if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() > 4096 {
-			return errors.New("existing ServiceAccount identity must be a private regular file")
-		}
-		existing, err := os.ReadFile(path)
-		if err != nil || !bytes.Equal(existing, value) {
-			return errors.New("existing ServiceAccount identity does not match the enrolled account")
-		}
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return errors.New("cannot inspect ServiceAccount identity destination")
+	output, err := openBootstrapOutput(path, -1, -1)
+	if err != nil {
+		return err
 	}
-	return writeNewFile(path, value)
+	defer output.root.Close()
+	if enrollment.replaceIdentity {
+		existing, err := output.read()
+		if err == nil {
+			if _, err := parseEnrollmentIdentity(existing, format); err != nil {
+				return err
+			}
+			if !bytes.Equal(existing, identityBytes(uid, format)) {
+				return output.replace(identityBytes(uid, format))
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return output.ensure(identityBytes(uid, format), -1, -1, nil)
 }
 
-func requireServiceAccountIdentity(path string) error {
+func requireEnrollmentIdentity(path, format string) error {
 	if path == "" {
 		return nil
 	}
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
-		return errors.New("ServiceAccount identity is unavailable")
+	output, err := openBootstrapOutput(path, -1, -1)
+	if err != nil {
+		return err
 	}
-	value, err := os.ReadFile(path)
-	const prefix = "GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="
-	if err != nil || !strings.HasPrefix(string(value), prefix) ||
-		!validServiceAccountUID(strings.TrimSuffix(strings.TrimPrefix(string(value), prefix), "\n")) ||
-		!strings.HasSuffix(string(value), "\n") {
-		return errors.New("ServiceAccount identity is invalid")
+	defer output.root.Close()
+	value, err := output.read()
+	if err != nil {
+		return err
 	}
-	return nil
+	_, err = parseEnrollmentIdentity(value, format)
+	return err
+}
+
+func parseEnrollmentIdentity(value []byte, format string) (string, error) {
+	if len(value) > 4096 {
+		return "", errors.New("ServiceAccount identity is too large")
+	}
+	prefix := "GITSTORE_CONTROLLER__SERVICEACCOUNT__UID="
+	if format == "toml" {
+		prefix = "[controller.serviceaccount]\nuid = \""
+	}
+	uid := strings.TrimSuffix(strings.TrimPrefix(string(value), prefix), "\n")
+	if format == "toml" {
+		uid = strings.TrimSuffix(uid, "\"")
+	}
+	if !strings.HasPrefix(string(value), prefix) ||
+		!validServiceAccountUID(uid) || !bytes.Equal(value, identityBytes(uid, format)) {
+		return "", errors.New("ServiceAccount identity is invalid")
+	}
+	return uid, nil
 }
 
 func validServiceAccountUID(value string) bool {
@@ -319,26 +374,6 @@ func validServiceAccountUID(value string) bool {
 		}
 	}
 	return true
-}
-
-func writeNewFile(path string, value []byte) error {
-	if strings.TrimSpace(path) == "" || !filepath.IsAbs(path) {
-		return errors.New("output path must be absolute")
-	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return errors.New("output path cannot be created")
-	}
-	defer file.Close() //nolint:errcheck
-	if _, err := file.Write(value); err != nil {
-		_ = os.Remove(path)
-		return errors.New("output write failed")
-	}
-	if err := file.Sync(); err != nil {
-		_ = os.Remove(path)
-		return errors.New("output sync failed")
-	}
-	return nil
 }
 
 func (c enrollmentClient) enroll(ctx context.Context, enrollment serviceAccountEnrollment, publicKey, algorithm string) (string, error) {
