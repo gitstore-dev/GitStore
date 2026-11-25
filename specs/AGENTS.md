@@ -1,9 +1,12 @@
 # Feature planning instructions
 
-- Follow repository-wide architecture invariants when writing specs, plans
-  and tasks: bounded work, pluggable AuthN/AuthZ, concurrent API/controller
-  replica correctness and rolling upgrades. Git remains singleton-only;
-  replication, placement-aware routing and autoscaling are not implied scope.
+- Follow repository-wide architecture invariants: bounded work, pluggable
+  AuthN/AuthZ, and replica correctness for production-capable API/controller
+  contracts. Declare affected profiles/providers; development-only contracts
+  are exempt from replica-safety requirements. Preserve useful in-process
+  concurrency tests and focused checks of shared production code. Git remains
+  singleton-only; replication, placement-aware routing and autoscaling are not
+  implied scope.
 - Reuse existing component interfaces and fields rather than planning
   parallel abstractions. Read the relevant component `AGENTS.md` first.
 - `/speckit.plan` and `/speckit.tasks` must explicitly include the ADR status
@@ -21,6 +24,16 @@
   `make pr-ready`; do not make capacity, soak, chaos or complete deployed
   mixed-version rehearsals prerequisites of every implementation. Record
   deferred qualification and require it before corresponding production claims.
+- Use supported released-version windows or a documented coordinated initial
+  unreleased alpha activation with retained state and fix-forward recovery.
+  Exclude incompatible development binaries during activation; do not invent
+  prior-release upgrade/downgrade machinery for hypothetical deployments.
+- Storage planning is mechanism-neutral: evaluate database indexes/views and
+  explicit tables per resource/access pattern and dependency group. Require
+  zero routine operator projection work with bounded automatic drift convergence;
+  distinguish derived projections from authority, claims and lifecycle guards.
+  Alpha schema re-baselining is allowed with explicit retained-data safety;
+  do not assume a fixed ScyllaDB version before GA.
 
 ## Inherited planning baseline
 

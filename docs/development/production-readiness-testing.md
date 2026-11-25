@@ -9,6 +9,15 @@ migration, replay and recovery risks, compatibility documentation and the full
 default `make pr-ready`. Reuse existing coverage rather than adding a complete
 deployed old/new-version rehearsal to every feature.
 
+Declare the affected profile and provider contracts before selecting replica
+tests. Development-only providers, including memdb, rbac-local, static-users
+AuthN/UserDir and development notification sinks such as MailSlurper, have no
+replica-safety requirement. They do not need shared durable state, distributed
+coordination, failover or rolling upgrades. Local correctness, security and
+bounded work still apply. Useful in-process handler/reconciler races remain
+appropriate for changed shared-code risks; they neither qualify distributed
+memdb nor exempt production paths exercised through that adapter.
+
 Capacity/soak, chaos and full deployed rolling-upgrade rehearsals qualify
 production claims. Run them explicitly for the affected boundaries; they are
 not ordinary alpha PR CI prerequisites. Keep deferred qualification visible,
@@ -40,6 +49,11 @@ Local `TestPushHelper` regressions cover these mechanics, not deployed admission
 replica recovery or capacity acceptance.
 
 ## 1. Multi-replica correctness
+
+Apply distributed guarantees to production-capable contracts. The in-process
+patterns here remain useful for shared application correctness even when a
+development adapter supplies storage; do not add infrastructure or a mandatory
+replica count to qualify that adapter itself.
 
 Exercise independently constructed reconcilers or handlers against the same
 conflicting resource and shared conditional-write boundary. Protect fake-client
@@ -87,6 +101,13 @@ For deterministic overlap coverage:
 
 Do not substitute a sequential test or a successful restart for an unverified
 overlap gate.
+
+Initial unreleased alpha activation may instead use a coordinated maintenance
+window that excludes incompatible development binaries, preserves retained
+state and uses fix-forward recovery with downgrades unsupported. Document that
+contract explicitly. A hypothetical prior release does not require migration,
+backfill or downgrade machinery; actual retained data and released contracts
+remain protected. Define a safe version window before claiming rolling upgrades.
 
 ## 2. Capacity/soak testing
 

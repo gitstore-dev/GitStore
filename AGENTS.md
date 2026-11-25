@@ -50,12 +50,14 @@ applicable instruction file rather than growing this root file.
   Preserve storage and use non-overlapping replacement; do not claim
   zero-downtime failover or add replication, sharding or autoscaling scope
   without explicit approval.
-- API and controller plans and tests must verify concurrent-replica correctness
-  on changed paths and document rollout compatibility. Use focused tests for
-  changed migration, replay and recovery risks, not a full deployed rehearsal
-  for every feature. Pluggable AuthN/AuthZ and bounded work remain PR requirements;
-  sustained load and full deployed qualification are separate production gates,
-  not alpha PR blockers or blanket claims of implemented HA.
+- API/controller replica requirements apply to production-capable profiles and
+  providers. Development-only profiles/providers are exempt; preserve useful
+  in-process concurrency tests and focused tests of shared production code.
+  Follow the constitution's Deployment Profile and Provider Scope; do not turn
+  local providers into distributed services. Document supported version windows
+  or coordinated initial-alpha activation with retained data and fix-forward
+  recovery. Pluggable AuthN/AuthZ and bounded work remain PR requirements;
+  sustained load and full deployed qualification are separate production gates.
 - Never calculate related-resource aggregates with live datastore queries in
   GraphQL resolvers. Materialize them asynchronously into `status.resolved`.
 
