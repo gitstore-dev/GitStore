@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.0-alpha.12](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.11...v0.1.0-alpha.12) (2026-11-25)
+
+
+### Features
+
+* **auth:** add portable API and controller bootstrap commands ([#615](https://github.com/gitstore-dev/GitStore/issues/615)) ([04daf61](https://github.com/gitstore-dev/GitStore/commit/04daf613160029d3e95897358f740760581105dd))
+
+
+### Bug Fixes
+
+* **git:** resolve quarantine reference delta bases ([#612](https://github.com/gitstore-dev/GitStore/issues/612)) ([f24f583](https://github.com/gitstore-dev/GitStore/commit/f24f583932419af2de0e079376d70457c9f6d5c8))
+
 ## [0.1.0-alpha.11](https://github.com/gitstore-dev/GitStore/compare/v0.1.0-alpha.10...v0.1.0-alpha.11) (2026-11-25)
 
 
