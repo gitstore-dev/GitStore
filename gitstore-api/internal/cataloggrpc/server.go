@@ -255,6 +255,7 @@ func (s *Server) ValidateRBACReceive(ctx context.Context, req *catalogv1.Validat
 // validateResources is shared by authenticated callbacks and in-process
 // GraphQL preflight. Both require live semantic authorization below.
 func (s *Server) validateResources(ctx context.Context, req *catalogv1.ValidateResourcesRequest) (*catalogv1.ValidateResourcesResponse, error) {
+	s = s.withRepositoryNamespace(ctx, req.GetRepositoryId())
 	if err := ctx.Err(); err != nil {
 		return nil, grpcstatus.FromContextError(err).Err()
 	}
@@ -856,6 +857,7 @@ func (s *Server) ValidateResourceDeletions(
 	if req.GetRepositoryId() == "" {
 		return nil, grpcstatus.Error(codes.InvalidArgument, "repository_id is required")
 	}
+	s = s.withRepositoryNamespace(ctx, req.GetRepositoryId())
 	if err := s.validateTranslationActivation(req.GetTrees()); err != nil {
 		return nil, err
 	}
@@ -1392,6 +1394,7 @@ func (s *Server) AdmitResources(
 	ctx = auth.ContextWithPrincipal(ctx, principal)
 	ctx, closeCapture := auth.ContextWithServingAuthorizationCapture(ctx)
 	defer closeCapture()
+	s = s.withRepositoryNamespace(ctx, req.GetRepositoryId())
 	if s.git == nil || s.store == nil {
 		return &catalogv1.AdmitResourcesResponse{}, nil
 	}
@@ -1535,6 +1538,7 @@ func (s *Server) loadParsedEntries(ctx context.Context, repositoryID, ref, names
 }
 
 func (s *Server) loadParsedEntriesFrom(ctx context.Context, reader GitReader, repositoryID, ref, namespace string, changedPaths []string) ([]*parsedEntry, error) {
+	s = s.withRepositoryNamespace(ctx, repositoryID)
 	if ref == "" || isZeroOID(ref) {
 		return nil, nil
 	}

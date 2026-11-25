@@ -8,7 +8,7 @@
   "properties": {
     "apiVersion": {"const": "rbac.authorization.gitstore.dev/v1beta1"},
     "kind": {"const": "Role"},
-    "metadata": {"allOf": [{"$ref": "#/$defs/ObjectMeta"}, {"required": ["namespace"]}]},
+    "metadata": {"$ref": "#/$defs/ObjectMeta"},
     "spec": {"$ref": "#/$defs/RoleSpec"}
   },
   "$defs": {

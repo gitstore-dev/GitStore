@@ -297,6 +297,13 @@ func (p *Parser) parseTranslation(raw []byte) (*ParsedResource, []byte, error) {
 	if err := document.Decode(&resource); err != nil {
 		return nil, nil, translationError("document", "MalformedSource", "invalid Translation structure")
 	}
+	effectiveNamespace, err := p.namespaceForManifest(frontmatter)
+	if err != nil {
+		return nil, nil, err
+	}
+	if effectiveNamespace != "" {
+		resource.Metadata.Namespace = effectiveNamespace
+	}
 	if err := validateLabels(resource.Metadata.Labels); err != nil {
 		return nil, nil, translationError("metadata.labels", "InvalidMetadata", "labels do not satisfy the metadata constraints")
 	}

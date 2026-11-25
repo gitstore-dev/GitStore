@@ -27,7 +27,7 @@
       "type": "object",
       "description": "Author-writable resource metadata. Do not set uid, resourceVersion, generation, creationTimestamp, revision, ownerReferences, or finalizers — those fields are system-managed and any of them present in an authored file causes the push to be rejected.",
       "additionalProperties": false,
-      "required": ["name", "namespace"],
+      "required": ["name"],
       "properties": {
         "name": {
           "type": "string",
@@ -38,7 +38,7 @@
         "namespace": {
           "type": "string",
           "pattern": "\\S",
-          "description": "Required nonblank namespace of the owning repository. It must match the repository namespace."
+          "description": "Optional in Git manifests: omission uses the owning repository namespace. If supplied, it must be a nonblank string matching that namespace; null is rejected."
         },
         "labels": {
           "type": "object",

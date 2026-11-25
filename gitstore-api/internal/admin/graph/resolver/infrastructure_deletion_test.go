@@ -51,6 +51,15 @@ func TestRepositoryDeletionRemovesAuthoringManifest(t *testing.T) {
 	require.ErrorIs(t, err, datastore.ErrNotFound)
 }
 
+func TestRepositoryDeletionIdentityAcceptsOmittedNamespace(t *testing.T) {
+	content := []byte("---\napiVersion: gitstore.dev/v1beta1\nkind: Repository\nmetadata: {name: catalog}\nspec: {defaultBranch: main}\n---\n")
+	require.NoError(t, validateDeletionIdentity(content, "Repository", "shop", "catalog"))
+	require.Error(t, validateDeletionIdentity(content, "Repository", "", "catalog"))
+	require.Error(t, validateDeletionIdentity(content, "Repository", "shop", "other"))
+	mismatched := []byte("---\napiVersion: gitstore.dev/v1beta1\nkind: Repository\nmetadata: {name: catalog, namespace: other}\nspec: {defaultBranch: main}\n---\n")
+	require.Error(t, validateDeletionIdentity(mismatched, "Repository", "shop", "catalog"))
+}
+
 type infrastructureAdmitFunc func(context.Context, admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error)
 
 func (f infrastructureAdmitFunc) AdmitCommittedManifest(ctx context.Context, req admission.CommittedManifestRequest) (*admission.CommittedManifestResult, error) {

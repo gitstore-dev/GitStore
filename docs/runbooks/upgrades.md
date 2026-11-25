@@ -9,6 +9,19 @@ Retain persistent storage and a recovery path. Exactly one Git service may be
 active; replace it without overlap. Do not assume that arbitrary old/new API
 or controller combinations are compatible.
 
+## Namespace-free Git manifests
+
+Upgrade all API replicas before pushing manifests that omit the namespace.
+Older APIs reject these files. The Git service and controllers do not need a
+new wire format: admission resolves the owning repository namespace on the API.
+Explicit matching namespaces work throughout the rollout.
+
+Before rolling back to an API that requires explicit namespaces, add the owning
+namespace to affected namespaced manifests and let admission converge while
+the newer API is still serving. Otherwise validation, replay, and recovery of
+those files can fail on the older version. This source change is required for
+rollback even if resources were already admitted successfully.
+
 ## Category lifecycle rollout order
 
 When upgrading from controllers without `completeCategoryDeletion`, deploy the

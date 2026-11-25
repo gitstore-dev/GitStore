@@ -159,6 +159,35 @@ func TestManifestEnvelopesAndCanonicalRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNamespacedManifestsInferOnlyOmittedNamespace(t *testing.T) {
+	for _, resource := range modelFixture(t) {
+		kind := resource["kind"].(string)
+		if strings.HasPrefix(kind, "Cluster") {
+			continue
+		}
+		meta := resource["metadata"].(map[string]any)
+		delete(meta, "namespace")
+		data, err := yaml.Marshal(resource)
+		require.NoError(t, err)
+		for _, namespace := range []string{"store-a", "store-b"} {
+			scope := RepositoryScope{Namespace: namespace, NamespaceUID: namespace + "-uid"}
+			parsed, err := ParseManifest(data, fixturePath(resource), scope)
+			require.NoError(t, err)
+			require.Equal(t, namespace, parsed.Metadata.Namespace)
+			require.Equal(t, scope.NamespaceUID, parsed.NamespaceUID)
+		}
+		_, err = ParseManifest(data, fixturePath(resource), RepositoryScope{})
+		require.Error(t, err)
+		for _, value := range []any{nil, "", " ", 23, "other"} {
+			meta["namespace"] = value
+			invalid, err := yaml.Marshal(resource)
+			require.NoError(t, err)
+			_, err = ParseManifest(invalid, fixturePath(resource), fixtureScope(kind))
+			require.Error(t, err)
+		}
+	}
+}
+
 func TestManifestRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -171,7 +200,7 @@ func TestManifestRejectsInvalidInput(t *testing.T) {
 		{"server status", 0, func(r map[string]any) { r["status"] = map[string]any{} }},
 		{"server uid", 0, func(r map[string]any) { r["metadata"].(map[string]any)["uid"] = "forged" }},
 		{"namespace mismatch", 0, func(r map[string]any) { r["metadata"].(map[string]any)["namespace"] = "other" }},
-		{"missing namespace", 0, func(r map[string]any) { delete(r["metadata"].(map[string]any), "namespace") }},
+		{"null namespace", 0, func(r map[string]any) { r["metadata"].(map[string]any)["namespace"] = nil }},
 		{"invalid name", 0, func(r map[string]any) { r["metadata"].(map[string]any)["name"] = "../escape" }},
 		{"cluster namespace", 2, func(r map[string]any) { r["metadata"].(map[string]any)["namespace"] = "acme" }},
 		{"deny", 0, func(r map[string]any) {
