@@ -12,6 +12,22 @@ description: "Task list template for feature implementation"
 
 **Organization**: Tasks are grouped by user story to enable independent implementation and testing of each story.
 
+**Profile/provider scope**: Identify development-only and production-capable
+contracts before adding replica tasks. Development-only profiles/providers
+(memdb, rbac-local, static-users AuthN/UserDir, development notification sinks
+such as MailSlurper, and other declared development/test providers) are exempt
+from shared-state, distributed-coordination, failover and rolling-upgrade work.
+Preserve useful in-process concurrency tests and focused checks of shared
+production code; local fixtures do not prove distributed-provider support.
+
+**Storage changes**: Include per-resource/access-pattern index/view/table
+evaluation, dependency and authority/claim classification, automatic bounded
+drift detection/recovery and removal of superseded projections/repair obligations.
+Write tests first for startup/resume, missed events, missing/stale/dangling/
+duplicate entries, concurrent writers, interruption and zero routine operator
+repair. Use persisted work rather than catalogue-sized RAM; record the actual
+tested database build without assuming a fixed pre-GA ScyllaDB version.
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)
@@ -155,7 +171,7 @@ Examples of foundational tasks (adjust based on your project):
 - [ ] TXXX Fix demonstrated regressions; do not add speculative performance work
 - [ ] TXXX [P] Additional unit tests (if requested) in tests/unit/
 - [ ] TXXX Security hardening
-- [ ] TXXX Focused tests for changed replica, migration, replay and recovery risks; reuse existing coverage and document compatibility/limitations
+- [ ] TXXX Focused tests for changed concurrency, applicable production replica, migration, replay and recovery risks; preserve useful in-process coverage and document provider scope/limitations
 - [ ] TXXX Multi-user AuthN/AuthZ and isolation tests
 - [ ] TXXX Operational dashboards, alerts, and runbook updates
 - [ ] TXXX Run quickstart.md validation
@@ -166,6 +182,8 @@ Include only the qualification required for the production claims of this
 delivery. Reuse attributable evidence for unchanged paths. If production
 qualification is outside the delivery scope, record these tasks as deferred,
 not as implementation dependencies or passing results.
+Development-only providers have no distributed qualification gate. Do not add
+replica infrastructure or replica tests solely to certify those providers.
 
 - [ ] TXXX Validate declared capacity/soak objectives with the existing `make capacity` selectors
 - [ ] TXXX Rehearse relevant deployed faults and full old/new-version rollouts with retained data
@@ -260,7 +278,8 @@ With multiple developers:
 - [Story] label maps task to specific user story for traceability
 - Each user story should be independently completable and testable
 - Verify tests fail before implementing
-- For API/controller changes, test changed replica/recovery risks; do not automatically require a full deployed rollout rehearsal
+- For API/controller changes, test changed risks under the declared provider contract; development-only providers have no replica-safety gate, while shared production paths retain their obligations and useful in-process tests
+- Document supported released-version windows or coordinated initial unreleased alpha activation with retained data/fix-forward recovery; no hypothetical legacy-release rehearsal or invented downgrade support
 - Git is singleton-only: do not add multi-Git topology, autoscaling or HA tasks unless repository sharding/routing/writer safety is explicitly approved feature scope; disjoint volumes do not make it supported
 - For protected paths, include multi-user AuthN/AuthZ and isolation tasks
 - For load-bearing paths, preserve bounded work and correctness; track sustained-load/deployed qualification separately from alpha implementation completion

@@ -97,13 +97,34 @@
 
 ### Production Requirements *(mandatory for core-service or load-bearing changes)*
 
-- **PR-001 Replica Safety**: [Define concurrent API/controller replica behavior, implementation gaps, process replacement and rolling upgrades. Git is singleton-only: retain storage and forbid overlapping replacements; do not require Git replicas or HA unless repository sharding/routing/writer safety is explicitly approved feature scope.]
+Declare affected development-only and production-capable profiles/providers.
+Development-only providers are explicitly exempt from replica safety: mark
+their distributed-state/failover/rolling-upgrade requirements N/A, not passed.
+Keep ordinary local correctness/security tests and useful in-process concurrency
+coverage. Shared production paths retain their production contracts even when
+tested with memdb or other local adapters.
+
+- **PR-001 Replica Safety**: [Define affected production API/controller replica behavior, gaps, replacement and supported version windows. Development-only contracts need no shared state, distributed coordination, failover or rolling upgrades. Preserve useful shared-code race/isolation/idempotency tests. Git remains singleton-only with retained storage and non-overlapping replacement.]
 - **PR-002 Multi-User Security**: [Define authentication, authorization, isolation, and audit behavior]
 - **PR-003 Capacity**: [Define dataset size, peak/sustained concurrency, payload shape, latency, and error objectives]
 - **PR-004 Backpressure**: [Define queue, worker, retry, timeout, and overload behavior]
 - **PR-005 Capacity Evidence**: [Name the reusable `make capacity TARGET=<target> PROFILE=<scenario> MODE=<diagnostic|alpha|production>` target/profile pair, required dataset/topology proof, threshold set, and domain-correctness verifier]
 - **PR-006 Fault Recovery**: [Name the reusable `make chaos CHAOS_PROFILE=...` profile(s), bounded target, steady-state hypothesis, and recovery deadline]
-- **PR-005 Recovery**: [Define convergence and data-integrity behavior after partial failure]
+- **PR-007 Recovery Integrity**: [Define convergence and data-integrity behavior after partial failure under the declared provider contract; production guarantees do not impose persistence or replica recovery on volatile development providers]
+
+Initial unreleased alpha contracts may use coordinated schema/API/controller
+activation, a maintenance window excluding incompatible development binaries,
+retained-state safeguards and fix-forward recovery with downgrades unsupported.
+Do not invent a prior-release migration, backfill or compatibility release
+solely for hypothetical deployments. Preserve real retained data and released
+contracts; define safe overlap windows before claiming rolling-upgrade support.
+
+For storage changes, require zero routine operator projection maintenance and
+measurable bounded automatic startup/resume, detected-drift and recurring
+recovery. Distinguish derived drift from authoritative conflicts; preserve
+identity, authorization and deletion safety. Define memory/disk/work and
+detection/convergence budgets without prescribing manual tables over database
+indexes/views or assuming an immutable pre-GA ScyllaDB version.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -124,9 +145,13 @@
 - **SC-003**: [User satisfaction metric, e.g., "90% of users successfully complete primary task on first attempt"]
 - **SC-004**: [Business metric, e.g., "Reduce support tickets related to [X] by 50%"]
 
-For core-service or load-bearing changes, success criteria MUST also measure
-API/controller multi-replica correctness, authorization isolation, sustained-load
-behavior, backpressure and recovery against the declared production dataset.
+For affected production-capable core-service or load-bearing contracts, success
+criteria MUST also measure API/controller multi-replica correctness,
+authorization isolation, sustained-load behavior, backpressure and recovery
+against the declared production dataset. Development-only profiles/providers
+are exempt from distributed qualification, not ordinary local correctness,
+security or bounded-work checks. In-process concurrency fixtures prove only
+their exercised boundaries and MUST NOT certify a distributed memdb deployment.
 Git evidence uses one active instance; separate Git volumes do not prove
 supported sharding, replication or HA.
 

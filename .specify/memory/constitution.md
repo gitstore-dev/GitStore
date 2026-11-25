@@ -1,27 +1,38 @@
 <!--
 Sync Impact Report:
-- Version change: 3.0.0 -> 4.0.0
-- Modified guidance: Development Workflow and Quality Gates
-- Added sections: Pull Request Readiness; Production Qualification
-- Removed sections: None
-- Rationale: Redefine which checks block ordinary feature delivery. Focused
-  correctness verification remains mandatory; deployed capacity, soak, chaos
-  and complete rolling-upgrade rehearsals qualify production claims rather
-  than every alpha PR. Safety principles and production obligations remain.
-- Templates updated:
-  - .specify/templates/plan-template.md
-  - .specify/templates/spec-template.md
-  - .specify/templates/tasks-template.md
-  - .specify/templates/commands/ (absent; no command templates to update)
-- Runtime guidance updated:
-  - AGENTS.md (also used by the CLAUDE.md symlink)
-  - .github/AGENTS.md
-  - tests/AGENTS.md
-  - specs/AGENTS.md
-  - docs/development/production-readiness-testing.md
-  - docs/developer-guide.md
-  - specs/071-translation-contract/ (current plan, tasks and qualification contract)
-- Follow-up TODOs: None
+  - Version change: 4.0.0 -> 4.2.0 (MINOR: incorporates the draft 4.1.0 storage
+    guidance, explicit profile/provider scope and initial-alpha activation
+    guidance; production obligations retained)
+  - Modified principles: III Clear Contracts & Versioning; VI Independently
+    Deployable Delivery; VII Simplicity with Proven Scale;
+    VIII Service-Specific Replica Safety;
+    IX Multi-User Authentication, Authorization & Isolation;
+    X Production Capacity, Backpressure & Load Validation
+  - Added sections: Deployment Profile and Provider Scope;
+    Storage Access and Automatic Drift Recovery
+  - Removed sections: None
+  - Templates updated: .specify/templates/plan-template.md,
+    .specify/templates/spec-template.md, .specify/templates/tasks-template.md
+  - Other templates checked: agent-file, checklist and constitution skeletons
+    contain no conflicting replica gates; templates/commands/ is absent.
+  - Runtime guidance updated: AGENTS.md, specs/AGENTS.md, tests/AGENTS.md,
+    gitstore-api/AGENTS.md, gitstore-controller-manager/AGENTS.md,
+    .claude/rules/scylla-migrations.md,
+    docs/developer-guide.md, docs/development/production-readiness-testing.md
+  - ProductVariant clarifications incorporated: focused implementation checks
+    versus deployed qualification; coordinated initial-alpha activation with
+    retained state and fix-forward recovery; no hypothetical legacy-release
+    migration or downgrade promise. Incorporate the draft 4.1.0 mechanism-neutral
+    storage, authority/claim fences, bounded automatic recovery, zero routine
+    operator projection work and deliberate alpha re-baseline safeguards.
+  - Development-only providers need no shared state, distributed coordination,
+    failover or rolling-upgrade implementation. Shared production code still
+    requires focused correctness tests; in-process memdb tests remain useful
+    evidence of their tested boundaries, never proof of distributed memdb.
+  - Production topology, security, capacity and qualification requirements are
+    unchanged. Existing feature replica clauses inherit this provider scope.
+  - Follow-up TODOs: None introduced. #605 still tracks cross-resource storage
+    evaluation and existing recovery gaps; policy is not runtime delivery.
 -->
 
 # GitStore Constitution
@@ -52,11 +63,17 @@ clients must evolve independently without relying on undocumented behavior.
 
 ### III. Clear Contracts & Versioning
 
-All public interfaces MUST follow semantic versioning. Breaking changes require
-a MAJOR version bump, additive features require MINOR, and compatible fixes
+Released public interfaces MUST follow semantic versioning. Breaking changes
+require a MAJOR version bump, additive features require MINOR, and compatible fixes
 require PATCH. GraphQL changes MUST prefer additive evolution and deprecation
 before removal. Persisted and inter-service contract changes MUST document
 compatibility, rollout order, and rollback behavior.
+
+An initial unreleased alpha contract MAY evolve without a hypothetical prior-release
+upgrade/downgrade path or a MAJOR bump for each development iteration. It MUST
+document coordinated activation, retained-data handling and fix-forward recovery.
+Actual released contracts and retained deployment data keep their safeguards;
+this exception does not change constitution versioning.
 
 **Rationale:** Stable contracts permit independent replica rollouts, safe
 rollback, and compatibility across services during rolling deployment.
@@ -85,10 +102,17 @@ outcomes rather than speculative infrastructure.
 
 ### VI. Independently Deployable Delivery
 
-Every delivery slice MUST preserve compatibility with independently deployed
-API, controller-manager, and Git-service versions. API/controller changes MUST
-remain correct when old and new replicas overlap within the documented
-compatibility window. Git-service replacement MUST stop the old process before
+Every delivery slice MUST state its supported API, controller-manager and
+Git-service version combinations, activation order and recovery contract.
+Production API/controller changes MUST remain correct when compatible old and
+new replicas overlap within a supported rolling-upgrade window.
+Initial unreleased alpha activation MAY instead stop incompatible development
+binaries in a coordinated maintenance window, preserve retained state and use
+fix-forward recovery with downgrades unsupported. It MUST NOT imply rolling
+compatibility or require legacy-release machinery solely for hypothetical
+deployments. Future released upgrade paths MUST define safe version windows
+before claiming rolling-upgrade support.
+Git-service replacement MUST stop the old process before
 starting its replacement against the retained repository storage; overlapping
 Git writers and zero-downtime Git failover are not supported. Priority order is
 defined by each feature specification rather than a fixed historical roadmap.
@@ -101,23 +125,36 @@ can scale horizontally or roll with overlapping instances.
 Implement the simplest design that satisfies the declared production envelope.
 New services, brokers, caches, indexes, and abstractions MUST have measured or
 contractual justification. Simplicity MUST NOT be used to justify process-local
-correctness state, unbounded scans, undocumented single-replica assumptions,
-authorization bypasses, or designs that fail at the required scale. The explicit
+state for distributed production correctness, unbounded scans, undocumented
+production single-replica assumptions, authorization bypasses, or designs that
+fail at the required scale. The explicit
 singleton Git constraint below MUST NOT be treated as a defect that unrelated
 features must solve.
+
+Storage design MUST account for total operator and implementation cost, not
+table count or presumed performance alone. Routine projection maintenance MUST
+require zero operator actions. Additional persistent structures MAY trade disk
+for bounded memory; whole-catalog in-memory comparison indexes are not an
+acceptable production recovery design.
 
 **Rationale:** Unnecessary components increase operational burden, but an
 under-designed system merely defers that burden to production incidents.
 
 ### VIII. Service-Specific Replica Safety (NON-NEGOTIABLE)
 
-API and controller-manager changes MUST define and verify correctness with
-multiple replicas. Durable state, work ownership, idempotency, concurrency
-control and recovery MUST have an explicit replica-safe design. Process-local
-correctness state MUST NOT be presented as replica-safe without a consistent
-replacement. This requirement is not a claim that every current API provider,
+For production-capable profiles and providers, API and controller-manager
+changes MUST define and verify correctness with multiple replicas. Durable
+state, work ownership, idempotency, concurrency control and recovery MUST have
+an explicit replica-safe design. Process-local correctness state MUST NOT be
+presented as replica-safe without a consistent replacement. This requirement
+is not a claim that every current API provider,
 controller operation or deployment already satisfies it; plans MUST identify
 implementation gaps and limit readiness claims to verified paths.
+
+Development-only profiles and providers are explicitly exempt from these
+replica-safety requirements under Deployment Profile and Provider Scope below.
+This exemption MUST NOT remove useful in-process concurrency tests or weaken
+production invariants in code shared with production providers.
 
 The Git service is stateful and **singleton-only**: exactly one active
 `gitstore-git-service` process per deployment. Repository sharding and
@@ -140,7 +177,10 @@ the pluggable authentication and authorization infrastructure. Every external
 and service-to-service entry point MUST authenticate callers and enforce
 authorization at the owning service boundary. Namespace and repository access
 MUST be isolated by policy; UI behavior MUST never be the enforcement layer.
-Identity and authorization decisions MUST be auditable and replica-consistent.
+Identity and authorization decisions MUST be auditable, and MUST be
+replica-consistent wherever the production replica contract applies.
+Development-only providers retain authentication, authorization and isolation
+within their declared local contract.
 
 **Rationale:** Commerce operations involve multiple users and automation agents
 with different privileges. A single-admin or trusted-network assumption is not
@@ -153,6 +193,8 @@ sustained peak Git push workloads. Core read and reconciliation paths MUST use
 bounded, query-first access patterns. Push validation, admission, projection,
 and reconciliation MUST apply bounded concurrency, backpressure, timeouts, and
 retry policies rather than unbounded queues or goroutines.
+Query-first means designing for explicit access patterns, not mandating
+application-maintained tables or prohibiting database-managed indexes/views.
 
 Every feature affecting a load-bearing path MUST define its production dataset,
 request or push concurrency, payload shape, latency/error objectives, and soak
@@ -164,6 +206,82 @@ traffic. Capacity must remain stable under prolonged pushes, large catalogues,
 replica changes, retries, and downstream slowdown.
 
 ## Architecture Constraints
+
+### Deployment Profile and Provider Scope
+
+- Plans MUST identify affected deployment profiles and provider contracts as
+  development-only or production-capable, including topology, state lifetime
+  and supported activation/version behavior. Existing generic feature replica
+  clauses inherit this scope; choosing a development adapter for a test does
+  not exempt the production code path it exercises.
+- The local development profile includes the memdb datastore, rbac-local
+  authorization, static-users authentication and user directory, and the
+  optional development notification provider backed by MailSlurper. These and
+  other explicitly documented development/test providers MAY use process-local state
+  and single API/controller instances. They MUST NOT be required to implement
+  shared durable state, cross-process coordination, replica failover, replica-wide
+  state propagation or rolling upgrades solely to satisfy production replica
+  requirements. In-memory state MAY be lost on restart under its declared
+  development contract; retained Git repositories and other retained data
+  MUST NOT be silently reset.
+- Development exemptions do not waive ordinary correctness, authentication,
+  authorization, tenant isolation, bounded work or data integrity within the
+  supported local contract. They do not qualify these providers for production
+  or permit production requirements to be bypassed by relabeling a deployment.
+- Focused tests MAY construct multiple API handlers or reconcilers sharing one
+  memdb instance to exercise changed request isolation, races, CAS, idempotency,
+  replay or retry behavior. Preserve useful coverage and add it when changed
+  shared-code risks require it. Such tests MUST NOT imply shared state between
+  independent memdb processes, or distributed-provider/HA qualification.
+  A new two-instance or deployed scaling test is not required for every feature.
+- Production-capable paths retain their replica, durable recovery, compatible
+  rolling-upgrade and qualification obligations. Test affected shared-code
+  invariants with the smallest appropriate fixtures; qualify actual deployed
+  provider/topology guarantees separately before making production claims.
+  Selecting one development provider in a mixed profile MUST NOT exempt
+  affected production-capable components or shared production paths.
+
+### Storage Access and Automatic Drift Recovery
+
+- Each access pattern MUST identify its authoritative state, consistency and
+  ordering needs, partition/work bounds, dependencies and recovery owner.
+  Secondary indexes (global or local), materialized views, explicit query tables
+  and combinations are permitted when they satisfy those contracts. No mechanism
+  is presumed faster or safer without applicable evidence.
+- Derived lookup/list projections MUST be distinguished from identity
+  reservations, unique claims, lifecycle fences, durable intents and retirement
+  authority. Database indexes do not by themselves enforce these invariants.
+  Recovery MUST NOT reconstruct authority from an unverified projection or
+  overwrite accepted desired state, UID ownership or legitimate author choices.
+- GitStore MUST automatically detect and converge repairable derived-state drift
+  at startup/resume, when detected during operation and through bounded recurring
+  verification for missed events. Database-managed maintenance or existing
+  API/controller machinery MAY own this work; no particular daemon is required.
+  Startup MUST NOT depend on loading the catalogue into memory or on an operator
+  invoking a repair command. Production progress/work MUST survive interruption
+  and converge safely under concurrent replicas/writers with bounded retries
+  and backpressure.
+- Missing, stale, dangling and duplicate derived entries MUST recover without
+  routine operator audits, repair commands, manual table edits, restart rituals
+  or deployment-order repair steps. Recovery MUST verify authoritative identity,
+  version and any applicable intent/coverage fences before mutation. Uncertain
+  evidence MUST fail closed, not grant authority or certify an empty dependency
+  set. True authoritative conflicts or loss MUST remain visible and MUST NOT
+  trigger arbitrary winner selection or destructive guesswork.
+- Plans MUST define measurable detection/convergence and memory/disk/work budgets,
+  automatic bootstrap/rebuild behavior, progress/readiness signals and tests for
+  crash, concurrent writes and retry. Manual tools MAY remain for diagnostics or
+  exceptional recovery; they MUST NOT be the normal convergence mechanism.
+  Zero routine projection work does not eliminate infrastructure monitoring,
+  backups, database repair, capacity management or authoritative disaster recovery.
+- Before GA, ScyllaDB versions and storage layouts are revisable design choices,
+  not assumed immutable pins. Implementations and tests MUST record the actual
+  database build/configuration and verify required capabilities; this is not a
+  promise of compatibility with every version or an unrecorded `latest` build.
+  Deliberate alpha schema re-baselines MAY replace historical layouts, indexes
+  and redundant tables with explicit data-preservation/conversion or fresh-keyspace
+  procedures. Never silently rewrite an applied migration ledger or reset retained
+  deployment data. Released-contract compatibility obligations still apply.
 
 ### Core Service Topology
 
@@ -181,6 +299,10 @@ services. Core services communicate only through versioned contracts and MUST
 not depend on another service's private storage.
 
 ### Replica Safety
+
+The API/controller distributed guarantees below apply to production-capable
+profiles and providers; development-only contracts use the scope above. Git
+singleton writer safety and retained-storage safeguards apply to every profile.
 
 - API replicas MUST keep durable resource, authorization, session, revocation,
   and idempotency semantics consistent across replicas.
@@ -207,9 +329,9 @@ not depend on another service's private storage.
   timeouts MUST have explicit bounds.
 - Feature plans MUST state measurable p95/p99 latency, throughput, error-rate,
   recovery, and resource-saturation objectives for affected production paths.
-- Replica tests MUST demonstrate correct behavior with at least two instances
-  of each affected API/controller service. Git MUST use exactly one active
-  instance, including in production-mode capacity evidence. A capacity pass
+- Production replica qualification MUST demonstrate correct behavior with at
+  least two instances of each affected API/controller service. Git MUST use
+  exactly one active instance, including in production-mode capacity evidence. A capacity pass
   MUST NOT be described as proof of Git HA.
 
 ## Development Workflow
@@ -218,7 +340,8 @@ not depend on another service's private storage.
 
 1. Define API, authorization, replica, and capacity contracts where applicable.
 2. Write contract and integration tests.
-3. Add concurrency, failover, and recovery tests for core-service changes.
+3. Add focused concurrency, failure and recovery tests for changed risks under
+   the affected provider contracts; apply the development replica exemption.
 4. Verify the new tests fail for the expected reason.
 5. Implement the minimum code required to pass.
 6. Refactor while preserving all tests.
@@ -244,6 +367,10 @@ not depend on another service's private storage.
   have focused contract/integration tests and documented limitations. Reuse
   existing coverage; do not require a complete deployed old/new-version
   rehearsal or a new scaling test for every feature.
+- Development-only providers have no replica-safety implementation or
+  qualification gate. Preserve useful in-process concurrency tests and test
+  shared production invariants without turning local providers into distributed
+  services. Initial-alpha activation may use the coordinated contract above.
 - Migration, wire-format or replay changes test the compatibility risks they
   introduce. A known unsafe rollout or data-loss path remains a blocker.
 - Git changes preserve singleton writer safety and retained storage; tests
@@ -251,6 +378,9 @@ not depend on another service's private storage.
 - Protected operations include authentication and authorization tests.
 - Logs, metrics, readiness, and error handling cover new operational states.
 - Contract changes document compatibility, rollout, and rollback.
+- Storage changes justify access structures and test bounded automatic drift
+  detection/recovery without operator repair; known legacy gaps are explicitly
+  tracked rather than advertised as self-healing.
 - Documentation and runbooks are updated with the implementation.
 - Constitution compliance is verified during PR review.
 
@@ -305,4 +435,4 @@ preferences. Runtime guidance may add detail but may not weaken these rules.
 Day-to-day repository and agent instructions supplement this constitution.
 When they conflict, this constitution takes precedence.
 
-**Version**: 4.0.0 | **Ratified**: 2026-03-09 | **Last Amended**: 2026-11-22
+**Version**: 4.2.0 | **Ratified**: 2026-03-09 | **Last Amended**: 2026-11-25

@@ -281,6 +281,16 @@ restart the process when finished.
 | `memdb`  | Development and fast tests  | In-memory only; no persistence             |
 | `scylla` | Production-oriented backend | Uses ScyllaDB 5.x+ and embedded migrations |
 
+The local development profile uses memdb, rbac-local authorization, static-users
+authentication/user directory, and an optional development notification sink
+such as MailSlurper. These and other documented development-only providers have
+no distributed-state, replica failover or rolling-upgrade guarantee and do not
+need implementations of those capabilities. Ordinary correctness,
+authentication, authorization, isolation and bounded-work checks still apply.
+Multiple in-process handlers sharing memdb can test application races and
+request isolation; that fixture does not make independent memdb processes share
+state. Production-capable paths retain their own requirements.
+
 Start Scylla services only:
 
 ```bash

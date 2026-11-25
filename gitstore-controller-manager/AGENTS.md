@@ -22,8 +22,11 @@
 - Materialize counts, sums and other related-resource aggregates into
   `status.resolved`; GraphQL resolvers must not compute live aggregates.
 - Reuse the pinned rate limiter, Pond worker pools, Backoff and LevelDB.
-  Verify concurrent-replica behavior, conflicts and rolling recovery without
-  weakening ownership or optimistic-concurrency checks.
+  Verify concurrent-replica behavior and supported rolling recovery for
+  production-capable contracts. Development-only profiles/providers are exempt
+  from replica-safety requirements; preserve useful in-process reconciler races,
+  conflicts and retry tests without weakening ownership, CAS or shared
+  production invariants.
 - Read `../shared/AGENTS.md` for telemetry and secret material. Controller
   spans cover reconciliation attempts, HTTP requests and WebSocket dials,
   not whole watch lifetimes.
